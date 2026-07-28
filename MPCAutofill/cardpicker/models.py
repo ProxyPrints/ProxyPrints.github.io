@@ -1052,6 +1052,37 @@ class CardTagVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> {self.tag} ({VotePolarity(self.polarity).label})"
 
 
+class PrintingTagVote(AbstractWeightedVote):
+    """
+    A vote on whether a descriptor `Tag` applies to a `CanonicalCard` (Scryfall printing).
+
+    DISTINCT FROM `CardPrintingTag`: that model votes on WHICH printing a `Card` (catalog image)
+    depicts. This model votes on whether a descriptor tag (e.g., "external-ip") applies to the
+    printing itself — independent of any specific catalog image.
+
+    DISTINCT FROM `CardTagVote`: that model votes per `Card` (catalog image). This model votes
+    per `CanonicalCard` (printing). The same physical printing may be depicted by many `Card`
+    images in this catalog; this vote belongs to the printing once, not duplicated per image.
+
+    Uniqueness is (printing, tag, anonymous_id) — the same `update_or_create` idiom as
+    `CardTagVote`'s own (card, tag, anonymous_id) constraint — so a voter can independently
+    update their opinion on one tag for a printing via update_or_create without affecting any
+    other vote they've cast on the same printing.
+    """
+
+    printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, related_name="printing_tag_votes")
+    tag = models.ForeignKey(to=Tag, on_delete=models.CASCADE, related_name="printing_votes")
+    polarity = models.SmallIntegerField(choices=VotePolarity.choices)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["printing", "tag", "anonymous_id"], name="printingtagvote_unique_vote"),
+        ]
+
+    def __str__(self) -> str:
+        return f"[{self.source}] {self.printing} -> {self.tag} ({VotePolarity(self.polarity).label})"
+
+
 class CardReportReason(models.TextChoices):
     """
     Why a user reported a card (the report button on the card detail modal - see

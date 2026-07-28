@@ -22,6 +22,7 @@ from .models import (
     ImageEvidence,
     LandsAmbiguousResidue,
     PilotRunLedger,
+    PrintingTagVote,
     Project,
     ProjectMember,
     SavedDeck,
@@ -207,6 +208,14 @@ class AdminCardTagVote(admin.ModelAdmin[CardTagVote]):
     list_filter = ("source", "polarity", "peer", ContestedTagFilter)
     search_fields = ("card__name", "tag__name")
     raw_id_fields = ["card", "tag"]
+
+
+@admin.register(PrintingTagVote)
+class AdminPrintingTagVote(admin.ModelAdmin[PrintingTagVote]):
+    list_display = ("printing", "tag", "polarity", "source", "confidence", "anonymous_id", "created_at")
+    list_filter = ("source", "polarity")
+    search_fields = ("printing__name", "tag__name")
+    raw_id_fields = ["printing", "tag"]
 
 
 @admin.register(CardReport)

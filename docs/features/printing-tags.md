@@ -334,6 +334,68 @@ printings, artists, tags, and moderation from one screen.
   same weight/gate treatment for both, see `models.py`'s `VoteSource`
   docstring. Production run: 28,112 votes written, 0/28,112 later
   resolved a card on their own (human-backed gate verified at scale).
+- **External-IP tag import (Scryfall Tagger)** (W9 per-printing design,
+  revised 2026-07-27): `manage.py import_external_ip_tags` imports
+  `art:external-ip` — a Scryfall Tagger community art tag identifying
+  Universes Beyond illustrations (Lord of the Rings, Doctor Who, Warhammer
+  40K, etc.) — as machine-cast `PrintingTagVote` rows. Votes target the
+  Scryfall printing (`CanonicalCard`) directly, not the catalog images
+  (`Card`) that depict it. The same physical printing may be depicted by many
+  `Card` images in the catalog; the Tagger community tag belongs to the
+  printing once, not duplicated per image.
+
+  Data flow:
+
+  1. Fetches `https://api.scryfall.com/bulk-data`, finds the `art_tags`
+     entry, and downloads its `jsonl_download_uri` (or reads a local file
+     via `--file`).
+  2. Parses the tag tree: finds the tag with slug `external-ip`, then BFS
+     its `child_ids` to collect the full subtree (~56 child IP tags).
+  3. Collects all `illustration_id` values from `taggings` across the
+     subtree (only leaf tags carry taggings per Scryfall's documentation).
+  4. Joins `illustration_id` → `default_cards.json` `illustration_id` →
+     `CanonicalCard.identifier` **directly** (the same bulk data
+     `import_canonical_card_data`/`import_scryfall_printing_metadata`
+     already maintain). No Card-level effective-printing inference is done —
+     the illustration → printing join is the complete eligibility check.
+  5. Writes `PrintingTagVote` rows: `tag="external-ip"`, `source=DEDUCTION`,
+     `anonymous_id="scryfall-tagger-v1"`, `polarity=APPLY`.
+
+  **User vote endpoint**: `POST 2/submitPrintingTagVote/` mirrors the
+  `CardTagVote` submit idiom — `update_or_create` keyed on
+  `(printing, tag, anonymous_id)`, `source=USER`, polarity 1/−1/0 (0 = retract).
+  Frontend UI is out of scope for this commit; the backend is wired and tested.
+
+  **Weighting**: votes carry `PRINTING_TAG_MACHINE_WEIGHT` (default 0.5)
+  through the normal `vote_consensus._SOURCE_WEIGHTS` path — no override
+  applies (the 2026-07-23 zero-weight rule is scoped to
+  `anonymous_id="deductive-backfill-v1"` only). `source=DEDUCTION` is used
+  rather than a bespoke `VoteSource` value because `VoteSource.source` is
+  limited to 10 characters; `anonymous_id` carries the identifiable provenance
+  for purge/re-run.
+
+  **Idempotent re-run**: the `(printing, tag, anonymous_id)` uniqueness
+  constraint on `PrintingTagVote` means a printing this identity has already
+  voted on is skipped. To refresh against updated upstream data (where a
+  printing was un-tagged), purge the old `run_id` via
+  `manage.py purge_machine_votes --run-id <id>` then re-run. Every invocation
+  stamps a fresh `run_id` on its votes for independent lifecycle management.
+  `purge_machine_votes` deletes `PrintingTagVote` rows by `run_id` alongside
+  the other vote models.
+
+  **Gate**: `verify_no_machine_only_resolutions` in `purge_machine_votes`
+  checks Card-level resolution status (printing, artist, tag). PrintingTagVote
+  writes do not affect any Card-level resolution status today — per-printing
+  consensus resolution is a separate concern with no persisted CanonicalCard
+  status field yet (see OPEN ITEMS in PR #497). The function therefore does not
+  apply to PrintingTagVote runs and is omitted from `import_external_ip_tags`'s
+  write path; it remains available for CardTagVote/CardPrintingTag/CardArtistVote.
+
+  **Default dry-run**: like every other Stage 3+ command, `import_external_ip_tags`
+  defaults to dry-run (count-only) and requires an explicit `--write` flag
+  to persist votes. The `--file` argument accepts a local art-tags JSONL(.gz)
+  file (or pretty-printed JSON array) for offline runs and testing.
+
 - **Moderation layer**: builds on the same consensus system — see
   [[moderation.md]] for the sensitive-tag taxonomy, privileged-approval
   gate, and its own Reports/Drives review surface.
