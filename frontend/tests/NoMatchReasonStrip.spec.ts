@@ -107,6 +107,7 @@ test.describe("NoMatchReasonStrip tests", () => {
     await expect(strip.getByText("AI art")).toBeVisible();
     await expect(strip.getByText("No collector line")).toBeVisible();
     await expect(strip.getByText("Non-English")).toBeVisible();
+    await expect(strip.getByText("External IP")).toBeVisible();
   });
 
   test("hides chips for reason tags that don't exist server-side yet", async ({
@@ -132,6 +133,7 @@ test.describe("NoMatchReasonStrip tests", () => {
     await expect(strip.getByText("Upscaled")).not.toBeVisible();
     await expect(strip.getByText("No collector line")).not.toBeVisible();
     await expect(strip.getByText("Non-English")).not.toBeVisible();
+    await expect(strip.getByText("External IP")).not.toBeVisible();
   });
 
   test("tapping a reason chip submits a positive tag vote and advances the feed", async ({

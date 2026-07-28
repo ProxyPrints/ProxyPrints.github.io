@@ -792,9 +792,10 @@ const NO_MATCH_REASON_TAG_DISPLAY_NAMES: Array<[string, string]> = [
   ["ai-art", "AI art"],
   ["no-collector-line", "No collector line"],
   ["non-english", "Non-English"],
+  ["external-ip", "External IP"],
 ];
 
-// all six no-match reason tags exist server-side - NoMatchReasonStrip shows every chip
+// all seven no-match reason tags exist server-side - NoMatchReasonStrip shows every chip
 export const tagsAllNoMatchReasonTags = http.get(buildRoute("2/tags/"), () =>
   HttpResponse.json(
     {
@@ -806,7 +807,7 @@ export const tagsAllNoMatchReasonTags = http.get(buildRoute("2/tags/"), () =>
   )
 );
 
-// only two of the six reason tags exist server-side (seed_no_match_reason_tags hasn't fully
+// only two of the seven reason tags exist server-side (seed_no_match_reason_tags hasn't fully
 // run, or ran on an older version of the taxonomy) - NoMatchReasonStrip should hide the rest
 export const tagsSomeNoMatchReasonTags = http.get(buildRoute("2/tags/"), () =>
   HttpResponse.json(
@@ -1236,11 +1237,33 @@ export const questionFeedArtist = http.get(buildRoute("2/questionFeed/"), () =>
         type: "artist",
         card: cardDocument8,
         confidentlyKnownArtistName: null,
+        scryfallIllustrationUrl: null,
       },
       remainingEstimate: questionFeedCounts({ total: 2, fresh: 2 }),
     },
     { status: 200 }
   )
+);
+
+// Same as questionFeedArtist but the card's canonical printing carries a harvested Scryfall
+// art-crop URL - exercises the WTC artist re-frame's subject-image substitution (QuestionFeed.
+// tsx's subjectImageSrc) rather than questionFeedArtist's null-falls-back-to-card-image case.
+export const questionFeedArtistWithIllustration = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "artist",
+          card: cardDocument8,
+          confidentlyKnownArtistName: null,
+          scryfallIllustrationUrl:
+            "https://cards.scryfall.io/art_crop/front/a/b/ab000000-0000-0000-0000-000000000000.jpg",
+        },
+        remainingEstimate: questionFeedCounts({ total: 2, fresh: 2 }),
+      },
+      { status: 200 }
+    )
 );
 
 // cardDocument8 has a confidently-known canonicalArtist (Alpha Artist) - this mock exercises

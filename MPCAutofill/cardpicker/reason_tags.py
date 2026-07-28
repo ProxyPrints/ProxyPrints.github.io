@@ -10,7 +10,7 @@ documents that a fresh DB has zero real Tag rows besides the synthetic never-per
 pseudo-tag - see cardpicker.tags). A manual, idempotent command avoids that coupling, exactly
 like the existing descriptor taxonomy already does.
 
-These six tag names are a federation interchange contract (see docs/features/printing-tags.md)
+These tag names are a federation interchange contract (see docs/features/printing-tags.md)
 - other instances that consume our vote export are expected to recognise these exact strings.
 Renaming any of them is a breaking data migration, not a refactor.
 
@@ -36,6 +36,23 @@ NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
     ("ai-art", "AI-generated artwork", "AI art"),
     ("no-collector-line", "No legible collector line on the card face", "No collector line"),
     ("non-english", "Non-English printing", "Non-English"),
+    # Deliberately the SAME string as EXTERNAL_IP_TAG_NAME in
+    # management/commands/import_external_ip_tags.py (2026-07-28) - both channels (this human
+    # no-match reason and that machine Scryfall-Tagger import) write into the same card.tags
+    # array, so one shared name makes `tag:external-ip` a single predicate over the whole
+    # catalog rather than two names that would permanently fragment it. Deliberately NOT named
+    # after the official Wizards "Universes Beyond" product line: that name covers OFFICIAL
+    # Magic printings, so a custom proxy bearing e.g. Warhammer or Lord of the Rings art isn't
+    # one of those - it's non-official art drawn from an external IP. There is no
+    # "external-ip"-negation counterpart tag here either - that would be an official
+    # product-line distinction (that Wizards line vs. everything else), which issue #505 will
+    # resolve authoritatively from `set_type`/`security_stamp` at the PRINTING level, not as a
+    # human-cast no-match reason.
+    (
+        "external-ip",
+        "Art is drawn from an external IP (crossover / licensed property) rather than original Magic art",
+        "External IP",
+    ),
 ]
 
 

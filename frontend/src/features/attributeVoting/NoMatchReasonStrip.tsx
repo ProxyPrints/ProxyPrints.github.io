@@ -7,7 +7,7 @@
  * narrower, faster "why" prompt matched to the moment right after a no-match tap, not a
  * general tagging surface.
  *
- * Keep the six tagName values below in sync with cardpicker/reason_tags.py (seeded via the
+ * Keep the tagName values below in sync with cardpicker/reason_tags.py (seeded via the
  * `seed_no_match_reason_tags` management command, not a migration - see that module's
  * header comment for why) - and see the same file for why these are a separate taxonomy
  * from cardpicker.default_tags.DEFAULT_TAGS and why renaming any of them is a breaking
@@ -16,9 +16,9 @@
  * what's shown here without a frontend deploy.
  *
  * Graceful degradation for an instance where that command hasn't been run yet: filters the
- * six chips down to whichever tags `useGetTagsQuery` (the existing, already-cached `2/tags/`
+ * chips down to whichever tags `useGetTagsQuery` (the existing, already-cached `2/tags/`
  * query used elsewhere for the search-filter tag tree - no new endpoint/fetch introduced
- * here) actually reports. While that query is still loading, shows all six optimistically
+ * here) actually reports. While that query is still loading, shows all of them optimistically
  * rather than flashing an empty strip - a stale-positive chip just fails the same way an
  * unseeded one always would (a caught, toasted "Vote failed"), it's not a worse outcome than
  * today's baseline. Once loaded, unseeded chips are hidden entirely rather than shown
@@ -47,6 +47,7 @@ const NO_MATCH_REASON_TAG_NAMES: Array<string> = [
   "ai-art",
   "no-collector-line",
   "non-english",
+  "external-ip",
 ];
 
 interface NoMatchReasonStripProps {

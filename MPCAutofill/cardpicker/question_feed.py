@@ -166,6 +166,33 @@ def _identify_printing_item(card: Card) -> QuestionFeedItem:
     )
 
 
+def _scryfall_illustration_url(card: Card) -> Optional[str]:
+    """
+    The Scryfall art-crop URL of `card`'s canonical printing, surfaced on artist-type feed
+    items (WTC artist question re-frame) so the frontend can show the artwork itself rather
+    than the full scanned card image. Delegates the printing lookup to `Card.
+    _get_indexed_printing_metadata` rather than re-deriving the same `canonical_card` (a
+    confirmed indexing match) -> RESOLVED-gated `inferred_canonical_card` precedence here -
+    that's the exact fallback chain `get_border_color`/`get_frame`/`get_frame_effects`/
+    `get_full_art` already share, and reimplementing it a second time would only risk the two
+    copies drifting. The URL itself is the one already harvested from Scryfall's bulk-data
+    dump into `CanonicalPrintingMetadata.art_crop_url` (see that field's own docstring), never
+    a hand-assembled CDN path - Scryfall's `cards.scryfall.io` image URLs are keyed by the
+    card's Scryfall UUID, not by set code/collector number, so a URL this module didn't read
+    out of the metadata sidecar could not be constructed correctly here anyway. Returns None
+    when the card has no canonical printing or that printing's metadata row carries no
+    art_crop_url (the frontend falls back to the plain card image).
+
+    Costs up to two small indexed lookups per call (the canonical printing FK, then its
+    metadata sidecar) - bounded and per-served-item, not per-candidate-scan, so no prefetch
+    wiring is added for it (artist items are served one per feed request).
+    """
+    metadata = card._get_indexed_printing_metadata()
+    if metadata is None or not metadata.art_crop_url:
+        return None
+    return metadata.art_crop_url
+
+
 def _artist_item(card: Card) -> QuestionFeedItem:
     serialised = card.serialise()
     confidently_known_artist_name = (
@@ -174,7 +201,10 @@ def _artist_item(card: Card) -> QuestionFeedItem:
         else None
     )
     return QuestionFeedItem(
-        type=TypeEnum.artist, card=serialised, confidentlyKnownArtistName=confidently_known_artist_name
+        type=TypeEnum.artist,
+        card=serialised,
+        confidentlyKnownArtistName=confidently_known_artist_name,
+        scryfallIllustrationUrl=_scryfall_illustration_url(card),
     )
 
 
