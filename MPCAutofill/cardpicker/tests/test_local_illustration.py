@@ -14,6 +14,8 @@ from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.local_illustration import (
     BASE_CONFIDENCE,
     ILLUSTRATION_ANONYMOUS_ID,
+    MULTIPLE_ILLUSTRATIONS_SKIP_REASON,
+    MULTIPLE_PRINTINGS_SKIP_REASON,
     NO_ARTIST_OCR_SKIP_REASON,
     NO_CANDIDATE_MATCH_SKIP_REASON,
     NO_EVIDENCE_SKIP_REASON,
@@ -165,7 +167,11 @@ class TestCalculateIllustrationVerdict:
         candidate = type("_C", (), {"pk": cc.pk})()
         return index, [candidate]
 
-    def test_single_illustration_votes_all_printings(self, db):
+    def test_one_illustration_one_printing_casts_exactly_one_vote(self, db):
+        """The ONLY case that votes after issue #525's 1:1 rule. (Renamed from
+        `test_single_illustration_votes_all_printings`: the old name described the pre-#525
+        behaviour - "vote every printing at full BASE_CONFIDENCE" - which this fixture never
+        actually exercised, since it only ever built one printing.)"""
         illustration_uuid = uuid.uuid4()
         index, candidates = self._build_index_and_mocks(
             "Christopher Rush", "Lightning Bolt", illustration_uuid, printing_pk=100
@@ -181,7 +187,9 @@ class TestCalculateIllustrationVerdict:
         assert verdict.skip_reason == ""
         assert verdict.confidence == BASE_CONFIDENCE
         assert verdict.illustration_count == 1
-        assert 100 in verdict.printing_pks
+        assert verdict.printing_count == 1
+        assert verdict.printing_pks == (100,)
+        assert verdict.illustration_id == str(illustration_uuid)
 
     def test_no_artist_match_abstains(self, db):
         index, candidates = self._build_index_and_mocks(
@@ -216,7 +224,15 @@ class TestCalculateIllustrationVerdict:
 
         assert verdict.skip_reason == NO_ILLUSTRATION_INDEX_ENTRY_SKIP_REASON
 
-    def test_multiple_illustrations_spreads_confidence(self, db):
+    def test_multiple_illustrations_abstains_and_retains_no_identity(self, db):
+        """Issue #525. THIS TEST PREVIOUSLY ASSERTED THE DEFECT
+        (`test_multiple_illustrations_spreads_confidence`: `skip_reason == ""`, two `printing_pks`,
+        `confidence == BASE_CONFIDENCE / 2`). The /N spread never reached the tally -
+        `resolve_vote_weight` takes no confidence argument and `VoteTuple` has no confidence field
+        - so those were two FULL-machine-weight votes for mutually exclusive printings under one
+        anonymous_id. It now abstains. No illustration identity is retained: there is no single
+        one, and inventing a representative would be picking an answer the evidence does not
+        support."""
         artist = CanonicalArtistFactory(name="Artist X")
         expansion = CanonicalExpansionFactory(code="test")
         cc1 = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion, pk=301)
@@ -234,10 +250,78 @@ class TestCalculateIllustrationVerdict:
             searchable_card_name="dragon",
         )
 
-        assert verdict.skip_reason == ""
+        assert verdict.skip_reason == MULTIPLE_ILLUSTRATIONS_SKIP_REASON
+        assert verdict.printing_pks == ()
         assert verdict.illustration_count == 2
-        assert verdict.confidence == pytest.approx(BASE_CONFIDENCE / 2)
-        assert len(verdict.printing_pks) == 2
+        assert verdict.printing_count == 2
+        assert verdict.illustration_id == ""
+        assert verdict.candidate_printing_pks == ()
+
+    def test_one_illustration_many_printings_abstains_but_retains_the_illustration(self, db):
+        """Issue #525's most common case, not an edge case: `illustration_id → printing` is 1:N,
+        so this fires for ANY reprinted artwork. The pre-#525 comment read "Exactly 1
+        illustration: vote every printing at full BASE_CONFIDENCE" - N full-weight votes for
+        mutually exclusive printings. It now abstains, but RETAINS the illustration identity and
+        the candidate printings, because that narrowing is genuinely established and issue #524
+        (`CardIllustrationVote`) is where it becomes persistable without re-deriving anything."""
+        artist = CanonicalArtistFactory(name="Artist Y")
+        expansion = CanonicalExpansionFactory(code="test")
+        shared_illustration = uuid.uuid4()
+        cc1 = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion, pk=401)
+        cc2 = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion, pk=402)
+        CanonicalPrintingMetadataFactory(canonical_card=cc1, illustration_id=shared_illustration)
+        CanonicalPrintingMetadataFactory(canonical_card=cc2, illustration_id=shared_illustration)
+        index = IllustrationIndex()
+        candidates = [type("_C", (), {"pk": cc1.pk})()]
+
+        verdict = calculate_illustration_verdict(
+            card_id=1,
+            evidence=type("E", (), {"artist_ocr_name": "Artist Y"})(),
+            illustration_index=index,
+            candidates=candidates,
+            searchable_card_name="dragon",
+        )
+
+        assert verdict.skip_reason == MULTIPLE_PRINTINGS_SKIP_REASON
+        assert verdict.printing_pks == ()  # nothing to cast
+        assert verdict.illustration_count == 1
+        assert verdict.printing_count == 2
+        # the recoverable fact, retained for issue #524 - and NOT in `printing_pks`, so no
+        # reordering of the runner's loop can turn it into cast votes.
+        assert verdict.illustration_id == str(shared_illustration)
+        assert set(verdict.candidate_printing_pks) == {401, 402}
+
+    def test_the_two_abstain_reasons_are_distinguishable(self, db):
+        """Only the single-illustration abstention carries a fact issue #524 can persist, so the
+        two must be separable by a plain `WHERE skip_reason = '...'` query."""
+        assert MULTIPLE_ILLUSTRATIONS_SKIP_REASON != MULTIPLE_PRINTINGS_SKIP_REASON
+
+    def test_the_same_printing_reached_twice_is_still_one_to_one(self, db):
+        """Two surviving candidates sharing an artist reach the same printing twice. That is a
+        genuinely 1:1 narrowing and must still vote - the de-duplication in the verdict exists so
+        it does not read as `MULTIPLE_PRINTINGS_SKIP_REASON`."""
+        artist = CanonicalArtistFactory(name="Artist Z")
+        expansion = CanonicalExpansionFactory(code="test")
+        illustration = uuid.uuid4()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion, pk=501)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=illustration)
+        # a second canonical card by the SAME artist under a DIFFERENT name - it contributes a
+        # second surviving candidate pk that maps to the same artist, hence the same lookup.
+        other = CanonicalCardFactory(name="Wyrm", artist=artist, expansion=expansion, pk=502)
+        index = IllustrationIndex()
+        candidates = [type("_C", (), {"pk": cc.pk})(), type("_C", (), {"pk": other.pk})()]
+
+        verdict = calculate_illustration_verdict(
+            card_id=1,
+            evidence=type("E", (), {"artist_ocr_name": "Artist Z"})(),
+            illustration_index=index,
+            candidates=candidates,
+            searchable_card_name="dragon",
+        )
+
+        assert verdict.skip_reason == ""
+        assert verdict.printing_pks == (501,)
+        assert verdict.printing_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +444,116 @@ class TestRunIllustrationCalculator:
         call_command("purge_machine_votes", run_id=run_id)
 
         assert CardPrintingTag.objects.filter(run_id=run_id).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# The 1:1 printing-resolution rule, end to end (issue #525)
+# ---------------------------------------------------------------------------
+
+
+class TestOneToOneRuleEndToEnd:
+    """Issue #525 through `run_illustration_calculator`: what actually reaches the DB. The
+    calculator emitted one `CardPrintingTag` per printing pk, so a multi-printing verdict wrote
+    several full-machine-weight rows for mutually exclusive printings under a single
+    `anonymous_id` - `cardprintingtag_unique_printing_vote` is on (card, printing, anonymous_id),
+    so they all persisted."""
+
+    def _artist_and_card(self, artist_name="Artist Q", card_name="Dragon"):
+        artist = CanonicalArtistFactory(name=artist_name)
+        expansion = CanonicalExpansionFactory(code="lea")
+        card = _eligible_card(name=card_name)
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name=artist_name)
+        return artist, expansion, card
+
+    def test_one_illustration_many_printings_writes_no_vote(self, db):
+        artist, expansion, card = self._artist_and_card()
+        shared_illustration = uuid.uuid4()
+        for _ in range(3):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared_illustration)
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.votes_written == 0
+        assert CardPrintingTag.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 0
+        assert result.skip_counts.get(MULTIPLE_PRINTINGS_SKIP_REASON) == 1
+        assert CardScanLog.objects.filter(
+            card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID, skip_reason=MULTIPLE_PRINTINGS_SKIP_REASON
+        ).exists()
+        # the coverage cost, measurable from the result itself.
+        assert result.cards_abstained_ambiguous == 1
+        assert result.printing_votes_withheld == 3
+
+    def test_multiple_illustrations_writes_no_vote(self, db):
+        artist, expansion, card = self._artist_and_card()
+        for _ in range(2):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.votes_written == 0
+        assert CardPrintingTag.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 0
+        assert result.skip_counts.get(MULTIPLE_ILLUSTRATIONS_SKIP_REASON) == 1
+        assert CardScanLog.objects.filter(
+            card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID, skip_reason=MULTIPLE_ILLUSTRATIONS_SKIP_REASON
+        ).exists()
+        assert result.cards_abstained_ambiguous == 1
+        assert result.printing_votes_withheld == 2
+
+    def test_one_illustration_one_printing_writes_exactly_one_vote(self, db):
+        artist, expansion, card = self._artist_and_card()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.votes_written == 1
+        votes = CardPrintingTag.objects.filter(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID)
+        assert votes.count() == 1
+        vote = votes.get()
+        assert vote.printing_id == cc.pk
+        assert vote.confidence == BASE_CONFIDENCE
+        assert vote.source == VoteSource.DEDUCTION
+        assert result.cards_abstained_ambiguous == 0
+        assert result.printing_votes_withheld == 0
+
+    def test_the_abstain_audit_sample_carries_the_retained_narrowing(self, db):
+        """Not persisted anywhere (issue #524 owns persistence) - but an operator running a DRY
+        RUN can still see exactly which illustration was resolved and which printings it narrowed
+        to, without querying the catalog again."""
+        artist, expansion, card = self._artist_and_card()
+        shared_illustration = uuid.uuid4()
+        printing_pks = set()
+        for _ in range(2):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared_illustration)
+            printing_pks.add(cc.pk)
+
+        result = run_illustration_calculator(dry_run=True)
+
+        entry = next(e for e in result.audit if e["card_id"] == card.pk)
+        assert entry["skip_reason"] == MULTIPLE_PRINTINGS_SKIP_REASON
+        assert entry["illustration_id"] == str(shared_illustration)
+        assert set(entry["candidate_printing_pks"]) == printing_pks
+        # dry run - nothing written, but the coverage figure is still available.
+        assert CardPrintingTag.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 0
+        assert CardScanLog.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 0
+        assert result.printing_votes_withheld == 2
+
+    def test_the_multi_illustration_abstain_invents_no_representative(self, db):
+        artist, expansion, card = self._artist_and_card()
+        for _ in range(3):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        result = run_illustration_calculator(dry_run=True)
+
+        entry = next(e for e in result.audit if e["card_id"] == card.pk)
+        assert entry["skip_reason"] == MULTIPLE_ILLUSTRATIONS_SKIP_REASON
+        assert entry["illustration_id"] == ""
+        assert entry["candidate_printing_pks"] == []
 
 
 # ---------------------------------------------------------------------------

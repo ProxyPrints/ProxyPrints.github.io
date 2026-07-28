@@ -2,8 +2,7 @@
 Stage D illustration deduction calculator (public issue #507, ``stage-d-illustration-v1``) — a
 new calculator in the Stage D framework that uses the ``illustration_id`` field imported from
 Scryfall (issue #506) to deduce printing identity. When an artist-OCR hit identifies the artist,
-and that artist has printings associated with exactly one ``illustration_id`` for this card name,
-we vote for all printings carrying that illustration.
+and that artist's printings of this card name narrow to exactly ONE printing, we vote for it.
 
 Anonymous ID: ``stage-d-illustration-v1``
 Source: ``VoteSource.DEDUCTION``
@@ -16,16 +15,40 @@ Logic:
   2. For each eligible card, use ``match_artist`` to fuzzy-match the OCR-extracted artist name
      against the card's candidate artists.
   3. For each surviving artist, look up the illustration index by ``(artist_pk, searchable_name)``.
-  4. Collect unique ``illustration_id`` values:
-     - 0 → abstain (no vote, skip logged)
-     - 1 → vote every printing of that illustration at ``BASE_CONFIDENCE``
-     - N>1 → union of printings across the N illustrations (plain set union), one vote each at
-       ``BASE_CONFIDENCE / N``
+  4. Resolve a printing ONLY at 1:1 — exactly one surviving ``illustration_id`` AND that
+     illustration mapping to exactly one printing:
+     - 0 illustrations → abstain (``no-illustration-index-entry``)
+     - 1 illustration → 1 printing → vote that printing at ``BASE_CONFIDENCE``
+     - 1 illustration → N printings → abstain (``multiple-printings-one-illustration``)
+     - N>1 illustrations → abstain (``multiple-illustrations``)
 
-NO vote pooling across illustration siblings — each printing gets its own independent vote.
-Confidence is currently informational-only (``resolve_vote_weight`` weights by source, never
-confidence — see ``vote_consensus.py``); the base/N division must NOT be "fixed" into weight
-math.
+THE 1:1 RULE (issue #525, 2026-07-28) — WHY BOTH MULTI-OUTCOME BRANCHES ABSTAIN. This calculator
+previously emitted one ``CardPrintingTag`` per printing in the verdict, so a single machine
+identity ended up voting simultaneously for several MUTUALLY EXCLUSIVE printings of the same
+card. The ``BASE_CONFIDENCE / N`` spread that was supposed to discount them is decorative:
+``vote_consensus.resolve_vote_weight(source, anonymous_id)`` takes no confidence argument and
+``VoteTuple`` carries no confidence field, so confidence NEVER reaches the tally — every emitted
+row landed at full ``PRINTING_TAG_MACHINE_WEIGHT``. The DB does not stop it either:
+``cardprintingtag_unique_printing_vote`` is on (card, printing, anonymous_id), so different
+printings under one identity all persist. Where md5 identity-group pooling is active those rows
+read as self-contradiction and get withheld; where it is not, they all count, at full machine
+weight, for outcomes that cannot all be true. The human submit path cannot do this —
+``post_submit_printing_tag`` deletes the voter's prior rows for the card before creating.
+
+Confidence stays informational-only. The base/N division must NOT be "fixed" into weight math
+(see ``vote_consensus.py``'s own warning); the fix is to stop casting the contradiction, not to
+make the consensus layer honour a discount.
+
+ABSTAIN-WITH-EVIDENCE, AND WHY THE TWO ABSTAIN REASONS ARE DISTINCT. Both multi-outcome cases
+record a ``CardScanLog`` row rather than dropping silently, but only ONE of them carries a
+recoverable fact: at 1 illustration → N printings the calculator KNOWS the illustration identity
+with full confidence and merely cannot choose a printing, so ``IllustrationVerdict`` retains that
+``illustration_id`` and the candidate printing pks. At N>1 illustrations there is no single
+identity to retain and none is invented. The two are separate ``skip_reason`` strings so the
+recoverable population is queryable. Nothing about the retained identity is PERSISTED here:
+human illustration answers have no vote model yet (issue #524, ``CardIllustrationVote``), and
+persisting the machine side is that issue's job — this abstain is the seam it plugs into, not
+the intended end state.
 
 Wired into ``local_calculate_verdicts.py`` (management command) after the fallback calculator,
 before slow-path routing. Reuses ``_eligible_cards_queryset`` from that module for the base
@@ -84,7 +107,20 @@ NO_ARTIST_OCR_SKIP_REASON = "no-artist-ocr"
 SINGLE_FACED_ONLY_SKIP_REASON = "multi-faced-v1"
 NO_CANDIDATE_MATCH_SKIP_REASON = "no-candidate-match"
 NO_ILLUSTRATION_INDEX_ENTRY_SKIP_REASON = "no-illustration-index-entry"
+
+# The two 1:1-rule abstentions (issue #525 — see the module docstring's "THE 1:1 RULE" section).
+# Deliberately TWO strings, not one: only the second carries a fact issue #524 can later persist
+# without re-deriving it, so the recoverable population has to be separable by a plain
+# `WHERE skip_reason = '...'` query.
+#
+# N>1 surviving illustrations — genuinely ambiguous, no single illustration identity exists to
+# retain. (This constant already existed in this module but was never reachable; the N>1 branch
+# cast N competing votes instead of using it. It now does what its name always said.)
 MULTIPLE_ILLUSTRATIONS_SKIP_REASON = "multiple-illustrations"
+# Exactly 1 surviving illustration, but it maps to more than one printing — the illustration
+# identity IS known; only the printing choice is undetermined. `IllustrationVerdict` carries the
+# `illustration_id` and the candidate printing pks on this abstention.
+MULTIPLE_PRINTINGS_SKIP_REASON = "multiple-printings-one-illustration"
 
 # Cards the join-key calculator already concluded have no confident hit —
 # this calculator only considers those. Carried verbatim from
@@ -268,13 +304,36 @@ def reset_illustration_index_cache_for_tests() -> None:
 
 @dataclass(frozen=True)
 class IllustrationVerdict:
-    """Pure result of one card's illustration deduction — no DB write yet."""
+    """
+    Pure result of one card's illustration deduction — no DB write yet.
+
+    ``printing_pks`` is the vote to cast and is EMPTY on every abstention. The narrowing evidence
+    an abstention did establish lives in the three fields below it, deliberately kept out of
+    ``printing_pks`` so no future reordering of the runner's loop can turn retained evidence into
+    cast votes:
+
+      - ``illustration_id``: the resolved illustration, as a string. Set when exactly one
+        illustration survived — i.e. on the 1:1 vote AND on the
+        ``MULTIPLE_PRINTINGS_SKIP_REASON`` abstention, which is the case issue #524
+        (``CardIllustrationVote``) will be able to persist without re-deriving anything. Empty
+        when N>1 illustrations survived: there is no single identity and none is invented.
+      - ``candidate_printing_pks``: the printings that illustration narrowed to. Populated on the
+        ``MULTIPLE_PRINTINGS_SKIP_REASON`` abstention.
+      - ``illustration_count``/``printing_count``: how ambiguous the abstention was, so the
+        narrowing is measurable rather than merely counted.
+
+    Nothing here is persisted beyond the ``CardScanLog.skip_reason`` string — see the module
+    docstring's "ABSTAIN-WITH-EVIDENCE" section.
+    """
 
     card_id: int
     printing_pks: tuple[int, ...] = ()
     confidence: float = 0.0
     skip_reason: str = ""
     illustration_count: int = 0
+    printing_count: int = 0
+    illustration_id: str = ""
+    candidate_printing_pks: tuple[int, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +352,14 @@ class IllustrationCalculatorResult:
     already_voted: int = 0
     skip_counts: dict[str, int] = field(default_factory=dict)
     audit: list[dict[str, Any]] = field(default_factory=list)
+    # THE COVERAGE COST OF THE 1:1 RULE (issue #525), made measurable rather than asserted.
+    # `cards_abstained_ambiguous` is how many cards the calculator would have voted on before the
+    # rule and now abstains on; `printing_votes_withheld` is how many CardPrintingTag rows those
+    # cards would have produced (one per competing printing). The ratio between them is the
+    # per-card contradiction width. Both are counted in dry-run mode too, so the figure can be
+    # obtained from a dry run rather than a live write.
+    cards_abstained_ambiguous: int = 0
+    printing_votes_withheld: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +453,10 @@ def calculate_illustration_verdict(
       2. For each surviving candidate pk, get its artist_pk via
          ``illustration_index.card_pk_to_artist_pk``.
       3. Look up ``(artist_pk, searchable_card_name)`` in the illustration index → illustration_ids.
-      4. 0 → abstain; 1 → full confidence; N>1 → spread.
+      4. Resolve a printing ONLY at 1:1 (issue #525 — see the module docstring's "THE 1:1 RULE"):
+         0 illustrations → abstain; 1 illustration → 1 printing → vote; 1 illustration → N
+         printings → abstain, RETAINING the illustration identity; N>1 illustrations → abstain,
+         retaining nothing but the counts.
 
     ``candidates`` is a list of objects with a ``.pk`` attribute (CanonicalCard pks) — either
     real ``CandidatePrinting`` objects from ``CandidateNameIndex.candidates_for()`` or lightweight
@@ -415,29 +485,54 @@ def calculate_illustration_verdict(
     n_illustrations = len(illustration_printing_map)
 
     if n_illustrations > 1:
-        # N>1 illustrations: union of printings across all illustrations, each at BASE_CONFIDENCE/N.
-        all_printing_pks: list[int] = []
+        # N>1 illustrations — abstain (issue #525). This branch used to cast the union of
+        # printings across all N illustrations, one vote each at BASE_CONFIDENCE/N: N
+        # full-machine-weight votes for mutually exclusive printings under ONE anonymous_id,
+        # because confidence never reaches the tally. Nothing is retained beyond the counts:
+        # there is no single illustration identity here and inventing a representative would be
+        # picking an answer the evidence does not support.
+        distinct_printing_pks: list[int] = []
         seen_pks: set[int] = set()
         for printing_pks in illustration_printing_map.values():
             for pk in printing_pks:
                 if pk not in seen_pks:
                     seen_pks.add(pk)
-                    all_printing_pks.append(pk)
-        confidence = BASE_CONFIDENCE / n_illustrations
+                    distinct_printing_pks.append(pk)
         return IllustrationVerdict(
             card_id=card_id,
-            printing_pks=tuple(all_printing_pks),
-            confidence=confidence,
+            skip_reason=MULTIPLE_ILLUSTRATIONS_SKIP_REASON,
             illustration_count=n_illustrations,
+            printing_count=len(distinct_printing_pks),
         )
 
-    # Exactly 1 illustration: vote every printing at full BASE_CONFIDENCE.
-    single_illustration_pks = next(iter(illustration_printing_map.values()))
+    single_illustration_id, single_illustration_pks_raw = next(iter(illustration_printing_map.items()))
+    # de-duplicate: the same printing can be reached twice when two surviving candidates share an
+    # artist, which would otherwise read as "ambiguous" for a genuinely 1:1 narrowing.
+    single_illustration_pks = list(dict.fromkeys(single_illustration_pks_raw))
+
+    if len(single_illustration_pks) != 1:
+        # Exactly 1 illustration, but it maps to N printings — the common case for any reprinted
+        # artwork, not an edge case. Abstain (issue #525), but RETAIN what was genuinely
+        # established: the illustration identity is known with full confidence, only the printing
+        # choice is undetermined. Issue #524 (`CardIllustrationVote`) is where this becomes a
+        # persisted answer; nothing is written here.
+        return IllustrationVerdict(
+            card_id=card_id,
+            skip_reason=MULTIPLE_PRINTINGS_SKIP_REASON,
+            illustration_count=1,
+            printing_count=len(single_illustration_pks),
+            illustration_id=single_illustration_id,
+            candidate_printing_pks=tuple(single_illustration_pks),
+        )
+
+    # 1:1 — exactly one illustration, exactly one printing. The only case that votes.
     return IllustrationVerdict(
         card_id=card_id,
-        printing_pks=tuple(single_illustration_pks),
+        printing_pks=(single_illustration_pks[0],),
         confidence=BASE_CONFIDENCE,
         illustration_count=1,
+        printing_count=1,
+        illustration_id=single_illustration_id,
     )
 
 
@@ -607,6 +702,26 @@ def run_illustration_calculator(
 
         if verdict.skip_reason:
             result.skip_counts[verdict.skip_reason] = result.skip_counts.get(verdict.skip_reason, 0) + 1
+            if verdict.skip_reason in (MULTIPLE_ILLUSTRATIONS_SKIP_REASON, MULTIPLE_PRINTINGS_SKIP_REASON):
+                # The 1:1 rule's own coverage cost (issue #525) - see the result dataclass' own
+                # comment. `printing_count` is exactly the number of CardPrintingTag rows the
+                # pre-#525 code would have written for this card.
+                result.cards_abstained_ambiguous += 1
+                result.printing_votes_withheld += verdict.printing_count
+                if len(result.audit) < audit_sample_size:
+                    # The retained narrowing, carried into the audit sample so an operator can see
+                    # WHAT was established without querying anything. `illustration_id` is set only
+                    # for the single-illustration case - issue #524's recoverable population.
+                    result.audit.append(
+                        {
+                            "card_id": card.pk,
+                            "skip_reason": verdict.skip_reason,
+                            "illustration_count": verdict.illustration_count,
+                            "printing_count": verdict.printing_count,
+                            "illustration_id": verdict.illustration_id,
+                            "candidate_printing_pks": list(verdict.candidate_printing_pks),
+                        }
+                    )
             if not dry_run:
                 scan_log_batch.append(
                     CardScanLog(
@@ -618,7 +733,10 @@ def run_illustration_calculator(
                 )
             continue
 
-        # Vote to cast: one CardPrintingTag per printing in the verdict.
+        # Vote to cast. Post-#525 this is always exactly one printing - the 1:1 rule is the only
+        # branch that reaches here with a non-empty `printing_pks` - but the loop below is left
+        # general rather than asserting a length, since the batching shape is shared with the
+        # other Stage D calculators.
         n_printings = len(verdict.printing_pks)
         result.votes_would_cast += n_printings
 
@@ -627,6 +745,8 @@ def run_illustration_calculator(
                 {
                     "card_id": card.pk,
                     "illustration_count": verdict.illustration_count,
+                    "printing_count": verdict.printing_count,
+                    "illustration_id": verdict.illustration_id,
                     "confidence": verdict.confidence,
                     "printing_pks": list(verdict.printing_pks),
                 }
