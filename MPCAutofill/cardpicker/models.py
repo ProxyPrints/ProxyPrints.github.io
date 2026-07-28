@@ -1004,6 +1004,91 @@ class CardArtistVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> {outcome}"
 
 
+class CardIllustrationVote(AbstractWeightedVote):
+    """
+    A vote that a given `Card` (an image in this fork's catalogue) depicts a specific Scryfall
+    ARTWORK, identified by `illustration_id`, or definitively depicts an artwork with no known
+    illustration identity (`is_unknown=True`). Issue #524.
+
+    WHY THIS GRAIN EXISTS AT ALL. `illustration_id` identifies an ARTWORK, and artwork-to-printing
+    is 1:N — roughly 2.2 printings share each illustration across the catalogue. Identifying the
+    artwork therefore NARROWS the printing but usually does not determine it, so the claim "this
+    card depicts illustration X" is genuinely not expressible as any number of `CardPrintingTag`
+    rows: one row picks a printing the evidence does not support, and N rows assert N mutually
+    exclusive printings at once. The knowledge is real and had nowhere to live until this model.
+
+    NOT A FOREIGN KEY, AND DELIBERATELY SO. `illustration_id` is a plain indexed `UUIDField`, not
+    an FK, because there is no `CanonicalIllustration` table and this model must not cause one to
+    exist. The value is Scryfall's own identifier, already imported onto
+    `CanonicalPrintingMetadata.illustration_id` (also a plain indexed `UUIDField`). The narrowing
+    from an illustration to its candidate printings is a READ — a join through
+    `CanonicalPrintingMetadata` (see `local_illustration.printings_for_illustration`) — and must
+    never be materialised as implied printing votes.
+
+    THE UNIQUENESS CONSTRAINT IS UNCONDITIONAL, AND THAT DIVERGENCE IS THE POINT (issue #525).
+    `UniqueConstraint(fields=["card", "anonymous_id"])` carries NO `condition=`, so ONE identity
+    can hold at most ONE illustration opinion per card, full stop — including across the
+    known/unknown split. Both sibling identity-vote models are keyed more loosely:
+    `CardPrintingTag` on (card, printing, anonymous_id) and `CardArtistVote`'s artist branch on
+    (card, artist, anonymous_id), each with a partial `condition=`. Both therefore rely on the
+    SUBMIT VIEW deleting the voter's prior rows for the card before creating the new one to get
+    one-vote-per-card; `CardArtistVote`'s own comment concedes as much, calling its constraint
+    "a safety net against a double-submit race, not the primary mechanism".
+
+    That works only for voters who go through a view. MACHINE writers do not: they `bulk_create`,
+    which bypasses the submit path entirely — and that is exactly how the illustration calculator
+    came to cast several mutually exclusive `CardPrintingTag` votes for one card under a single
+    `anonymous_id` (issue #525: N full-machine-weight rows for N competing printings, all
+    persisted, because the constraint's `printing` term let them coexist and the `BASE_CONFIDENCE
+    / N` discount never reached the tally). The remedy chosen there was to make the calculator
+    abstain; the remedy chosen HERE is structural — under an unconditional (card, anonymous_id)
+    key a self-contradiction is not merely discouraged by convention in a view, it is
+    UNREPRESENTABLE in the table, for every writer, human or machine, forever.
+
+    DO NOT "FIX" THIS TO MATCH ITS SIBLINGS. Adding `illustration_id` to the constraint's fields,
+    or attaching a `condition=Q(is_unknown=False)`, would re-open precisely the hole #525 closed:
+    it would let one identity hold two contradictory illustration claims (or one known plus one
+    unknown claim) for the same card simultaneously. The cost of the strict key is that a writer
+    with a CHANGED answer must UPDATE the existing row rather than insert alongside it — see
+    `local_illustration._purge_and_write_illustration_votes`, which compares the stored
+    `illustration_id` VALUE and not merely the (card, anonymous_id) key for exactly this reason.
+    That cost is intended: an update is what a corrected answer actually is.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="illustration_votes")
+    # Scryfall's artwork identifier, matching `CanonicalPrintingMetadata.illustration_id` in both
+    # type and indexing. Nullable because `is_unknown=True` rows carry no identity (the XOR check
+    # below is what keeps "null" and "unknown" from drifting apart).
+    illustration_id = models.UUIDField(null=True, blank=True, db_index=True)
+    is_unknown = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            # Mirrors `cardartistvote_artist_xor_unknown` exactly: a row either names an
+            # illustration or declares the illustration unknown, never both and never neither.
+            models.CheckConstraint(
+                check=(
+                    models.Q(illustration_id__isnull=False, is_unknown=False)
+                    | models.Q(illustration_id__isnull=True, is_unknown=True)
+                ),
+                name="cardillustrationvote_illustration_xor_unknown",
+            ),
+            # UNCONDITIONAL — no `condition=`, and no `illustration_id` in `fields`. This is the
+            # deliberate divergence from `CardPrintingTag`/`CardArtistVote` documented at length in
+            # the class docstring above (issue #525): it is the PRIMARY mechanism for
+            # one-illustration-opinion-per-(card, identity), not a race safety net behind a view
+            # that machine writers never call.
+            models.UniqueConstraint(
+                fields=["card", "anonymous_id"],
+                name="cardillustrationvote_unique_vote",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        outcome = "UNKNOWN" if self.is_unknown else str(self.illustration_id)
+        return f"[{self.source}] {self.card.name} -> illustration {outcome}"
+
+
 class TagModerationClass(models.TextChoices):
     """
     Whether consensus on this tag resolves like any other (STANDARD) or requires a privileged

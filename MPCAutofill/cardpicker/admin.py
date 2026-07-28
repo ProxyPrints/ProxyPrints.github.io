@@ -13,6 +13,7 @@ from .models import (
     CanonicalPrintingMetadata,
     Card,
     CardArtistVote,
+    CardIllustrationVote,
     CardPrintingTag,
     CardReport,
     CardScanLog,
@@ -200,6 +201,29 @@ class AdminCardArtistVote(admin.ModelAdmin[CardArtistVote]):
     list_filter = ("source", "is_unknown", "peer", ContestedArtistFilter)
     search_fields = ("card__name",)
     raw_id_fields = ["card", "artist"]
+
+
+@admin.register(CardIllustrationVote)
+class AdminCardIllustrationVote(admin.ModelAdmin[CardIllustrationVote]):
+    """Issue #524. No `contested` filter yet - there is no `illustration_consensus` module to
+    wrap, unlike the three above; add one here when consensus at this grain lands."""
+
+    list_display = (
+        "card",
+        "illustration_id",
+        "is_unknown",
+        "source",
+        "peer",
+        "confidence",
+        "anonymous_id",
+        "created_at",
+    )
+    list_filter = ("source", "is_unknown", "peer")
+    # `illustration_id` is a plain indexed UUIDField, not an FK (there is no CanonicalIllustration
+    # table - see the model's own docstring), so it is searchable directly rather than via a
+    # related lookup.
+    search_fields = ("card__name", "illustration_id")
+    raw_id_fields = ["card"]
 
 
 @admin.register(CardTagVote)

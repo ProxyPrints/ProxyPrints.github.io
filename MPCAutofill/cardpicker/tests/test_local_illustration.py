@@ -10,6 +10,9 @@ import uuid
 
 import pytest
 
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
+
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.local_illustration import (
     BASE_CONFIDENCE,
@@ -24,11 +27,15 @@ from cardpicker.local_illustration import (
     IllustrationIndex,
     _eligible_illustration_cards_queryset,
     _get_cached_illustration_index,
+    _split_new_illustration_votes,
     calculate_illustration_verdict,
+    printings_for_illustration,
     reset_illustration_index_cache_for_tests,
     run_illustration_calculator,
 )
 from cardpicker.models import (
+    CardArtistVote,
+    CardIllustrationVote,
     CardPrintingTag,
     CardScanLog,
     PrintingTagStatus,
@@ -955,3 +962,724 @@ class TestAlreadyVotedIsNotStructurallyZero:
         # the winner's row survives untouched - the purge must not have run for a skipped card.
         assert CardPrintingTag.objects.filter(pk=winner.pk).exists()
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 1
+
+
+# =============================================================================================
+# CardIllustrationVote — the model's constraints (issue #524)
+# =============================================================================================
+
+
+class TestCardIllustrationVoteConstraints:
+    """`CardIllustrationVote`'s two constraints, asserted at the DB level rather than trusted from
+    the model definition. The uniqueness one deliberately DIVERGES from every sibling identity-vote
+    model (`CardPrintingTag`, `CardArtistVote`) and the divergence is the point - see the model's
+    own docstring and issue #525."""
+
+    def test_a_row_may_name_an_illustration(self, db):
+        card = _eligible_card()
+        illustration = uuid.uuid4()
+        vote = CardIllustrationVote.objects.create(
+            card=card, illustration_id=illustration, is_unknown=False, anonymous_id="voter-a"
+        )
+        assert vote.illustration_id == illustration
+
+    def test_a_row_may_declare_the_illustration_unknown(self, db):
+        card = _eligible_card()
+        vote = CardIllustrationVote.objects.create(
+            card=card, illustration_id=None, is_unknown=True, anonymous_id="voter-a"
+        )
+        assert vote.is_unknown is True
+
+    def test_naming_an_illustration_and_claiming_unknown_is_rejected(self, db):
+        """The XOR check, mirroring `cardartistvote_artist_xor_unknown`."""
+        card = _eligible_card()
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                CardIllustrationVote.objects.create(
+                    card=card, illustration_id=uuid.uuid4(), is_unknown=True, anonymous_id="voter-a"
+                )
+
+    def test_naming_neither_is_rejected(self, db):
+        card = _eligible_card()
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                CardIllustrationVote.objects.create(
+                    card=card, illustration_id=None, is_unknown=False, anonymous_id="voter-a"
+                )
+
+    def test_one_identity_cannot_hold_two_illustration_opinions_on_one_card(self, db):
+        """THE DIVERGENCE, AND THE WHOLE REASON THE CONSTRAINT IS UNCONDITIONAL (issue #525).
+
+        `CardPrintingTag`'s key is (card, printing, anonymous_id) and `CardArtistVote`'s artist
+        branch is (card, artist, anonymous_id) - under EITHER shape this insert would succeed,
+        because the second row names a different illustration. Both models rely on the submit VIEW
+        deleting prior rows to get one-vote-per-card, which machine writers using `bulk_create`
+        never call; that is exactly how the illustration calculator came to hold several mutually
+        exclusive printing votes under one identity. Here it is a DB error, not a convention."""
+        card = _eligible_card()
+        CardIllustrationVote.objects.create(
+            card=card, illustration_id=uuid.uuid4(), is_unknown=False, anonymous_id="voter-a"
+        )
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                CardIllustrationVote.objects.create(
+                    card=card, illustration_id=uuid.uuid4(), is_unknown=False, anonymous_id="voter-a"
+                )
+
+    def test_one_identity_cannot_hold_a_named_and_an_unknown_opinion_on_one_card(self, db):
+        """A `condition=`d constraint (either sibling's shape) would permit this pair; the
+        unconditional one does not. "This is illustration X" and "the illustration is unknown" are
+        contradictory claims and one identity may not hold both."""
+        card = _eligible_card()
+        CardIllustrationVote.objects.create(
+            card=card, illustration_id=uuid.uuid4(), is_unknown=False, anonymous_id="voter-a"
+        )
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                CardIllustrationVote.objects.create(
+                    card=card, illustration_id=None, is_unknown=True, anonymous_id="voter-a"
+                )
+
+    def test_different_identities_may_disagree_about_the_same_card(self, db):
+        """The constraint scopes contradiction OUT of a single identity, not out of the tally -
+        disagreement between voters is what the consensus layer exists to reconcile."""
+        card = _eligible_card()
+        CardIllustrationVote.objects.create(
+            card=card, illustration_id=uuid.uuid4(), is_unknown=False, anonymous_id="voter-a"
+        )
+        CardIllustrationVote.objects.create(
+            card=card, illustration_id=uuid.uuid4(), is_unknown=False, anonymous_id="voter-b"
+        )
+        assert CardIllustrationVote.objects.filter(card=card).count() == 2
+
+    def test_one_identity_may_vote_on_many_cards(self, db):
+        illustration = uuid.uuid4()
+        for _ in range(3):
+            CardIllustrationVote.objects.create(
+                card=_eligible_card(), illustration_id=illustration, is_unknown=False, anonymous_id="voter-a"
+            )
+        assert CardIllustrationVote.objects.filter(anonymous_id="voter-a").count() == 3
+
+    def test_deleting_the_card_deletes_its_illustration_votes(self, db):
+        card = _eligible_card()
+        CardIllustrationVote.objects.create(
+            card=card, illustration_id=uuid.uuid4(), is_unknown=False, anonymous_id="voter-a"
+        )
+        card.delete()
+        assert CardIllustrationVote.objects.count() == 0
+
+    def test_votes_are_reachable_from_the_card_by_related_name(self, db):
+        card = _eligible_card()
+        CardIllustrationVote.objects.create(
+            card=card, illustration_id=uuid.uuid4(), is_unknown=False, anonymous_id="voter-a"
+        )
+        assert card.illustration_votes.count() == 1
+
+
+# =============================================================================================
+# The read-side narrowing (issue #524, task 3)
+# =============================================================================================
+
+
+class TestPrintingsForIllustration:
+    """`printings_for_illustration` is the narrowing an illustration vote implies, expressed as a
+    READ. It must never be materialised as implied printing votes - that materialisation IS issue
+    #525's defect."""
+
+    def _catalog(self):
+        artist = CanonicalArtistFactory(name="Artist Q")
+        expansion = CanonicalExpansionFactory(code="lea")
+        shared = uuid.uuid4()
+        other = uuid.uuid4()
+        shared_ccs = []
+        for _ in range(3):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared)
+            shared_ccs.append(cc)
+        odd_one = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=odd_one, illustration_id=other)
+        return shared, other, shared_ccs, odd_one
+
+    def test_returns_every_printing_carrying_the_illustration(self, db):
+        shared, _other, shared_ccs, odd_one = self._catalog()
+        found = set(printings_for_illustration(shared).values_list("pk", flat=True))
+        assert found == {cc.pk for cc in shared_ccs}
+        assert odd_one.pk not in found
+
+    def test_accepts_a_string_illustration_id(self, db):
+        """`IllustrationVerdict.illustration_id` and `CardIllustrationVote.illustration_id` reach
+        callers as a str and a UUID respectively; both must work."""
+        shared, _other, shared_ccs, _odd = self._catalog()
+        assert printings_for_illustration(str(shared)).count() == len(shared_ccs)
+
+    def test_scoping_to_a_candidate_list_narrows_the_result(self, db):
+        shared, _other, shared_ccs, _odd = self._catalog()
+        scope = [shared_ccs[0].pk]
+        found = set(printings_for_illustration(shared, candidate_printing_pks=scope).values_list("pk", flat=True))
+        assert found == {shared_ccs[0].pk}
+
+    def test_the_scope_intersects_rather_than_replaces(self, db):
+        """A candidate pk that does NOT carry this illustration must not be returned just because
+        the caller listed it - the scope narrows, it never adds."""
+        shared, _other, shared_ccs, odd_one = self._catalog()
+        found = set(
+            printings_for_illustration(shared, candidate_printing_pks=[shared_ccs[0].pk, odd_one.pk]).values_list(
+                "pk", flat=True
+            )
+        )
+        assert found == {shared_ccs[0].pk}
+
+    def test_the_scope_reaches_the_compiled_sql(self, db):
+        """Batch-scale cost, asserted on the compiled SQL rather than only on the result set -
+        the same evidence standard `TestEligibleIllustrationCardsQuerysetCardIdScoping` uses."""
+        shared, _other, shared_ccs, _odd = self._catalog()
+        scoped_sql = str(printings_for_illustration(shared, candidate_printing_pks=[shared_ccs[0].pk]).query)
+        unscoped_sql = str(printings_for_illustration(shared).query)
+        assert str(shared_ccs[0].pk) in scoped_sql
+        assert "IN (" in scoped_sql
+        assert str(shared_ccs[0].pk) not in unscoped_sql
+
+    def test_an_unknown_illustration_narrows_to_nothing(self, db):
+        self._catalog()
+        assert printings_for_illustration(uuid.uuid4()).count() == 0
+
+    def test_it_returns_a_lazy_queryset_and_writes_nothing(self, db):
+        shared, _other, _shared_ccs, _odd = self._catalog()
+        with CaptureQueriesContext(connection) as captured:
+            queryset = printings_for_illustration(shared)
+        assert len(captured) == 0, "constructing the narrowing must not hit the database"
+        assert queryset.count() >= 1
+        assert CardPrintingTag.objects.count() == 0
+
+
+# =============================================================================================
+# The machine illustration writer (issue #524, task 2)
+# =============================================================================================
+
+
+class TestIllustrationVoteWriter:
+    """`run_illustration_calculator` writes a `CardIllustrationVote` whenever it resolves exactly
+    ONE illustration - INCLUDING the cards issue #525's 1:1 rule makes abstain from a printing
+    vote. #526 retained `illustration_id` on the verdict for exactly this consumer."""
+
+    def _artist_and_card(self, artist_name="Artist Q", card_name="Dragon"):
+        artist = CanonicalArtistFactory(name=artist_name)
+        expansion = CanonicalExpansionFactory(code="lea")
+        card = _eligible_card(name=card_name)
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name=artist_name)
+        return artist, expansion, card
+
+    def test_one_illustration_many_printings_writes_the_illustration_vote_and_no_printing_vote(self, db):
+        """THE CASE THIS WHOLE ISSUE EXISTS FOR. Pre-#524 this card produced nothing but a
+        `CardScanLog` skip string; the resolved artwork identity was discarded. The 1:1 printing
+        rule is UNCHANGED - still zero printing votes."""
+        artist, expansion, card = self._artist_and_card()
+        shared_illustration = uuid.uuid4()
+        for _ in range(3):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared_illustration)
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.votes_written == 0
+        assert CardPrintingTag.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 0
+        assert result.illustration_votes_written == 1
+        vote = CardIllustrationVote.objects.get(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID)
+        assert vote.illustration_id == shared_illustration
+        assert vote.is_unknown is False
+        assert vote.source == VoteSource.DEDUCTION
+        assert vote.confidence == BASE_CONFIDENCE
+        assert vote.run_id == result.run_id
+        # #526's abstain reason is retained unchanged.
+        assert CardScanLog.objects.filter(
+            card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID, skip_reason=MULTIPLE_PRINTINGS_SKIP_REASON
+        ).exists()
+
+    def test_the_illustration_vote_is_not_expanded_into_printing_votes(self, db):
+        """The narrowing stays a read. One artwork vote, never one vote per printing sharing it -
+        that expansion is issue #525's defect, restated at a new grain."""
+        artist, expansion, card = self._artist_and_card()
+        shared_illustration = uuid.uuid4()
+        for _ in range(4):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared_illustration)
+
+        run_illustration_calculator(dry_run=False)
+
+        assert CardIllustrationVote.objects.filter(card=card).count() == 1
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 0
+        # ...and the narrowing the single vote implies is still fully recoverable, as a READ.
+        assert printings_for_illustration(shared_illustration).count() == 4
+
+    def test_the_one_to_one_case_writes_both_grains(self, db):
+        artist, expansion, card = self._artist_and_card()
+        illustration = uuid.uuid4()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=illustration)
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.votes_written == 1
+        assert CardPrintingTag.objects.get(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID).printing_id == cc.pk
+        assert result.illustration_votes_written == 1
+        assert CardIllustrationVote.objects.get(card=card).illustration_id == illustration
+
+    def test_multiple_illustrations_writes_no_illustration_vote(self, db):
+        """N>1 illustrations: no single identity exists, so nothing is recorded at either grain and
+        #526's skip reason is untouched. Inventing a representative would be picking an answer the
+        evidence does not support."""
+        artist, expansion, card = self._artist_and_card()
+        for _ in range(2):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.illustration_votes_written == 0
+        assert CardIllustrationVote.objects.count() == 0
+        assert CardPrintingTag.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 0
+        assert CardScanLog.objects.filter(
+            card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID, skip_reason=MULTIPLE_ILLUSTRATIONS_SKIP_REASON
+        ).exists()
+
+    def test_no_candidate_match_writes_no_illustration_vote(self, db):
+        artist, expansion, card = self._artist_and_card(artist_name="Artist Q")
+        cc = CanonicalCardFactory(
+            name="Dragon", artist=CanonicalArtistFactory(name="Someone Else"), expansion=expansion
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.illustration_votes_written == 0
+        assert CardIllustrationVote.objects.count() == 0
+
+    def test_dry_run_writes_no_illustration_vote_but_still_counts_it(self, db):
+        artist, expansion, card = self._artist_and_card()
+        shared_illustration = uuid.uuid4()
+        for _ in range(2):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared_illustration)
+
+        result = run_illustration_calculator(dry_run=True)
+
+        assert result.illustration_votes_would_cast == 1
+        assert result.illustration_votes_written == 0
+        assert CardIllustrationVote.objects.count() == 0
+
+    def test_the_anonymous_id_is_not_bumped(self, db):
+        """No version string moves as part of #524 (#525's own instruction: a bump is unsafe
+        pending separate backend investigation). Both grains share the one identity."""
+        artist, expansion, card = self._artist_and_card()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        run_illustration_calculator(dry_run=False)
+
+        assert ILLUSTRATION_ANONYMOUS_ID == "stage-d-illustration-v1"
+        assert CardIllustrationVote.objects.get(card=card).anonymous_id == ILLUSTRATION_ANONYMOUS_ID
+
+    def test_illustration_votes_carry_the_run_id(self, db):
+        artist, expansion, card = self._artist_and_card()
+        shared_illustration = uuid.uuid4()
+        for _ in range(2):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared_illustration)
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert CardIllustrationVote.objects.filter(run_id=result.run_id).count() == 1
+
+
+# =============================================================================================
+# Idempotence, the changed-answer path, and cancel-safety for the illustration grain
+# =============================================================================================
+
+
+class TestIllustrationVoteIdempotenceAndCorrection:
+    """The design point the unconditional UNIQUE(card, anonymous_id) forces: the pre-write split
+    must compare the illustration_id VALUE, not just the (card, anonymous_id) KEY. A key-only
+    comparison makes an unchanged answer AND a corrected answer both look like collisions, so the
+    corrected one can never land - and `ignore_conflicts=True` swallows the attempt silently."""
+
+    def _artist_and_card(self, artist_name="Artist Q", card_name="Dragon"):
+        artist = CanonicalArtistFactory(name=artist_name)
+        expansion = CanonicalExpansionFactory(code="lea")
+        card = _eligible_card(name=card_name)
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name=artist_name)
+        return artist, expansion, card
+
+    def test_an_unchanged_answer_is_a_no_op_counted_as_already_voted(self, db):
+        card = _eligible_card()
+        illustration = uuid.uuid4()
+        existing = CardIllustrationVote.objects.create(
+            card=card, illustration_id=illustration, is_unknown=False, anonymous_id=ILLUSTRATION_ANONYMOUS_ID
+        )
+        proposed = CardIllustrationVote(
+            card_id=card.pk,
+            illustration_id=str(illustration),  # str, as the verdict carries it
+            is_unknown=False,
+            anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+        )
+
+        new_votes, already_voted = _split_new_illustration_votes([proposed])
+
+        assert new_votes == []
+        assert already_voted == 1
+        assert CardIllustrationVote.objects.get(pk=existing.pk).illustration_id == illustration
+
+    def test_a_changed_answer_is_kept_by_the_split(self, db):
+        """THE CASE A KEY-ONLY COMPARISON SILENTLY BREAKS. Same card, same identity, DIFFERENT
+        illustration - a corrected conclusion, not a collision."""
+        card = _eligible_card()
+        CardIllustrationVote.objects.create(
+            card=card, illustration_id=uuid.uuid4(), is_unknown=False, anonymous_id=ILLUSTRATION_ANONYMOUS_ID
+        )
+        corrected = uuid.uuid4()
+        proposed = CardIllustrationVote(
+            card_id=card.pk,
+            illustration_id=str(corrected),
+            is_unknown=False,
+            anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+        )
+
+        new_votes, already_voted = _split_new_illustration_votes([proposed])
+
+        assert new_votes == [proposed]
+        assert already_voted == 0
+
+    def test_a_changed_answer_lands_end_to_end(self, db):
+        """THE REGRESSION TEST FOR THE DESIGN POINT, through the real runner: a metadata refresh
+        moves the card's artwork to a different illustration, and the stored vote must FOLLOW it.
+        Under a key-only split this assertion fails with the stale UUID still in the row."""
+        artist, expansion, card = self._artist_and_card()
+        first_illustration = uuid.uuid4()
+        ccs = []
+        for _ in range(2):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=first_illustration)
+            ccs.append(cc)
+
+        first = run_illustration_calculator(dry_run=False)
+        assert first.illustration_votes_written == 1
+        stored = CardIllustrationVote.objects.get(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID)
+        assert stored.illustration_id == first_illustration
+
+        # A metadata refresh: `import_scryfall_printing_metadata` re-populates illustration_id in
+        # place, and this card's artwork now resolves to a different illustration. (The scan-log
+        # row and the index cache from the first run are cleared the way an operator's re-run
+        # would clear them.)
+        corrected_illustration = uuid.uuid4()
+        for cc in ccs:
+            cc.printing_metadata.illustration_id = corrected_illustration
+            cc.printing_metadata.save(update_fields=["illustration_id"])
+        CardScanLog.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).delete()
+        reset_illustration_index_cache_for_tests()
+
+        second = run_illustration_calculator(dry_run=False)
+
+        assert second.illustration_votes_already_voted == 0
+        assert second.illustration_votes_written == 1
+        # ONE row, carrying the CORRECTED value - the unconditional constraint guarantees the first.
+        rows = CardIllustrationVote.objects.filter(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID)
+        assert rows.count() == 1
+        assert rows.get().illustration_id == corrected_illustration
+
+    def test_rerunning_with_an_unchanged_answer_writes_nothing_end_to_end(self, db):
+        """The other half of the same seam: idempotence must survive the value comparison."""
+        artist, expansion, card = self._artist_and_card()
+        shared_illustration = uuid.uuid4()
+        for _ in range(2):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared_illustration)
+
+        first = run_illustration_calculator(dry_run=False)
+        original_pk = CardIllustrationVote.objects.get(card=card).pk
+        CardScanLog.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).delete()
+
+        second = run_illustration_calculator(dry_run=False)
+
+        assert first.illustration_votes_written == 1
+        assert second.illustration_votes_written == 0
+        assert second.illustration_votes_already_voted == 1
+        # untouched, not deleted-and-reinserted.
+        assert CardIllustrationVote.objects.get(card=card).pk == original_pk
+
+    def test_a_stale_version_row_is_overwritten_not_counted_as_a_collision(self, db):
+        """Calculator-version self-overwrite (#519/#520) at the new grain: a `...-v0` row is a
+        different anonymous_id, so the split never sees it, and the family-scoped purge removes it
+        before the current version's row lands."""
+        artist, expansion, card = self._artist_and_card()
+        stale = CardIllustrationVote.objects.create(
+            card=card,
+            illustration_id=uuid.uuid4(),
+            is_unknown=False,
+            anonymous_id="stage-d-illustration-v0",
+            source=VoteSource.DEDUCTION,
+        )
+        illustration = uuid.uuid4()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=illustration)
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.illustration_votes_already_voted == 0
+        assert not CardIllustrationVote.objects.filter(pk=stale.pk).exists()
+        assert CardIllustrationVote.objects.get(card=card).illustration_id == illustration
+
+    def test_a_human_vote_on_the_same_card_is_never_purged(self, db):
+        """`purge_stale_machine_votes` returns 0 for a non-machine anonymous_id (human voters use
+        UUIDs, which never match the `<family>-v<n>` shape), so a human's illustration answer
+        survives every calculator re-run - and the unconditional constraint does not stand in the
+        way, because it is scoped per identity."""
+        artist, expansion, card = self._artist_and_card()
+        human_illustration = uuid.uuid4()
+        human = CardIllustrationVote.objects.create(
+            card=card,
+            illustration_id=human_illustration,
+            is_unknown=False,
+            anonymous_id=str(uuid.uuid4()),
+            source=VoteSource.USER,
+        )
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        run_illustration_calculator(dry_run=False)
+
+        assert CardIllustrationVote.objects.get(pk=human.pk).illustration_id == human_illustration
+        assert CardIllustrationVote.objects.filter(card=card).count() == 2
+
+    def test_the_purge_is_scoped_to_the_rows_being_written(self, db):
+        """A card whose vote the split skipped as unchanged must KEEP its row. Purging the full
+        batch would delete it and then not re-insert it - the vote destroyed to replace it with
+        nothing."""
+        artist, expansion, card = self._artist_and_card()
+        shared_illustration = uuid.uuid4()
+        for _ in range(2):
+            cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+            CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=shared_illustration)
+        existing = CardIllustrationVote.objects.create(
+            card=card,
+            illustration_id=shared_illustration,
+            is_unknown=False,
+            anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+            source=VoteSource.DEDUCTION,
+        )
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.illustration_votes_already_voted == 1
+        assert result.illustration_votes_written == 0
+        assert CardIllustrationVote.objects.filter(pk=existing.pk).exists()
+
+    def test_a_failed_illustration_insert_rolls_its_purge_back(self, db, monkeypatch):
+        """Cancel-safety, same shape as `TestPurgeAndInsertAreAtomic` for the printing grain: the
+        DELETE and the INSERT are separate statements, and a mid-flight kill between them must not
+        leave the card with its previous vote gone and nothing written back."""
+        artist, expansion, card = self._artist_and_card()
+        stale = CardIllustrationVote.objects.create(
+            card=card,
+            illustration_id=uuid.uuid4(),
+            is_unknown=False,
+            anonymous_id="stage-d-illustration-v0",
+            source=VoteSource.DEDUCTION,
+        )
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+        monkeypatch.setattr(CardIllustrationVote.objects, "bulk_create", _boom)
+
+        with pytest.raises(RuntimeError):
+            run_illustration_calculator(dry_run=False)
+
+        assert CardIllustrationVote.objects.filter(pk=stale.pk).exists()
+
+    def test_the_split_runs_before_the_purge(self, db, monkeypatch):
+        """Ordering, asserted directly: if the purge ran first it would delete exactly the rows the
+        split then looks for, and `illustration_votes_already_voted` would read 0 forever - the
+        "zero forever suggests the guard is dead code" failure `_purge_and_write_printing_tag_votes`
+        documents, reproduced at the new grain."""
+        import cardpicker.local_illustration as module
+
+        calls: list[str] = []
+        real_split = module._split_new_illustration_votes
+        real_write = module._purge_and_write_illustration_votes
+
+        def _tracked_split(batch):
+            calls.append("split")
+            return real_split(batch)
+
+        def _tracked_write(anonymous_id, votes):
+            calls.append("purge_and_write")
+            return real_write(anonymous_id, votes)
+
+        monkeypatch.setattr(module, "_split_new_illustration_votes", _tracked_split)
+        monkeypatch.setattr(module, "_purge_and_write_illustration_votes", _tracked_write)
+
+        artist, expansion, card = self._artist_and_card()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+
+        run_illustration_calculator(dry_run=False)
+
+        assert calls == ["split", "purge_and_write"]
+
+    def test_an_empty_batch_purges_nothing(self, db):
+        from cardpicker.local_illustration import _purge_and_write_illustration_votes
+
+        card = _eligible_card()
+        untouched = CardIllustrationVote.objects.create(
+            card=card,
+            illustration_id=uuid.uuid4(),
+            is_unknown=False,
+            anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+            source=VoteSource.DEDUCTION,
+        )
+
+        _purge_and_write_illustration_votes(ILLUSTRATION_ANONYMOUS_ID, [])
+
+        assert CardIllustrationVote.objects.filter(pk=untouched.pk).exists()
+
+
+# =============================================================================================
+# Issue #523 — the invariant lock
+# =============================================================================================
+
+
+class TestArtistInputIsOcrDerivedNotVoteDerived:
+    """ISSUE #523's INVARIANT: `stage-d-illustration-v1`'s artist input MUST come from OCR
+    evidence, never from artist votes.
+
+    WHY THIS LANDS WITH #524 AND NOT AFTER. `illustration_id -> artist` is functional, so an
+    illustration answer can legitimately derive a `CardArtistVote`. This calculator runs the
+    INVERSE direction - OCR artist name in, illustration out. Wire the derived artist vote back in
+    as the calculator's artist input and the loop closes: the calculator re-confirms an artist that
+    was itself derived from an illustration the calculator proposed, manufacturing multi-source
+    agreement out of a single click. Before #524 there were no illustration votes at all, so the
+    loop was unreachable; #524 is what makes it reachable, which is why the lock ships with it.
+
+    #523 asks for the assertion to be on THE SEAM - the argument passed to `match_artist` - rather
+    than on the verdict, because a rewire that changed the source could still produce an identical
+    verdict on any given fixture."""
+
+    def _index_and_candidates(self, artist_name, card_name, illustration_uuid):
+        artist = CanonicalArtistFactory(name=artist_name)
+        expansion = CanonicalExpansionFactory(code="lea")
+        cc = CanonicalCardFactory(name=card_name, artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=illustration_uuid)
+        return artist, cc, IllustrationIndex(), [type("_C", (), {"pk": cc.pk})()]
+
+    def test_match_artist_receives_exactly_the_ocr_name(self, db, monkeypatch):
+        """The seam assertion. Fails the moment the first argument stops being
+        `evidence.artist_ocr_name`."""
+        import cardpicker.local_illustration as module
+
+        artist, cc, index, candidates = self._index_and_candidates("Christopher Rush", "Lightning Bolt", uuid.uuid4())
+        captured: list = []
+        real_match_artist = module.match_artist
+
+        def _capture(ocr_name, cands, artist_by_pk):
+            captured.append(ocr_name)
+            return real_match_artist(ocr_name, cands, artist_by_pk)
+
+        monkeypatch.setattr(module, "match_artist", _capture)
+        evidence = type("E", (), {"artist_ocr_name": "Christopher Rush"})()
+
+        module.calculate_illustration_verdict(
+            card_id=1,
+            evidence=evidence,
+            illustration_index=index,
+            candidates=candidates,
+            searchable_card_name="lightning bolt",
+        )
+
+        assert captured == [evidence.artist_ocr_name]
+
+    def test_a_contradicting_artist_vote_does_not_change_the_artist_input(self, db, monkeypatch):
+        """The adversarial version: a `CardArtistVote` naming a DIFFERENT artist exists for this
+        card. If the artist input were ever sourced from votes, the captured value would be the
+        vote's artist. It must remain the OCR string."""
+        import cardpicker.local_illustration as module
+
+        artist, cc, index, candidates = self._index_and_candidates("Christopher Rush", "Lightning Bolt", uuid.uuid4())
+        voted_artist = CanonicalArtistFactory(name="Rebecca Guay")
+        card = _eligible_card(name="Lightning Bolt")
+        CardArtistVote.objects.create(
+            card=card, artist=voted_artist, is_unknown=False, anonymous_id="voter-a", source=VoteSource.USER
+        )
+
+        captured: list = []
+        real_match_artist = module.match_artist
+
+        def _capture(ocr_name, cands, artist_by_pk):
+            captured.append(ocr_name)
+            return real_match_artist(ocr_name, cands, artist_by_pk)
+
+        monkeypatch.setattr(module, "match_artist", _capture)
+
+        module.calculate_illustration_verdict(
+            card_id=card.pk,
+            evidence=type("E", (), {"artist_ocr_name": "Christopher Rush"})(),
+            illustration_index=index,
+            candidates=candidates,
+            searchable_card_name="lightning bolt",
+        )
+
+        assert captured == ["Christopher Rush"]
+        assert "Rebecca Guay" not in captured
+
+    def test_the_verdict_path_never_queries_cardartistvote(self, db):
+        """The structural half: not one SQL statement issued while computing a verdict may touch
+        the `CardArtistVote` table. This fails on ANY rewire that reads votes for the artist input,
+        including one that reaches them through a helper rather than at this call site."""
+        artist, cc, index, candidates = self._index_and_candidates("Christopher Rush", "Lightning Bolt", uuid.uuid4())
+        card = _eligible_card(name="Lightning Bolt")
+        CardArtistVote.objects.create(
+            card=card,
+            artist=CanonicalArtistFactory(name="Rebecca Guay"),
+            is_unknown=False,
+            anonymous_id="voter-a",
+            source=VoteSource.USER,
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            calculate_illustration_verdict(
+                card_id=card.pk,
+                evidence=type("E", (), {"artist_ocr_name": "Christopher Rush"})(),
+                illustration_index=index,
+                candidates=candidates,
+                searchable_card_name="lightning bolt",
+            )
+
+        offending = [q["sql"] for q in captured.captured_queries if CardArtistVote._meta.db_table in q["sql"]]
+        assert offending == [], f"artist input must never be vote-derived (issue #523); saw: {offending}"
+
+    def test_the_whole_runner_never_queries_cardartistvote(self, db):
+        """End to end, including the eligibility query and both write paths - the calculator as a
+        whole must not read artist votes."""
+        artist = CanonicalArtistFactory(name="Christopher Rush")
+        expansion = CanonicalExpansionFactory(code="lea")
+        cc = CanonicalCardFactory(name="Lightning Bolt", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
+        card = _eligible_card(name="Lightning Bolt")
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name="Christopher Rush")
+        CardArtistVote.objects.create(
+            card=card,
+            artist=CanonicalArtistFactory(name="Rebecca Guay"),
+            is_unknown=False,
+            anonymous_id="voter-a",
+            source=VoteSource.USER,
+        )
+        reset_illustration_index_cache_for_tests()
+
+        with CaptureQueriesContext(connection) as captured:
+            run_illustration_calculator(dry_run=True)
+
+        offending = [q["sql"] for q in captured.captured_queries if CardArtistVote._meta.db_table in q["sql"]]
+        assert offending == [], f"artist input must never be vote-derived (issue #523); saw: {offending}"
