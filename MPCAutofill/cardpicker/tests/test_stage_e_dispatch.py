@@ -33,6 +33,7 @@ from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import ExtractionResult
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.management.commands.run_image_evidence_cohort import (
+    MANIFEST_EXTRACTOR_CURRENT_VERSIONS,
     MANIFEST_EXTRACTOR_KEYS,
 )
 from cardpicker.management.commands.stream_backstop_sweep import (
@@ -117,7 +118,7 @@ def _stub_compute_card_evidence_ok(**field_overrides: Any):
             card_id=card_id,
             content_hash=content_hash,
             fields=fields,
-            extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
+            extractor_versions=dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
         )
 
     return _stub
@@ -271,7 +272,7 @@ def _full_evidence(card, **overrides: Any) -> ImageEvidence:
     dispatch-gating behaviour) without needing to mock the fetch/compute chain at all."""
     defaults = dict(
         content_hash=card.content_phash or 0,
-        extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
+        extractor_versions=dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
         collector_line_raw_text="",
         collector_line_set_code="",
         collector_line_collector_number="",
@@ -437,6 +438,59 @@ class TestSelectMicroBatch:
         assert len(large_batch) == 5
 
         assert len(large_catalog_queries.captured_queries) == len(small_catalog_queries.captured_queries)
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=250, STAGE_E_SELECTION_SCAN_CAP=1500)
+    def test_bulk_scale_selection_with_version_aware_resume_filter(self, db: Any) -> None:
+        """Bulk-scale (1200 cards): version-aware resume filter correctly re-processes cards with
+        old version tags while skipping cards with current versions, and micro-batch selection
+        respects batch_size. Creates 1200 cards: 200 with current-version evidence (should be
+        skipped), 200 with stale-version evidence (should be re-processed), 800 with no evidence
+        (should be eligible)."""
+        from cardpicker.management.commands.run_image_evidence_cohort import (
+            MANIFEST_EXTRACTOR_CURRENT_VERSIONS,
+        )
+
+        current_versions = MANIFEST_EXTRACTOR_CURRENT_VERSIONS
+        stale_versions = {k: f"{k}-v0" for k in current_versions}
+
+        stale_cards = []
+        current_cards = []
+        eligible_cards = []
+        for i in range(1, 1201):
+            if i <= 200:
+                card = CardFactory(content_phash=i)
+                ImageEvidenceFactory(
+                    card=card,
+                    content_hash=i,
+                    extractor_versions=stale_versions,
+                )
+                stale_cards.append(card)
+            elif i <= 400:
+                card = CardFactory(content_phash=i)
+                ImageEvidenceFactory(
+                    card=card,
+                    content_hash=i,
+                    extractor_versions=current_versions,
+                )
+                current_cards.append(card)
+            else:
+                card = CardFactory(content_phash=i)
+                eligible_cards.append(card)
+
+        batch = _select_micro_batch([], batch_size=500)
+
+        assert len(batch) == 500
+
+        current_pks = {c.pk for c in current_cards}
+        assert current_pks.isdisjoint(batch), "current-version cards must be skipped"
+
+        stale_pks = {c.pk for c in stale_cards}
+        eligible_pks = {c.pk for c in eligible_cards}
+        batched_stale = stale_pks & set(batch)
+        batched_eligible = eligible_pks & set(batch)
+        assert len(batched_stale) > 0, "stale-version cards must be re-processed"
+        assert len(batched_eligible) > 0, "no-evidence cards must be eligible"
+        assert len(batched_stale) + len(batched_eligible) == 500
 
 
 class TestEndToEndMicroBatch:
@@ -1111,7 +1165,7 @@ class TestEvidenceTransferInDispatch:
             card=sibling,
             content_hash=111,
             md5_checksum="abc123",
-            extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
+            extractor_versions=dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
             symbol_phash=999,
         )
 
@@ -1141,7 +1195,7 @@ class TestEvidenceTransferInDispatch:
             card=sibling,
             content_hash=111,
             md5_checksum="abc123",
-            extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
+            extractor_versions=dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
         )
         real_card = CardFactory(name="Real", content_phash=222)  # no md5 - always real extraction
 
