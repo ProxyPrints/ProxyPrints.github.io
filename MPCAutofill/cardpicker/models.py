@@ -195,6 +195,12 @@ class CanonicalPrintingMetadata(models.Model):
     # already sitting in the same weekly bulk-data file this sidecar already parses (2026-07-19,
     # harvest-calculate pipeline Stage B - see docs/features/catalog-completion-plan.md).
     art_crop_url = models.CharField(blank=True, default="")
+    # Scryfall's illustration UUID — identifies the artwork independently of any specific
+    # printing. Populated by import_scryfall_printing_metadata (see that function and
+    # PrintingMetadataRow.resolved_illustration_id for the single-face/double-face parsing).
+    # Null-tolerant: some records legitimately lack it (e.g. faces without art). Indexed for
+    # the Stage D illustration deduction calculator's in-memory join against CanonicalCard.
+    illustration_id = models.UUIDField(null=True, blank=True, db_index=True)
 
     def __str__(self) -> str:
         return f"Printing metadata for {self.canonical_card}"

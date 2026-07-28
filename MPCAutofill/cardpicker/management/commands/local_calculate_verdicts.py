@@ -16,6 +16,10 @@ from cardpicker.local_identify_printing_tags import (
     generate_run_id,
     verify_zero_resolutions,
 )
+from cardpicker.local_illustration import (
+    ILLUSTRATION_ANONYMOUS_ID,
+    run_illustration_calculator,
+)
 from cardpicker.models import CardPrintingTag, PilotRunLedger
 from cardpicker.pilot_run_lifecycle import (
     add_dry_run_guard_arguments,
@@ -263,10 +267,55 @@ class Command(BaseCommand):
                     "resolved machine-only."
                 )
 
-            # Slow-path routing (owner decision, issue #220): runs AFTER both calculators above in
+            # Illustration deduction calculator (issue #507, stage-d-illustration-v1): runs
+            # AFTER the fallback calculator above in the SAME invocation/run_id — uses
+            # illustration_id relationships to deduce printing identity from artist-OCR hits.
+            # Sequenced before slow-path routing below: a card this calculator resolves must not
+            # also get routed to human review in the same invocation (the slow-path queryset
+            # would need an additional exclusion for this identity's votes, similar to the
+            # fallback-voted-card exclusion it already carries).
+            illustration_result = run_illustration_calculator(
+                run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"], audit_sample_size=audit_sample_size
+            )
+            votes_written += illustration_result.votes_written
+            would_cast += illustration_result.votes_would_cast
+            print(
+                f"[illustration] considered={illustration_result.cards_considered} "
+                f"multi_faced_skipped={illustration_result.multi_faced_skipped} "
+                f"votes={'written=' + str(illustration_result.votes_written) if not dry_run else 'would_cast=' + str(illustration_result.votes_would_cast)} "
+                f"already_voted={illustration_result.already_voted} "
+                f"skip_counts={dict(illustration_result.skip_counts)}"
+            )
+            for entry in illustration_result.audit[:10]:
+                print(f"  sample: {entry}")
+            if diff_file is not None:
+                _write_diff_report_lines(diff_file, "illustration", illustration_result.audit)
+
+            if not dry_run:
+                illustration_touched_card_ids = list(
+                    CardPrintingTag.objects.filter(run_id=run_id, anonymous_id=ILLUSTRATION_ANONYMOUS_ID).values_list(
+                        "card_id", flat=True
+                    )
+                )
+                illustration_violations = verify_zero_resolutions(illustration_touched_card_ids)
+                if illustration_violations:
+                    raise CommandError(
+                        f"GATE VIOLATION: {len(illustration_violations)} card(s) resolved to a printing "
+                        f"from this single-anonymous_id machine pass alone, which should be "
+                        f"structurally impossible per resolve_weighted_consensus's own human-"
+                        f"backed gate - STOP and investigate. Affected card pks: "
+                        f"{illustration_violations[:50]}"
+                        + (" (truncated)" if len(illustration_violations) > 50 else "")
+                    )
+                print(
+                    f"Gate check passed: 0/{len(illustration_touched_card_ids)} illustration-touched cards "
+                    "resolved machine-only."
+                )
+
+            # Slow-path routing (owner decision, issue #220): runs AFTER all calculators above in
             # the SAME invocation/run_id - it only ever consumes their own no-hit output (see
             # run_slow_path_calculator's own docstring), so sequencing here matters even though all
-            # three ship in this one command. Casts no CardPrintingTag at all (it has no printing
+            # four ship in this one command. Casts no CardPrintingTag at all (it has no printing
             # to vote for), so there is no analogous gate check to run for it.
             slow_path_result = run_slow_path_calculator(
                 run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"], audit_sample_size=audit_sample_size
@@ -308,6 +357,14 @@ class Command(BaseCommand):
                         "votes_written": fallback_result.votes_written,
                         "already_voted": fallback_result.already_voted,
                         "skip_counts": dict(fallback_result.skip_counts),
+                    },
+                    "illustration": {
+                        "considered": illustration_result.cards_considered,
+                        "would_cast": illustration_result.votes_would_cast,
+                        "votes_written": illustration_result.votes_written,
+                        "already_voted": illustration_result.already_voted,
+                        "multi_faced_skipped": illustration_result.multi_faced_skipped,
+                        "skip_counts": dict(illustration_result.skip_counts),
                     },
                     "slow_path": {
                         "considered": slow_path_result.cards_considered,
