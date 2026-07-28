@@ -1147,6 +1147,16 @@ or an env var (`--batch-size`'s DEFAULT reads
 `settings.STAGE_E_MICRO_BATCH_SIZE`; the flag always wins when passed):
 
 - `--batch-size N` — chunk size, and the `batch_size` passed per chunk.
+- `--source KEY` — scope the cohort to one or more `Source`s by their `key`
+  field instead of the whole catalog, for pushing a newly-added drive through
+  the extractor without a full-catalog traversal. Repeatable
+  (`--source a --source b`) and/or comma-separated (`--source a,b`). An
+  unknown key is an error before any dispatch, never a silently empty cohort.
+  A scope, not an eligibility filter — within the chosen source nothing is
+  still skipped for being already done. It narrows FIRST: `--sample` draws
+  from the narrowed pool and `--start-pk` applies within it. Auto-triggering
+  this on source registration is deferred (issue #514 covers the indexing half
+  of the same gap).
 - `--start-pk N` — resume from a pk, EXCLUSIVE. Overrides AND resets the
   stored high-water mark, so `--start-pk 0` genuinely restarts the pass.
 - `--max-batches N` — bound one invocation.
@@ -1172,16 +1182,29 @@ or an env var (`--batch-size`'s DEFAULT reads
 ### Resume
 
 A pk high-water mark persisted to `cardpicker.models.StageEFullCatalogCursor`
-(a small dedicated singleton model) after every COMPLETED batch; a killed run
-resumes exactly where it stopped on the next bare invocation. Deliberately
-NOT a `StageESweepCursor` row — that model's semantics are backlog-sweep
-semantics (wrap/lap counting, CAS chunk claiming), and both are actively
-harmful here: a wrap would silently restart a 230k-card pass from the
-beginning instead of ending it, and CAS-claiming ranges would make the
-backstop sweep skip pk space it never examined. `--sample` and `--dry-run`
-runs never read or write the mark (a sample is spread across the whole pk
-space, so advancing a real pass's resume point from one would jump it to near
-the end of the catalog).
+after every COMPLETED batch; a killed run resumes exactly where it stopped on
+the next bare invocation. Deliberately NOT a `StageESweepCursor` row — that
+model's semantics are backlog-sweep semantics (wrap/lap counting, CAS chunk
+claiming), and both are actively harmful here: a wrap would silently restart a
+230k-card pass from the beginning instead of ending it, and CAS-claiming
+ranges would make the backstop sweep skip pk space it never examined.
+`--sample` and `--dry-run` runs never read or write the mark (a sample is
+spread across the whole pk space, so advancing a real pass's resume point from
+one would jump it to near the end of the catalog).
+
+**The mark is KEYED BY SCOPE**, not shared across scopes — this is the subtle
+part. A `--source X` run and a full-catalog run traverse different pk space,
+so one shared mark would corrupt both directions: a scoped run whose cards
+happen to live high in the pk space would leave a mark that made a later
+full-catalog run SKIP EVERYTHING BELOW IT (silently never-processed cards, the
+worst possible failure for a pass whose entire purpose is total coverage), and
+a completed full-catalog run would leave a mark that made a later `--source Y`
+run believe it had already finished. Keying was chosen over the alternative
+(demanding `--start-pk` whenever the scope changes) because it needs no
+operator vigilance to be safe, and because it makes the genuinely useful thing
+work: a scoped drive pass and the long full-catalog pass can be interleaved,
+each resuming its own progress correctly. Multi-source keys are sorted and
+de-duplicated, so `--source a,b` and `--source b,a` share one mark.
 
 ### Stop conditions — deliberately asymmetric
 

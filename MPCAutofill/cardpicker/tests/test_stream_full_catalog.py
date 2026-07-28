@@ -27,13 +27,17 @@ from cardpicker.management.commands.run_image_evidence_cohort import (
     MANIFEST_EXTRACTOR_CURRENT_VERSIONS,
 )
 from cardpicker.management.commands.stream_full_catalog import (
+    FULL_CATALOG_SCOPE,
     deterministic_sample_pks,
     full_catalog_pk_queryset,
+    parse_source_keys,
+    resume_scope_for,
 )
 from cardpicker.models import (
     CardPrintingTag,
     EnvelopeTrip,
     PilotRunLedger,
+    Source,
     StageEFullCatalogCursor,
     StageESweepCursor,
     VoteSource,
@@ -45,6 +49,7 @@ from cardpicker.tests.factories import (
     CanonicalCardFactory,
     CardFactory,
     ImageEvidenceFactory,
+    SourceFactory,
 )
 
 STREAMING_ON = override_settings(STAGE_E_STREAMING_ENABLED=True)
@@ -303,7 +308,7 @@ class TestResume:
 
         call_command("stream_full_catalog", "--batch-size", "2")
 
-        assert StageEFullCatalogCursor.get_position() == cards[-1].pk
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == cards[-1].pk
         assert StageEFullCatalogCursor.objects.get().cards_dispatched == 4
 
     @STREAMING_ON
@@ -332,7 +337,7 @@ class TestResume:
             ],
         )
         call_command("stream_full_catalog", "--batch-size", "2")
-        assert StageEFullCatalogCursor.get_position() == cards[1].pk
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == cards[1].pk
 
         resumed = _install_recording_dispatch(monkeypatch)
         call_command("stream_full_catalog", "--batch-size", "2")
@@ -341,7 +346,7 @@ class TestResume:
     @STREAMING_ON
     def test_start_pk_overrides_and_resets_the_stored_mark(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         cards = _cards(6)
-        StageEFullCatalogCursor.reset_to(cards[3].pk)
+        StageEFullCatalogCursor.reset_to(FULL_CATALOG_SCOPE, cards[3].pk)
 
         first = _install_recording_dispatch(monkeypatch)
         call_command("stream_full_catalog", "--batch-size", "10", "--start-pk", str(cards[0].pk))
@@ -350,12 +355,12 @@ class TestResume:
         # ...and the reset STUCK: a bare relaunch must not snap back to the old, higher mark. The
         # mark is monotonic, so without the explicit reset in handle() it would still read
         # cards[3].pk here rather than the pk this --start-pk run actually finished at.
-        assert StageEFullCatalogCursor.get_position() == cards[-1].pk
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == cards[-1].pk
 
     @STREAMING_ON
     def test_start_pk_zero_restarts_the_whole_pass(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         cards = _cards(4)
-        StageEFullCatalogCursor.reset_to(cards[-1].pk)
+        StageEFullCatalogCursor.reset_to(FULL_CATALOG_SCOPE, cards[-1].pk)
 
         recorder = _install_recording_dispatch(monkeypatch)
         call_command("stream_full_catalog", "--batch-size", "10", "--start-pk", "0")
@@ -377,7 +382,7 @@ class TestResume:
         call_command("stream_full_catalog", "--batch-size", "2")
         output = capsys.readouterr().out
 
-        assert f"RESUME resume_pk={cards[1].pk}" in output
+        assert f"RESUME scope=full-catalog resume_pk={cards[1].pk}" in output
         # ...and the rolled-up summary carries it too, so a log truncated before the DONE line
         # still contains a valid resume point.
         assert f"resume_pk={cards[1].pk}" in [line for line in output.splitlines() if line.startswith("PROGRESS")][-1]
@@ -446,13 +451,13 @@ class TestSample:
         """A sample is spread across the WHOLE pk space, so letting one advance the mark would jump
         a real catalog pass's resume point to near the end of the catalog after a single batch."""
         cards = _cards(40)
-        StageEFullCatalogCursor.reset_to(cards[0].pk)
+        StageEFullCatalogCursor.reset_to(FULL_CATALOG_SCOPE, cards[0].pk)
 
         recorder = _install_recording_dispatch(monkeypatch)
         call_command("stream_full_catalog", "--sample", "8", "--batch-size", "8")
 
         # the stored mark is unchanged...
-        assert StageEFullCatalogCursor.get_position() == cards[0].pk
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == cards[0].pk
         # ...and was not applied as a filter either: the sample is drawn from the whole pk space,
         # so it can legitimately include cards at or below the stored mark.
         assert len(recorder.dispatched_ids) == 8
@@ -595,7 +600,7 @@ class TestStopConditions:
         assert "halted=halted-new-trip" in output
         assert output.count("Envelope halt") == 1  # one attempt, not six
         assert PilotRunLedger.objects.count() == 0
-        assert StageEFullCatalogCursor.get_position() == 0
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == 0
 
     @STREAMING_ON
     def test_stops_on_an_already_open_trip(
@@ -691,7 +696,7 @@ class TestThrottleBackoffAndRetry:
         assert "throttle_retries=2" in output
         # the pass completed - a transient throttle must not end it.
         assert "cards_done=2" in output
-        assert StageEFullCatalogCursor.get_position() == cards[-1].pk
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == cards[-1].pk
 
     @STREAMING_ON
     def test_backoff_is_capped(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -744,7 +749,7 @@ class TestThrottleBackoffAndRetry:
         assert "giving up" in output
         assert "stopped_reason=throttle-retries-exhausted" in output
         # the resume pk is still printed before the non-zero exit.
-        assert "RESUME resume_pk=0" in output
+        assert "RESUME scope=full-catalog resume_pk=0" in output
         assert PilotRunLedger.objects.count() == 0
 
     @STREAMING_ON
@@ -974,22 +979,22 @@ class TestArgumentValidation:
 
 class TestFullCatalogCursorModel:
     def test_advance_is_monotonic(self, db: Any) -> None:
-        StageEFullCatalogCursor.advance(100, cards_dispatched=5)
-        assert StageEFullCatalogCursor.get_position() == 100
+        StageEFullCatalogCursor.advance(FULL_CATALOG_SCOPE, 100, cards_dispatched=5)
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == 100
 
-        StageEFullCatalogCursor.advance(50, cards_dispatched=5)
-        assert StageEFullCatalogCursor.get_position() == 100  # never rewinds
+        StageEFullCatalogCursor.advance(FULL_CATALOG_SCOPE, 50, cards_dispatched=5)
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == 100  # never rewinds
 
-        StageEFullCatalogCursor.advance(150, cards_dispatched=5)
-        assert StageEFullCatalogCursor.get_position() == 150
+        StageEFullCatalogCursor.advance(FULL_CATALOG_SCOPE, 150, cards_dispatched=5)
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == 150
 
     def test_reset_to_is_the_only_backwards_move(self, db: Any) -> None:
-        StageEFullCatalogCursor.advance(100)
-        StageEFullCatalogCursor.reset_to(10)
-        assert StageEFullCatalogCursor.get_position() == 10
+        StageEFullCatalogCursor.advance(FULL_CATALOG_SCOPE, 100)
+        StageEFullCatalogCursor.reset_to(FULL_CATALOG_SCOPE, 10)
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == 10
 
     def test_position_is_zero_before_the_command_has_ever_run(self, db: Any) -> None:
-        assert StageEFullCatalogCursor.get_position() == 0
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == 0
         assert StageEFullCatalogCursor.objects.count() == 0
 
 
@@ -1107,7 +1112,7 @@ class TestStageZeroFreshness:
         """A resume that refreshes has the same early/late inconsistency as a mid-run refresh,
         only spread across two invocations."""
         cards = _cards(6)
-        StageEFullCatalogCursor.reset_to(cards[1].pk)
+        StageEFullCatalogCursor.reset_to(FULL_CATALOG_SCOPE, cards[1].pk)
         _install_recording_dispatch(monkeypatch)
         monkeypatch.setattr(stream_full_catalog, "_is_fresh", lambda path, entry: False)
         monkeypatch.setattr(stream_full_catalog, "import_scryfall_printing_metadata", dict)
@@ -1177,3 +1182,221 @@ class TestStageZeroFreshness:
         monkeypatch.setattr(stream_full_catalog, "_get_default_cards_entry", _boom)
 
         call_command("stream_full_catalog")
+
+
+class TestSourceScoping:
+    """`--source <key>` (2026-07-28) - push one newly-added drive through the extractor without a
+    full-catalog traversal. A SCOPE, not an eligibility filter: within the chosen source nothing is
+    still skipped for being already done."""
+
+    @STREAMING_ON
+    def test_a_scoped_cohort_contains_only_that_sources_cards(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        wanted = SourceFactory(key="new_drive", name="New Drive")
+        other = SourceFactory(key="old_drive", name="Old Drive")
+        mine = [CardFactory(content_phash=i, source=wanted) for i in (1, 2)]
+        theirs = [CardFactory(content_phash=i, source=other) for i in (3, 4)]
+
+        recorder = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "new_drive", "--batch-size", "10")
+
+        assert recorder.dispatched_ids == [c.pk for c in mine]
+        assert not set(recorder.dispatched_ids) & {c.pk for c in theirs}
+
+    @STREAMING_ON
+    def test_an_unscoped_run_still_covers_the_whole_catalog(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        wanted = SourceFactory(key="new_drive", name="New Drive")
+        other = SourceFactory(key="old_drive", name="Old Drive")
+        cards = [CardFactory(content_phash=1, source=wanted), CardFactory(content_phash=2, source=other)]
+
+        recorder = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--batch-size", "10")
+
+        assert recorder.dispatched_ids == [c.pk for c in cards]
+
+    @STREAMING_ON
+    @pytest.mark.parametrize("argv", [["--source", "a", "--source", "b"], ["--source", "a,b"]])
+    def test_repeated_and_comma_separated_forms_are_equivalent(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, argv: List[str]
+    ) -> None:
+        source_a = SourceFactory(key="a", name="A")
+        source_b = SourceFactory(key="b", name="B")
+        SourceFactory(key="c", name="C")
+        wanted = [CardFactory(content_phash=1, source=source_a), CardFactory(content_phash=2, source=source_b)]
+        CardFactory(content_phash=3, source=Source.objects.get(key="c"))
+
+        recorder = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", *argv, "--batch-size", "10")
+
+        assert recorder.dispatched_ids == [c.pk for c in wanted]
+
+    @STREAMING_ON
+    def test_an_unknown_source_key_is_an_error_not_an_empty_cohort(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A typo'd drive key that quietly "completed" a zero-card pass is exactly the false
+        success an unattended run must never report."""
+        SourceFactory(key="real_drive", name="Real Drive")
+        CardFactory(content_phash=1, source=Source.objects.get(key="real_drive"))
+        recorder = _install_recording_dispatch(monkeypatch)
+
+        with pytest.raises(CommandError, match="unknown source key"):
+            call_command("stream_full_catalog", "--source", "typo_drive")
+
+        assert recorder.calls == []
+        assert StageEFullCatalogCursor.objects.count() == 0
+
+    @STREAMING_ON
+    def test_an_unknown_key_alongside_a_known_one_still_errors(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        SourceFactory(key="real_drive", name="Real Drive")
+        recorder = _install_recording_dispatch(monkeypatch)
+
+        with pytest.raises(CommandError, match=r"unknown source key\(s\) \['typo_drive'\]"):
+            call_command("stream_full_catalog", "--source", "real_drive,typo_drive")
+
+        assert recorder.calls == []
+
+    @STREAMING_ON
+    def test_dry_run_reports_the_scoped_cohort_size(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        wanted = SourceFactory(key="new_drive", name="New Drive")
+        other = SourceFactory(key="old_drive", name="Old Drive")
+        for i in (1, 2, 3):
+            CardFactory(content_phash=i, source=wanted)
+        for i in (4, 5, 6, 7):
+            CardFactory(content_phash=i, source=other)
+
+        call_command("stream_full_catalog", "--source", "new_drive", "--dry-run", "--batch-size", "2")
+        output = capsys.readouterr().out
+
+        assert "Cohort: 3 cards remaining" in output  # the scoped 3, not the catalog's 7
+        assert "sources ['new_drive']" in output
+        assert "planned_batches=2" in output
+
+    @STREAMING_ON
+    def test_start_pk_applies_within_the_narrowed_set(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        wanted = SourceFactory(key="new_drive", name="New Drive")
+        other = SourceFactory(key="old_drive", name="Old Drive")
+        mine = [CardFactory(content_phash=i, source=wanted) for i in (1, 2, 3)]
+        CardFactory(content_phash=4, source=other)
+
+        recorder = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "new_drive", "--start-pk", str(mine[0].pk))
+
+        assert recorder.dispatched_ids == [c.pk for c in mine[1:]]
+
+    @STREAMING_ON
+    def test_sample_draws_from_the_narrowed_pool(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        wanted = SourceFactory(key="new_drive", name="New Drive")
+        other = SourceFactory(key="old_drive", name="Old Drive")
+        mine = {CardFactory(content_phash=i, source=wanted).pk for i in range(1, 21)}
+        for i in range(21, 41):
+            CardFactory(content_phash=i, source=other)
+
+        recorder = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "new_drive", "--sample", "5", "--batch-size", "5")
+
+        assert len(recorder.dispatched_ids) == 5
+        assert set(recorder.dispatched_ids) <= mine
+        # still deterministic, given the same N AND the same scope.
+        assert deterministic_sample_pks(5, ["new_drive"]) == sorted(recorder.dispatched_ids)
+
+
+class TestResumeMarkIsKeyedByScope:
+    """The part most likely to go subtly wrong: a mark recorded during a `--source X` run must
+    never make a later full-catalog run skip pk space it has not examined."""
+
+    @STREAMING_ON
+    def test_a_scoped_run_does_not_advance_the_full_catalog_mark(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        wanted = SourceFactory(key="high_pk_drive", name="High Pk Drive")
+        other = SourceFactory(key="other_drive", name="Other Drive")
+        # the OTHER source's cards sort FIRST, the scoped source's LAST - so a shared mark would
+        # park at the very top of the pk space after the scoped run.
+        low = [CardFactory(content_phash=i, source=other) for i in (1, 2, 3)]
+        high = [CardFactory(content_phash=i, source=wanted) for i in (4, 5)]
+
+        _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "high_pk_drive", "--batch-size", "10")
+
+        assert StageEFullCatalogCursor.get_position("source:high_pk_drive") == high[-1].pk
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == 0
+
+        # ...and the full-catalog run that follows still covers EVERY card, including the low ones
+        # a shared mark would have skipped entirely.
+        recorder = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--batch-size", "10")
+
+        assert recorder.dispatched_ids == [c.pk for c in low + high]
+
+    @STREAMING_ON
+    def test_a_full_catalog_run_does_not_complete_a_scoped_one(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        wanted = SourceFactory(key="new_drive", name="New Drive")
+        mine = [CardFactory(content_phash=i, source=wanted) for i in (1, 2)]
+
+        _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--batch-size", "10")
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == mine[-1].pk
+
+        recorder = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "new_drive", "--batch-size", "10")
+
+        # the scoped scope has its own, untouched mark - the cards are re-dispatched, which is the
+        # correct behaviour for a cohort that is deliberately unfiltered by eligibility.
+        assert recorder.dispatched_ids == [c.pk for c in mine]
+
+    @STREAMING_ON
+    def test_two_different_scopes_resume_independently(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        source_a = SourceFactory(key="a", name="A")
+        source_b = SourceFactory(key="b", name="B")
+        a_cards = [CardFactory(content_phash=i, source=source_a) for i in (1, 2, 3, 4)]
+        b_cards = [CardFactory(content_phash=i, source=source_b) for i in (5, 6, 7, 8)]
+
+        first = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "a", "--batch-size", "2", "--max-batches", "1")
+        assert first.dispatched_ids == [c.pk for c in a_cards[:2]]
+
+        second = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "b", "--batch-size", "2", "--max-batches", "1")
+        assert second.dispatched_ids == [c.pk for c in b_cards[:2]]
+
+        # each scope picks up its OWN remainder, neither confused by the other.
+        third = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "a", "--batch-size", "10")
+        assert third.dispatched_ids == [c.pk for c in a_cards[2:]]
+
+        fourth = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "b", "--batch-size", "10")
+        assert fourth.dispatched_ids == [c.pk for c in b_cards[2:]]
+
+    @STREAMING_ON
+    def test_multi_source_scope_keys_are_order_insensitive(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`--source a,b` and `--source b,a` select exactly the same cohort, so they must share a
+        resume mark rather than each starting over."""
+        source_a = SourceFactory(key="a", name="A")
+        source_b = SourceFactory(key="b", name="B")
+        cards = [CardFactory(content_phash=1, source=source_a), CardFactory(content_phash=2, source=source_b)]
+
+        _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "a,b", "--batch-size", "10")
+
+        recorder = _install_recording_dispatch(monkeypatch)
+        call_command("stream_full_catalog", "--source", "b,a", "--batch-size", "10")
+
+        assert recorder.calls == []  # already complete under the shared scope key
+        assert StageEFullCatalogCursor.get_position("source:a,b") == cards[-1].pk
+
+    def test_resume_scope_for_derives_a_stable_key(self) -> None:
+        assert resume_scope_for(None) == FULL_CATALOG_SCOPE
+        assert resume_scope_for([]) == FULL_CATALOG_SCOPE
+        assert resume_scope_for(["b", "a"]) == resume_scope_for(["a", "b"]) == "source:a,b"
+        assert resume_scope_for(["a", "a"]) == "source:a"
+
+    def test_parse_source_keys_accepts_both_forms(self) -> None:
+        assert parse_source_keys(None) is None
+        assert parse_source_keys([]) is None
+        assert parse_source_keys(["a", "b"]) == ["a", "b"]
+        assert parse_source_keys(["a,b"]) == ["a", "b"]
+        assert parse_source_keys(["a, b", "c"]) == ["a", "b", "c"]
+        assert parse_source_keys([" , "]) is None

@@ -84,14 +84,34 @@ relaunch, never a rebuild and a redeploy. Nothing this command decides may come 
 change mid-campaign. (`--batch-size`'s DEFAULT reads `settings.STAGE_E_MICRO_BATCH_SIZE`, which is
 different: the flag always wins when passed.)
 
+SCOPING TO ONE SOURCE (`--source <key>`, 2026-07-28): narrows the cohort to the cards of one or
+more `Source`s (by their `key` field) instead of the whole catalog - for pushing a newly-added
+drive through the extractor without a full-catalog traversal. Repeatable AND comma-separated
+(`--source a --source b`, `--source a,b`, or both). An unknown key is a `CommandError` BEFORE any
+dispatch, never a silently empty cohort. It is a SCOPE, not an eligibility filter: within the
+chosen source nothing is still skipped for being already done. It narrows FIRST - `--sample` draws
+from the narrowed pool, and `--start-pk` applies within it. Auto-triggering this on source
+registration is deferred (issue #514 covers the indexing half of the same gap).
+
 RESUME: a pk high-water mark persisted to `cardpicker.models.StageEFullCatalogCursor` (a small
-dedicated singleton model - see its own docstring for why `StageESweepCursor` is the wrong model
-here: wrap/lap semantics and CAS chunk claiming, both actively harmful for this pass) after every
+dedicated model - see its own docstring for why `StageESweepCursor` is the wrong model here:
+wrap/lap semantics and CAS chunk claiming, both actively harmful for this pass) after every
 COMPLETED batch. A killed run resumes exactly where it stopped on the next bare invocation.
 `--start-pk` overrides the stored mark and RESETS it, so `--start-pk 0` genuinely restarts the
 pass rather than snapping back to the old mark on the following invocation. `--sample` and
 `--dry-run` runs never read or write the mark at all (a sample is spread across the whole pk space,
 so advancing a real pass's resume point from one would jump it to near the end of the catalog).
+
+THE MARK IS KEYED BY SCOPE (`resume_scope_for`), not shared across scopes. This is the subtle one.
+A `--source X` run and a full-catalog run traverse different pk space, so one shared mark would
+corrupt both directions: a scoped run whose cards happen to live high in the pk space would leave
+a mark that made a later full-catalog run SKIP EVERYTHING BELOW IT - silently never-processed
+cards, the worst possible failure for a pass whose entire purpose is total coverage - and a
+completed full-catalog run would leave a mark that made a later `--source Y` run believe it had
+already finished. Keying (rather than the alternative of demanding `--start-pk` whenever the scope
+changes) was chosen because it needs no operator vigilance to be safe and because it makes the
+genuinely useful thing work: a scoped drive pass and the long full-catalog pass can be
+interleaved, each resuming its own progress correctly.
 
 THIS IS A ONE-SHOT, RUN-TO-COMPLETION DRIVER, NOT A CRON JOB. It is intended to run UNATTENDED
 across the whole 230,753-card catalog in a single invocation. That is the difference that shapes
@@ -186,7 +206,7 @@ from cardpicker.management.commands.stream_backstop_sweep import (
     _HALT_STATUSES,
     _THROTTLED_STATUS,
 )
-from cardpicker.models import Card, StageEFullCatalogCursor
+from cardpicker.models import Card, Source, StageEFullCatalogCursor
 
 # STAGE 0 (issue #513 item 2 - see this module's own docstring). These are CALLED, never
 # reimplemented, and `cardpicker/printing_metadata_import.py` is NOT modified by this change.
@@ -241,7 +261,23 @@ DEFAULT_PROGRESS_EVERY_BATCHES = 25
 DEFAULT_PROGRESS_EVERY_SECONDS = 300.0
 
 
-def full_catalog_pk_queryset() -> Any:
+FULL_CATALOG_SCOPE = "full-catalog"
+
+
+def resume_scope_for(source_keys: Optional[List[str]]) -> str:
+    """
+    The `StageEFullCatalogCursor.scope` key this invocation's own resume mark lives under - see
+    that model's own "KEYED BY SCOPE" docstring for why a single shared mark would be actively
+    dangerous. `None` (no `--source`) is the whole catalog; a scoped run keys on its SORTED,
+    de-duplicated source keys, so `--source a --source b` and `--source b,a` resume each other
+    (they select exactly the same cohort) while `--source a` alone does not.
+    """
+    if not source_keys:
+        return FULL_CATALOG_SCOPE
+    return "source:" + ",".join(sorted(set(source_keys)))
+
+
+def full_catalog_pk_queryset(source_keys: Optional[List[str]] = None) -> Any:
     """
     THE cohort: every `Card` with a stable content hash, in pk order, with NO eligibility filter of
     any kind - not the Stage C backlog, not the Stage D backlog, nothing excluded for being already
@@ -249,11 +285,19 @@ def full_catalog_pk_queryset() -> Any:
     no stable identity for `ImageEvidence.content_hash` to key against, so `_run_stage_c` skips it
     outright (`if card.content_phash is None: continue`) and `_cursor_chunk_walk` scopes its own
     walk the same way - including such cards would only dispatch batches full of guaranteed no-ops.
+
+    `source_keys` (`--source`, 2026-07-28) narrows the cohort to cards belonging to those
+    `Source`s. This is a SCOPE, not an eligibility filter - within the chosen scope nothing is
+    still skipped for being already done. It narrows FIRST: `--sample` and `--start-pk` both apply
+    within the narrowed set, never across the whole catalog.
     """
-    return Card.objects.filter(content_phash__isnull=False).order_by("pk")
+    queryset = Card.objects.filter(content_phash__isnull=False)
+    if source_keys:
+        queryset = queryset.filter(source__key__in=source_keys)
+    return queryset.order_by("pk")
 
 
-def next_chunk_after(after_pk: int, batch_size: int) -> List[int]:
+def next_chunk_after(after_pk: int, batch_size: int, source_keys: Optional[List[str]] = None) -> List[int]:
     """
     One keyset-paginated page of the cohort - a pure pk-index range scan bounded by `batch_size`,
     issued fresh per batch. Deliberately NOT a materialised full-cohort id list held across the
@@ -261,10 +305,21 @@ def next_chunk_after(after_pk: int, batch_size: int) -> List[int]:
     OCR work between pages: either would tie a multi-hour pass's memory or its DB session to a
     snapshot taken at launch.
     """
-    return list(full_catalog_pk_queryset().filter(pk__gt=after_pk).values_list("pk", flat=True)[:batch_size])
+    return list(full_catalog_pk_queryset(source_keys).filter(pk__gt=after_pk).values_list("pk", flat=True)[:batch_size])
 
 
-def deterministic_sample_pks(sample_size: int) -> List[int]:
+def parse_source_keys(raw_values: Optional[List[str]]) -> Optional[List[str]]:
+    """`--source` accepts BOTH forms, in any combination: repeat the flag
+    (`--source a --source b`) and/or pass a comma list (`--source a,b`). Returns `None` for "no
+    scoping at all" so every downstream caller can distinguish it from an (impossible) empty
+    scope."""
+    if not raw_values:
+        return None
+    keys = [key.strip() for raw in raw_values for key in raw.split(",") if key.strip()]
+    return keys or None
+
+
+def deterministic_sample_pks(sample_size: int, source_keys: Optional[List[str]] = None) -> List[int]:
     """
     `--sample N`: a deterministic pseudo-random subset of N cards drawn across the WHOLE pk space,
     returned in ascending pk order. For representative throughput measurement - a pk-ordered PREFIX
@@ -282,8 +337,12 @@ def deterministic_sample_pks(sample_size: int) -> List[int]:
 
     N larger than the catalog yields the whole catalog (`random.Random.sample` would raise on an
     over-large `k`), which is the sensible reading of "sample more cards than exist".
+
+    `source_keys` narrows the pool the sample is DRAWN FROM (`--source` composes with `--sample`,
+    narrowing first) - so the draw stays deterministic given the same N AND the same scope, but a
+    scoped sample is deliberately not a subset of the unscoped one.
     """
-    all_pks = list(full_catalog_pk_queryset().values_list("pk", flat=True))
+    all_pks = list(full_catalog_pk_queryset(source_keys).values_list("pk", flat=True))
     if sample_size >= len(all_pks):
         return all_pks
     return sorted(random.Random(sample_size).sample(all_pks, sample_size))
@@ -309,6 +368,19 @@ class Command(BaseCommand):
             "equal is what keeps _select_micro_batch off the sweep-cursor path entirely - see this "
             "command's own module docstring). Default: settings.STAGE_E_MICRO_BATCH_SIZE "
             f"({DEFAULT_MICRO_BATCH_SIZE} if unset).",
+        )
+        parser.add_argument(
+            "--source",
+            action="append",
+            default=None,
+            metavar="KEY",
+            help="Scope the cohort to cards belonging to this Source (its `key` field) instead of "
+            "the whole catalog - for pushing a newly-added drive through the extractor without a "
+            "full-catalog traversal. Repeatable (--source a --source b) AND/OR comma-separated "
+            "(--source a,b). An unknown key is an error, never a silently empty cohort. Composes "
+            "with every other cohort flag: --source narrows FIRST, then --sample/--start-pk apply "
+            "within the narrowed set. The resume high-water mark is keyed by scope, so a scoped "
+            "run can never make a later full-catalog run skip pk space it has not examined.",
         )
         parser.add_argument(
             "--start-pk",
@@ -454,6 +526,18 @@ class Command(BaseCommand):
         if progress_every_batches <= 0 or progress_every_seconds <= 0:
             raise CommandError("--progress-every-batches and --progress-every-seconds must be positive.")
 
+        source_keys = parse_source_keys(options["source"])
+        if source_keys is not None:
+            # An unknown key is a CommandError BEFORE any dispatch, never a silently empty cohort -
+            # a typo'd drive key that quietly "completed" a zero-card pass is exactly the kind of
+            # false success an unattended run must never report.
+            known = set(Source.objects.filter(key__in=source_keys).values_list("key", flat=True))
+            unknown = sorted(set(source_keys) - known)
+            if unknown:
+                available = ", ".join(sorted(Source.objects.values_list("key", flat=True))) or "(none)"
+                raise CommandError(f"--source: unknown source key(s) {unknown}. Known keys: {available}")
+        resume_scope = resume_scope_for(source_keys)
+
         reextract: bool = options["reextract"]
         short_circuit: Optional[bool] = options["short_circuit"]
         dry_run: bool = options["dry_run"]
@@ -480,7 +564,7 @@ class Command(BaseCommand):
                 require_fresh=require_fresh,
                 # A stored mark means a PRIOR invocation already dispatched batches against
                 # whatever reference data was current then - see _run_stage_zero_freshness.
-                is_resume=StageEFullCatalogCursor.get_position() > 0,
+                is_resume=StageEFullCatalogCursor.get_position(resume_scope) > 0,
             )
 
         # A --sample run is a measurement, not catalog progress: it neither reads nor writes the
@@ -494,23 +578,28 @@ class Command(BaseCommand):
                 # one invocation: `advance` is monotonic, so without this reset a --start-pk 0
                 # restart would run its first batch and then find the stored mark still parked at
                 # the old, much higher position on the next bare invocation.
-                StageEFullCatalogCursor.reset_to(start_pk)
+                StageEFullCatalogCursor.reset_to(resume_scope, start_pk)
             mark_source = "--start-pk"
         elif uses_stored_mark:
-            resume_pk = StageEFullCatalogCursor.get_position()
+            resume_pk = StageEFullCatalogCursor.get_position(resume_scope)
             mark_source = "stored high-water mark"
         else:
             resume_pk = 0
             mark_source = "sample/dry-run (stored mark not consulted)"
 
         sampled_pks: Optional[List[int]] = None
+        scope_text = (
+            "full catalog (content_phash not null, no eligibility filter)"
+            if source_keys is None
+            else f"sources {sorted(set(source_keys))} (no eligibility filter within that scope)"
+        )
         if sample_size is not None:
-            sampled_pks = [pk for pk in deterministic_sample_pks(sample_size) if pk > resume_pk]
+            sampled_pks = [pk for pk in deterministic_sample_pks(sample_size, source_keys) if pk > resume_pk]
             remaining = len(sampled_pks)
-            cohort_description = f"deterministic sample of {sample_size} (seeded from N)"
+            cohort_description = f"deterministic sample of {sample_size} (seeded from N) drawn from {scope_text}"
         else:
-            remaining = full_catalog_pk_queryset().filter(pk__gt=resume_pk).count()
-            cohort_description = "full catalog (content_phash not null, no eligibility filter)"
+            remaining = full_catalog_pk_queryset(source_keys).filter(pk__gt=resume_pk).count()
+            cohort_description = scope_text
 
         planned_batches = (remaining + batch_size - 1) // batch_size
         if max_batches is not None:
@@ -518,6 +607,7 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f"Cohort: {remaining} cards remaining - {cohort_description}; "
+            f"resume_scope={resume_scope}; "
             f"resume_pk={resume_pk} ({mark_source}); batch_size={batch_size}; "
             f"planned_batches={planned_batches}"
             + (f" (bounded by --max-batches={max_batches})" if max_batches is not None else "")
@@ -566,7 +656,7 @@ class Command(BaseCommand):
                 # re-dispatches the SAME chunk rather than silently skipping it.
                 chunk = sampled_pks[sample_offset : sample_offset + batch_size]
             else:
-                chunk = next_chunk_after(resume_pk, batch_size)
+                chunk = next_chunk_after(resume_pk, batch_size, source_keys)
             if not chunk:
                 stopped_reason = "cohort-exhausted"
                 self.stdout.write("Cohort exhausted - every card in this pass has been dispatched.")
@@ -655,7 +745,7 @@ class Command(BaseCommand):
             )
             resume_pk = max(resume_pk, batch_high)
             if uses_stored_mark:
-                StageEFullCatalogCursor.advance(resume_pk, cards_dispatched=len(chunk))
+                StageEFullCatalogCursor.advance(resume_scope, resume_pk, cards_dispatched=len(chunk))
 
             elapsed = time.monotonic() - started_at
             batch_line = (
@@ -725,7 +815,10 @@ class Command(BaseCommand):
             f"halted={halted_status} stopped_reason={stopped_reason}"
         )
         # Printed on EVERY exit path (module docstring) - the operator's relaunch argument.
-        self.stdout.write(f"RESUME resume_pk={resume_pk} (relaunch bare to continue, or --start-pk {resume_pk})")
+        self.stdout.write(
+            f"RESUME scope={resume_scope} resume_pk={resume_pk} "
+            f"(relaunch with the SAME --source flags to continue, or --start-pk {resume_pk})"
+        )
 
         if throttle_budget_exhausted:
             # NON-ZERO EXIT, after the summary and the resume pk are already on stdout: an

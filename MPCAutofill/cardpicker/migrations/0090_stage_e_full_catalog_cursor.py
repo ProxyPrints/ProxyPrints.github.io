@@ -4,7 +4,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ("cardpicker", "0089_canonicalprintingmetadata_illustration_id"),
     ]
@@ -14,7 +13,7 @@ class Migration(migrations.Migration):
             name="StageEFullCatalogCursor",
             fields=[
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
-                ("singleton_key", models.PositiveSmallIntegerField(default=1, unique=True)),
+                ("scope", models.CharField(max_length=64, unique=True)),
                 ("position", models.BigIntegerField(default=0)),
                 ("cards_dispatched", models.BigIntegerField(default=0)),
                 ("updated_at", models.DateTimeField(auto_now=True)),

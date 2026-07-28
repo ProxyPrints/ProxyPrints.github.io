@@ -1574,54 +1574,68 @@ class StageEFullCatalogCursor(models.Model):
     sample run walks a pseudo-random subset spread across the whole pk space, so letting it advance
     this mark would jump a real catalog pass's resume point to near the end of the pk space after
     a single measurement batch.
+
+    KEYED BY SCOPE, not a singleton - `stream_full_catalog`'s `--source <key>` flag means a run can
+    traverse either the WHOLE catalog (`scope="full-catalog"`) or one source's cards
+    (`scope="source:<key>"`), and those two walks cover different pk space. One shared mark would
+    corrupt both directions: a `--source X` run whose cards happen to live high in the pk space
+    would leave a mark that made a later full-catalog run skip everything below it (silently
+    never-processed cards, the worst possible failure for a pass whose entire purpose is total
+    coverage), and a completed full-catalog run would leave a mark that made a later `--source Y`
+    run believe it had already finished. This is exactly the reasoning `StageESweepCursor`'s own
+    docstring gives for being keyed rather than singleton, applied to a different key space.
+
+    `scope` is derived by the command, never operator-supplied free text - see
+    `stream_full_catalog.resume_scope_for`.
     """
 
-    singleton_key = models.PositiveSmallIntegerField(default=1, unique=True)
+    scope = models.CharField(max_length=64, unique=True)
     position = models.BigIntegerField(default=0)
     cards_dispatched = models.BigIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:
-        return f"Stage E full-catalog cursor position={self.position} cards_dispatched={self.cards_dispatched}"
+        return (
+            f"Stage E full-catalog cursor scope={self.scope} position={self.position} "
+            f"cards_dispatched={self.cards_dispatched}"
+        )
 
     @classmethod
-    def get_position(cls) -> int:
-        """The stored high-water mark, `0` on a deployment where this command has never run (no
-        row yet) - `0` is also the correct "start from the very beginning" value, since the walk
+    def get_position(cls, scope: str) -> int:
+        """`scope`'s own stored high-water mark, `0` when that scope has never been run (no row
+        yet) - `0` is also the correct "start from the very beginning" value, since the walk
         resumes at `pk__gt=position` and Card pks are positive."""
-        row = cls.objects.filter(singleton_key=1).first()
+        row = cls.objects.filter(scope=scope).first()
         return row.position if row is not None else 0
 
     @classmethod
-    def advance(cls, to_position: int, cards_dispatched: int = 0) -> None:
-        """Record a completed batch. MONOTONIC - a `to_position` that is not ahead of the stored
-        one leaves `position` alone (the `position__lt` guard in the UPDATE's own filter), so this
-        is safe to call unconditionally after every completed batch without a read-modify-write
-        race. Creates the singleton row on first use."""
+    def advance(cls, scope: str, to_position: int, cards_dispatched: int = 0) -> None:
+        """Record a completed batch against `scope`. MONOTONIC - a `to_position` that is not ahead
+        of the stored one leaves `position` alone (the `position__lt` guard in the UPDATE's own
+        filter), so this is safe to call unconditionally after every completed batch without a
+        read-modify-write race. Creates `scope`'s row on first use."""
         now = timezone.now()
-        updated = cls.objects.filter(singleton_key=1, position__lt=to_position).update(
+        updated = cls.objects.filter(scope=scope, position__lt=to_position).update(
             position=to_position,
             cards_dispatched=models.F("cards_dispatched") + cards_dispatched,
             updated_at=now,
         )
         if updated:
             return
-        if cls.objects.filter(singleton_key=1).exists():
+        if cls.objects.filter(scope=scope).exists():
             # Row exists but is already at or ahead of `to_position` - monotonic no-op by design.
             return
-        cls.objects.get_or_create(
-            singleton_key=1, defaults={"position": to_position, "cards_dispatched": cards_dispatched}
-        )
+        cls.objects.get_or_create(scope=scope, defaults={"position": to_position, "cards_dispatched": cards_dispatched})
 
     @classmethod
-    def reset_to(cls, position: int) -> None:
+    def reset_to(cls, scope: str, position: int) -> None:
         """The `--start-pk` override (`stream_full_catalog`): the ONLY way `position` ever moves
         backwards. An explicit operator instruction to resume from a specific pk must win over
         whatever a prior invocation stored, otherwise `--start-pk 0` (restart the whole pass) would
         run its first batch and then silently snap back to the old mark on the next invocation."""
-        updated = cls.objects.filter(singleton_key=1).update(position=position, updated_at=timezone.now())
+        updated = cls.objects.filter(scope=scope).update(position=position, updated_at=timezone.now())
         if not updated:
-            cls.objects.get_or_create(singleton_key=1, defaults={"position": position})
+            cls.objects.get_or_create(scope=scope, defaults={"position": position})
 
 
 class CardScanLog(models.Model):
