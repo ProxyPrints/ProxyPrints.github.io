@@ -75,6 +75,7 @@ from cardpicker.models import (
     Tag,
     VotePolarity,
     VoteSource,
+    purge_stale_machine_votes,
 )
 from cardpicker.printing_metadata_import import (
     _cache_path,
@@ -357,6 +358,9 @@ def run_external_ip_tag_import(
         # uniqueness constraint - the eligibility query above already excludes any printing this
         # identity has voted on, so a conflict here would only ever come from two concurrent
         # invocations racing, not from this invocation's own logic.
+        purge_stale_machine_votes(
+            PrintingTagVote, SCRYFALL_TAGGER_ANONYMOUS_ID, "printing_id", [_v.printing_id for _v in votes_batch]
+        )
         PrintingTagVote.objects.bulk_create(votes_batch, ignore_conflicts=True)
         result.votes_written = len(votes_batch)
 
@@ -389,6 +393,9 @@ def run_external_ip_tag_import(
             )
 
     if not dry_run and negative_batch:
+        purge_stale_machine_votes(
+            PrintingTagVote, SCRYFALL_TAGGER_ANONYMOUS_ID, "printing_id", [_v.printing_id for _v in negative_batch]
+        )
         PrintingTagVote.objects.bulk_create(negative_batch, ignore_conflicts=True)
         result.negative_votes_written = len(negative_batch)
 

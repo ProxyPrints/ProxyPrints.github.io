@@ -52,6 +52,7 @@ from cardpicker.models import (
     ImageEvidence,
     PrintingTagStatus,
     VoteSource,
+    purge_stale_machine_votes,
 )
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.search.sanitisation import to_searchable
@@ -527,6 +528,10 @@ def run_illustration_calculator(
     if not dry_run:
         from cardpicker.local_calculate_verdicts import _split_new_printing_tag_votes
 
+        if votes_batch:
+            purge_stale_machine_votes(
+                CardPrintingTag, ILLUSTRATION_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
+            )
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
         if new_votes:
             CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)

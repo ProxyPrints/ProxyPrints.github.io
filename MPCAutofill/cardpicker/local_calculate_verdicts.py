@@ -412,6 +412,7 @@ from cardpicker.models import (
     ImageEvidence,
     PrintingTagStatus,
     VoteSource,
+    purge_stale_machine_votes,
 )
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.printing_metadata_import import is_back_face
@@ -1282,6 +1283,10 @@ def run_join_key_calculator(
         # crash-proofing (the check above still leaves a narrow query-to-insert race window) -
         # same belt-and-suspenders precedent as local_layout_class_cast.py:300/
         # local_detect_ai_art.py:459/local_identify_printing_tags.py:1246 for CardTagVote.
+        if votes_batch:
+            purge_stale_machine_votes(
+                CardPrintingTag, JOIN_KEY_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
+            )
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
         if new_votes:
             CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
@@ -1606,6 +1611,10 @@ def run_fallback_calculator(
         # under its own STAGE_D_FALLBACK_ANONYMOUS_ID and is equally exposed to the concurrent-
         # dispatch collision that fixes). ignore_conflicts=True is the actual crash-proofing -
         # same rationale as run_join_key_calculator's own identical call site.
+        if votes_batch:
+            purge_stale_machine_votes(
+                CardPrintingTag, STAGE_D_FALLBACK_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
+            )
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
         if new_votes:
             CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)

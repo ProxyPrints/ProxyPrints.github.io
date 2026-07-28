@@ -90,6 +90,7 @@ from cardpicker.models import (
     Tag,
     VotePolarity,
     VoteSource,
+    purge_stale_machine_votes,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 
@@ -294,6 +295,9 @@ def run_layout_class_cast(
         # uniqueness constraint - the eligibility query above already excludes any card this
         # identity has voted on, so a conflict here would only ever come from two concurrent
         # invocations racing, not from this invocation's own logic.
+        purge_stale_machine_votes(
+            CardTagVote, LAYOUT_CLASS_CAST_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
+        )
         CardTagVote.objects.bulk_create(votes_batch, ignore_conflicts=True)
         CardScanLog.objects.bulk_create(scan_log_batch)
         result.votes_written = len(votes_batch)
