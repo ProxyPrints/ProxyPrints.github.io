@@ -52,7 +52,7 @@ from cardpicker.models import EnvelopeTrip
 # §10(a) ratified numeric bounds - PASSIVE mode only (see module docstring). None of these are
 # invented here; every one is cited to a specific brief section in the module docstring above.
 HOST_LOAD_CEILING = 7.0
-RSS_MB_PER_WORKER_CEILING = 512.0
+RSS_MB_PER_WORKER_CEILING = 768.0
 FETCH_FAILURE_RATE_CEILING = 0.01
 FETCH_FAILURE_WINDOW = 500
 

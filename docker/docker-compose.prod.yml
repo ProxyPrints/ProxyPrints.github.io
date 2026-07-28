@@ -40,6 +40,11 @@ services:
       # Stage E streaming activation (docs/features/stage-e-operations.md) - reads
       # docker/.env; default False = dormant. Phase-3 activation flips the .env value.
       - STAGE_E_STREAMING_ENABLED=${STAGE_E_STREAMING_ENABLED:-False}
+      # Stage E streaming batch tuning (shakedown measurement output, 2026-07-28) - b25
+      # reverts to the original placeholder; concurrent cap 6 stays below the 7-core
+      # ceiling (tripped at 8 concurrent on 2026-07-24/25).
+      - STAGE_E_MICRO_BATCH_SIZE=${STAGE_E_MICRO_BATCH_SIZE:-25}
+      - STAGE_E_MAX_CONCURRENT_DISPATCHES=${STAGE_E_MAX_CONCURRENT_DISPATCHES:-6}
       # Stage C evidence transfer kill-switch (issue #473 PR-2, Tron §8 gate condition) - default
       # True (transfer ON); docker/.env can flip it False to isolate a live-run anomaly.
       - STAGE_C_EVIDENCE_TRANSFER_ENABLED=${STAGE_C_EVIDENCE_TRANSFER_ENABLED:-True}
@@ -90,6 +95,11 @@ services:
       # Stage E streaming activation (docs/features/stage-e-operations.md) - reads
       # docker/.env; default False = dormant. Phase-3 activation flips the .env value.
       - STAGE_E_STREAMING_ENABLED=${STAGE_E_STREAMING_ENABLED:-False}
+      # Stage E streaming batch tuning (shakedown measurement output, 2026-07-28) - b25
+      # reverts to the original placeholder; concurrent cap 6 stays below the 7-core
+      # ceiling (tripped at 8 concurrent on 2026-07-24/25).
+      - STAGE_E_MICRO_BATCH_SIZE=${STAGE_E_MICRO_BATCH_SIZE:-25}
+      - STAGE_E_MAX_CONCURRENT_DISPATCHES=${STAGE_E_MAX_CONCURRENT_DISPATCHES:-6}
       # Stage C evidence transfer kill-switch (issue #473 PR-2, Tron §8 gate condition) - default
       # True (transfer ON); docker/.env can flip it False to isolate a live-run anomaly.
       - STAGE_C_EVIDENCE_TRANSFER_ENABLED=${STAGE_C_EVIDENCE_TRANSFER_ENABLED:-True}

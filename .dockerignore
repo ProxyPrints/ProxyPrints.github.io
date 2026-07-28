@@ -22,3 +22,6 @@ schemas
 .mypy_cache
 .ruff_cache
 test-results
+# nginx certs are runtime bind mounts (docker-compose.prod.yml), never COPY'd in any
+# Dockerfile — but the host key has restricted permissions that block docker context upload.
+docker/nginx/certs
