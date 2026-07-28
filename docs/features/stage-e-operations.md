@@ -850,6 +850,9 @@ Before scheduling a bulk extraction run (`run_image_evidence_cohort`,
    `stage_d_illustration_votes` and `stage_d_illustration_already_voted` for
    observability.
 
+6. **Soak gate.** After each width-ramp step, run `soak_gate_report --run-id <run_id>` to evaluate the per-step criteria before widening.
+   See [`docs/soak-gate.md`](../../soak-gate.md) for the full runbook.
+
 ## Phase 3 — Shakedown driver
 
 `manage.py stage_e_shakedown` (issue #465) — routes the Bug-A blank-tier-1
