@@ -62,13 +62,21 @@ this is deliberately NOT the same thing as pooling compute; only I/O-bound fetch
 overlapped, the OCR/extraction work itself stays exactly as sequential as the paragraph above
 requires.
 
-CONSENSUS RECOMPUTE (decision (4)) NEEDS NO SEPARATE STEP HERE: all three Stage D calculators
+CONSENSUS RECOMPUTE (decision (4)) NEEDS NO SEPARATE STEP HERE: all Stage D calculators
 already call `resolve_and_persist_printing(touched_card)` internally for every card they cast a
 vote on (see e.g. `run_join_key_calculator`'s own final loop, unchanged by this module) - scoping
 those calculators to the micro-batch via `card_ids` already scopes their consensus recompute calls
 to exactly the same set, satisfying decision (4)'s "scoped incremental per-touch" requirement for
 free. This module never imports `printing_consensus`/`vote_consensus`/`tag_consensus`/
 `artist_consensus` (PROTECTED CORE) directly at all.
+
+ILLUSTRATION CALCULATOR (issue #507, PR #509): `cardpicker.local_illustration.
+run_illustration_calculator` is wired into `_run_stage_d` after the fallback calculator and before
+the slow-path router, in the same `card_ids`-scoped, `dry_run=False` shape the other calculators
+use. Its result fields (`votes_written`, `already_voted`) are aggregated onto the same
+`DispatchOutcome`/`PilotRunLedger` counters the other Stage D calculators produce. The calculator
+is imported lazily (same pattern as `_stage_c_manifest_extractor_keys`) to avoid a hard
+import-time dependency between sibling engines.
 """
 
 import logging
@@ -78,7 +86,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Callable, Deque, Iterable, Optional
+from typing import Any, Callable, Deque, Iterable, Optional
 
 from django.conf import settings
 from django.utils import timezone
@@ -146,6 +154,22 @@ def _stage_c_manifest_extractor_keys() -> "frozenset[str]":
     )
 
     return MANIFEST_EXTRACTOR_KEYS
+
+
+def _stage_c_manifest_versions() -> "dict[str, str]":
+    """
+    Lazy import of the single-source version map (2026-07-28, issue #509) - same lazy-import
+    posture as `_stage_c_manifest_extractor_keys` immediately above. Returns the dict mapping each
+    manifest extractor key to its CURRENT expected version string, used by `_select_micro_batch` and
+    `_run_stage_c` to reject stale `ImageEvidence` rows whose keys are present but whose values
+    carry an old version tag. Imported from the same module as `MANIFEST_EXTRACTOR_KEYS` (the
+    single source of truth) so the two can never drift apart.
+    """
+    from cardpicker.management.commands.run_image_evidence_cohort import (
+        MANIFEST_EXTRACTOR_CURRENT_VERSIONS,
+    )
+
+    return MANIFEST_EXTRACTOR_CURRENT_VERSIONS
 
 
 class _FetchOutcomeWindow:
@@ -229,6 +253,8 @@ class DispatchOutcome:
     # (zero forever would suggest the guard itself is dead code, not that races don't happen).
     stage_d_join_key_already_voted: int = 0
     stage_d_fallback_already_voted: int = 0
+    stage_d_illustration_votes: int = 0
+    stage_d_illustration_already_voted: int = 0
     trip_id: Optional[str] = None
 
 
@@ -384,11 +410,11 @@ def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[i
     if len(seen) >= batch_size:
         return seen[:batch_size]
 
-    manifest_keys = list(_stage_c_manifest_extractor_keys())
+    manifest_versions = _stage_c_manifest_versions()
 
     def _verify_stage_c_chunk(chunk: list[int]) -> Iterable[int]:
         done_ids = set(
-            ImageEvidence.objects.filter(card_id__in=chunk, extractor_versions__has_keys=manifest_keys).values_list(
+            ImageEvidence.objects.filter(card_id__in=chunk, extractor_versions__contains=manifest_versions).values_list(
                 "card_id", flat=True
             )
         )
@@ -601,11 +627,11 @@ def _run_stage_c(
     if force_stage_c_reextract:
         already_done_ids: set[int] = set()
     else:
-        manifest_keys = list(_stage_c_manifest_extractor_keys())
+        manifest_versions = _stage_c_manifest_versions()
         already_done_ids = set(
-            ImageEvidence.objects.filter(card_id__in=batch_ids, extractor_versions__has_keys=manifest_keys).values_list(
-                "card_id", flat=True
-            )
+            ImageEvidence.objects.filter(
+                card_id__in=batch_ids, extractor_versions__contains=manifest_versions
+            ).values_list("card_id", flat=True)
         )
     short_circuit: Optional[bool] = False if force_stage_c_reextract else None
     lexicon = known_set_codes()
@@ -723,6 +749,20 @@ def _run_stage_c(
     return trip
 
 
+def _run_illustration_calculator(run_id: str, card_ids: list[int]) -> Any:
+    """
+    Lazy-import wrapper for `cardpicker.local_illustration.run_illustration_calculator` - mirrors
+    `_stage_c_manifest_extractor_keys`'s own posture of avoiding a hard import-time dependency
+    between sibling engines (that function's own docstring has the full rationale). The actual
+    calculator is the same `run_illustration_calculator` the bulk-management command
+    (`local_calculate_verdicts`) already uses, called here with `dry_run=False` and the micro-batch
+    `card_ids` scope parameter `local_illustration.py` gained for this module's benefit.
+    """
+    from cardpicker.local_illustration import run_illustration_calculator
+
+    return run_illustration_calculator(run_id=run_id, dry_run=False, card_ids=card_ids)
+
+
 def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) -> None:
     """
     Stage D over the SAME micro-batch, scoped via the `card_ids` parameter
@@ -768,6 +808,10 @@ def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) ->
     fallback_result = run_fallback_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
     outcome.stage_d_fallback_votes = fallback_result.votes_written
     outcome.stage_d_fallback_already_voted = fallback_result.already_voted
+
+    illustration_result = _run_illustration_calculator(run_id=run_id, card_ids=batch_ids)
+    outcome.stage_d_illustration_votes = illustration_result.votes_written
+    outcome.stage_d_illustration_already_voted = illustration_result.already_voted
 
     slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
     outcome.stage_d_slow_path_routed = slow_path_result.routed_written
@@ -904,6 +948,8 @@ def dispatch_micro_batch(
                     "stage_d_join_key_already_voted": outcome.stage_d_join_key_already_voted,
                     "stage_d_fallback_votes": outcome.stage_d_fallback_votes,
                     "stage_d_fallback_already_voted": outcome.stage_d_fallback_already_voted,
+                    "stage_d_illustration_votes": outcome.stage_d_illustration_votes,
+                    "stage_d_illustration_already_voted": outcome.stage_d_illustration_already_voted,
                     "stage_d_slow_path_routed": outcome.stage_d_slow_path_routed,
                     "peak_rss_mb": peak_rss_mb,
                     "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,

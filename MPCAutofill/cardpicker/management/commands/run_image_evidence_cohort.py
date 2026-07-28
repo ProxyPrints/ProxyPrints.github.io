@@ -251,6 +251,29 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
     }
 )
 
+# Single-source version map (2026-07-28, issue #509): maps each manifest extractor key to the
+# CURRENT expected version string from image_evidence.py's per-extractor version constants.
+# Used by the version-aware resume filter (below) to reject stale rows whose keys are present
+# but whose values still carry an old version tag - e.g. a card with
+# "collector_line_ocr": "collector-line-ocr-v1" has the KEY but not the CURRENT VALUE, so it
+# should be re-processed, not skipped. Imported by stage_e_dispatch._stage_c_manifest_versions()
+# for the streaming filter (same "imported, never reimplemented" posture as MANIFEST_EXTRACTOR_KEYS
+# itself). Keep this dict's values in sync with image_evidence.py's version constants whenever a
+# version bump lands.
+MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
+    "fetch_health": "fetch-health-v2",
+    "geometry_bleed": "geometry-bleed-v1",
+    "layout_class": "layout-class-v1",
+    "crop_coordinates": "crop-coordinates-v1",
+    "collector_line_ocr": "collector-line-ocr-v2",
+    "artist_ocr": "artist-ocr-v2",
+    "collector_line_tsv": "collector-line-tsv-v2",
+    "artbox_phash": "artbox-phash-v1",
+    "symbol_region": "symbol-region-v1",
+    "legal_line": "legal-line-v2",
+    "quality_signals": "quality-signals-v1",
+}
+
 DEFAULT_LIMIT = 3000
 # Usable compute OCPUs (owner-confirmed hardware, 2026-07-20): 8 OCPU total, 1 pinned to network
 # traffic, 7 usable for compute - matches the process pool's own sizing rationale in the module
@@ -959,7 +982,7 @@ class Command(BaseCommand):
                 for card_id, extractor_versions in ImageEvidence.objects.values_list(
                     "card_id", "extractor_versions"
                 ).iterator():
-                    if MANIFEST_EXTRACTOR_KEYS.issubset(extractor_versions.keys()):
+                    if MANIFEST_EXTRACTOR_CURRENT_VERSIONS.items() <= extractor_versions.items():
                         already_done_ids.add(card_id)
                 if already_done_ids:
                     self.stdout.write(f"Resume filter: skipping {len(already_done_ids)} already-fully-processed cards")

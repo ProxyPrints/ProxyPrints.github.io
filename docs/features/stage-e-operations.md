@@ -717,7 +717,9 @@ per-batch dry-run leg — see `stage-e-streaming.md` §3 decision (5)), and
 `stage_d_fallback_already_voted` (2026-07-24 — a losing race against a
 concurrent overlapping dispatch, see "Resume contract, extended to a
 streamed micro-batch" below; non-zero occasionally is healthy, not a bug),
-`stage_d_slow_path_routed`, `elapsed_s`, `peak_rss_mb` (via the same
+`stage_d_illustration_votes`/`stage_d_illustration_already_voted`
+(2026-07-28, issue #507 — illustration deduction calculator wired into the
+streaming conveyor), `stage_d_slow_path_routed`, `elapsed_s`, `peak_rss_mb` (via the same
 `process_metrics.get_process_rss_mb` Phase 1 wired in), and `lockout_trip_id`
 (non-null only when a Google lockout tripped mid-batch). A halted call
 (`disabled`/`halted-open-trip`/`halted-new-trip`)
@@ -807,6 +809,46 @@ uncontrolled load the envelope has no visibility into and no ability to
 throttle, which is exactly the class of resource contention that produced
 the host-load trip above. Land a BULK write cleanly, or explicitly pause
 PASSIVE streaming for its duration, rather than running both at once.
+
+### Bulk run preconditions
+
+Before scheduling a bulk extraction run (`run_image_evidence_cohort`,
+`local_calculate_verdicts`, `reparse_collector_evidence`, etc.), verify:
+
+1. **Streaming disabled or paused.** Set `STAGE_E_STREAMING_ENABLED=False`
+   (or trip the envelope so `current_trip()` is non-None) before starting.
+   BULK commands are outside the envelope's own bars and a concurrent
+   streaming dispatch adds uncontrolled load (see "Runbook addition" above).
+
+2. **No active envelope trip.** If streaming IS expected to resume
+   immediately after the bulk run, acknowledge any open trip first
+   (`resolve_envelope_trip`). A fresh bulk run against a tripped envelope
+   works fine (BULK mode ignores the envelope), but streaming will not
+   resume until the trip is cleared — forgetting this is the most common
+   post-bulk-run surprise.
+
+3. **Version-aware resume filter.** The `MANIFEST_EXTRACTOR_CURRENT_VERSIONS`
+   dict (`run_image_evidence_cohort.py`) maps each extractor key to its
+   current expected version string. A card whose `ImageEvidence` row has all
+   keys present but at an older version (e.g. `collector_line_ocr` at
+   `"collector-line-ocr-v1"` when the current version is `"v2"`) is
+   re-processed, not skipped. This means a version bump in
+   `image_evidence.py` (e.g. the OCR engine flip, issue #480) correctly
+   triggers a full re-extraction of affected cards on the next bulk pass —
+   no manual row deletion needed.
+
+4. **Fresh git SHA.** Every `PilotRunLedger` row records
+   `git_sha=get_baked_git_sha()`. If a bulk run spans a deploy, ledger rows
+   from different code versions share one `run_id` — cross-reference the
+   SHA column when triaging mid-run failures.
+
+5. **Illustration calculator.** Bulk-mode commands
+   (`local_calculate_verdicts`) already wire `run_illustration_calculator`
+   after fallback (issue #507). The streaming conveyor
+   (`stage_e_dispatch._run_stage_d`) now does the same — no separate manual
+   invocation needed in either path. Ledger counters include
+   `stage_d_illustration_votes` and `stage_d_illustration_already_voted` for
+   observability.
 
 ## Phase 3 — Shakedown driver
 

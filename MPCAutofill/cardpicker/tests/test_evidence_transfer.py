@@ -24,12 +24,12 @@ from cardpicker.evidence_transfer import (
     transfer_evidence,
 )
 from cardpicker.management.commands.run_image_evidence_cohort import (
-    MANIFEST_EXTRACTOR_KEYS,
+    MANIFEST_EXTRACTOR_CURRENT_VERSIONS,
 )
 from cardpicker.models import CardScanLog, ImageEvidence
 from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory
 
-FULL_MANIFEST = {key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS}
+FULL_MANIFEST = dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS)
 
 
 class TestFindTransferSourceHappyPath:

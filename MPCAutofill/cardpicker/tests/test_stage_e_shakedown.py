@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from cardpicker import stage_e_dispatch
 from cardpicker.management.commands.run_image_evidence_cohort import (
-    MANIFEST_EXTRACTOR_KEYS,
+    MANIFEST_EXTRACTOR_CURRENT_VERSIONS,
 )
 from cardpicker.management.commands.stage_e_shakedown import (
     FORCE_ESCALATED_RUN_ID,
@@ -42,7 +42,7 @@ def _blank_tail_evidence(card: Any, **overrides: Any) -> ImageEvidence:
     combination IS the thing under test, not incidental setup."""
     defaults = dict(
         content_hash=card.content_phash or 0,
-        extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
+        extractor_versions=dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
         fetch_ok=True,
         collector_line_raw_text="",
         collector_line_set_code="",
@@ -207,7 +207,7 @@ def _install_ok_stage_c_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             card_id=card_id,
             content_hash=content_hash,
             fields=fields,
-            extractor_versions={key: f"{key}-v1" for key in MANIFEST_EXTRACTOR_KEYS},
+            extractor_versions=dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
         )
 
     import cardpicker.image_cdn_fetch as image_cdn_fetch_module
