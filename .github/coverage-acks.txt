@@ -79,3 +79,12 @@ coverage-ack: frontend/tests/QuestionFeedResponsive.spec.ts::question feed - que
 coverage-ack: frontend/tests/QuestionFeedResponsive.spec.ts::question feed - shared blue mystery card composition (owner review round 3) > * — the shared MysteryCard component is retinted onto tokens and its glyph becomes plain text (WD1); replacement coverage lives under the new "mystery-card glyph" describe - PR #446
 coverage-ack: frontend/tests/WhatsThatWordsAnimation.spec.ts::What's That Card? - sliced-word pop + hero card pulse (issue #305) > * — retires the sliced WHAT'S/THAT/CARD? pop sequence and the card-pulse-in-sync-with-THAT effect entirely (WD1 kills the gold/navy identity these animations were built around; ANNEX C's animation inventory doesn't list either) - the file is re-purposed for ANNEX C's actual reduced-motion coverage, not a like-for-like port - PR #446
 coverage-ack: frontend/tests/WhatsThatWordsAnimation.spec.ts::What's That Card? - narrow-width wordmark swap (owner live-review) > * — retires the WideWordmark/NarrowWordmark viewport-driven CSS-display fork (container-first policy); WhatsThatWords is now one static, single-tree <h1> - PR #446
+
+# WTC phase B (PR #528) - NoMatchReasonStrip's seven reason chips were split into two
+# labelled groups (not-official-printing / not-official-art). Both titles below picked up
+# wording describing that split in the same change; neither test was removed - both are
+# still present, still exercise the same strip, and the file gained two further tests on top
+# (the exhaustive/no-overlap partition check, and a cross-group vote-payload-shape check),
+# taking this file from 4 tests to 6.
+coverage-ack: frontend/tests/NoMatchReasonStrip.spec.ts::NoMatchReasonStrip tests > No match is disabled until a chip is set, then shows the reason strip (not the general attribute panel) — renamed to "No match is disabled until a chip is set, then shows the reason strip split into two labelled groups (not the general attribute panel)" when the strip was split into two axes; test still present and extended with per-group assertions.
+coverage-ack: frontend/tests/NoMatchReasonStrip.spec.ts::NoMatchReasonStrip tests > hides chips for reason tags that don't exist server-side yet — renamed to "hides chips for reason tags that don't exist server-side yet, in both groups" when the strip was split into two axes; test still present and extended to assert the unseeded-tag filter applies inside a still-rendered group, not just across whole groups.

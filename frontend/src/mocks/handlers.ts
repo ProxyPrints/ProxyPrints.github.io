@@ -785,7 +785,13 @@ const serialisedTag = (name: string, displayName: string | null = null) => ({
 // keep in sync with cardpicker/reason_tags.py's NO_MATCH_REASON_TAGS - real seeded
 // (name, displayName) pairs, mirrored here so mocked tests exercise the same
 // displayName-lookup path a real seeded backend would.
-const NO_MATCH_REASON_TAG_DISPLAY_NAMES: Array<[string, string]> = [
+//
+// Exported so NoMatchReasonStrip.spec.ts's exhaustiveness test can check
+// NoMatchReasonStrip.tsx's NO_MATCH_REASON_TAG_GROUPS partition against an INDEPENDENT
+// mirror of the backend contract (this list), not against itself - a test that only
+// compared the partition to a flat list re-derived from the same partition object would
+// never actually catch drift.
+export const NO_MATCH_REASON_TAG_DISPLAY_NAMES: Array<[string, string]> = [
   ["custom-art", "Custom art"],
   ["altered-frame", "Altered frame"],
   ["upscaled", "Upscaled"],
