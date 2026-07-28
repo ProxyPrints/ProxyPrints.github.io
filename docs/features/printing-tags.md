@@ -322,6 +322,30 @@ printings, artists, tags, and moderation from one screen.
   that name covers OFFICIAL Magic printings, so a custom proxy bearing
   e.g. Warhammer or Lord of the Rings art isn't one of those — it's
   non-official art drawn from an external IP.
+  **Two-axis split (WTC phase B, 2026-07-28)**: the seven tags above
+  answer two different questions, not one, and
+  `NoMatchReasonStrip.tsx`'s exported `NO_MATCH_REASON_TAG_GROUPS`
+  (mirrored in `reason_tags.py`'s docstring so both sides agree without
+  either re-deriving it from the other) is the single source of truth
+  for the split, presented in the UI as two labelled chip groups instead
+  of one flat wall:
+
+  - _not-official-printing_ (`altered-frame`, `upscaled`,
+    `no-collector-line`, `non-english`) — the artwork is genuine, the
+    physical card is not; the artwork question stays answerable.
+  - _not-official-art_ (`custom-art`, `ai-art`, `external-ip`) — the
+    artwork itself isn't from any official card; the artwork question is
+    unanswerable.
+
+  Exhaustive over the taxonomy (asserted by a frontend test) so a future
+  tag added here without a matching entry on either side of
+  `NO_MATCH_REASON_TAG_GROUPS` fails loudly instead of silently missing
+  from the UI. This split is presentational plus a shared routing
+  constant only — it makes no funnel/selection decision itself; the
+  illustration funnel (WTC phase C) is the intended consumer of it as a
+  routing signal (not-official-printing cards stay in the funnel,
+  not-official-art cards drop out).
+
 - **Tag identity vs. presentation**: `Tag.name` is the immutable machine
   key (votes, `Card.tags`, filename-bracket matching, federation);
   `Tag.display_name` (nullable, additive) is freely-editable presentation
