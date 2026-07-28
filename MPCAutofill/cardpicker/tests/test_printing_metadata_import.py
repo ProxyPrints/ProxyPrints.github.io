@@ -1,10 +1,16 @@
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
+import requests
+
+from cardpicker import printing_metadata_import
 from cardpicker.models import CanonicalPrintingMetadata
 from cardpicker.printing_metadata_import import (
+    _download_default_cards,
     _load_back_face_names,
     get_back_face_names,
     import_scryfall_printing_metadata,
@@ -262,3 +268,184 @@ class TestGetBackFaceNames:
         info = _load_back_face_names.cache_info()
         assert info.hits == 1
         assert info.misses == 1
+
+
+class _FakeBulkDataResponse:
+    """Stand-in for the (non-streamed) /bulk-data API response - status_code + text only."""
+
+    def __init__(self, updated_at: str, size: int, status_code: int = 200):
+        self.status_code = status_code
+        self.text = json.dumps(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "type": "default_cards",
+                        "download_uri": "https://example.test/default_cards.json",
+                        "updated_at": updated_at,
+                        "size": size,
+                    }
+                ],
+            }
+        )
+
+
+class _FakeStreamResponse:
+    """
+    Stand-in for a streamed download response (context manager + status_code + iter_content).
+    `error`, when given, is raised AFTER every chunk has been yielded - a mid-stream
+    connection failure.
+    """
+
+    def __init__(self, chunks: list[bytes], status_code: int = 200, error: Exception | None = None):
+        self.status_code = status_code
+        self._chunks = chunks
+        self._error = error
+
+    def __enter__(self) -> "_FakeStreamResponse":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int = 8192) -> Any:
+        yield from self._chunks
+        if self._error is not None:
+            raise self._error
+
+
+def _mock_scryfall_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    updated_at: str = "2026-07-28T00:00:00.000Z",
+    size: int = 123,
+    download_chunks: list[bytes] | None = None,
+) -> list[str]:
+    """
+    Routes `requests.get` to fakes: the /bulk-data API returns one default_cards entry carrying
+    `updated_at`/`size`; any other URL is treated as the bulk download itself. Returns the list
+    of requested URLs so tests can assert whether the download was actually hit.
+    """
+    requested_urls: list[str] = []
+
+    def fake_get(url: str, **kwargs: Any) -> Any:
+        requested_urls.append(url)
+        if url == "https://api.scryfall.com/bulk-data":
+            return _FakeBulkDataResponse(updated_at=updated_at, size=size)
+        return _FakeStreamResponse(chunks=download_chunks if download_chunks is not None else [b"[\n]\n"])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    return requested_urls
+
+
+def _use_tmp_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    cache_path = tmp_path / "default_cards.json"
+    monkeypatch.setattr(printing_metadata_import, "_cache_path", lambda: cache_path)
+    return cache_path
+
+
+class TestAtomicDownload:
+    """
+    Issue #513 download-side, part 1: `_download_default_cards` streams to a temp file in the
+    same directory and atomically `os.replace`s it over the cache only on success, so a
+    mid-stream failure can never truncate the real cache. All network is mocked - no real
+    Scryfall calls, no real ~558MB files.
+    """
+
+    def test_successful_download_lands_via_os_replace_and_writes_sidecar(self, db, tmp_path, monkeypatch):
+        cache_path = _use_tmp_cache(monkeypatch, tmp_path)
+        payload = b'[\n{"id": "11111111-1111-1111-1111-111111111111"}\n]\n'
+        _mock_scryfall_requests(monkeypatch, download_chunks=[payload])
+        replaced: list[tuple[Path, Path]] = []
+        real_replace = os.replace
+
+        def spy_replace(src: Any, dst: Any) -> None:
+            replaced.append((Path(src), Path(dst)))
+            real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", spy_replace)
+
+        import_scryfall_printing_metadata()
+
+        assert replaced == [(Path(str(cache_path) + ".tmp"), cache_path)]
+        assert cache_path.read_bytes() == payload
+        assert not Path(str(cache_path) + ".tmp").exists()
+        sidecar = json.loads((tmp_path / "default_cards.meta.json").read_text())
+        assert sidecar == {"updated_at": "2026-07-28T00:00:00.000Z", "size": 123}
+
+    def test_mid_stream_failure_leaves_original_cache_and_no_temp_file(self, tmp_path, monkeypatch):
+        cache_path = tmp_path / "default_cards.json"
+        original = b"original cache contents"
+        cache_path.write_bytes(original)
+
+        def failing_get(url: str, **kwargs: Any) -> _FakeStreamResponse:
+            return _FakeStreamResponse(
+                chunks=[b"partial"],
+                error=requests.exceptions.ConnectionError("connection dropped mid-stream"),
+            )
+
+        monkeypatch.setattr(requests, "get", failing_get)
+
+        with pytest.raises(requests.exceptions.ConnectionError):
+            _download_default_cards("https://example.test/default_cards.json", cache_path)
+
+        assert cache_path.read_bytes() == original
+        assert not Path(str(cache_path) + ".tmp").exists()
+
+
+class TestRemoteFreshness:
+    """
+    Issue #513 download-side, part 2: with no explicit path, `import_scryfall_printing_metadata`
+    consults the /bulk-data entry's `updated_at` against the download-time sidecar (`_is_fresh`)
+    and skips the ~558MB re-download while the remote is unchanged. All network is mocked.
+    """
+
+    def test_matching_sidecar_skips_download(self, db, tmp_path, monkeypatch):
+        cache_path = _use_tmp_cache(monkeypatch, tmp_path)
+        cache_path.write_bytes(b"[\n]\n")
+        (tmp_path / "default_cards.meta.json").write_text(
+            json.dumps({"updated_at": "2026-07-28T00:00:00.000Z", "size": 123})
+        )
+        requested_urls = _mock_scryfall_requests(monkeypatch)
+
+        import_scryfall_printing_metadata()
+
+        assert requested_urls == ["https://api.scryfall.com/bulk-data"]
+        assert cache_path.read_bytes() == b"[\n]\n"
+
+    def test_missing_sidecar_triggers_download(self, db, tmp_path, monkeypatch):
+        cache_path = _use_tmp_cache(monkeypatch, tmp_path)
+        cache_path.write_bytes(b"stale cache")
+        requested_urls = _mock_scryfall_requests(monkeypatch)
+
+        import_scryfall_printing_metadata()
+
+        assert requested_urls == ["https://api.scryfall.com/bulk-data", "https://example.test/default_cards.json"]
+        assert cache_path.read_bytes() == b"[\n]\n"
+        sidecar = json.loads((tmp_path / "default_cards.meta.json").read_text())
+        assert sidecar == {"updated_at": "2026-07-28T00:00:00.000Z", "size": 123}
+
+    def test_mismatched_sidecar_triggers_download(self, db, tmp_path, monkeypatch):
+        cache_path = _use_tmp_cache(monkeypatch, tmp_path)
+        cache_path.write_bytes(b"[\n]\n")
+        (tmp_path / "default_cards.meta.json").write_text(
+            json.dumps({"updated_at": "2026-07-01T00:00:00.000Z", "size": 99})
+        )
+        requested_urls = _mock_scryfall_requests(monkeypatch)
+
+        import_scryfall_printing_metadata()
+
+        assert requested_urls == ["https://api.scryfall.com/bulk-data", "https://example.test/default_cards.json"]
+        sidecar = json.loads((tmp_path / "default_cards.meta.json").read_text())
+        assert sidecar == {"updated_at": "2026-07-28T00:00:00.000Z", "size": 123}
+
+    def test_bulk_data_api_failure_is_loud_not_silent_cache_reuse(self, db, tmp_path, monkeypatch):
+        cache_path = _use_tmp_cache(monkeypatch, tmp_path)
+        cache_path.write_bytes(b"[\n]\n")
+
+        def failing_get(url: str, **kwargs: Any) -> _FakeBulkDataResponse:
+            return _FakeBulkDataResponse(updated_at="2026-07-28T00:00:00.000Z", size=123, status_code=503)
+
+        monkeypatch.setattr(requests, "get", failing_get)
+
+        with pytest.raises(AssertionError):
+            import_scryfall_printing_metadata()

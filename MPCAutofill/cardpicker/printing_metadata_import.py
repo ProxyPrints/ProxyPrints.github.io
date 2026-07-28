@@ -1,5 +1,6 @@
+import json
 import logging
-import time
+import os
 import uuid
 from collections import Counter
 from datetime import date
@@ -42,6 +43,14 @@ DOUBLE_FACED_LAYOUTS = frozenset({"transform", "modal_dfc", "double_faced_token"
 class BulkDataEntry(BaseModel):
     type: str
     download_uri: str
+    # `updated_at`/`size` ride along on the same /bulk-data entry - issue #513's remote-diff
+    # freshness check compares the remote `updated_at` against the sidecar written at download
+    # time (see `_is_fresh`) and skips the ~558MB re-download when they match. Kept as the raw
+    # API string on purpose: the comparison is exact-equality, so no datetime parsing/format
+    # drift can ever produce a spurious "unchanged" verdict (a format change just re-downloads
+    # once, the safe direction).
+    updated_at: str
+    size: int
 
 
 class BulkDataResponse(BaseModel):
@@ -98,8 +107,39 @@ def _cache_path() -> Path:
     return Path(settings.BASE_DIR) / "scryfall_cache" / "default_cards.json"
 
 
-def _is_stale(path: Path) -> bool:
-    return not path.exists() or time.time() - path.stat().st_mtime > 7 * 24 * 3600
+def _sidecar_path(path: Path) -> Path:
+    return path.with_suffix(".meta.json")
+
+
+def _write_sidecar(path: Path, entry: BulkDataEntry) -> None:
+    """
+    Issue #513: records the remote `updated_at`/`size` of the bulk entry `path` was just
+    downloaded from, next to the cache itself (e.g. `default_cards.meta.json`) - `_is_fresh`'s
+    only input on later runs. Written AFTER `_download_default_cards`'s atomic replace has
+    landed, so a sidecar on disk always describes the cache file beside it; if this write
+    itself fails, the next run simply sees no/stale sidecar and re-downloads once (the safe
+    direction).
+    """
+    _sidecar_path(path).write_text(json.dumps({"updated_at": entry.updated_at, "size": entry.size}))
+
+
+def _is_fresh(path: Path, entry: BulkDataEntry) -> bool:
+    """
+    Issue #513's remote-diff freshness check - replaces the old `_is_stale` 7-day mtime
+    heuristic with the remote bulk entry's own `updated_at` as the authority: the cache is
+    fresh only if it exists on disk AND the sidecar written at its download time records the
+    same `updated_at` the /bulk-data API currently reports. An unchanged remote therefore never
+    re-downloads (whatever the local mtime), and a changed remote always does. A missing or
+    unreadable sidecar means stale - the first run after this deploys has no sidecar yet, so it
+    re-downloads once (intended).
+    """
+    if not path.exists():
+        return False
+    try:
+        meta = json.loads(_sidecar_path(path).read_text())
+    except (OSError, ValueError):  # missing/unreadable sidecar, invalid UTF-8, invalid JSON
+        return False
+    return isinstance(meta, dict) and meta.get("updated_at") == entry.updated_at
 
 
 def ensure_scryfall_cache_present(default_cards_path: Path | None = None) -> None:
@@ -122,11 +162,11 @@ def ensure_scryfall_cache_present(default_cards_path: Path | None = None) -> Non
     this by not calling the guard at all (an explicit `--allow-missing-scryfall-cache`-style flag
     at the call site), rather than this function growing its own bypass flag.
 
-    Deliberately checks EXISTENCE only, not staleness - `_is_stale`'s 7-day weekly re-download
-    window is a completely separate, already-working concern
-    (`import_scryfall_printing_metadata`/`import_canonical_card_data` both already re-fetch a
-    stale-but-present file on their own next run); this guard only exists to catch the file being
-    GONE.
+    Deliberately checks EXISTENCE only, not staleness - freshness is a completely separate,
+    already-working concern (`import_scryfall_printing_metadata` re-fetches whenever the remote
+    bulk entry's `updated_at` differs from the download-time sidecar - see `_is_fresh` - and
+    `import_canonical_card_data` applies its own heuristic, each on its own next run); this
+    guard only exists to catch the file being GONE.
     """
     path = default_cards_path or _cache_path()
     if not path.exists():
@@ -142,23 +182,40 @@ def ensure_scryfall_cache_present(default_cards_path: Path | None = None) -> Non
 
 
 @section_timer(name="get default_cards bulk data URL")
-def _get_default_cards_url() -> str:
+def _get_default_cards_entry() -> BulkDataEntry:
+    # Fails LOUD on any API error (the asserts below) on purpose: per issue #513, a failed
+    # bulk-data lookup must never silently fall back to reusing a cache of unknown age.
     response = requests.get("https://api.scryfall.com/bulk-data", headers=Scryfall.get_headers())
     assert response.status_code == 200
     parsed = BulkDataResponse.model_validate_json(response.text)
     matches = [entry for entry in parsed.data if entry.type == "default_cards"]
     assert matches, "Scryfall bulk-data response did not contain a 'default_cards' entry"
-    return matches.pop().download_uri
+    return matches.pop()
 
 
 @section_timer(name="download default_cards bulk data")
 def _download_default_cards(url: str, path: Path) -> None:
+    """
+    Streams to a temporary file in the SAME directory as `path` first, then atomically
+    `os.replace`s it over `path` only once the stream has fully completed - previously this
+    streamed directly over `path`, so a mid-stream failure left a truncated cache with a fresh
+    mtime that later runs treated as valid (silent degradation, the same class as issue #402).
+    The temp file must live beside `path` so the replace stays on a single filesystem
+    (os.replace is not atomic across filesystems); the try/finally guarantees no partial temp
+    file is left behind and the original cache is untouched on any failure.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Downloading default_cards bulk data from %s", url)
-    with requests.get(url, stream=True, headers=Scryfall.get_headers()) as r:
-        with open(path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
+    tmp_path = Path(str(path) + ".tmp")
+    try:
+        with requests.get(url, stream=True, headers=Scryfall.get_headers()) as r:
+            assert r.status_code == 200
+            with open(tmp_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _parse_rows(path: Path) -> list[PrintingMetadataRow]:
@@ -183,8 +240,8 @@ def _load_back_face_names(path_str: str) -> frozenset[str]:
     bulk-data files (e.g. one per test) never share a cache entry, while repeated lookups against
     the same real on-disk file within one process (the common case - this is called once per
     card, not once per run) only ever parse it once. The cache is intentionally never invalidated
-    within a process lifetime: the bulk file itself only refreshes weekly at most (see
-    `_is_stale`), matching the same "reused within the 7-day window" tolerance
+    within a process lifetime: the bulk file itself only refreshes when the remote bulk entry
+    actually changes (see `_is_fresh`), matching the same "reused within a run" tolerance
     `import_scryfall_printing_metadata`'s own cache already assumes.
     """
     path = Path(path_str)
@@ -252,16 +309,20 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
     filtering boundary already lives in `MTGIntegration.get_canonical_cards_and_artists`.
 
     Reuses the same bulk-data cache location (`scryfall_cache/default_cards.json`) that
-    `import_canonical_card_data` uses, so if both commands run within the same 7-day
-    window, only one of them actually downloads the file.
+    `import_canonical_card_data` uses. Freshness is issue #513's remote-diff check
+    (`_is_fresh`): the /bulk-data entry's `updated_at` is compared against the sidecar written
+    at the last download, and the ~558MB file is only re-fetched when the remote has actually
+    changed (a missing/unreadable sidecar re-downloads once - intended on the first run after
+    deploy).
     """
     path = default_cards_path or _cache_path()
     if default_cards_path is None:
-        if _is_stale(path):
-            url = _get_default_cards_url()
-            _download_default_cards(url, path)
+        entry = _get_default_cards_entry()
+        if _is_fresh(path, entry):
+            logger.info("Using cached default cards at %s (remote updated_at %s unchanged)", path, entry.updated_at)
         else:
-            logger.info("Using cached default cards at %s", path)
+            _download_default_cards(entry.download_uri, path)
+            _write_sidecar(path, entry)
 
     rows = _parse_rows(path)
 
