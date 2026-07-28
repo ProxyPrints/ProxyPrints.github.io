@@ -6,7 +6,9 @@ from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
     _eligible_base_queryset,
 )
+from cardpicker.local_residual_classify import ART_HASH_ARTIST_ANONYMOUS_ID
 from cardpicker.models import (
+    CardArtistVote,
     CardPrintingTag,
     VoteSource,
     calculator_family,
@@ -14,6 +16,7 @@ from cardpicker.models import (
 )
 from cardpicker.tests.factories import (
     CanonicalCardFactory,
+    CardArtistVoteFactory,
     CardFactory,
     CardPrintingTagFactory,
 )
@@ -134,3 +137,24 @@ class TestProgressInvariant:
         )
 
         assert _eligible_base_queryset(OCR_ANONYMOUS_ID).filter(pk=card.pk).exists()
+
+
+class TestPurgeStaleArtistVotes:
+    def test_art_hash_old_version_deleted_human_uuid_survives(self, db):
+        """Old-version ART_HASH artist vote is purged; a human-UUID vote on the same card survives."""
+        card = CardFactory()
+        stale_vote = CardArtistVoteFactory(
+            card=card,
+            anonymous_id="art-hash-artist-v0",
+            source=VoteSource.OCR,
+        )
+        human_vote = CardArtistVoteFactory(
+            card=card,
+            anonymous_id=str(uuid.uuid4()),
+            source=VoteSource.USER,
+        )
+
+        purge_stale_machine_votes(CardArtistVote, ART_HASH_ARTIST_ANONYMOUS_ID, "card_id", [card.pk])
+
+        assert not CardArtistVote.objects.filter(pk=stale_vote.pk).exists()
+        assert CardArtistVote.objects.filter(pk=human_vote.pk).exists()

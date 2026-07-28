@@ -462,6 +462,10 @@ def run_d0_sibling_artist_propagation(
             touched_card_ids.append(card.pk)
 
     if not dry_run:
+        if votes_batch:
+            purge_stale_machine_votes(
+                CardArtistVote, ART_HASH_ARTIST_ANONYMOUS_ID, "card_id", [v.card_id for v in votes_batch]
+            )
         CardArtistVote.objects.bulk_create(votes_batch)
         for card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_artist(card)
