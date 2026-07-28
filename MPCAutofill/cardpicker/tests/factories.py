@@ -146,6 +146,18 @@ class CardTagVoteFactory(factory.django.DjangoModelFactory):
     confidence = None
 
 
+class PrintingTagVoteFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.PrintingTagVote
+
+    printing = factory.SubFactory(CanonicalCardFactory)
+    tag = factory.SubFactory(TagFactory)
+    polarity = models.VotePolarity.APPLY
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
+    source = models.VoteSource.USER
+    confidence = None
+
+
 class CardReportFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = models.CardReport
