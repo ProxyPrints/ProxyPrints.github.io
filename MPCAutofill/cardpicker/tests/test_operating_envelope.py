@@ -58,11 +58,12 @@ class TestHostLoadBar:
 
 
 class TestRssBar:
-    def test_trips_above_512mb_per_worker(self, db):
-        trip = check_envelope(EnvelopeSignals(rss_mb_per_worker=512.1))
+    def test_trips_above_rss_ceiling_per_worker(self, db):
+        rss_mb_per_worker = RSS_MB_PER_WORKER_CEILING + 0.1
+        trip = check_envelope(EnvelopeSignals(rss_mb_per_worker=rss_mb_per_worker))
         assert trip is not None
         assert trip.bar == EnvelopeTrip.Bar.RSS
-        assert trip.detail == {"rss_mb_per_worker": 512.1, "ceiling": RSS_MB_PER_WORKER_CEILING}
+        assert trip.detail == {"rss_mb_per_worker": rss_mb_per_worker, "ceiling": RSS_MB_PER_WORKER_CEILING}
 
     def test_well_under_the_ceiling_does_not_trip(self, db):
         assert check_envelope(EnvelopeSignals(rss_mb_per_worker=190.0)) is None
