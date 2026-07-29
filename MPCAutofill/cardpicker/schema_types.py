@@ -2971,6 +2971,351 @@ class ArtistExternalLinksResponse(BaseModel):
         return result
 
 
+class ContributionsOverTimeWeek(BaseModel):
+    """
+    One week's bucket of cardpicker.catalog_stats.compute_contributions_over_time - hand-
+    maintained, same provenance as ArtistExternalLinksResponse above (issue #332: `npm run build`
+    in schemas/ is destructive to the hand-added Cast/RetractImplicitVoteRequest types, so this
+    addition was hand-integrated instead of triggering a regeneration). A JSON schema source DOES
+    exist (schemas/schemas/endpoints/CatalogStatsResponse.json) for documentation/future safe
+    regeneration.
+    """
+
+    weekStart: str
+    bySurface: Dict[str, int]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ContributionsOverTimeWeek":
+        assert isinstance(obj, dict)
+        weekStart = from_str(obj.get("weekStart"))
+        bySurface = from_dict(from_int, obj.get("bySurface"))
+        return ContributionsOverTimeWeek(weekStart=weekStart, bySurface=bySurface)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["weekStart"] = from_str(self.weekStart)
+        result["bySurface"] = from_dict(from_int, self.bySurface)
+        return result
+
+
+class ContributionsOverTime(BaseModel):
+    """Proposal F chart 2 - see cardpicker.catalog_stats.compute_contributions_over_time's own
+    docstring for the human-only-by-two-filters guarantee this shape carries."""
+
+    bucketDays: int
+    series: List[ContributionsOverTimeWeek]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ContributionsOverTime":
+        assert isinstance(obj, dict)
+        bucketDays = from_int(obj.get("bucketDays"))
+        series = from_list(ContributionsOverTimeWeek.from_dict, obj.get("series"))
+        return ContributionsOverTime(bucketDays=bucketDays, series=series)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["bucketDays"] = from_int(self.bucketDays)
+        result["series"] = from_list(lambda x: to_class(ContributionsOverTimeWeek, x), self.series)
+        return result
+
+
+class SkipReasonCount(BaseModel):
+    reason: str
+    count: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SkipReasonCount":
+        assert isinstance(obj, dict)
+        reason = from_str(obj.get("reason"))
+        count = from_int(obj.get("count"))
+        return SkipReasonCount(reason=reason, count=count)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["reason"] = from_str(self.reason)
+        result["count"] = from_int(self.count)
+        return result
+
+
+class SkipReasonEngineCount(BaseModel):
+    reason: str
+    engine: str
+    count: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SkipReasonEngineCount":
+        assert isinstance(obj, dict)
+        reason = from_str(obj.get("reason"))
+        engine = from_str(obj.get("engine"))
+        count = from_int(obj.get("count"))
+        return SkipReasonEngineCount(reason=reason, engine=engine, count=count)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["reason"] = from_str(self.reason)
+        result["engine"] = from_str(self.engine)
+        result["count"] = from_int(self.count)
+        return result
+
+
+class SkipBreakdown(BaseModel):
+    """Proposal F chart 4 - see cardpicker.catalog_stats.compute_skip_breakdown's own docstring."""
+
+    byReason: List[SkipReasonCount]
+    byReasonAndEngine: List[SkipReasonEngineCount]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SkipBreakdown":
+        assert isinstance(obj, dict)
+        byReason = from_list(SkipReasonCount.from_dict, obj.get("byReason"))
+        byReasonAndEngine = from_list(SkipReasonEngineCount.from_dict, obj.get("byReasonAndEngine"))
+        return SkipBreakdown(byReason=byReason, byReasonAndEngine=byReasonAndEngine)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["byReason"] = from_list(lambda x: to_class(SkipReasonCount, x), self.byReason)
+        result["byReasonAndEngine"] = from_list(lambda x: to_class(SkipReasonEngineCount, x), self.byReasonAndEngine)
+        return result
+
+
+class PilotRunHistoryEntry(BaseModel):
+    """
+    One cardpicker.models.PilotRunLedger row as surfaced by cardpicker.catalog_stats.
+    compute_run_history - see that function's own docstring for the stage_d_*_already_voted
+    caveat (deliberately never surfaced here, at any level) and why votesWritten is safe to
+    surface as-is (but null for command="stage_e_streaming_dispatch" rows specifically).
+    """
+
+    runId: str
+    command: str
+    status: str
+    startedAt: str
+    finishedAt: Optional[str] = None
+    durationSeconds: Optional[float] = None
+    votesWritten: Optional[int] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "PilotRunHistoryEntry":
+        assert isinstance(obj, dict)
+        runId = from_str(obj.get("runId"))
+        command = from_str(obj.get("command"))
+        status = from_str(obj.get("status"))
+        startedAt = from_str(obj.get("startedAt"))
+        finishedAt = from_union([from_none, from_str], obj.get("finishedAt"))
+        durationSeconds = from_union([from_none, from_float], obj.get("durationSeconds"))
+        votesWritten = from_union([from_none, from_int], obj.get("votesWritten"))
+        return PilotRunHistoryEntry(
+            runId=runId,
+            command=command,
+            status=status,
+            startedAt=startedAt,
+            finishedAt=finishedAt,
+            durationSeconds=durationSeconds,
+            votesWritten=votesWritten,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["runId"] = from_str(self.runId)
+        result["command"] = from_str(self.command)
+        result["status"] = from_str(self.status)
+        result["startedAt"] = from_str(self.startedAt)
+        result["finishedAt"] = from_union([from_none, from_str], self.finishedAt)
+        result["durationSeconds"] = from_union([from_none, from_float], self.durationSeconds)
+        result["votesWritten"] = from_union([from_none, from_int], self.votesWritten)
+        return result
+
+
+class RunHistory(BaseModel):
+    """Proposal F chart 6 - see cardpicker.catalog_stats.compute_run_history's own docstring."""
+
+    recent: List[PilotRunHistoryEntry]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "RunHistory":
+        assert isinstance(obj, dict)
+        recent = from_list(PilotRunHistoryEntry.from_dict, obj.get("recent"))
+        return RunHistory(recent=recent)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["recent"] = from_list(lambda x: to_class(PilotRunHistoryEntry, x), self.recent)
+        return result
+
+
+class CatalogComposition(BaseModel):
+    """Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, see
+    cardpicker.catalog_stats.compute_catalog_composition's own docstring. `sources` reuses the
+    existing generated `SourceContribution` type rather than a new one."""
+
+    sources: List[SourceContribution]
+    cardCountByType: Dict[str, int]
+    totalDatabaseSize: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CatalogComposition":
+        assert isinstance(obj, dict)
+        sources = from_list(SourceContribution.from_dict, obj.get("sources"))
+        cardCountByType = from_dict(from_int, obj.get("cardCountByType"))
+        totalDatabaseSize = from_int(obj.get("totalDatabaseSize"))
+        return CatalogComposition(sources=sources, cardCountByType=cardCountByType, totalDatabaseSize=totalDatabaseSize)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["sources"] = from_list(lambda x: to_class(SourceContribution, x), self.sources)
+        result["cardCountByType"] = from_dict(from_int, self.cardCountByType)
+        result["totalDatabaseSize"] = from_int(self.totalDatabaseSize)
+        return result
+
+
+class HumanVoteCounts(BaseModel):
+    printingTag: int
+    artist: int
+    tag: int
+    total: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "HumanVoteCounts":
+        assert isinstance(obj, dict)
+        printingTag = from_int(obj.get("printingTag"))
+        artist = from_int(obj.get("artist"))
+        tag = from_int(obj.get("tag"))
+        total = from_int(obj.get("total"))
+        return HumanVoteCounts(printingTag=printingTag, artist=artist, tag=tag, total=total)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["printingTag"] = from_int(self.printingTag)
+        result["artist"] = from_int(self.artist)
+        result["tag"] = from_int(self.tag)
+        result["total"] = from_int(self.total)
+        return result
+
+
+class Md5GroupStats(BaseModel):
+    groupsWithMultipleCards: int
+    cardsInMultiCardGroups: int
+    largestGroupSize: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "Md5GroupStats":
+        assert isinstance(obj, dict)
+        groupsWithMultipleCards = from_int(obj.get("groupsWithMultipleCards"))
+        cardsInMultiCardGroups = from_int(obj.get("cardsInMultiCardGroups"))
+        largestGroupSize = from_int(obj.get("largestGroupSize"))
+        return Md5GroupStats(
+            groupsWithMultipleCards=groupsWithMultipleCards,
+            cardsInMultiCardGroups=cardsInMultiCardGroups,
+            largestGroupSize=largestGroupSize,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["groupsWithMultipleCards"] = from_int(self.groupsWithMultipleCards)
+        result["cardsInMultiCardGroups"] = from_int(self.cardsInMultiCardGroups)
+        result["largestGroupSize"] = from_int(self.largestGroupSize)
+        return result
+
+
+class Participation(BaseModel):
+    """
+    The call-to-action panel - see cardpicker.catalog_stats.compute_participation's own docstring
+    for why this deliberately carries no "percent complete" field: emit counts, let the page
+    decide the framing.
+    """
+
+    total: int
+    confirmable: int
+    contested: int
+    fresh: int
+    humanVotes: HumanVoteCounts
+    distinctHumanVoters: int
+    md5Groups: Md5GroupStats
+
+    @staticmethod
+    def from_dict(obj: Any) -> "Participation":
+        assert isinstance(obj, dict)
+        total = from_int(obj.get("total"))
+        confirmable = from_int(obj.get("confirmable"))
+        contested = from_int(obj.get("contested"))
+        fresh = from_int(obj.get("fresh"))
+        humanVotes = HumanVoteCounts.from_dict(obj.get("humanVotes"))
+        distinctHumanVoters = from_int(obj.get("distinctHumanVoters"))
+        md5Groups = Md5GroupStats.from_dict(obj.get("md5Groups"))
+        return Participation(
+            total=total,
+            confirmable=confirmable,
+            contested=contested,
+            fresh=fresh,
+            humanVotes=humanVotes,
+            distinctHumanVoters=distinctHumanVoters,
+            md5Groups=md5Groups,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["total"] = from_int(self.total)
+        result["confirmable"] = from_int(self.confirmable)
+        result["contested"] = from_int(self.contested)
+        result["fresh"] = from_int(self.fresh)
+        result["humanVotes"] = to_class(HumanVoteCounts, self.humanVotes)
+        result["distinctHumanVoters"] = from_int(self.distinctHumanVoters)
+        result["md5Groups"] = to_class(Md5GroupStats, self.md5Groups)
+        return result
+
+
+class CatalogStatsResponse(BaseModel):
+    """
+    1/catalogStats/ - hand-maintained, NOT quicktype-generated, same provenance/reasoning as
+    CastImplicitVoteRequest/RetractImplicitVoteRequest/ArtistExternalLinksResponse above: `npm run
+    build` in schemas/ is destructive to the two hand-added request types (issue #332), so this
+    addition was hand-integrated to match the generated style instead of triggering a
+    regeneration. A JSON schema source DOES exist
+    (schemas/schemas/endpoints/CatalogStatsResponse.json, for documentation and any future safe
+    regeneration) but was not run through quicktype here.
+
+    Cache-only on the read path (cardpicker.catalog_stats.get_cached_catalog_stats) - a cache miss
+    returns every field at its zero/empty value (generatedAt=None), never a 500. See that module's
+    own docstring for the full compute/warm/cache-only-read architecture, and for why charts 1
+    (resolutionProgress) and 5 (hashCoverage) are deliberately absent from this shape this pass.
+    """
+
+    generatedAt: Optional[str] = None
+    contributionsOverTime: ContributionsOverTime
+    skipBreakdown: SkipBreakdown
+    runHistory: RunHistory
+    catalogComposition: CatalogComposition
+    participation: Participation
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CatalogStatsResponse":
+        assert isinstance(obj, dict)
+        generatedAt = from_union([from_none, from_str], obj.get("generatedAt"))
+        contributionsOverTime = ContributionsOverTime.from_dict(obj.get("contributionsOverTime"))
+        skipBreakdown = SkipBreakdown.from_dict(obj.get("skipBreakdown"))
+        runHistory = RunHistory.from_dict(obj.get("runHistory"))
+        catalogComposition = CatalogComposition.from_dict(obj.get("catalogComposition"))
+        participation = Participation.from_dict(obj.get("participation"))
+        return CatalogStatsResponse(
+            generatedAt=generatedAt,
+            contributionsOverTime=contributionsOverTime,
+            skipBreakdown=skipBreakdown,
+            runHistory=runHistory,
+            catalogComposition=catalogComposition,
+            participation=participation,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["generatedAt"] = from_union([from_none, from_str], self.generatedAt)
+        result["contributionsOverTime"] = to_class(ContributionsOverTime, self.contributionsOverTime)
+        result["skipBreakdown"] = to_class(SkipBreakdown, self.skipBreakdown)
+        result["runHistory"] = to_class(RunHistory, self.runHistory)
+        result["catalogComposition"] = to_class(CatalogComposition, self.catalogComposition)
+        result["participation"] = to_class(Participation, self.participation)
+        return result
+
+
 class TagVoteTallyEntry(BaseModel):
     count: int
     polarity: int

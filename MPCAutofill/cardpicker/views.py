@@ -46,6 +46,7 @@ from cardpicker.artist_external_links import (
     get_cached_artist_external_links,
     not_found_record,
 )
+from cardpicker.catalog_stats import get_cached_catalog_stats
 from cardpicker.constants import (
     ARTIST_AUTOCOMPLETE_MAX_QUERY_LENGTH,
     ARTIST_AUTOCOMPLETE_MIN_QUERY_LENGTH,
@@ -132,6 +133,7 @@ from cardpicker.schema_types import (
     CardsRequest,
     CardsResponse,
     CastImplicitVoteRequest,
+    CatalogStatsResponse,
     ConfirmReviewClusterRequest,
     ConfirmReviewClusterResponse,
     ContributionsResponse,
@@ -844,6 +846,31 @@ def get_artist_external_links(request: HttpRequest) -> HttpResponse:
 
     result = get_cached_artist_external_links(name)
     return JsonResponse(ArtistExternalLinksResponse(**result).model_dump())
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def get_catalog_stats(request: HttpRequest) -> HttpResponse:
+    """
+    Proposal F's public stats aggregate (docs/proposals/proposal-f-public-stats-page.md;
+    cardpicker.catalog_stats's own module docstring has the full compute/warm/cache-only-read
+    architecture). GET-only, no parameters - one blob, always the same shape.
+
+    **Cache-only - NEVER computes on request, on a cache hit OR a cache miss.** This is Proposal
+    F's own explicit constraint ("zero live aggregate queries from public traffic"), not merely a
+    performance choice: `get_cached_catalog_stats` never calls any of `cardpicker.catalog_stats`'s
+    `compute_*` aggregation functions - only the `warm_catalog_stats` management command does,
+    on its own hourly schedule (migration 0094). A cache miss - the cache hasn't been warmed yet,
+    or the named `"shared"` cache backend isn't configured in this environment at all (pre-#538/
+    #543) - returns `cardpicker.catalog_stats.zeroed_catalog_stats()`, a fully-shaped, all-zero
+    blob, so the page always has something to render and this endpoint never runs a single
+    aggregate query nor 500s because an optional piece of infrastructure isn't wired up yet.
+    """
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+
+    blob = get_cached_catalog_stats()
+    return JsonResponse(CatalogStatsResponse(**blob).model_dump())
 
 
 @csrf_exempt
