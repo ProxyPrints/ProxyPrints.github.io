@@ -1808,17 +1808,28 @@ class TestCheckpointing:
         class SimulatedKill(Exception):
             pass
 
-        original_bulk_create = CardPrintingTag.objects.bulk_create
+        import cardpicker.local_identify_printing_tags as module
+
+        # The kill fires from `verify_zero_resolutions`, the LAST thing `flush()` does, i.e. after
+        # the first flush's write has committed. It used to fire from inside a wrapped
+        # `bulk_create` instead; that stopped meaning "after the flush committed" on 2026-07-28,
+        # when the purge and the insert were wrapped in one `transaction.atomic()` for
+        # cancel-safety - raising from inside `bulk_create` now raises INSIDE that transaction and
+        # correctly rolls the whole pair back, so it would test the new atomicity rather than this
+        # test's actual subject (chunked checkpointing: a kill loses at most one chunk, and a
+        # plain re-invocation resumes). Moving the kill one statement later restores the original
+        # intent exactly, against the new write boundary.
+        original_verify = module.verify_zero_resolutions
         call_count = {"n": 0}
 
-        def killing_bulk_create(objs, *args, **kwargs):
+        def killing_verify(card_ids, *args, **kwargs):
             call_count["n"] += 1
-            result = original_bulk_create(objs, *args, **kwargs)
+            result = original_verify(card_ids, *args, **kwargs)
             if call_count["n"] == 1:
                 raise SimulatedKill("process died immediately after the first flush committed")
             return result
 
-        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", killing_bulk_create)
+        monkeypatch.setattr(module, "verify_zero_resolutions", killing_verify)
 
         with pytest.raises(SimulatedKill):
             run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, batch_size=2)
@@ -1826,7 +1837,7 @@ class TestCheckpointing:
         # the first flush's 2 cards are durably committed despite the "crash" on the next batch
         assert CardPrintingTag.objects.filter(anonymous_id=OCR_ANONYMOUS_ID).count() == 2
 
-        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", original_bulk_create)
+        monkeypatch.setattr(module, "verify_zero_resolutions", original_verify)
         results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False, batch_size=2)
 
         assert results["ocr"].votes_written == 4  # the 4 cards the killed run never reached
@@ -3557,3 +3568,106 @@ class TestPipelinedBackfillOutOfOrder:
         for card in cards:
             card.refresh_from_db()
             assert card.content_phash == card.pk
+
+
+class TestPurgeWriteAtomicity:
+    """Cancel-safety at this module's three vote-write sites (2026-07-28, generalising PR #526's
+    fix for the Stage D calculators). `run_pilot`'s and `run_name_frequency_elimination`'s chunked
+    flushes were already better placed than most - a kill loses at most one chunk, by design (see
+    `TestCheckpointing`) - but the purge and the insert WITHIN a chunk were two untransacted
+    statements, so a kill landing between them deleted that chunk's cards' previous same-family
+    votes and wrote no replacement: strictly worse than losing the chunk, because the pre-existing
+    votes went with it. All three pairs now run inside one `transaction.atomic()`.
+
+    A `-v0` row is used as the victim throughout: it belongs to the same calculator FAMILY (so the
+    purge targets it) but is not the current anonymous_id (so `_eligible_base_queryset` still
+    selects the card and the run genuinely reaches the write) - the versioned-progress invariant
+    `test_calculator_version_purge.TestProgressInvariant` pins."""
+
+    @staticmethod
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+    def test_pilot_printing_tag_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card = CardFactory(name="Forest")
+        TestCheckpointing._wire_fake_ocr(monkeypatch, printing.pk)
+        stale = CardPrintingTag.objects.create(
+            card=card, printing=printing, is_no_match=False, anonymous_id="local-ocr-v0", source=VoteSource.OCR
+        )
+
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", self._boom)
+
+        with pytest.raises(RuntimeError):
+            run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        assert CardPrintingTag.objects.filter(pk=stale.pk).exists()
+
+    def test_pilot_tag_vote_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
+        """The same flush's OTHER write - the attribute `CardTagVote`s pass 2 casts. Fixture is
+        `TestPass2Wiring::test_fallback_fires_and_votes_when_pass_1_misses_entirely`'s, which is
+        the only path that puts rows in `tag_votes_batch`."""
+        printing = CanonicalCardFactory(
+            name="Forest",
+            expansion=CanonicalExpansionFactory(code="aaa"),
+            artist=CanonicalArtistFactory(name="Marie Magny"),
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black", frame="1993")
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        card = CardFactory(name="Forest")
+        tag = TagFactory(name="Black Border")
+
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "Illus. Marie Magny")
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
+        )
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "no-clear-winner"),
+        )
+        monkeypatch.setattr(
+            module, "fetch_card_image", lambda card, dpi=None: _black_bordered_image_with_artist_text("Marie Magny")
+        )
+
+        stale = CardTagVote.objects.create(
+            card=card,
+            tag=tag,
+            polarity=VotePolarity.APPLY,
+            anonymous_id="local-fallback-v0",
+            source=VoteSource.OCR,
+        )
+
+        monkeypatch.setattr(CardTagVote.objects, "bulk_create", self._boom)
+
+        # workers=1 for the same reason TestPass2Wiring gives: real (unmocked)
+        # run_fallback_for_card must run on this test's own DB connection.
+        with pytest.raises(RuntimeError):
+            run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+
+        assert CardTagVote.objects.filter(pk=stale.pk).exists()
+
+    def test_name_frequency_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        uncovered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        card = CardFactory(name="Forest")
+        stale = CardPrintingTag.objects.create(
+            card=card,
+            printing=uncovered_printing,
+            is_no_match=False,
+            anonymous_id="local-name-frequency-v0",
+            source=VoteSource.OCR,
+        )
+
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", self._boom)
+
+        with pytest.raises(RuntimeError):
+            run_name_frequency_elimination(dry_run=False)
+
+        assert CardPrintingTag.objects.filter(pk=stale.pk).exists()

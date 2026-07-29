@@ -23,9 +23,12 @@ tests/fixtures/ and the Django test DB.
 import uuid
 from pathlib import Path
 
+import pytest
+
 from django.core.management import call_command
 
 from cardpicker.management.commands.import_external_ip_tags import (
+    EXTERNAL_IP_TAG_NAME,
     SCRYFALL_TAGGER_ANONYMOUS_ID,
     ExternalIpImportResult,
     build_illustration_index,
@@ -33,7 +36,13 @@ from cardpicker.management.commands.import_external_ip_tags import (
     find_external_ip_subtree,
     run_external_ip_tag_import,
 )
-from cardpicker.models import CanonicalCard, PrintingTagVote, VotePolarity, VoteSource
+from cardpicker.models import (
+    CanonicalCard,
+    PrintingTagVote,
+    Tag,
+    VotePolarity,
+    VoteSource,
+)
 from cardpicker.tests.factories import CanonicalCardFactory
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -318,6 +327,66 @@ class TestRunExternalIpTagImport:
         entry = result.negative_audit[0]
         assert "printing_id" in entry
         assert "printing_name" in entry
+
+
+class TestPurgeWriteAtomicity:
+    """Cancel-safety at this command's two vote-write sites (2026-07-28, generalising PR #526's
+    fix for the Stage D calculators). Each purge is a DELETE and its insert a separate statement,
+    so an import killed between them left the affected PRINTINGS with their previous same-family
+    vote deleted and nothing written back. Both pairs now run inside one `transaction.atomic()`.
+
+    These are the app's only `printing_id`-keyed purge sites, so they also pin
+    `vote_write.purge_and_write_votes`' `target_field` parameter against a real caller.
+
+    The victim row carries `scryfall-tagger-v0`: same calculator family (so the purge targets it),
+    different anonymous_id (so the eligibility exclude still selects the printing and the run
+    genuinely reaches the write)."""
+
+    @staticmethod
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+    def _stale_vote(self, printing, polarity):
+        tag, _ = Tag.objects.get_or_create(name=EXTERNAL_IP_TAG_NAME)
+        return PrintingTagVote.objects.create(
+            printing=printing,
+            tag=tag,
+            polarity=polarity,
+            anonymous_id="scryfall-tagger-v0",
+            source=VoteSource.DEDUCTION,
+        )
+
+    def test_positive_pass_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
+        ring = _make_canonical(_RING_ID)
+        stale = self._stale_vote(ring, VotePolarity.APPLY)
+
+        monkeypatch.setattr(PrintingTagVote.objects, "bulk_create", self._boom)
+
+        with pytest.raises(RuntimeError):
+            run_external_ip_tag_import(
+                tags_path=_ART_TAGS_FIXTURE,
+                default_cards_path=_DEFAULT_CARDS_FIXTURE,
+                dry_run=False,
+            )
+
+        assert PrintingTagVote.objects.filter(pk=stale.pk).exists()
+
+    def test_negative_pass_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
+        # only a printing OUTSIDE the positive Tagger set, so the positive pass writes nothing and
+        # the failure necessarily lands on the NOT_APPLICABLE write.
+        unmatched = _make_canonical(_UNMATCHED_PRINTING_ID)
+        stale = self._stale_vote(unmatched, VotePolarity.NOT_APPLICABLE)
+
+        monkeypatch.setattr(PrintingTagVote.objects, "bulk_create", self._boom)
+
+        with pytest.raises(RuntimeError):
+            run_external_ip_tag_import(
+                tags_path=_ART_TAGS_FIXTURE,
+                default_cards_path=_DEFAULT_CARDS_FIXTURE,
+                dry_run=False,
+            )
+
+        assert PrintingTagVote.objects.filter(pk=stale.pk).exists()
 
 
 class TestManagementCommand:

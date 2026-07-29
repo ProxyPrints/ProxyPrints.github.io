@@ -24,9 +24,9 @@ from cardpicker.models import (
     CardPrintingTag,
     PrintingTagStatus,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.search.sanitisation import to_searchable
+from cardpicker.vote_write import purge_and_write_votes
 
 DEDUCTIVE_BACKFILL_ANONYMOUS_ID = "deductive-backfill-v1"
 
@@ -209,10 +209,15 @@ def run_backfill(
         if not pending:
             return
         if not dry_run:
-            purge_stale_machine_votes(
-                CardPrintingTag, DEDUCTIVE_BACKFILL_ANONYMOUS_ID, "card_id", [v.card_id for v in pending]
-            )
-            CardPrintingTag.objects.bulk_create(
+            # CANCEL-SAFETY (2026-07-28): the chunked flush already means an interrupted run keeps
+            # whatever it committed (see this function's own docstring), but the purge and the
+            # insert within a chunk were two untransacted statements - a kill between them deleted
+            # the chunk's cards' previous same-family votes and wrote no replacement, which is
+            # worse than simply losing the chunk. `vote_write.purge_and_write_votes` makes the
+            # pair atomic and scopes the purge to exactly the rows it inserts; `ignore_conflicts`
+            # stays off, as before.
+            purge_and_write_votes(
+                CardPrintingTag,
                 [
                     CardPrintingTag(
                         card_id=vote.card_id,
@@ -223,7 +228,9 @@ def run_backfill(
                         confidence=vote.confidence,
                     )
                     for vote in pending
-                ]
+                ],
+                anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+                target_field="card_id",
             )
         for vote in pending:
             if vote.tier == "d1":

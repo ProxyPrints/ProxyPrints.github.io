@@ -64,9 +64,9 @@ from cardpicker.models import (
     CardTypes,
     PrintingTagStatus,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.search.sanitisation import strip_bracketed_groups, to_searchable
+from cardpicker.vote_write import purge_and_write_votes
 
 logger = logging.getLogger(__name__)
 
@@ -1243,20 +1243,18 @@ def run_pilot(
         if dry_run:
             votes_batch, tag_votes_batch, batch_written_card_ids, scan_log_batch = [], [], [], []
             return
-        if tag_votes_batch:
-            _by_anon: dict[str, list[int]] = collections.defaultdict(list)
-            for _v in tag_votes_batch:
-                _by_anon[_v.anonymous_id].append(_v.card_id)
-            for _anon_id, _card_ids in _by_anon.items():
-                purge_stale_machine_votes(CardTagVote, _anon_id, "card_id", _card_ids)
-            CardTagVote.objects.bulk_create(tag_votes_batch, ignore_conflicts=True)
-        if votes_batch:
-            _by_anon2: dict[str, list[int]] = collections.defaultdict(list)
-            for _pv in votes_batch:
-                _by_anon2[_pv.anonymous_id].append(_pv.card_id)
-            for _anon_id, _card_ids in _by_anon2.items():
-                purge_stale_machine_votes(CardPrintingTag, _anon_id, "card_id", _card_ids)
-            CardPrintingTag.objects.bulk_create(votes_batch)
+        # CANCEL-SAFETY (2026-07-28): this flush was already better placed than most - a kill
+        # loses at most one chunk, by design (see the checkpointing comment above) - but the purge
+        # and the insert inside a chunk were still two untransacted statements, so a kill landing
+        # between them deleted this chunk's cards' previous votes and wrote nothing back: strictly
+        # worse than losing the chunk, because the pre-existing votes went too.
+        # `vote_write.purge_and_write_votes` makes each pair atomic and scopes the purge to
+        # exactly the rows it inserts. Passing `anonymous_id=None` reproduces the per-identity
+        # grouping this flush did by hand: a pilot batch legitimately mixes engines' identities
+        # (OCR/phash/fallback, plus propagated cluster votes), and each row must be purged under
+        # its OWN family, never one representative's.
+        purge_and_write_votes(CardTagVote, tag_votes_batch, target_field="card_id", ignore_conflicts=True)
+        purge_and_write_votes(CardPrintingTag, votes_batch, target_field="card_id")
         if scan_log_batch:
             CardScanLog.objects.bulk_create(scan_log_batch)
         if batch_written_card_ids:
@@ -1849,11 +1847,18 @@ def run_name_frequency_elimination(
         if dry_run:
             votes_batch, batch_written_card_ids = [], []
             return
-        if votes_batch:
-            purge_stale_machine_votes(
-                CardPrintingTag, NAME_FREQUENCY_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
-            )
-            CardPrintingTag.objects.bulk_create(votes_batch)
+        # CANCEL-SAFETY (2026-07-28) - same reasoning as run_pilot's own flush above and
+        # `vote_write.purge_and_write_votes`' docstring: the purge and the insert are one atomic
+        # pair scoped to exactly the rows written, so a kill mid-chunk loses the chunk rather
+        # than also destroying whatever those cards had before. Every row here carries
+        # NAME_FREQUENCY_ANONYMOUS_ID (single-engine entrypoint), so the identity is passed
+        # explicitly rather than derived per row.
+        purge_and_write_votes(
+            CardPrintingTag,
+            votes_batch,
+            anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID,
+            target_field="card_id",
+        )
         if batch_written_card_ids:
             result.gate_violations.extend(verify_zero_resolutions(batch_written_card_ids))
         votes_batch, batch_written_card_ids = [], []

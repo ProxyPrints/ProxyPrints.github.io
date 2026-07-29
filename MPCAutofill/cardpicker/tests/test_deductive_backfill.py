@@ -1,11 +1,15 @@
+import pytest
+
+import cardpicker.deductive_backfill as module
 from cardpicker.deductive_backfill import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+    DeductiveVote,
     run_backfill,
     select_d1_candidates,
     select_d2_candidates,
     verify_zero_resolutions,
 )
-from cardpicker.models import PrintingTagStatus, VoteSource
+from cardpicker.models import CardPrintingTag, PrintingTagStatus, VoteSource
 from cardpicker.printing_consensus import resolve_printing
 from cardpicker.tests.factories import (
     CanonicalCardFactory,
@@ -238,3 +242,43 @@ class TestZeroResolutionsGate:
 
         violations = verify_zero_resolutions([card.pk])
         assert violations == [card.pk]
+
+
+class TestPurgeWriteAtomicity:
+    """Cancel-safety at this module's chunked flush (2026-07-28, generalising PR #526's fix for
+    the Stage D calculators). The chunking already means an interrupted run keeps whatever it
+    committed, but the purge and the insert WITHIN a chunk were two untransacted statements - a
+    kill between them deleted that chunk's cards' previous same-family votes and wrote no
+    replacement, which is worse than simply losing the chunk. Both now run inside one
+    `transaction.atomic()`.
+
+    `select_candidates` is stubbed rather than driven by a fixture because `_eligible_base_queryset`
+    excludes any card that already has ANY `CardPrintingTag` row - so the only way this site's
+    purge ever has something to delete is the selection-to-write race window, which is exactly
+    what the stub reproduces."""
+
+    def test_a_failed_insert_rolls_the_purge_back(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Race Window Card")
+        card = CardFactory(name="Race Window Card")
+        stale = CardPrintingTagFactory(
+            card=card,
+            printing=printing,
+            source=VoteSource.DEDUCTION,
+            anonymous_id="deductive-backfill-v0",
+        )
+
+        monkeypatch.setattr(
+            module,
+            "select_candidates",
+            lambda tier: iter([DeductiveVote(card_id=card.pk, printing_id=printing.pk, tier="d1")]),
+        )
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", _boom)
+
+        with pytest.raises(RuntimeError):
+            run_backfill(tier="d1")
+
+        assert CardPrintingTag.objects.filter(pk=stale.pk).exists()

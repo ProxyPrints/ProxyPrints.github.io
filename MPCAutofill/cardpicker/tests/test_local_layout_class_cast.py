@@ -7,6 +7,8 @@ image fetch - this module consumes stored `ImageEvidence` rows only, same "host 
 precedent `test_local_detect_ai_art.py` already establishes for this pipeline's later stages.
 """
 
+import pytest
+
 from cardpicker.attribute_tags import seed_attribute_tags
 from cardpicker.default_tags import seed_default_tags
 from cardpicker.local_fallback import (
@@ -305,3 +307,39 @@ class TestRunLayoutClassCast:
         assert result.votes_written == 1
         assert CardTagVote.objects.filter(card=card, anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID).count() == 1
         assert CardTagVote.objects.filter(card=card).count() == 2
+
+
+class TestPurgeWriteAtomicity:
+    """Cancel-safety at this module's own vote-write site (2026-07-28, generalising PR #526's fix
+    for the Stage D calculators). The purge is a DELETE and the insert a separate statement, so
+    before `vote_write.purge_and_write_votes` a run killed between the two left these cards with
+    their previous same-family vote deleted and nothing written back. This project's operator
+    kills long runs deliberately and a full-catalog pass takes hours, so that is a routine event,
+    not a disaster scenario."""
+
+    def test_a_failed_insert_rolls_the_purge_back(self, db, monkeypatch):
+        _seed_tags()
+        tag = Tag.objects.get(name="Borderless")
+        card = CardFactory(name="Hidden Courtyard", content_phash=42)
+        _evidence(card, layout_class="borderless")
+        # an older version of THIS calculator's own family: purged on write, and the row whose
+        # survival is what proves the DELETE was rolled back. A `-v0` row does not make the card
+        # ineligible (the eligibility query excludes the exact CURRENT anonymous_id only), so the
+        # run genuinely reaches the write.
+        stale = CardTagVote.objects.create(
+            card=card,
+            tag=tag,
+            polarity=VotePolarity.APPLY,
+            anonymous_id="layout-class-cast-v0",
+            source=VoteSource.OCR,
+        )
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+        monkeypatch.setattr(CardTagVote.objects, "bulk_create", _boom)
+
+        with pytest.raises(RuntimeError):
+            run_layout_class_cast(dry_run=False)
+
+        assert CardTagVote.objects.filter(pk=stale.pk).exists()

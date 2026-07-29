@@ -76,9 +76,9 @@ from cardpicker.models import (
     Tag,
     VotePolarity,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
+from cardpicker.vote_write import purge_and_write_votes
 
 # Own anonymous_id (distinct from every other engine's - see local_identify_printing_tags.py's
 # OCR_ANONYMOUS_ID/PHASH_ANONYMOUS_ID comment for why each engine gets its own: independently
@@ -454,8 +454,20 @@ def run_ai_art_detector(
         # uniqueness constraint - the eligibility query above already excludes any card this
         # identity has voted on, so a conflict here would only ever come from two concurrent
         # invocations racing, not from this invocation's own logic.
-        purge_stale_machine_votes(CardTagVote, AI_ART_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch])
-        CardTagVote.objects.bulk_create(votes_batch, ignore_conflicts=True)
+        #
+        # CANCEL-SAFETY (2026-07-28): purge and insert are two separate statements, so a run
+        # killed between them left these cards with their previous vote deleted and nothing
+        # written back. `vote_write.purge_and_write_votes` runs the pair inside one
+        # `transaction.atomic()` and scopes the purge to exactly the rows it inserts - see that
+        # module's docstring. No already-voted split at this site (the eligibility query above is
+        # this module's idempotence), so purged set == written set either way.
+        purge_and_write_votes(
+            CardTagVote,
+            votes_batch,
+            anonymous_id=AI_ART_ANONYMOUS_ID,
+            target_field="card_id",
+            ignore_conflicts=True,
+        )
         CardScanLog.objects.bulk_create(scan_log_batch)
         result.votes_written = len(votes_batch)
 

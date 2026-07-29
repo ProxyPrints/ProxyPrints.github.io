@@ -75,13 +75,13 @@ from cardpicker.models import (
     Tag,
     VotePolarity,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.printing_metadata_import import (
     _cache_path,
     ensure_scryfall_cache_present,
 )
 from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
+from cardpicker.vote_write import purge_and_write_votes
 
 # Own anonymous_id, per the per-engine convention (module docstring's SOURCE CHOICE section) -
 # independently purgeable/re-runnable via the existing purge_machine_votes --run-id mechanism,
@@ -358,10 +358,19 @@ def run_external_ip_tag_import(
         # uniqueness constraint - the eligibility query above already excludes any printing this
         # identity has voted on, so a conflict here would only ever come from two concurrent
         # invocations racing, not from this invocation's own logic.
-        purge_stale_machine_votes(
-            PrintingTagVote, SCRYFALL_TAGGER_ANONYMOUS_ID, "printing_id", [_v.printing_id for _v in votes_batch]
+        #
+        # CANCEL-SAFETY (2026-07-28): purge and insert are two separate statements, so an import
+        # killed between them left the affected PRINTINGS with their previous same-family vote
+        # deleted and nothing written back. `vote_write.purge_and_write_votes` runs the pair
+        # inside one `transaction.atomic()`, scoped to exactly the rows it inserts. This is the
+        # only `printing_id`-keyed call site in the app - hence the explicit `target_field`.
+        purge_and_write_votes(
+            PrintingTagVote,
+            votes_batch,
+            anonymous_id=SCRYFALL_TAGGER_ANONYMOUS_ID,
+            target_field="printing_id",
+            ignore_conflicts=True,
         )
-        PrintingTagVote.objects.bulk_create(votes_batch, ignore_conflicts=True)
         result.votes_written = len(votes_batch)
 
     # Negative pass: vote NOT_APPLICABLE for confirmed printings not in the positive set
@@ -393,10 +402,15 @@ def run_external_ip_tag_import(
             )
 
     if not dry_run and negative_batch:
-        purge_stale_machine_votes(
-            PrintingTagVote, SCRYFALL_TAGGER_ANONYMOUS_ID, "printing_id", [_v.printing_id for _v in negative_batch]
+        # CANCEL-SAFETY (2026-07-28) - identical reasoning to the positive pass above; see
+        # `vote_write.purge_and_write_votes`' docstring.
+        purge_and_write_votes(
+            PrintingTagVote,
+            negative_batch,
+            anonymous_id=SCRYFALL_TAGGER_ANONYMOUS_ID,
+            target_field="printing_id",
+            ignore_conflicts=True,
         )
-        PrintingTagVote.objects.bulk_create(negative_batch, ignore_conflicts=True)
         result.negative_votes_written = len(negative_batch)
 
     return result

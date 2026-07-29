@@ -75,10 +75,10 @@ from cardpicker.models import (
     Tag,
     VotePolarity,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.vote_consensus import is_human_backed_source
+from cardpicker.vote_write import purge_and_write_votes
 
 # Part 3's own anonymous_id (17 chars, well under max_length=40) for the frame-mismatch dual
 # yield - distinct from OCR_ANONYMOUS_ID/PHASH_ANONYMOUS_ID/FALLBACK_ANONYMOUS_ID since this
@@ -332,16 +332,31 @@ def run_frame_mismatch_recovery(
             result.outcomes.append(outcome)
 
     if not dry_run:
-        if artist_votes_batch:
-            purge_stale_machine_votes(
-                CardArtistVote, RESIDUAL_CLASSIFY_ANONYMOUS_ID, "card_id", [_v.card_id for _v in artist_votes_batch]
-            )
-        CardArtistVote.objects.bulk_create(artist_votes_batch)
-        if tag_votes_batch:
-            purge_stale_machine_votes(
-                CardTagVote, RESIDUAL_CLASSIFY_ANONYMOUS_ID, "card_id", [_v.card_id for _v in tag_votes_batch]
-            )
-        CardTagVote.objects.bulk_create(tag_votes_batch)
+        # CANCEL-SAFETY (2026-07-28): each purge is a DELETE and its insert a separate statement,
+        # so a run killed between them left the affected cards with their previous vote deleted
+        # and nothing written back. `vote_write.purge_and_write_votes` runs each pair inside one
+        # `transaction.atomic()`, scoped to exactly the rows it inserts - see that module's
+        # docstring. The two models are two independent atomic pairs, not one: they are separate
+        # tables with separate purges, and a kill landing between them leaves the artist votes
+        # committed and the tag votes not written at all - which is the same partial-progress
+        # outcome a kill one statement earlier already produced, and is safe because neither
+        # write depends on the other (`resolve_and_persist_artist`/`resolve_and_persist_tag_votes`
+        # below each read only their own model).
+        # `ignore_conflicts` stays OFF at both sites, exactly as before: unlike the AI-art/
+        # layout-class engines this module has no belt-and-suspenders conflict expectation, and
+        # turning it on would silently swallow a real constraint violation.
+        purge_and_write_votes(
+            CardArtistVote,
+            artist_votes_batch,
+            anonymous_id=RESIDUAL_CLASSIFY_ANONYMOUS_ID,
+            target_field="card_id",
+        )
+        purge_and_write_votes(
+            CardTagVote,
+            tag_votes_batch,
+            anonymous_id=RESIDUAL_CLASSIFY_ANONYMOUS_ID,
+            target_field="card_id",
+        )
         for card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_artist(card)
             resolve_and_persist_tag_votes(card)
@@ -462,11 +477,15 @@ def run_d0_sibling_artist_propagation(
             touched_card_ids.append(card.pk)
 
     if not dry_run:
-        if votes_batch:
-            purge_stale_machine_votes(
-                CardArtistVote, ART_HASH_ARTIST_ANONYMOUS_ID, "card_id", [v.card_id for v in votes_batch]
-            )
-        CardArtistVote.objects.bulk_create(votes_batch)
+        # CANCEL-SAFETY (2026-07-28) - same reasoning as run_frame_mismatch_recovery's own write
+        # above and `vote_write.purge_and_write_votes`' docstring: purge and insert are one
+        # atomic pair, scoped to exactly the rows written.
+        purge_and_write_votes(
+            CardArtistVote,
+            votes_batch,
+            anonymous_id=ART_HASH_ARTIST_ANONYMOUS_ID,
+            target_field="card_id",
+        )
         for card in Card.objects.filter(pk__in=touched_card_ids):
             resolve_and_persist_artist(card)
 

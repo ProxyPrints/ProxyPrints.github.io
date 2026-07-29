@@ -11,6 +11,8 @@ at all); TestEvidenceFirstAndFetchFallbackProduceIdenticalVerdicts is the explic
 regardless of data source" fixture the issue asks for.
 """
 
+import pytest
+
 import cardpicker.local_lands_identify as module
 from cardpicker import local_ocr
 from cardpicker.local_identify_printing_tags import (
@@ -749,3 +751,90 @@ class TestEvidenceFirstAndFetchFallbackProduceIdenticalVerdicts:
         outcomes_by_card = {o.card_id: o for o in result.outcomes}
         assert outcomes_by_card[evidence_card.pk].evidence_backed is True
         assert outcomes_by_card[fetch_card.pk].evidence_backed is False
+
+
+class TestPurgeWriteOrderingAndAtomicity:
+    """2026-07-28: this module had the SAME purge-before-split ordering bug PR #526 fixed in
+    `local_calculate_verdicts`/`local_illustration`, plus the same untransacted DELETE-then-INSERT.
+
+    `purge_stale_machine_votes` deletes by calculator FAMILY, which includes LANDS_ANONYMOUS_ID
+    itself - so purging the RAW batch before `_split_new_votes` deleted exactly the rows the split
+    then went looking for. That was masked rather than harmless here: this batch also carries
+    OCR_ANONYMOUS_ID votes (`test_ocr_resolved_vote_colliding_with_an_existing_identical_vote_is_
+    skipped_not_crashed` above is the collision the module's tests actually exercised, and the
+    lands-family purge never touched those), so a genuine LANDS_ANONYMOUS_ID collision went
+    un-counted AND had its winner's row destroyed with nothing re-inserted - the split drops the
+    loser, so the purge deleted a committed vote for free."""
+
+    @staticmethod
+    def _fixture():
+        artist = CanonicalArtistFactory(name="Rebecca Guay")
+        printing = CanonicalCardFactory(name="Plains", artist=artist, image_hash=7)
+        card = CardFactory(name="Plains", content_phash=7)
+        return card, printing
+
+    @staticmethod
+    def _wire(monkeypatch, on_anchor=None):
+        monkeypatch.setattr(module, "fetch_card_image", lambda c, dpi=None: object())
+        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image, **kw: OcrCardResult())
+
+        def anchor(image, raw_texts):
+            if on_anchor is not None:
+                on_anchor()
+            return True, "Rebecca Guay"
+
+        monkeypatch.setattr(module, "detect_illus_anchor", anchor)
+
+    def test_a_lands_family_collision_is_counted_and_the_winner_survives(self, db, monkeypatch):
+        """The concurrent-dispatch race the eligibility query cannot close: a competing run
+        commits an identical lands vote between this run's SELECTION and its WRITE (modelled by
+        creating the row from inside the mocked anchor detection, which fires per card mid-loop).
+        The split must see it - `already_voted == 1` - and the committed row must be left alone."""
+        card, printing = self._fixture()
+        created = {}
+
+        def commit_a_racing_vote():
+            if not created:
+                created["vote"] = CardPrintingTag.objects.create(
+                    card=card,
+                    printing=printing,
+                    is_no_match=False,
+                    anonymous_id=LANDS_ANONYMOUS_ID,
+                    source=VoteSource.OCR,
+                    confidence=LANDS_SINGLETON_CONFIDENCE,
+                )
+
+        self._wire(monkeypatch, on_anchor=commit_a_racing_vote)
+
+        result = run_lands_identify(dry_run=False, sample_size=300, fetch_budget=10)
+
+        # before the fix: the purge ran first and deleted the winner, the split then found
+        # nothing, and already_voted was 0 while a committed vote had silently been replaced.
+        assert result.already_voted == 1
+        assert result.votes_written == 0
+        assert CardPrintingTag.objects.filter(pk=created["vote"].pk).exists()
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id=LANDS_ANONYMOUS_ID).count() == 1
+
+    def test_a_failed_insert_rolls_the_purge_back(self, db, monkeypatch):
+        card, printing = self._fixture()
+        # an older version of this module's own family: purged on write (the current
+        # anonymous_id is what the eligibility query excludes on, so `-v0` still selects), and
+        # the row whose survival proves the DELETE was rolled back.
+        stale = CardPrintingTag.objects.create(
+            card=card,
+            printing=printing,
+            is_no_match=False,
+            anonymous_id="lands-artist-decomp-v0",
+            source=VoteSource.OCR,
+        )
+        self._wire(monkeypatch)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", _boom)
+
+        with pytest.raises(RuntimeError):
+            run_lands_identify(dry_run=False, sample_size=300, fetch_budget=10)
+
+        assert CardPrintingTag.objects.filter(pk=stale.pk).exists()
