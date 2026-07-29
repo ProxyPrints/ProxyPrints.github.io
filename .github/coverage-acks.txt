@@ -108,3 +108,15 @@ coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - Level 2 illus
 # own "Source: MTG Artist Connection" line, asserted separately in the renamed test below. Test
 # still present, still covers the same surface, extended with the new credit-line assertion.
 coverage-ack: frontend/tests/DisplayPage.spec.ts::DisplayPage (Proposal H, Step 1) > the promoted artist line shows a plain credit + a support button naming MTG Artist Connection for a card with a known canonical artist (E2 - promoted, no longer a collapsed accordion; SPEC-display-left-rail.md §5/§8) — renamed to "the promoted artist line shows a plain credit + the MTG Artist Connection applet (page-link button, credit line) for a card with a known canonical artist (M2 applet round, docs/features/artist-support-links.md)" when ArtistSupportLink became a self-contained applet; the button now names the artist instead of the destination (the applet's own credit line names the destination instead, newly asserted), and its class changed from caller-supplied btn-outline-primary to the applet's own btn-primary. Test still present, same surface, extended not dropped.
+
+# Issue #301 (croppable bleed, merged bleed boxes, split-the-difference gutters) - layout.ts's
+# fit math changed from "full bleed or drop a card" to "bare-card-count-first, bleed crops to
+# whatever the space affords" (see layout.ts's own module comment / fitAxisWithBleed). The old
+# title asserted the very behavior #301 was written to remove (a bordered profile dropping the
+# sheet from 4x2 to 3x2 once bleed exceeded the cap) - that claim is now false, not merely
+# renamed cosmetically, so the test was rewritten to assert the new (intended) outcome: the
+# sheet stays a full 4x2, bleed on the affected edge crops to the cap instead. Same surface
+# (Page Setup margin-profile control + live sheet slot count), same cap arithmetic
+# (marginProfiles.test.ts's maxBleedForFourColumns is unchanged by #301 - only what exceeding
+# it DOES changed), test still present and extended with a disclaimer-text assertion.
+coverage-ack: frontend/tests/DisplayPage.spec.ts::DisplayPage (Proposal H, Step 1) > the margin-profile control defaults to Borderless (no warning) and switching to Bordered shrinks the sheet from 4x2 to 3x2, with a cap warning shown — renamed to "the margin-profile control defaults to Borderless (no warning) and switching to Bordered crops bleed rather than dropping to 3x2, with a cap warning shown (#301)" when #301 replaced the old "drop a column" behavior with per-edge bleed cropping; the sheet no longer shrinks to 3x2 at all under the new fit math, which is the fix this issue shipped, not a regression.

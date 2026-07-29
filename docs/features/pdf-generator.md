@@ -142,6 +142,86 @@ Full spec + approval record: `docs/proposals/proposal-b-bleed-normalization.md`.
 
 **A real crash caught only by running `tests/PDFGenerator.spec.ts`, not by `tsc`/`jest`**: the first version skipped the old proportional rescale by setting `transform: "none"` when normalized. `@react-pdf/renderer`'s own stylesheet parser (`@react-pdf/stylesheet`) has a bug where any single-token transform value throws deep inside its internals (see `docs/lessons.md`'s entry for the exact mechanism) - and their custom reconciler doesn't propagate that as a rejection anywhere, so `pdf(...).toBlob()` just hangs forever with zero console/page error. All 3 download-path Playwright tests hung at their timeout; a stashed pre-Proposal-B baseline confirmed they pass cleanly with no other changes. Fixed by using `transform: undefined` (omitting the key) instead of `"none"` - all 4 tests pass afterward, matching baseline timing.
 
+## #301 — croppable bleed, merged bleed boxes, split-the-difference gutters
+
+Owner decisions, 2026-07-21/29, extending Proposal B above: bleed is now a resource the layout
+may CROP, not a rigid box that gets a whole card dropped when it doesn't fit. #299 (Proposal B,
+above) still produces the resource - `resolveBleedPlan`/`normalizeCardBleed` still measure and
+synthesize each card's bleed to exactly the configured target (`bleedEdgeMM`) on every side. #301
+decides how much of that carried bleed actually RENDERS, given the page - neither replaces the
+other.
+
+**The fit math (`layout.ts`)**: `bleedEdgeMM` is now a per-edge MAXIMUM, not a fixed addend.
+`fitAxisWithBleed` (replacing the old `fitCardsInDimension`) fits card COUNT from the bare card
+size alone (no bleed at all) - a crowded axis that used to drop a whole card the moment full
+bleed didn't fit now keeps every card and shrinks bleed instead. Whatever space is left over
+after the bare-card fit is handed out via a water-filling formula: every one of an axis's
+`2*count` half-boundaries (both page edges and every shared interior gutter's two facing halves)
+draws from the same slack pool equally - "split the difference" at a gutter and "page edge/margin
+caps are just another constraint on the same clamp" both fall out of that one formula, not two
+code paths. `computeLayout`'s `LayoutSlot` now carries a `bleedMM: {top,bottom,left,right}` -
+uniform across every slot on the page (per-AXIS, not truly per-slot - see `LayoutSlot.bleedMM`'s
+own comment for why that's correct here, not a simplification), so a card can be full bleed on
+one axis (say top/bottom) while cropped on the other (left/right), but never asymmetric left-vs-
+right or top-vs-bottom within this grid's regular geometry. Regression-guarded: when there's
+enough slack to grant the full target everywhere (the common case), the new formula reduces to
+byte-identical output to the pre-#301 rigid fit (`layout.test.ts`'s dedicated regression-guard
+describe block proves this against the old formula directly, not just self-consistency).
+
+**Per-edge crop windows (`pdfImage.ts`)**: `computeBleedCropMM`/`computeRenderedBleedMM` are pure
+mm-domain geometry - `max(0, carried - available)` per edge for the crop, `min(carried, available)` for what actually renders. `computeBleedCropWindowPx` converts to source-image pixels
+at the card's own dpi for a caller that wants a true pixel crop. A card whose plan carries no
+bleed at all (a trimmed source, or any card `isBleedNormalizationEligible` rejects) always
+computes a 0 crop, never negative - "up to X available," never "X or a dropped card."
+
+**Export (`PDF.tsx`)**: `PDFCardImage` sizes each card's destination box to
+`CardSize + renderedBleedMM` (may be less than the configured target on a crowded axis) and,
+for a #299-normalized (bleed-normalized) card, crops the oversized synthesized image down to
+that box via a CSS technique - the full-target-bleed `<Image>` sits at a negative offset inside
+an `overflow: hidden` wrapper sized to the rendered box, rather than a second canvas decode/
+crop/re-encode pass (the visible PDF output is pixel-identical either way; this keeps the
+crop as pure, unit-tested geometry in `pdfImage.ts` with no new imperative canvas code - see
+that module's own boundary-of-thin-imperative-work comment, same shape as `bleedExtension.ts`'s
+split). Cut lines (`CutLineCorner`, `PDFCardCutLines`, `PageCutLines`) mark the TRUE card edge -
+`bleedMM.<edge>` in from the slot boundary, not a flat offset - so a cut line stays correct even
+when its slot is cropped below the configured target. The non-normalized path (thumbnail-tier,
+SCM, any source `isBleedNormalizationEligible` rejects) keeps the pre-#301 proportional CSS
+rescale (a real per-edge pixel crop isn't available for that path - unchanged limitation, not a
+#301 regression), just targeting the new (possibly smaller) rendered box instead of the flat
+configured target.
+
+**Preview (`PagePreview.tsx`)**: reads `computeLayout`'s own `slot.widthMM`/`heightMM`/`bleedMM`
+directly (previously assumed a flat `CardSize + 2*bleedEdgeMM` for every slot) - same
+`computeLayout()` call the exporter uses, so slot sizes and cut-line positions agree with the PDF
+by construction, not by parallel maintenance.
+
+**Trailing-edge / bordered-profile warning (`marginProfiles.ts` + `MarginProfileControl.tsx`)**:
+`maxBleedForFourColumns`'s FORMULA is unchanged (it already computed exactly the per-edge bleed
+`fitAxisWithBleed`'s water-filling converges to at a fixed count of 4 - the same expression,
+re-derived) - only what exceeding it MEANS changed. Pre-#301 it meant "the sheet drops from 4
+columns to 3"; post-#301 it means "bleed on the affected edge crops to this cap, all 4 columns
+stay." `MarginProfileControl`'s warning copy was rewritten from a vague "see the warning above"/
+"fewer cards per row" pointer into the owner's mandated disclaimer: bleed is cropped to N mm on
+the affected edge, with reduced cutting tolerance there - stated outright, not implied. Still
+never a hard clamp on the bleed input itself (unchanged from before this round).
+
+**Known limitation, not fixed here**: a #299-normalized card is ASSUMED to carry exactly
+`bleedEdgeMM` on every side for crop-window purposes (matching `normalizeCardBleed`'s own
+contract) - the rare case where a too-small source hit `bleedExtension.ts`'s own
+`clampOpposingCrop` shortfall (a real, already-documented "slightly-short bleed margin" trade
+there) isn't visible from outside that module without touching it, which is out of this pass's
+scope (`bleedNormalize.ts`/`bleedExtension.ts` are #299's contract - see this doc's own Proposal
+B section and those files' own header warnings about a past unilateral change to that
+resolution order).
+
+**Key files**: `frontend/src/features/pdf/layout.ts` (+ `layout.test.ts`),
+`frontend/src/features/pdf/pdfImage.ts` (+ `pdfImage.test.ts`),
+`frontend/src/features/pdf/PDF.tsx`, `frontend/src/features/pdf/PagePreview.tsx`,
+`frontend/src/features/display/marginProfiles.ts` (+ `marginProfiles.test.ts`),
+`frontend/src/features/display/MarginProfileControl.tsx` (+ `.test.tsx`),
+`frontend/tests/DisplayPage.spec.ts`'s margin-profile-control test (rewritten for the new
+behavior - old title ack'd in `.github/coverage-acks.txt`).
+
 ## PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG2)
 
 `PDFGenerator.tsx` derives a `waitPhase` (`"idle" | "fetching" | "assembling" | "done"`) from the

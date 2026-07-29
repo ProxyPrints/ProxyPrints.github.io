@@ -41,6 +41,7 @@ import { CardHeightMM, CardWidthMM } from "@/common/constants";
 import { useLongPress } from "@/common/useLongPress";
 import {
   computeLayout,
+  LayoutEdgeBleed,
   LayoutMargins,
   LayoutSpacing,
 } from "@/features/pdf/layout";
@@ -387,8 +388,6 @@ export function PagePreview({
   );
 
   const scale = maxWidthPx / (pageWidthMM * CSS_PX_PER_MM);
-  const slotWidthMM = CardWidthMM + 2 * bleedEdgeMM;
-  const slotHeightMM = CardHeightMM + 2 * bleedEdgeMM;
 
   return (
     <div
@@ -426,9 +425,9 @@ export function PagePreview({
             content={slots[index]}
             xMM={slot.xMM}
             yMM={slot.yMM}
-            slotWidthMM={slotWidthMM}
-            slotHeightMM={slotHeightMM}
-            bleedEdgeMM={bleedEdgeMM}
+            slotWidthMM={slot.widthMM}
+            slotHeightMM={slot.heightMM}
+            bleedMM={slot.bleedMM}
             showCutLines={showCutLines}
             screenPresentation={screenPresentation}
             isSelected={onSlotClick != null && selectedSlotIndex === index}
@@ -449,7 +448,13 @@ interface PagePreviewSlotElProps {
   yMM: number;
   slotWidthMM: number;
   slotHeightMM: number;
-  bleedEdgeMM: number;
+  /** #301 - the per-edge bleed `computeLayout` actually granted this slot (never more than the
+   * caller's configured `bleedEdgeMM`, and potentially less on a crowded axis - see
+   * layout.ts's `fitAxisWithBleed`). The cut line (the TRUE card edge - see this component's
+   * own module comment) sits at `bleedMM.left`/`bleedMM.top` from the slot's own top-left, not
+   * at a flat `bleedEdgeMM` offset, so it stays correct even when this slot is cropped below
+   * the configured target - this is the "preview mirrors export" contract in practice. */
+  bleedMM: LayoutEdgeBleed;
   showCutLines: boolean;
   screenPresentation: boolean;
   isSelected: boolean;
@@ -472,7 +477,7 @@ function PagePreviewSlotEl({
   yMM,
   slotWidthMM,
   slotHeightMM,
-  bleedEdgeMM,
+  bleedMM,
   showCutLines,
   screenPresentation,
   isSelected,
@@ -661,8 +666,8 @@ function PagePreviewSlotEl({
             data-testid="page-preview-cut-line"
             style={{
               position: "absolute",
-              left: bleedEdgeMM + "mm",
-              top: bleedEdgeMM + "mm",
+              left: bleedMM.left + "mm",
+              top: bleedMM.top + "mm",
               width: CardWidthMM + "mm",
               height: CardHeightMM + "mm",
               pointerEvents: "none",
@@ -678,8 +683,8 @@ function PagePreviewSlotEl({
             data-testid="page-preview-cut-line"
             style={{
               position: "absolute",
-              left: bleedEdgeMM + "mm",
-              top: bleedEdgeMM + "mm",
+              left: bleedMM.left + "mm",
+              top: bleedMM.top + "mm",
               width: CardWidthMM + "mm",
               height: CardHeightMM + "mm",
               outline: "0.25mm dashed rgba(220, 30, 30, 0.75)",
