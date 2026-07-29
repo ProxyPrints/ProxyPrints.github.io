@@ -25,6 +25,7 @@ import {
   questionFeedIdentifyPrintingGroupedByIllustration,
   questionFeedTag,
   submitArtistVoteResolvesToCanonicalArtist1,
+  submitIllustrationVoteCastsPrintingAndArtist,
   submitPrintingTagNoMatch,
   submitPrintingTagResolvesToPrintingCandidate1,
   submitPrintingTagResolvesToPrintingCandidate2,
@@ -297,22 +298,33 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     ).toHaveCount(0);
   });
 
-  test("selecting a grouped candidate submits the identical payload to the identical endpoint as an ungrouped one", async ({
+  // Issue #503 (WTC phase C2) / #524 - supersedes this describe block's former "selecting a
+  // grouped candidate submits the identical payload to the identical endpoint as an ungrouped
+  // one" test (see .github/coverage-acks.txt for the rename ack). That title asserted phase
+  // C1's contract: C1 was deliberately presentation-only, so tapping any candidate - grouped
+  // or not - submitted the identical /2/submitPrintingTag/ payload. C2 intentionally splits
+  // that: a grouped tap now goes to /2/submitIllustrationVote/ with ONE illustrationId, never
+  // a printing list, while an ungrouped tap is unchanged. These two tests assert that split.
+  test("selecting a grouped candidate submits its illustrationId to /2/submitIllustrationVote/, not a printing list", async ({
     page,
     network,
   }) => {
-    let submittedPrinting:
-      | { printingIdentifier?: string; isNoMatch?: boolean }
+    let submittedIllustrationVote:
+      | { illustrationId?: string; isUnknown?: boolean }
       | undefined;
+    let printingTagSubmitted = false;
     network.use(
       questionFeedIdentifyPrintingGroupedByIllustration,
-      submitPrintingTagResolvesToPrintingCandidate1,
+      submitIllustrationVoteCastsPrintingAndArtist,
       submitTagVoteResolvesToApply,
       ...defaultHandlers
     );
     page.on("request", (request) => {
+      if (request.url().includes("/2/submitIllustrationVote/")) {
+        submittedIllustrationVote = request.postDataJSON();
+      }
       if (request.url().includes("/2/submitPrintingTag/")) {
-        submittedPrinting = request.postDataJSON();
+        printingTagSubmitted = true;
       }
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
@@ -324,9 +336,51 @@ test.describe("question feed - Level 2 illustration grouping", () => {
       .click();
 
     await expect
+      .poll(() => submittedIllustrationVote?.illustrationId)
+      .toBe("illustration-shared");
+    expect(submittedIllustrationVote?.isUnknown).toBe(false);
+    expect(submittedIllustrationVote).not.toHaveProperty("printingIdentifier");
+    expect(printingTagSubmitted).toBe(false);
+  });
+
+  test("selecting an ungrouped candidate (distinct or null illustrationId) still submits to /2/submitPrintingTag/, unchanged", async ({
+    page,
+    network,
+  }) => {
+    let submittedPrinting:
+      | { printingIdentifier?: string; isNoMatch?: boolean }
+      | undefined;
+    let illustrationVoteSubmitted = false;
+    network.use(
+      questionFeedIdentifyPrintingGroupedByIllustration,
+      submitPrintingTagResolvesToPrintingCandidate1,
+      submitTagVoteResolvesToApply,
+      ...defaultHandlers
+    );
+    page.on("request", (request) => {
+      if (request.url().includes("/2/submitPrintingTag/")) {
+        submittedPrinting = request.postDataJSON();
+      }
+      if (request.url().includes("/2/submitIllustrationVote/")) {
+        illustrationVoteSubmitted = true;
+      }
+    });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    // candidateC carries its own distinct illustrationId (no sibling, so it never clusters) -
+    // exercises the "distinct" half of this title alongside candidateD's null-illustrationId
+    // case already covered by the mixed-set rendering test above.
+    await page
+      .locator(
+        `[data-card-identifier="${illustrationGroupCandidateC.identifier}"]`
+      )
+      .click();
+
+    await expect
       .poll(() => submittedPrinting?.printingIdentifier)
-      .toBe(illustrationGroupCandidateA.identifier);
+      .toBe(illustrationGroupCandidateC.identifier);
     expect(submittedPrinting?.isNoMatch).toBe(false);
+    expect(illustrationVoteSubmitted).toBe(false);
   });
 });
 
