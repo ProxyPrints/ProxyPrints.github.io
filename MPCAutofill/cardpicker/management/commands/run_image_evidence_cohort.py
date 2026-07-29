@@ -381,7 +381,9 @@ def _fetch_one_card(
 
     from cardpicker.evidence_transfer import find_transfer_source, transfer_evidence
 
-    transfer_source = find_transfer_source(card)
+    # `run_id=run_id` - see `evidence_transfer._record_transfer_anomaly`'s own docstring: this
+    # call can write a durable anomaly CardScanLog row, which was previously unstamped.
+    transfer_source = find_transfer_source(card, run_id=run_id)
     if transfer_source is not None:
         if not dry_run:
             transfer_evidence(card, transfer_source, run_id=run_id)

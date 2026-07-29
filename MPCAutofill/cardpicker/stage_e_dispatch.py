@@ -862,7 +862,10 @@ def _run_stage_c(
         if card.content_phash is None:
             continue
 
-        transfer_source = find_transfer_source(card)
+        # `run_id=run_id` (2026-07-29): this call can write a durable CardScanLog anomaly row,
+        # and until the run_id audit that row was the one machine-written scan log in the app
+        # carrying no run stamp - invisible to every run-scoped reconciliation report.
+        transfer_source = find_transfer_source(card, run_id=run_id)
         if transfer_source is not None:
             with suppress_evidence_change_echo():
                 transfer_evidence(card, transfer_source, run_id=run_id)
