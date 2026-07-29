@@ -17,10 +17,33 @@ Doubles as the federation export's pre-flight audit: a divergent cluster is exac
 record federation must never publish (docs/federation-v1.md's content_hash verdict-exchange
 format assumes one printing per hash), so this same query is the audit gate for that future work,
 not a separate check to build twice.
+
+THIS CHECK IS CURRENTLY VACUOUS, AND NOW SAYS SO (2026-07-29). Measured against the live
+catalogue: 230,770 cards, 230,753 of them hashed, forming 33,631 d=0 groups with 2+ members -
+but only 4 cards are RESOLVED at all, and those 4 sit at 4 distinct hashes. So `clusters_checked`
+is 0 and `divergent` is empty, and that emptiness is a statement about the RESOLVED population,
+not about consistency. The code is correct and its unit tests exercise every branch; it is
+starved of input, not broken.
+
+That distinction is the entire reason `is_vacuous` and `d0_groups_in_catalogue` exist on the
+result. A report-only check whose empty output is indistinguishable from a clean bill of health
+is how `stage-d-illustration-v1` and `local-name-frequency-v1` stayed dormant for weeks while
+reading green (docs/documentation-process.md: "dormancy is exactly what a coverage-based audit
+misses"). This one now refuses to render a green line when it checked nothing - callers get
+`is_vacuous`, and `manage.py local_cluster_consistency_check` prints a DORMANT banner and exits
+non-zero instead of "no divergent clusters found."
+
+`d0_groups_in_catalogue` is what makes the diagnosis readable at a glance: it counts d=0 groups
+across the whole hashed catalogue regardless of resolution status, so the report can say "0 of
+33,631 possible clusters were checkable" - the clustering signal is abundant and the RESOLVED
+population is the bottleneck. Were it 0 as well, the reading would be the opposite (no duplicate
+images to compare at all), and those two situations must not look alike.
 """
 
 import collections
 from dataclasses import dataclass
+
+from django.db.models import Count
 
 from cardpicker.models import Card, PrintingTagStatus
 
@@ -43,6 +66,25 @@ class ClusterConsistencyResult:
     # cards are singletons with no d=0 sibling at all, and never enter clusters_checked).
     resolved_cards_considered: int
     divergent: tuple[DivergentCluster, ...]
+    # d=0 groups with 2+ members across the WHOLE hashed catalogue, ignoring resolution status -
+    # the ceiling `clusters_checked` could reach if every card were resolved. The gap between the
+    # two is the dormancy measure: 0 checked out of 33,631 available (2026-07-29) means the check
+    # is starved, not that the catalogue is clean.
+    d0_groups_in_catalogue: int
+
+    @property
+    def is_vacuous(self) -> bool:
+        """
+        True when the check compared nothing, so `divergent == ()` carries no information.
+
+        READ THIS BEFORE TREATING AN EMPTY `divergent` AS AN ALL-CLEAR. "No divergent clusters"
+        and "no clusters" are different findings that produce the identical empty tuple, and
+        only the first one is evidence. Every caller that reports, gates, or exports on the
+        strength of this result must branch on this property first - see
+        `manage.py local_cluster_consistency_check`, which exits non-zero when it is True, and
+        the module docstring for why an unlabelled empty check is a known failure mode here.
+        """
+        return self.clusters_checked == 0
 
 
 def find_cluster_printing_divergences() -> ClusterConsistencyResult:
@@ -52,6 +94,12 @@ def find_cluster_printing_divergences() -> ClusterConsistencyResult:
     values are not all identical. A group of size 1 is trivially consistent (nothing to compare
     against) and is excluded from clusters_checked entirely, matching local_clustering's own
     "representative + others, len>=2 only" convention for what counts as a cluster at all.
+
+    Also runs one extra aggregate - `d0_groups_in_catalogue` - over every hashed Card regardless
+    of resolution status, so the result can distinguish "nothing to compare" from "everything
+    compared cleanly" (see `ClusterConsistencyResult.is_vacuous` and the module docstring). It is
+    a single indexed GROUP BY, run once per call on a report-only path; the cost buys the one
+    number that makes an empty result interpretable.
     """
     rows = Card.objects.filter(
         printing_tag_status=PrintingTagStatus.RESOLVED,
@@ -78,10 +126,19 @@ def find_cluster_printing_divergences() -> ClusterConsistencyResult:
         if len(distinct_printings) > 1:
             divergent.append(DivergentCluster(content_phash=content_phash, members=tuple(members)))
 
+    d0_groups_in_catalogue = (
+        Card.objects.filter(content_phash__isnull=False)
+        .values("content_phash")
+        .annotate(member_count=Count("id"))
+        .filter(member_count__gt=1)
+        .count()
+    )
+
     return ClusterConsistencyResult(
         clusters_checked=clusters_checked,
         resolved_cards_considered=resolved_cards_considered,
         divergent=tuple(divergent),
+        d0_groups_in_catalogue=d0_groups_in_catalogue,
     )
 
 
