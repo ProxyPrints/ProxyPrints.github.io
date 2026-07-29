@@ -6,17 +6,23 @@ WHY THIS MODULE EXISTS AT ALL (2026-07-28). PR #526 introduced
 plus a cancel-safety hole at the three `CardPrintingTag`-casting Stage D call sites. The same two
 defects existed, unfixed, at every OTHER `purge_stale_machine_votes(...)` +
 `bulk_create(...)` pair wired up by #519/#520 - nine more sites across seven modules, casting four
-different vote models (`CardPrintingTag`, `CardTagVote`, `CardArtistVote`, `PrintingTagVote`) and
-keyed on two different target fields (`card_id`, `printing_id`). This module is #526's primitive
-with those four axes parameterised; the semantics below are #526's, unchanged.
+different vote models (`CardPrintingTag`, `CardTagVote`, `CardArtistVote`, and the since-retired
+`PrintingTagVote`) and keyed on two different target fields (`card_id`, `printing_id`). This module
+is #526's primitive with those four axes parameterised; the semantics below are #526's, unchanged.
+`PrintingTagVote` was retired on 2026-07-29 (migration 0101) and took the app's only
+`printing_id`-keyed call site with it, so every LIVE caller today passes the default
+`target_field="card_id"`. The parameter stays because it is what makes this a primitive rather
+than a `CardPrintingTag` helper, and `purge_stale_machine_votes` is keyed the same way.
 
 IT IS A SEPARATE MODULE, NOT A FUNCTION IN `local_calculate_verdicts`, BECAUSE OF AN IMPORT CYCLE:
 `local_calculate_verdicts` imports from `local_identify_printing_tags` (its `CandidateNameIndex`,
 `_eligible_base_queryset`, `generate_run_id`, ...), and `local_identify_printing_tags` is itself
 one of the call sites that needs this primitive - so it cannot import back. `local_lands_identify`
-and `local_residual_classify` sit on that same import chain, and
-`management/commands/import_external_ip_tags.py` has no business importing a Stage D calculator at
-all just to write a vote batch. A leaf module whose only dependencies are `django.db.transaction`
+and `local_residual_classify` sit on that same import chain, and the management commands that
+write vote batches have no business importing a Stage D calculator at all just to do it (the
+motivating case was `management/commands/import_external_ip_tags.py`, retired 2026-07-29 with
+`PrintingTagVote`; the argument is unchanged for the ones that remain). A leaf module whose only
+dependencies are `django.db.transaction`
 and `cardpicker.models` is importable from all of them. It is deliberately NOT in `models.py`
 alongside `purge_stale_machine_votes` itself: `models.py` is the schema, and this is write-path
 policy that composes a model-layer helper with `bulk_create`.
@@ -79,10 +85,11 @@ def purge_and_write_votes(
     is that callers must pass POST-SPLIT rows, because `rows` is simultaneously the purge scope
     and the insert payload.
 
-    `model_class` is the vote model (`CardPrintingTag`, `CardTagVote`, `CardArtistVote`,
-    `PrintingTagVote`); `target_field` is the column `purge_stale_machine_votes` keys the purge on
-    and the attribute read off each row to build that scope (`card_id` for the per-card vote
-    models, `printing_id` for `PrintingTagVote`).
+    `model_class` is the vote model (`CardPrintingTag`, `CardTagVote`, `CardArtistVote`);
+    `target_field` is the column `purge_stale_machine_votes` keys the purge on and the attribute
+    read off each row to build that scope - `card_id` for every vote model that exists today. It
+    is still a parameter because the primitive is not `CardPrintingTag`-specific: the retired
+    `PrintingTagVote` passed `printing_id`, and any future non-card-keyed vote model would too.
 
     `anonymous_id` is the identity whose FAMILY is purged. Pass it explicitly when the caller
     purges under one fixed identity even though `rows` may carry others - `local_lands_identify`

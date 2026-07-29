@@ -16,7 +16,7 @@ import Levenshtein
 import pycountry
 from django_ratelimit.decorators import ratelimit
 from elasticsearch_dsl.index import Index
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -79,7 +79,6 @@ from cardpicker.models import (
     CardTypes,
     DFCPair,
     PrintingTagStatus,
-    PrintingTagVote,
     SavedDeck,
     SavedDeckKind,
     SavedDeckShare,
@@ -2970,96 +2969,6 @@ def get_funnel_counts(request: HttpRequest) -> HttpResponse:
 
     cache.set("funnel-counts-v1", result, 3600)
     return JsonResponse(result)
-
-
-class _SubmitPrintingTagVoteRequest(BaseModel):
-    """
-    Request body for POST 2/submitPrintingTagVote/ — cast or update a user vote on whether
-    a descriptor tag applies to a CanonicalCard (Scryfall printing).
-
-    Mirrors SubmitTagVoteRequest's shape but targets a printing (CanonicalCard.identifier)
-    rather than a Card image. The `polarity` values are the same: 1=APPLY, -1=NOT_APPLICABLE,
-    0=retract (deletes the existing vote from this anonymous_id for this printing+tag pair).
-    """
-
-    anonymousId: str
-    printingIdentifier: str
-    tagName: str
-    polarity: int
-    voteSurface: Optional[str] = None
-
-
-def _get_canonical_card_or_400(identifier: str) -> CanonicalCard:
-    try:
-        return CanonicalCard.objects.get(identifier=identifier)
-    except (CanonicalCard.DoesNotExist, ValueError):
-        raise BadRequestException(f"No canonical card (printing) found with identifier {identifier!r}.")
-
-
-@csrf_exempt
-@reject_untrusted_origin
-@ratelimit(  # type: ignore
-    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
-)
-@ErrorWrappers.to_json
-def post_submit_printing_tag_vote(request: HttpRequest) -> HttpResponse:
-    """
-    Cast or update a vote on whether a descriptor Tag applies to a CanonicalCard (Scryfall
-    printing). Mirrors the CardTagVote submit idiom (post_submit_tag_vote / _cast_tag_vote_and_
-    resolve) but targets PrintingTagVote — one vote per (printing, tag, anonymous_id) so a
-    voter can independently update their opinion via update_or_create without affecting any
-    other vote they've cast.
-
-    Polarity 0 is a retract: deletes the existing vote from this identity for this
-    (printing, tag) pair, identical to post_submit_tag_vote's own RETRACT_POLARITY sentinel.
-
-    Per-printing consensus resolution is intentionally not triggered here. Printing-level
-    tag resolution (external-ip, UW/UB) follows a primary-signal / fallback pattern:
-    Scryfall structured data (tagger art_tags, security_stamp) is the authoritative source
-    and resolves without a vote. User votes fill gaps where Scryfall data is ambiguous.
-    The resolution function will be added when a pipeline consumer needs it (card
-    serialisation / question feed expansion — see #437). Until then, votes land correctly
-    but no resolution is computed or surfaced.
-    """
-    if request.method != "POST":
-        raise BadRequestException("Expected POST request.")
-    if getattr(request, "limited", False):
-        return JsonResponse(
-            ErrorResponse(
-                name="Rate limited", message="Too many tag vote submissions - please slow down."
-            ).model_dump(),
-            status=429,
-        )
-
-    req = _SubmitPrintingTagVoteRequest.model_validate(json.loads(request.body))
-    printing = _get_canonical_card_or_400(req.printingIdentifier)
-    try:
-        tag = Tag.objects.get(name=req.tagName)
-    except Tag.DoesNotExist:
-        raise BadRequestException(f"No tag found with name {req.tagName!r}.")
-    if req.polarity not in (VotePolarity.APPLY, VotePolarity.NOT_APPLICABLE, RETRACT_POLARITY):
-        raise BadRequestException(
-            f"Invalid polarity {req.polarity!r} - must be 1 (apply), -1 (not applicable), or 0 (retract)."
-        )
-
-    anonymous_id = req.anonymousId
-    with transaction.atomic():
-        if req.polarity == RETRACT_POLARITY:
-            PrintingTagVote.objects.filter(printing=printing, tag=tag, anonymous_id=anonymous_id).delete()
-        else:
-            PrintingTagVote.objects.update_or_create(
-                printing=printing,
-                tag=tag,
-                anonymous_id=anonymous_id,
-                defaults={
-                    "polarity": req.polarity,
-                    "source": VoteSource.USER,
-                    "user": _requesting_user(request),
-                    "vote_surface": req.voteSurface,
-                },
-            )
-
-    return JsonResponse({"status": "ok"})
 
 
 # endregion

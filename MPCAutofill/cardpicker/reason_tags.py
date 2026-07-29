@@ -53,6 +53,14 @@ from cardpicker.models import Tag
 # Axis inline below (see the module docstring's "WTC phase B" section for the full
 # rationale) - not a schema change, just a reading aid: which of the two questions
 # (not-official-printing vs. not-official-art) each row answers.
+# Our own `Tag.name` for the external-IP no-match reason, exported as a named constant because it
+# is a convergence contract, not just a row in the list below: any machine channel that ever
+# derives external-IP-ness from Scryfall data must write THIS string. It previously lived in
+# `management/commands/import_external_ip_tags.py` (the Scryfall Tagger import), which was retired
+# on 2026-07-29 along with `PrintingTagVote`; the constant outlived it deliberately so the contract
+# survives the code that used to honour it. `test_reason_tags` pins it against the list below.
+EXTERNAL_IP_TAG_NAME = "external-ip"
+
 NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
     # axis: not-official-art
     ("custom-art", "Original or alternate artwork - does not depict a real printing", "Custom art"),
@@ -68,11 +76,14 @@ NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
     ("non-english", "Non-English printing", "Non-English"),
     # axis: not-official-art (see the dedicated comment on this tag below for its own,
     # unrelated "why this exact string" rationale)
-    # Deliberately the SAME string as EXTERNAL_IP_TAG_NAME in
-    # management/commands/import_external_ip_tags.py (2026-07-28) - both channels (this human
-    # no-match reason and that machine Scryfall-Tagger import) write into the same card.tags
-    # array, so one shared name makes `tag:external-ip` a single predicate over the whole
-    # catalog rather than two names that would permanently fragment it. Deliberately NOT named
+    # EXTERNAL_IP_TAG_NAME (defined above) used to live in
+    # management/commands/import_external_ip_tags.py, which owned the machine half of this tag;
+    # that command and its `PrintingTagVote` target were retired on 2026-07-29 and the constant
+    # moved here, to the module that owns the surviving (human) channel. The convergence rule it
+    # encodes is unchanged and still binding on whatever rebuilds the machine half: both channels
+    # write into the same card.tags array, so one shared name makes `tag:external-ip` a single
+    # predicate over the whole catalog rather than two names that would permanently fragment it.
+    # Deliberately NOT named
     # after the official Wizards "Universes Beyond" product line: that name covers OFFICIAL
     # Magic printings, so a custom proxy bearing e.g. Warhammer or Lord of the Rings art isn't
     # one of those - it's non-official art drawn from an external IP. There is no
@@ -81,7 +92,7 @@ NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
     # resolve authoritatively from `set_type`/`security_stamp` at the PRINTING level, not as a
     # human-cast no-match reason.
     (
-        "external-ip",
+        EXTERNAL_IP_TAG_NAME,
         "Art is drawn from an external IP (crossover / licensed property) rather than original Magic art",
         "External IP",
     ),

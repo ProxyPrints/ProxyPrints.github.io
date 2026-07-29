@@ -26,8 +26,6 @@ from cardpicker.models import (
     CardTypes,
     PilotRunLedger,
     PrintingTagStatus,
-    PrintingTagVote,
-    VotePolarity,
     VoteSource,
     calculator_family,
 )
@@ -40,7 +38,6 @@ from cardpicker.tests.factories import (
     CardFactory,
     CardPrintingTagFactory,
     CardTagVoteFactory,
-    TagFactory,
 )
 
 
@@ -299,20 +296,15 @@ class TestPurgeByAnonymousId:
         assert purge_by_anonymous_id(self.CALC).printing_votes_deleted == 1
         assert not CardPrintingTag.objects.filter(anonymous_id=self.CALC).exists()
 
-    def test_covers_all_four_vote_tables(self, db):
+    def test_covers_every_vote_table(self, db):
+        """Three vote tables since 2026-07-29, not four: `PrintingTagVote` was retired (migration
+        0101) with 0 rows, and `PurgeResult.printing_tag_votes_deleted` went with it. If a fourth
+        vote model is ever added, it belongs in this assertion the same day it is added."""
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         card = CardFactory(name="Forest")
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id=self.CALC, run_id=None)
         CardArtistVoteFactory(card=card, source=VoteSource.OCR, anonymous_id=self.CALC, run_id="run-A")
         CardTagVoteFactory(card=card, source=VoteSource.OCR, anonymous_id=self.CALC, run_id="run-B")
-        PrintingTagVote.objects.create(
-            printing=printing,
-            tag=TagFactory(),
-            polarity=VotePolarity.APPLY,
-            source=VoteSource.OCR,
-            anonymous_id=self.CALC,
-            run_id=None,
-        )
 
         result = purge_by_anonymous_id(self.CALC)
 
@@ -320,9 +312,7 @@ class TestPurgeByAnonymousId:
             result.printing_votes_deleted,
             result.artist_votes_deleted,
             result.tag_votes_deleted,
-            result.printing_tag_votes_deleted,
-        ) == (1, 1, 1, 1)
-        assert not PrintingTagVote.objects.filter(anonymous_id=self.CALC).exists()
+        ) == (1, 1, 1)
 
     def test_other_calculators_and_other_versions_are_untouched(self, db):
         """One EXACT id per invocation - not a family, not a prefix. `-v2` of the same

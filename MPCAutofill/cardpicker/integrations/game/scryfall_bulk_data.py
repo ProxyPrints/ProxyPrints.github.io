@@ -7,7 +7,9 @@ the same upstream endpoint:
 
   * `cardpicker/printing_metadata_import.py` (its own `BulkDataEntry`),
   * `cardpicker/integrations/game/mtg.py` (its own `BulkDataRow`/`BulkDataResponse`),
-  * `cardpicker/management/commands/import_external_ip_tags.py` (its own `_BulkDataEntry`).
+  * `cardpicker/management/commands/import_external_ip_tags.py` (its own `_BulkDataEntry`) -
+    RETIRED 2026-07-29 along with `PrintingTagVote`; it is named here because it is half the
+    reason this module exists, not because it still calls in. Two importers remain.
 
 When Scryfall retired the old bulk format (blog "Two New Ways to Sync Scryfall Data",
 2026-07-01; retirement 2026-07-20), exactly ONE of the three had been hardened for it - the
@@ -20,9 +22,8 @@ Magic-specific vendor, and `integrations/game/` is the pluggable per-game packag
 `GameIntegration`) that exists precisely to keep game-specific vendor knowledge out of
 `cardpicker/`. Putting Scryfall's wire format at `cardpicker/` level would make the generic
 layer own an MTG vendor's schema. The dependency direction is also already established and is
-preserved here: `cardpicker.printing_metadata_import` and
-`cardpicker.management.commands.import_external_ip_tags` ALREADY import from
-`cardpicker.integrations.game.mtg` (both pull `Scryfall` for its headers), i.e. cardpicker ->
+preserved here: `cardpicker.printing_metadata_import` ALREADY imports from
+`cardpicker.integrations.game.mtg` (pulling `Scryfall` for its headers), i.e. cardpicker ->
 integrations. Nothing in this module imports back out of the integrations package, so no game
 integration is made to depend on a cardpicker-level module.
 
@@ -70,6 +71,12 @@ USER_AGENT = "mpc-autofill/1.0"
 # each call site.
 DEFAULT_CARDS = "default_cards"
 ORACLE_CARDS = "oracle_cards"
+# `ART_TAGS` has had NO consumer since `import_external_ip_tags` was retired on 2026-07-29 with
+# `PrintingTagVote`. Kept, with its live-endpoint test, because the Scryfall Tagger art-tag feed
+# is the named input of the unified-Scryfall-importer work item that inherits that capability
+# (docs/features/printing-tags.md's retirement record) - a bare constant plus one test is a
+# cheaper thing to carry than a re-derivation of which bulk entry type the feed lives under, and
+# the test is what would tell us if the entry type disappeared upstream in the meantime.
 ART_TAGS = "art_tags"
 
 # gzip's zlib window-bits selector: 16 + MAX_WBITS means "expect a gzip (RFC 1952) wrapper",
@@ -240,8 +247,8 @@ def download_and_decompress(url: str, path: Path, timeout: int = 60) -> None:
 
     ON-DISK FORMAT NOTE: we store the file DECOMPRESSED even though the remote is compressed.
     Keeping it gzipped would save ~596MB of the persistent `scryfall_cache` volume but would
-    force every reader (`printing_metadata_import._parse_rows`, the back-face lookup,
-    `import_external_ip_tags`' illustration index) to re-inflate 620MB on every pass, and would
+    force every reader (`printing_metadata_import._parse_rows`, the back-face lookup) to
+    re-inflate 620MB on every pass, and would
     invalidate the already-deployed on-disk cache and the `ensure_scryfall_cache_present` guard
     that points at it. Disk is already provisioned for the uncompressed size; CPU on every read
     is not worth trading for it.

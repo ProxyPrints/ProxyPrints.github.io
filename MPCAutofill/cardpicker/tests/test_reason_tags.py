@@ -1,7 +1,10 @@
 from cardpicker.default_tags import DEFAULT_TAGS
-from cardpicker.management.commands.import_external_ip_tags import EXTERNAL_IP_TAG_NAME
 from cardpicker.models import Tag
-from cardpicker.reason_tags import NO_MATCH_REASON_TAGS, seed_no_match_reason_tags
+from cardpicker.reason_tags import (
+    EXTERNAL_IP_TAG_NAME,
+    NO_MATCH_REASON_TAGS,
+    seed_no_match_reason_tags,
+)
 
 
 class TestSeedNoMatchReasonTags:
@@ -23,19 +26,21 @@ class TestSeedNoMatchReasonTags:
 
     def test_external_ip_tag_seeded_with_expected_display_name(self, db):
         # Replaces a never-committed pair of Universes-product-line-named tags (2026-07-28) -
-        # deliberately the same name as EXTERNAL_IP_TAG_NAME in
-        # management/commands/import_external_ip_tags.py, so this pins both the name and its
-        # seeded display_name directly rather than relying only on the generic
+        # deliberately the same name as `reason_tags.EXTERNAL_IP_TAG_NAME`, so this pins both the
+        # name and its seeded display_name directly rather than relying only on the generic
         # test_display_name_set_at_creation loop above.
         seed_no_match_reason_tags()
         tag = Tag.objects.get(name="external-ip")
         assert tag.display_name == "External IP"
 
     def test_external_ip_name_matches_the_machine_importer(self, db):
-        # Both channels (this human no-match reason and import_external_ip_tags' machine
-        # Scryfall-Tagger import) must converge on the exact same Tag.name so `tag:external-ip`
-        # is a single predicate over the whole catalog - pinned directly so the two modules
-        # can't silently drift apart.
+        # The convergence contract, kept alive across the retirement of the channel that
+        # motivated it: `import_external_ip_tags` (the machine Scryfall-Tagger import) and its
+        # `PrintingTagVote` target were removed on 2026-07-29, so `EXTERNAL_IP_TAG_NAME` now
+        # lives in `reason_tags` beside the surviving human channel. Whatever rebuilds the
+        # machine half - see docs/features/printing-tags.md's retirement record - must write
+        # this exact string, so `tag:external-ip` stays ONE predicate over the whole catalog
+        # instead of two names that would permanently fragment it.
         reason_tag_names = {name for name, _description, _display_name in NO_MATCH_REASON_TAGS}
         assert EXTERNAL_IP_TAG_NAME in reason_tag_names
 
