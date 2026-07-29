@@ -79,7 +79,7 @@ from django.utils import timezone
 
 from cardpicker.local_calculate_verdicts import (
     SLOW_PATH_ANONYMOUS_ID,
-    SLOW_PATH_TO_REVIEW_REASON,
+    SLOW_PATH_TO_REVIEW_SKIP_REASON,
 )
 from cardpicker.models import (
     Card,
@@ -195,9 +195,15 @@ def compute_skip_breakdown() -> dict[str, Any]:
     per-engine view) by reason + `anonymous_id` (the field this project's calculators use as their
     engine identity, e.g. `local-ocr-v1`/`local-phash-v1`/`local-fallback-v1` - see
     `CardScanLog.anonymous_id`'s own field comment: "same field, same width, same semantics as
-    `AbstractWeightedVote.anonymous_id`"). ~11 distinct `skip_reason` values exist in production
-    (measured 2026-07-29) - this aggregation makes no assumption about that count, it is purely a
-    `GROUP BY`.
+    `AbstractWeightedVote.anonymous_id`").
+
+    NO COUNT IS ASSERTED HERE, deliberately. This docstring used to claim "~11 distinct
+    `skip_reason` values exist in production" while the code declared roughly thirty and the
+    column actually held 23 - a hardcoded number nothing derived, so nothing could catch it
+    drifting. The aggregation itself never needed the figure: it is purely a `GROUP BY` and is
+    correct for any number of distinct values. `docs/reference/skip-reasons.md` is the roster,
+    tethered to the `*_SKIP_REASON` declarations by `check_skip_reason_roster_tether()` in
+    `.github/scripts/docs_lint.py`; the live figure comes from this query, not from prose.
 
     Returns `{"byReason": [{"reason": str, "count": int}, ...], "byReasonAndEngine": [{"reason":
     str, "engine": str, "count": int}, ...]}`, both sorted by count descending (ties broken
@@ -338,7 +344,7 @@ def compute_participation() -> dict[str, Any]:
       routed or not."
     - `distinctCardsRoutedToReview` - distinct `card_id` in `CardScanLog` filtered to the
       slow-path agent (`local_calculate_verdicts.SLOW_PATH_ANONYMOUS_ID`) and
-      `skip_reason=SLOW_PATH_TO_REVIEW_REASON` - same filter shape `review_clusters.
+      `skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON` - same filter shape `review_clusters.
       _review_queue_card_ids()` already uses. Genuinely a distinct-CARD count, not a row count:
       `CardScanLog` is an append-only audit trail (see that model's own docstring) - a card can
       accumulate more than one row for the same `(card, anonymous_id)` pair across re-runs, so a
@@ -386,7 +392,7 @@ def compute_participation() -> dict[str, Any]:
     # append-only table. Kept as a queryset (not yet evaluated) so the intersection query below
     # can reuse the same base filter rather than re-stating it.
     routed_to_review_qs = CardScanLog.objects.filter(
-        anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
     )
     distinct_cards_routed_to_review = routed_to_review_qs.values("card_id").distinct().count()
 

@@ -507,6 +507,134 @@ def check_calculator_roster_tether() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Roster tether: skip reasons (2026-07-29)
+#
+# The same defect as the calculator roster above, one layer down.
+# docs/pipeline-fidelity-gate.md fired as an audit partly on the
+# precondition that "every empirically-derived constant/threshold/override/
+# SKIP-REASON [is] mapped to its home in the new pipeline, or flagged
+# missing". That claim could never have been TESTED, because the skip
+# reasons could not be ENUMERATED: ~30 distinct values existed, only ~11
+# were declared as named constants, the rest were bare inline string
+# literals, and several write sites passed the value through dynamically
+# (`skip_reason=outcome.ocr_skip_reason`, `skip_reason=verdict.skip_reason`,
+# `skip_reason=skip_reason`). No static analysis could produce a complete
+# roster, so the audit checked itself against an incomplete list — and
+# twelve values appeared nowhere in docs/ at all.
+#
+# The 2026-07-29 declaration-convention sweep fixed the code side: every
+# value written to `CardScanLog.skip_reason` now originates from a
+# module-level `*_SKIP_REASON` constant, so the roster IS derivable. This
+# rule is what keeps it that way, on the same terms as the calculator
+# tether: CODE is the source of truth, docs/reference/skip-reasons.md is
+# the thing checked.
+# ---------------------------------------------------------------------------
+
+SKIP_REASON_DOC_REL = "reference/skip-reasons.md"
+
+# Key on the DECLARED CONSTANT NAME, exactly as CALCULATOR_ID_DECL_RE does
+# and for the same reason: a regex over string literals cannot tell a skip
+# reason from any other hyphenated string in the module (tag names, engine
+# names, layout classes, `evidence_types_used` labels all share the shape).
+# A module-level `*_SKIP_REASON = "<literal>"` binding is the actual
+# declaration, so that is what this matches: column-0 only (no indented or
+# local rebindings), literal value only (an alias `X_SKIP_REASON = OTHER`
+# re-declares nothing, and a `*_SKIP_REASONS` frozenset is a SET of already-
+# declared values, not a declaration — note the regex requires `= "` and so
+# skips both).
+SKIP_REASON_DECL_RE = re.compile(r'^(_?[A-Z][A-Z0-9_]*_SKIP_REASON)\s*=\s*"([^"]+)"', re.MULTILINE)
+
+# Declared `*_SKIP_REASON` values that legitimately have NO doc entry.
+# EXPLICIT and per-entry-justified on purpose, same convention as
+# CALCULATOR_ROSTER_ALLOWLIST: an exclusion has to be a visible decision,
+# not a silent gap. Nothing goes here merely because it currently fails the
+# check. EMPTY TODAY, deliberately — every declared value, including the
+# retired ones and the report-only ones that never reach the database, has
+# a real entry in the doc, because "this string exists but is never
+# persisted" is itself a fact a reader of a scan-log roster needs.
+SKIP_REASON_ROSTER_ALLOWLIST: dict = {}
+
+
+def _declared_skip_reasons() -> dict:
+    """
+    DERIVE the skip-reason roster from code. Returns {reason: [decl sites]}.
+
+    Deliberately derived, never hardcoded — same reasoning as
+    `_declared_calculator_identities()`: a second hand-maintained list
+    inside the linter would just move the stale list from the doc into the
+    check.
+
+    One value maps to MANY declarations on purpose. "no-evidence",
+    "ambiguous", "no-text" and "frame-mismatch" are each emitted by several
+    calculators under different `anonymous_id`s with genuinely different
+    meanings, so each calculator declares its own prefixed constant and all
+    of them are reported as sites for that one value.
+    """
+    reasons: dict = {}
+    src_dir = REPO_ROOT / CALCULATOR_SOURCE_DIR_REL
+    if not src_dir.is_dir():
+        return reasons
+    # Non-recursive glob, same as the calculator roster: `cardpicker/tests/`
+    # declares fixture reasons that are not part of the production roster.
+    for py in sorted(src_dir.glob("*.py")):
+        text = py.read_text()
+        for m in SKIP_REASON_DECL_RE.finditer(text):
+            site = f"{py.relative_to(REPO_ROOT)}:{line_of(text, m.start())} ({m.group(1)})"
+            reasons.setdefault(m.group(2), []).append(site)
+    return reasons
+
+
+def check_skip_reason_roster_tether() -> list[str]:
+    """
+    Every skip-reason value declared in MPCAutofill/cardpicker/*.py must
+    have an entry in docs/reference/skip-reasons.md. Same shape as
+    check_calculator_roster_tether(): code read as the source of truth, the
+    doc is the thing checked, findings are hard ::error:: annotations on the
+    DOC (that's where the fix goes).
+
+    Matching is on the FULL literal value written to the database column,
+    NOT on the constant name. That is the opposite choice from the
+    calculator tether's full-identity-vs-family reasoning, for a different
+    reason rather than an inconsistent one: here the string IS the
+    production datum (2.7M `CardScanLog` rows key on it), while the constant
+    name is an internal handle a refactor may legitimately change. Renaming
+    `FRAME_MISMATCH_SKIP_REASON` breaks nothing and should not fail lint;
+    changing its VALUE orphans every historical row and must fail loudly.
+    """
+    findings = []
+    doc = DOCS_DIR / SKIP_REASON_DOC_REL
+    if not doc.is_file():
+        return findings
+    doc_rel = doc.relative_to(REPO_ROOT)
+    # Fenced blocks are illustrative/pseudocode (same reasoning as the
+    # link/path checks) — a reason mentioned only inside one is not an entry
+    # about it.
+    prose = strip_fenced_code(doc.read_text())
+
+    for reason, sites in sorted(_declared_skip_reasons().items()):
+        if reason in SKIP_REASON_ROSTER_ALLOWLIST:
+            continue
+        # Token-bounded so one reason can't satisfy the check by being a
+        # substring of another ("no-clear-winner" vs
+        # "no-clear-winner-margin", "ambiguous" vs anything containing it).
+        if re.search(r"(?<![\w-])" + re.escape(reason) + r"(?![\w-])", prose):
+            continue
+        findings.append(
+            f"::error file={doc_rel}::skip-reason roster drift: reason "
+            f"`{reason}` is declared in code ({'; '.join(sites)}) but has no "
+            f"entry in {doc_rel}. Code is the source of truth for this roster: "
+            f"add an entry stating what the reason MEANS and which calculator "
+            f"emits it (including 'retired — historical rows only' or "
+            f"'report-only, never persisted' where that is the truth — a value "
+            f"nothing writes any more is exactly what an enumeration misses), "
+            f"or, if it genuinely should not be documented, add it to "
+            f"SKIP_REASON_ROSTER_ALLOWLIST in .github/scripts/docs_lint.py "
+            f"with a per-entry reason."
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Interconnection rules (2026-07-23 owner ruling: "kill the lettering
 # convention all together ... each subject should have one document or they
 # should at least reference each other"). Decisions now live written-out in
@@ -837,6 +965,7 @@ def main(argv=None) -> int:
         hard_findings.extend(check_file(path))
     hard_findings.extend(check_extractable_primitives_tether())
     hard_findings.extend(check_calculator_roster_tether())
+    hard_findings.extend(check_skip_reason_roster_tether())
 
     # Soft findings: the interconnection rules. Emitted as ::warning:: and
     # NOT counted unless --strict / DOCS_LINT_STRICT.

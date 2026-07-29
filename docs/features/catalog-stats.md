@@ -93,13 +93,13 @@ confirmations".
 
 ## The five shipped panels
 
-| Panel                   | Proposal F chart | Data source                                                                        | Notes                                                                                                               |
-| ----------------------- | ---------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `contributionsOverTime` | 2                | `CardPrintingTag`/`CardArtistVote`/`CardTagVote`, weekly `vote_surface` buckets    | Human-only by two independent filters (`vote_surface` non-null/non-blank AND `source in HUMAN_SOURCES`) - see above |
-| `skipBreakdown`         | 4                | `CardScanLog.skip_reason`, grouped by reason and by reason+`anonymous_id` (engine) | ~11 distinct reasons observed in production                                                                         |
-| `runHistory`            | 6                | `PilotRunLedger` - status/duration/`votes_written`, most recent 50                 | See "The already-voted caveat" below                                                                                |
-| `catalogComposition`    | 7                | `cardpicker.models.summarise_contributions()`, reused verbatim                     | The cheapest panel - moves an existing live query (`GET 2/contributions/`) onto this cache instead of adding one    |
-| `participation`         | (call to action) | `question_feed.get_remaining_estimate()` + human vote counts + md5-group figures   | Raw counts only - see "No percent-complete field" below; card-denominated counts in "Cards vs. votes" below         |
+| Panel                   | Proposal F chart | Data source                                                                        | Notes                                                                                                                  |
+| ----------------------- | ---------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `contributionsOverTime` | 2                | `CardPrintingTag`/`CardArtistVote`/`CardTagVote`, weekly `vote_surface` buckets    | Human-only by two independent filters (`vote_surface` non-null/non-blank AND `source in HUMAN_SOURCES`) - see above    |
+| `skipBreakdown`         | 4                | `CardScanLog.skip_reason`, grouped by reason and by reason+`anonymous_id` (engine) | Plain `GROUP BY`, no assumption about how many distinct reasons exist - see `reference/skip-reasons.md` for the roster |
+| `runHistory`            | 6                | `PilotRunLedger` - status/duration/`votes_written`, most recent 50                 | See "The already-voted caveat" below                                                                                   |
+| `catalogComposition`    | 7                | `cardpicker.models.summarise_contributions()`, reused verbatim                     | The cheapest panel - moves an existing live query (`GET 2/contributions/`) onto this cache instead of adding one       |
+| `participation`         | (call to action) | `question_feed.get_remaining_estimate()` + human vote counts + md5-group figures   | Raw counts only - see "No percent-complete field" below; card-denominated counts in "Cards vs. votes" below            |
 
 ## The already-voted caveat (`runHistory`)
 
@@ -174,7 +174,7 @@ including the live-API-skew guard this swap requires.
 - **`distinctCardsRoutedToReview`** - distinct `card_id` in `CardScanLog`
   filtered to the slow-path agent
   (`local_calculate_verdicts.SLOW_PATH_ANONYMOUS_ID`) and
-  `skip_reason=SLOW_PATH_TO_REVIEW_REASON` - the same filter shape
+  `skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON` - the same filter shape
   `review_clusters._review_queue_card_ids()` already uses. **This must be
   a distinct-card count, computed with
   `.values("card_id").distinct().count()`, never a plain `.count()`.**

@@ -136,6 +136,49 @@ assert None not in RETIRED_PRINTING_VOTE_FAMILIES, (
     "every retired printing-vote identity must follow the machine calculator naming convention "
     "(<family>-v<N>): the 2026-07-29 redundancy retirement is enforced by family, not by literal."
 )
+# THIS MODULE'S OWN SKIP VOCABULARY (2026-07-29 declaration-convention sweep - see
+# docs/reference/skip-reasons.md). Every value the OCR and phash engines here write to
+# `CardScanLog.skip_reason` is declared as a module-level `*_SKIP_REASON` constant so the roster
+# is statically enumerable, exactly as `*_ANONYMOUS_ID` already is. These were inline string
+# literals at their write sites until this sweep; the STRINGS are unchanged (a row written before
+# and after this change is byte-identical) - only their point of declaration moved.
+#
+# Same-value/different-constant is deliberate where a string is also emitted by another
+# calculator under a different `anonymous_id` and a different meaning (e.g. "ambiguous",
+# "frame-mismatch", "no-text"); a single shared constant would falsely imply one shared concept.
+UNFETCHABLE_IMAGE_SKIP_REASON = "unfetchable-image"
+FRAME_MISMATCH_SKIP_REASON = "frame-mismatch"
+DISAGREEMENT_WITH_OTHER_ENGINE_SKIP_REASON = "disagreement-with-other-engine"
+
+# The OCR engine's own outcomes (`OcrCardResult.skip_reason`, set in `run_ocr_for_card`).
+# PARSED_BUT_NO_MATCH_SKIP_REASON no longer reaches `CardScanLog` at all as of issue #207 - that
+# outcome casts a real `is_no_match` CardPrintingTag vote instead - but it is still an
+# `OcrCardResult.skip_reason` value the write loop branches on, and HISTORICAL scan-log rows
+# carry it, so it is declared here alongside the rest rather than left as a bare literal.
+OCR_AMBIGUOUS_SKIP_REASON = "ambiguous"
+OCR_NO_TEXT_SKIP_REASON = "no-text"
+PARSED_BUT_NO_MATCH_SKIP_REASON = "parsed-but-no-match"
+# Duplicated as a literal from `local_calculate_verdicts.JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON`
+# rather than imported - the same "avoid a hard import-time dependency between sibling engines
+# over one constant" precedent `local_illustration._JOIN_KEY_NO_HIT_SKIP_REASONS` already sets.
+# A literal (not an alias) is also what keeps this declaration visible to docs_lint's roster
+# tether, which matches `NAME = "<literal>"` only.
+OCR_UNKNOWN_SET_CODE_SKIP_REASON = "unknown-set-code"
+
+# The phash engine's own outcomes (`run_phash_for_card`).
+PHASH_TOO_MANY_CANDIDATES_SKIP_REASON = "too-many-candidates"
+# `local_phash.find_best_match` is PROTECTED CORE (docs/upstreaming/license-provenance.md §2) and
+# returns these two strings as its own inline literals; they cannot be declared at their true
+# source without editing a protected file. They are MIRRORED here - the one roster entry whose
+# declaration is not co-located with its origin - and used for the equality test below so the
+# coupling is at least named rather than anonymous. NO_CLEAR_WINNER is never written to
+# `CardScanLog` by this module today (`_classify_no_clear_winner` always refines it into one of
+# the two variants below); HISTORICAL rows predating that refinement still carry it.
+PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON = "no-hashable-candidates"
+PHASH_NO_CLEAR_WINNER_SKIP_REASON = "no-clear-winner"
+PHASH_NO_CLEAR_WINNER_DISTANCE_SKIP_REASON = "no-clear-winner-distance"
+PHASH_NO_CLEAR_WINNER_MARGIN_SKIP_REASON = "no-clear-winner-margin"
+
 # Basic lands and staple commons can carry hundreds of printings (Forest alone: 944 in the
 # live pilot's own eligible pool, confirmed live 2026-07-15) - and "multi-candidate names
 # first" ordering puts exactly those names first, meaning an uncapped pilot run would try to
@@ -173,7 +216,7 @@ EXCLUDED_RESOLVED_TAGS = ["custom-art", "non-english"]
 # issue #207 - they're strong enough negative evidence to cast a real `is_no_match` vote instead,
 # which already excludes the card from re-selection via its own anonymous_id (see
 # _eligible_base_queryset), no scan-log/rescannability bookkeeping needed for them any more.
-RESCANNABLE_SKIP_REASONS = frozenset({"unfetchable-image", "frame-mismatch"})
+RESCANNABLE_SKIP_REASONS = frozenset({UNFETCHABLE_IMAGE_SKIP_REASON, FRAME_MISMATCH_SKIP_REASON})
 
 Engine = Literal["ocr", "phash"]
 
@@ -797,7 +840,7 @@ def run_ocr_for_card(
     `set_code` validity) - so this is purely additive: a card whose winning variant is a genuine
     candidate match, or whose collector line is genuinely illegible, sees zero behavior change."""
     if image is None:
-        return OcrCardResult(skip_reason="unfetchable-image")
+        return OcrCardResult(skip_reason=UNFETCHABLE_IMAGE_SKIP_REASON)
 
     cropped = local_ocr.crop_collector_line(image, local_fallback.normalize_crop_box(crop_box, bleed_class))
     variants = local_ocr.preprocess_variants(cropped)
@@ -833,23 +876,23 @@ def run_ocr_for_card(
                 engine="ocr", printing_pk=matched.pk, confidence=confidence, detail=raw_text.strip()
             )
             return result
-        if reason == "ambiguous":
+        if reason == OCR_AMBIGUOUS_SKIP_REASON:
             saw_ambiguous = True
-        elif reason == "parsed-but-no-match" and (
+        elif reason == PARSED_BUT_NO_MATCH_SKIP_REASON and (
             parsed.set_code is None or known_set_codes is None or parsed.set_code in known_set_codes
         ):
             saw_lexicon_valid_no_match = True
     if saw_ambiguous:
-        result.skip_reason = "ambiguous"
+        result.skip_reason = OCR_AMBIGUOUS_SKIP_REASON
     elif saw_lexicon_valid_no_match:
-        result.skip_reason = "parsed-but-no-match"
+        result.skip_reason = PARSED_BUT_NO_MATCH_SKIP_REASON
     elif result.parsed_a_collector_number:
         # every "parsed-but-no-match" outcome this loop saw carried an out-of-lexicon set_code -
         # a distinct, non-rescannable ABSTENTION (see this function's own known_set_codes
         # docstring paragraph), not the confident "parsed-but-no-match" negative.
-        result.skip_reason = "unknown-set-code"
+        result.skip_reason = OCR_UNKNOWN_SET_CODE_SKIP_REASON
     else:
-        result.skip_reason = "no-text"
+        result.skip_reason = OCR_NO_TEXT_SKIP_REASON
     return result
 
 
@@ -892,10 +935,10 @@ def _classify_no_clear_winner(
     best_distance = scored[0][1]
     runner_up_distance = scored[1][1] if len(scored) > 1 else None
     if best_distance > distance_threshold:
-        return "no-clear-winner-distance"
+        return PHASH_NO_CLEAR_WINNER_DISTANCE_SKIP_REASON
     assert runner_up_distance is not None and (runner_up_distance - best_distance) <= margin  # the only other way
     # find_best_match returns "no-clear-winner" - a margin-too-tight runner-up, not a threshold miss.
-    return "no-clear-winner-margin"
+    return PHASH_NO_CLEAR_WINNER_MARGIN_SKIP_REASON
 
 
 def run_phash_for_card(
@@ -912,10 +955,10 @@ def run_phash_for_card(
     # checked first, before any candidate-hash fetch - see PHASH_MAX_CANDIDATES' comment for
     # why this matters (basic lands/staple commons can have hundreds of candidates)
     if len(selected.candidates) > max_candidates:
-        return None, "too-many-candidates"
+        return None, PHASH_TOO_MANY_CANDIDATES_SKIP_REASON
 
     if image is None:
-        return None, "unfetchable-image"
+        return None, UNFETCHABLE_IMAGE_SKIP_REASON
 
     card_hash = local_phash.compute_card_art_hash(image, bleed_class)
 
@@ -931,7 +974,7 @@ def run_phash_for_card(
 
     match, reason = local_phash.find_best_match(card_hash, candidates_with_hashes, distance_threshold, margin)
     if match is None:
-        if reason == "no-clear-winner":
+        if reason == PHASH_NO_CLEAR_WINNER_SKIP_REASON:
             reason = _classify_no_clear_winner(card_hash, candidates_with_hashes, distance_threshold, margin)
         return None, reason
     detail = f"distance={match.distance} runner_up={match.runner_up_distance}"
@@ -1530,14 +1573,14 @@ def run_pilot(
                     result_ocr.disagreements.append(
                         {"card_id": card_id, "ocr": outcome.ocr_vote, "phash": outcome.phash_vote}
                     )
-                    result_ocr.skip_counts["disagreement-with-other-engine"] += 1
-                    result_phash.skip_counts["disagreement-with-other-engine"] += 1
+                    result_ocr.skip_counts[DISAGREEMENT_WITH_OTHER_ENGINE_SKIP_REASON] += 1
+                    result_phash.skip_counts[DISAGREEMENT_WITH_OTHER_ENGINE_SKIP_REASON] += 1
                     scan_log_batch.append(
                         CardScanLog(
                             card_id=card_id,
                             anonymous_id=OCR_ANONYMOUS_ID,
                             run_id=run_id,
-                            skip_reason="disagreement-with-other-engine",
+                            skip_reason=DISAGREEMENT_WITH_OTHER_ENGINE_SKIP_REASON,
                         )
                     )
                     scan_log_batch.append(
@@ -1545,19 +1588,19 @@ def run_pilot(
                             card_id=card_id,
                             anonymous_id=PHASH_ANONYMOUS_ID,
                             run_id=run_id,
-                            skip_reason="disagreement-with-other-engine",
+                            skip_reason=DISAGREEMENT_WITH_OTHER_ENGINE_SKIP_REASON,
                         )
                     )
                 else:
                     if outcome.ocr_vote is not None and result_ocr is not None:
                         if printing_vote_withheld_for_frame_mismatch:
-                            result_ocr.skip_counts["frame-mismatch"] += 1
+                            result_ocr.skip_counts[FRAME_MISMATCH_SKIP_REASON] += 1
                             scan_log_batch.append(
                                 CardScanLog(
                                     card_id=card_id,
                                     anonymous_id=OCR_ANONYMOUS_ID,
                                     run_id=run_id,
-                                    skip_reason="frame-mismatch",
+                                    skip_reason=FRAME_MISMATCH_SKIP_REASON,
                                 )
                             )
                         else:
@@ -1580,7 +1623,7 @@ def run_pilot(
                                 card_id, outcome.ocr_vote.printing_pk, OCR_ANONYMOUS_ID, outcome.ocr_vote.confidence
                             )
                     elif outcome.ocr_skip_reason and result_ocr is not None:
-                        if outcome.ocr_skip_reason == "parsed-but-no-match":
+                        if outcome.ocr_skip_reason == PARSED_BUT_NO_MATCH_SKIP_REASON:
                             # issue #207: a syntactically valid collector-line read that matches
                             # NONE of this card's own candidates is genuine evidence against the
                             # WHOLE candidate set (unlike "ambiguous", split out above, which is
@@ -1604,7 +1647,9 @@ def run_pilot(
                                 )
                             )
                             result_ocr.no_match_votes_written += 1
-                            result_ocr.audit.append({"card_id": card_id, "no_match_reason": "parsed-but-no-match"})
+                            result_ocr.audit.append(
+                                {"card_id": card_id, "no_match_reason": PARSED_BUT_NO_MATCH_SKIP_REASON}
+                            )
                             if card_id not in written_card_ids:
                                 written_card_ids.append(card_id)
                                 batch_written_card_ids.append(card_id)
@@ -1621,13 +1666,13 @@ def run_pilot(
 
                     if outcome.phash_vote is not None and result_phash is not None:
                         if printing_vote_withheld_for_frame_mismatch:
-                            result_phash.skip_counts["frame-mismatch"] += 1
+                            result_phash.skip_counts[FRAME_MISMATCH_SKIP_REASON] += 1
                             scan_log_batch.append(
                                 CardScanLog(
                                     card_id=card_id,
                                     anonymous_id=PHASH_ANONYMOUS_ID,
                                     run_id=run_id,
-                                    skip_reason="frame-mismatch",
+                                    skip_reason=FRAME_MISMATCH_SKIP_REASON,
                                 )
                             )
                         else:
@@ -1941,6 +1986,19 @@ def verify_zero_resolutions(card_ids: list[int], batch_size: int = 2000) -> list
 
 __all__ = [
     "OCR_ANONYMOUS_ID",
+    "UNFETCHABLE_IMAGE_SKIP_REASON",
+    "FRAME_MISMATCH_SKIP_REASON",
+    "DISAGREEMENT_WITH_OTHER_ENGINE_SKIP_REASON",
+    "OCR_AMBIGUOUS_SKIP_REASON",
+    "OCR_NO_TEXT_SKIP_REASON",
+    "OCR_UNKNOWN_SET_CODE_SKIP_REASON",
+    "PARSED_BUT_NO_MATCH_SKIP_REASON",
+    "PHASH_TOO_MANY_CANDIDATES_SKIP_REASON",
+    "PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON",
+    "PHASH_NO_CLEAR_WINNER_SKIP_REASON",
+    "PHASH_NO_CLEAR_WINNER_DISTANCE_SKIP_REASON",
+    "PHASH_NO_CLEAR_WINNER_MARGIN_SKIP_REASON",
+    "RESCANNABLE_SKIP_REASONS",
     "PHASH_ANONYMOUS_ID",
     "DEDUCTIVE_BACKFILL_ANONYMOUS_ID",
     "OCR_CONFIDENCE_BOTH",

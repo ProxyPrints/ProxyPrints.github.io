@@ -175,6 +175,30 @@ BASIC_LAND_NAMES = frozenset(
 LANDS_SINGLETON_CONFIDENCE = 0.85
 LANDS_TIEBREAK_CONFIDENCE = 0.8
 
+# THIS CALCULATOR'S OWN SKIP VOCABULARY (2026-07-29 declaration-convention sweep - see
+# docs/reference/skip-reasons.md). REPORT-ONLY: unlike every other module in the roster, NOTHING
+# here is ever written to `CardScanLog.skip_reason` - this module writes `CardPrintingTag` votes
+# and `LandsAmbiguousResidue` routing rows, never a scan-log row (grep: `CardScanLog` appears in
+# this file exactly once, in a comment). These values live only on `LandIdentifyOutcome`, an
+# in-memory run report. They are declared anyway, under the same convention, because they were
+# the largest cluster of skip-reason strings in the codebase with no named home at all and no way
+# to enumerate them, which is the exact defect this sweep exists to close. The STRINGS are
+# unchanged.
+LANDS_NO_ARTIST_EXTRACTED_SKIP_REASON = "no-artist-extracted"
+LANDS_ARTIST_NO_MATCH_SKIP_REASON = "artist-no-match"
+LANDS_NO_CONTENT_PHASH_SKIP_REASON = "no-content-phash"
+LANDS_FETCH_BUDGET_EXHAUSTED_SKIP_REASON = "fetch-budget-exhausted"
+LANDS_UNFETCHABLE_IMAGE_SKIP_REASON = "unfetchable-image"
+# NOT STATICALLY ENUMERABLE, stated explicitly rather than forced (see
+# docs/reference/skip-reasons.md's "The one value that is not a constant" section): the phash
+# branch reports `f"{LANDS_PHASH_SKIP_REASON_PREFIX}{reason}"`, where `reason` is whatever
+# `local_phash.find_best_match` (PROTECTED CORE) returned. The PREFIX is a constant and the
+# `.startswith` routing test below reads it, but the composed value is not a declared string.
+# This is harmless precisely because none of it is ever persisted; if this module ever grows a
+# `CardScanLog` write, the composition has to be replaced with an explicit per-outcome constant
+# first.
+LANDS_PHASH_SKIP_REASON_PREFIX = "phash-"
+
 
 def is_lands_target(card_name: str, candidate_count: int) -> bool:
     """The plan doc's target-pool membership test: a basic land by name, OR any name whose
@@ -314,7 +338,7 @@ def identify_land_printing(
     Split out from run_lands_identify's orchestrator so it's directly unit-testable without a
     real fetch or DB access."""
     if artist_name is None:
-        return None, None, "no-artist-extracted", None, None
+        return None, None, LANDS_NO_ARTIST_EXTRACTED_SKIP_REASON, None, None
 
     candidate_pks = {c.pk for c in selected.candidates}
     canonicals = {c.pk: c for c in CanonicalCard.objects.select_related("artist").filter(pk__in=candidate_pks)}
@@ -322,7 +346,7 @@ def identify_land_printing(
 
     matched_pks = match_artist(artist_name, selected.candidates, artist_by_pk)
     if matched_pks is None:
-        return None, None, "artist-no-match", None, None
+        return None, None, LANDS_ARTIST_NO_MATCH_SKIP_REASON, None, None
     frozen_matched_pks = frozenset(matched_pks)
 
     filtered_candidates = [c for c in selected.candidates if c.pk in frozen_matched_pks]
@@ -336,7 +360,7 @@ def identify_land_printing(
             candidates_with_hashes.append((candidate, candidate_hash))
 
     if selected.card.content_phash is None:
-        return None, None, "no-content-phash", frozen_matched_pks, None
+        return None, None, LANDS_NO_CONTENT_PHASH_SKIP_REASON, frozen_matched_pks, None
 
     phash_distances = {
         candidate.pk: local_phash._int_to_hash(selected.card.content_phash) - local_phash._int_to_hash(candidate_hash)
@@ -345,7 +369,7 @@ def identify_land_printing(
 
     match, reason = local_phash.find_best_match(selected.card.content_phash, candidates_with_hashes)
     if match is None:
-        return None, None, f"phash-{reason}", frozen_matched_pks, phash_distances
+        return None, None, f"{LANDS_PHASH_SKIP_REASON_PREFIX}{reason}", frozen_matched_pks, phash_distances
 
     confidence = LANDS_SINGLETON_CONFIDENCE if len(frozen_matched_pks) == 1 else LANDS_TIEBREAK_CONFIDENCE
     return match.candidate.pk, confidence, "", frozen_matched_pks, phash_distances
@@ -515,7 +539,7 @@ def _process_land_card(
                     run_id=run_id,
                 )
             )
-    elif skip_reason.startswith("phash-"):
+    elif skip_reason.startswith(LANDS_PHASH_SKIP_REASON_PREFIX):
         result.ambiguous_phash += 1
         # Routing data, not a vote (see LandsAmbiguousResidue's own docstring) - the artist
         # match already paid the real narrowing cost; persist it so a future funnel surface
@@ -679,7 +703,7 @@ def run_lands_identify(
                     card_id=card.pk,
                     card_name=card.name,
                     candidate_count=len(selected.candidates),
-                    skip_reason="fetch-budget-exhausted",
+                    skip_reason=LANDS_FETCH_BUDGET_EXHAUSTED_SKIP_REASON,
                 )
             )
             continue
@@ -693,7 +717,7 @@ def run_lands_identify(
                     card_name=card.name,
                     candidate_count=len(selected.candidates),
                     fetched=False,
-                    skip_reason="unfetchable-image",
+                    skip_reason=LANDS_UNFETCHABLE_IMAGE_SKIP_REASON,
                 )
             )
             continue
@@ -750,6 +774,12 @@ def run_lands_identify(
 
 __all__ = [
     "OCR_FETCH_DPI",
+    "LANDS_NO_ARTIST_EXTRACTED_SKIP_REASON",
+    "LANDS_ARTIST_NO_MATCH_SKIP_REASON",
+    "LANDS_NO_CONTENT_PHASH_SKIP_REASON",
+    "LANDS_FETCH_BUDGET_EXHAUSTED_SKIP_REASON",
+    "LANDS_UNFETCHABLE_IMAGE_SKIP_REASON",
+    "LANDS_PHASH_SKIP_REASON_PREFIX",
     "LANDS_ANONYMOUS_ID",
     "BASIC_LAND_NAMES",
     "LANDS_SINGLETON_CONFIDENCE",

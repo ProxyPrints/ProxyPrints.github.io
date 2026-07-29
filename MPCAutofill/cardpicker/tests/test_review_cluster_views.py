@@ -14,7 +14,7 @@ from django.urls import reverse
 from cardpicker import views
 from cardpicker.local_calculate_verdicts import (
     SLOW_PATH_ANONYMOUS_ID,
-    SLOW_PATH_TO_REVIEW_REASON,
+    SLOW_PATH_TO_REVIEW_SKIP_REASON,
 )
 from cardpicker.models import (
     CardPrintingTag,
@@ -34,7 +34,9 @@ def _clear_cache():
 
 def make_review_card(*, content_phash=None, symbol_phash=None, legal_line_raw_text="", name=None):
     card = CardFactory(content_phash=content_phash, **({"name": name} if name else {}))
-    CardScanLog.objects.create(card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON)
+    CardScanLog.objects.create(
+        card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
+    )
     if content_phash is not None:
         ImageEvidenceFactory(
             card=card,

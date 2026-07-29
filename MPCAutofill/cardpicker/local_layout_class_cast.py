@@ -111,7 +111,24 @@ REQUIRED_EXTRACTOR_KEYS: tuple[str, ...] = ("layout_class",)
 # are genuine, repeatable conclusions for this content_hash's own stored evidence, same
 # "permanent unless the taxonomy/extractor itself changes" reasoning local_detect_ai_art.py's
 # "no-marker-hit" gets.
-LAYOUT_CLASS_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence", "incomplete-evidence"})
+# THIS CALCULATOR'S OWN SKIP VOCABULARY (2026-07-29 declaration-convention sweep - see
+# docs/reference/skip-reasons.md). Every value written to `CardScanLog.skip_reason` here is
+# declared as a module-level `*_SKIP_REASON` constant so the roster is statically enumerable,
+# exactly as `*_ANONYMOUS_ID` already is. These were inline string literals at their write sites
+# until this sweep; the STRINGS are unchanged (a row written before and after this change is
+# byte-identical) - only their point of declaration moved. The ``LAYOUT_CLASS_`` prefix is deliberate:
+# these same strings are also emitted by other calculators under a different `anonymous_id`, and
+# a single shared constant would falsely imply one shared concept.
+LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON = "no-evidence"
+LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON = "incomplete-evidence"
+# The verdict produced no layout class at all.
+LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON = "ambiguous"
+# A layout class WAS read, but it has no CardTagVote tag mapped to it.
+LAYOUT_CLASS_UNMAPPED_SKIP_REASON = "unmapped-layout-class"
+
+LAYOUT_CLASS_RESCANNABLE_SKIP_REASONS = frozenset(
+    {LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON, LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON}
+)
 
 
 @dataclass(frozen=True)
@@ -263,27 +280,31 @@ def run_layout_class_cast(
 
         evidence = current_evidence_queryset(card).order_by("-updated_at").first()
         if evidence is None:
-            result.skip_counts["no-evidence"] = result.skip_counts.get("no-evidence", 0) + 1
+            result.skip_counts[LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON] = (
+                result.skip_counts.get(LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON, 0) + 1
+            )
             if not dry_run:
                 scan_log_batch.append(
                     CardScanLog(
                         card_id=card.pk,
                         anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID,
                         run_id=run_id,
-                        skip_reason="no-evidence",
+                        skip_reason=LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON,
                     )
                 )
             continue
 
         if any(key not in evidence.extractor_versions for key in REQUIRED_EXTRACTOR_KEYS):
-            result.skip_counts["incomplete-evidence"] = result.skip_counts.get("incomplete-evidence", 0) + 1
+            result.skip_counts[LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON] = (
+                result.skip_counts.get(LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON, 0) + 1
+            )
             if not dry_run:
                 scan_log_batch.append(
                     CardScanLog(
                         card_id=card.pk,
                         anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID,
                         run_id=run_id,
-                        skip_reason="incomplete-evidence",
+                        skip_reason=LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON,
                     )
                 )
             continue
@@ -292,7 +313,9 @@ def run_layout_class_cast(
         verdict = calculate_layout_class_verdict(card.pk, evidence)
 
         if not verdict.is_hit:
-            skip_reason = "ambiguous" if not verdict.layout_class else "unmapped-layout-class"
+            skip_reason = (
+                LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON if not verdict.layout_class else LAYOUT_CLASS_UNMAPPED_SKIP_REASON
+            )
             result.skip_counts[skip_reason] = result.skip_counts.get(skip_reason, 0) + 1
             if not dry_run:
                 scan_log_batch.append(
@@ -357,6 +380,10 @@ __all__ = [
     "LAYOUT_CLASS_CAST_ANONYMOUS_ID",
     "REQUIRED_EXTRACTOR_KEYS",
     "LAYOUT_CLASS_RESCANNABLE_SKIP_REASONS",
+    "LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON",
+    "LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON",
+    "LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON",
+    "LAYOUT_CLASS_UNMAPPED_SKIP_REASON",
     "LayoutClassVerdict",
     "calculate_layout_class_verdict",
     "LayoutClassCastResult",

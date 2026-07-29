@@ -10,7 +10,7 @@ from django.core.cache import cache
 
 from cardpicker.local_calculate_verdicts import (
     SLOW_PATH_ANONYMOUS_ID,
-    SLOW_PATH_TO_REVIEW_REASON,
+    SLOW_PATH_TO_REVIEW_SKIP_REASON,
 )
 from cardpicker.models import CardScanLog, PrintingTagStatus
 from cardpicker.review_clusters import (
@@ -42,7 +42,9 @@ def make_review_card(*, content_phash=None, symbol_phash=None, legal_line_raw_te
     ImageEvidence row (content_hash matching this card's own content_phash, same freshness
     convention every real caller relies on)."""
     card = CardFactory(content_phash=content_phash, **({"name": name} if name else {}))
-    CardScanLog.objects.create(card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON)
+    CardScanLog.objects.create(
+        card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
+    )
     if content_phash is not None:
         ImageEvidenceFactory(
             card=card,
