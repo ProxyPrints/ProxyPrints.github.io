@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 Mechanical lint over docs/: internal link resolution + backtick-quoted
-repo-path existence. Never fixes anything — only reports, via GitHub
-Actions ::error:: annotations so failures show up inline on the PR diff.
+repo-path existence, plus CODE-TO-DOC TETHERS (a doc that enumerates a
+set defined in code is checked against the code, which is the source of
+truth — see docs/documentation-process.md's "Roster tethers" section).
+Never fixes anything — only reports, via GitHub Actions ::error::
+annotations so failures show up inline on the PR diff.
 
 KNOWN LIMITATIONS (see docs/documentation-process.md's "docs-lint" section
 for the full writeup):
@@ -377,6 +380,133 @@ def check_extractable_primitives_tether() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Roster tether: calculator identities (owner ruling 2026-07-29)
+#
+# docs/pipeline-fidelity-gate.md enumerates the calculators whose output the
+# gate audits. That list was hand-maintained, and it drifted: it named
+# eleven identities while fourteen were declared in code. The gate performed
+# perfectly on all eleven it listed — and two of the three it omitted
+# (`stage-d-illustration-v1`, `local-name-frequency-v1`) turned out to be
+# entirely DORMANT in production (3 votes ever, and zero output of any kind,
+# respectively). Dormancy is precisely what a coverage-based audit cannot
+# catch: a calculator that produces nothing produces no divergence to
+# explain, so it looks clean by being invisible. Nothing bound the doc's
+# list to reality, so the item nobody remembered to add was the item nobody
+# was checking.
+#
+# The general rule this instantiates (see docs/documentation-process.md's
+# "Roster tethers" section): any document that ENUMERATES a set which is
+# actually defined in code must be tethered to that code by a lint rule,
+# with CODE as the source of truth.
+# ---------------------------------------------------------------------------
+
+FIDELITY_GATE_DOC_REL = "pipeline-fidelity-gate.md"
+CALCULATOR_SOURCE_DIR_REL = "MPCAutofill/cardpicker"
+
+# Key on the DECLARED CONSTANT NAME, not on a regex over string literals.
+# Calculator identities share the `<name>-vN` shape with things that are not
+# calculators at all — test fixtures (`some-other-engine-v1`,
+# `unrelated-family-v1`) and extractor version keys (`collector-line-ocr-v2`,
+# `legal-line-v2`, `artist-ocr-v1`) — and a shape-matching regex would sweep
+# all of those in. A module-level `*_ANONYMOUS_ID = "<literal>"` binding is
+# the actual declaration of a vote-casting identity, so that is what this
+# matches: column-0 only (no indented/local rebindings), literal value only
+# (an alias like `X_ANONYMOUS_ID = OTHER_ID` re-declares nothing).
+CALCULATOR_ID_DECL_RE = re.compile(r'^(_?[A-Z][A-Z0-9_]*_ANONYMOUS_ID)\s*=\s*"([^"]+)"', re.MULTILINE)
+
+# Declared `*_ANONYMOUS_ID` identities that legitimately have NO fidelity-gate
+# entry. EXPLICIT and per-entry-justified on purpose: an exclusion has to be a
+# visible decision, not a silent gap. Nothing goes here merely because it
+# currently fails the check — only because it is genuinely not a calculator
+# whose output the gate audits.
+CALCULATOR_ROSTER_ALLOWLIST = {
+    "evidence-transfer-v1": (
+        "not a calculator — cardpicker/evidence_transfer.py copies existing "
+        "evidence between cards and casts NO votes of any kind (its only DB "
+        "footprint is a CardScanLog skip row). It produces no vote population "
+        "for the fidelity gate to audit, so it has no fidelity entry to have."
+    ),
+    "question-feed-hypothetical-vote": (
+        "not a calculator — cardpicker/question_feed.py uses this identity to "
+        "model what a vote WOULD weigh if the user cast it, so the UI can "
+        "preview the effect. Nothing is ever persisted under it; it never "
+        "reaches the vote tables the gate audits."
+    ),
+}
+
+
+def _declared_calculator_identities() -> dict:
+    """
+    DERIVE the calculator roster from code. Returns {identity: [decl sites]}.
+
+    Deliberately derived, never hardcoded: a second hand-maintained list
+    inside the linter would reproduce exactly the drift this rule exists to
+    prevent — it would just move the stale list from the doc into the check.
+    """
+    identities: dict = {}
+    src_dir = REPO_ROOT / CALCULATOR_SOURCE_DIR_REL
+    if not src_dir.is_dir():
+        return identities
+    # Non-recursive glob: `cardpicker/tests/` declares fixture identities that
+    # are not part of the production roster.
+    for py in sorted(src_dir.glob("*.py")):
+        text = py.read_text()
+        for m in CALCULATOR_ID_DECL_RE.finditer(text):
+            site = f"{py.relative_to(REPO_ROOT)}:{line_of(text, m.start())} ({m.group(1)})"
+            identities.setdefault(m.group(2), []).append(site)
+    return identities
+
+
+def check_calculator_roster_tether() -> list[str]:
+    """
+    Every calculator identity declared in MPCAutofill/cardpicker/*.py must
+    have an entry in docs/pipeline-fidelity-gate.md. Same shape as
+    check_extractable_primitives_tether(): code is read as the source of
+    truth, the doc is the thing checked, findings are hard ::error::
+    annotations on the DOC (that's where the fix goes).
+
+    Matching is on the FULL identity (`local-ocr-v1`), NOT on
+    `models.calculator_family`'s version-stripped family (`local-ocr`).
+    Family matching would let a version bump ride on a stale entry: rename
+    the constant's value to `local-ocr-v2` and a doc entry still describing
+    v1's behaviour, counts and status would keep the lint green while
+    silently becoming an orphan describing an engine that no longer runs.
+    Full-identity matching makes that bump fail loudly and forces the entry
+    to be revisited — which is the point of the tether. The cost is that a
+    version bump is a two-file change; that is the intended cost.
+    """
+    findings = []
+    doc = DOCS_DIR / FIDELITY_GATE_DOC_REL
+    if not doc.is_file():
+        return findings
+    doc_rel = doc.relative_to(REPO_ROOT)
+    # Fenced blocks are illustrative/pseudocode (same reasoning as the
+    # link/path checks) — an identity mentioned only inside one is not an
+    # entry about it.
+    prose = strip_fenced_code(doc.read_text())
+
+    for identity, sites in sorted(_declared_calculator_identities().items()):
+        if identity in CALCULATOR_ROSTER_ALLOWLIST:
+            continue
+        # Token-bounded so one identity can't satisfy the check by being a
+        # substring of another.
+        if re.search(r"(?<![\w-])" + re.escape(identity) + r"(?![\w-])", prose):
+            continue
+        findings.append(
+            f"::error file={doc_rel}::calculator roster drift: identity "
+            f"`{identity}` is declared in code ({'; '.join(sites)}) but has no "
+            f"entry in {doc_rel}. Code is the source of truth for this roster: "
+            f"add an entry stating what the calculator does and its CURRENT "
+            f"status (including 'dormant' or 'casts no votes' — a dormant "
+            f"calculator is exactly what a coverage audit misses), or, if it "
+            f"is not a vote-casting calculator at all, add it to "
+            f"CALCULATOR_ROSTER_ALLOWLIST in .github/scripts/docs_lint.py with "
+            f"a per-entry reason."
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Interconnection rules (2026-07-23 owner ruling: "kill the lettering
 # convention all together ... each subject should have one document or they
 # should at least reference each other"). Decisions now live written-out in
@@ -706,6 +836,7 @@ def main(argv=None) -> int:
     for path in sorted(DOCS_DIR.rglob("*.md")):
         hard_findings.extend(check_file(path))
     hard_findings.extend(check_extractable_primitives_tether())
+    hard_findings.extend(check_calculator_roster_tether())
 
     # Soft findings: the interconnection rules. Emitted as ::warning:: and
     # NOT counted unless --strict / DOCS_LINT_STRICT.

@@ -1162,6 +1162,55 @@ buckets:
   art-style detector and casts a tag vote indicating whether the card art
   is AI-generated.
 
+### Calculator roster — the three identities this page omitted (2026-07-29)
+
+Until 2026-07-29 this page enumerated **eleven** calculator identities.
+Code declared **fourteen**. The three below appear nowhere above, and the
+gate never audited them — not because it failed on them, but because it
+was never pointed at them. Two of the three turned out to be effectively
+DEAD in production, which is exactly the failure a coverage-based audit
+cannot surface on its own: a calculator that produces no output produces
+no divergence to explain, so it reads as clean by being invisible. The
+list is now tethered to code by `.github/scripts/docs_lint.py`'s
+`check_calculator_roster_tether()` — every `*_ANONYMOUS_ID` declared in
+`MPCAutofill/cardpicker/` must have an entry here, and CI fails if one
+does not. See [`documentation-process.md`](documentation-process.md)'s
+"Roster tethers" section for the general rule.
+
+- **`stage-d-slow-path-v1`** (`SLOW_PATH_ANONYMOUS_ID`,
+  [`MPCAutofill/cardpicker/local_calculate_verdicts.py`](../MPCAutofill/cardpicker/local_calculate_verdicts.py)) —
+  **a ROUTER, not a voter. Working as designed.** It has no printing to
+  vote for, so it casts **0** votes of any kind by construction; its
+  entire DB footprint is `CardScanLog` routing markers carrying
+  `skip_reason='to-review'` — **135,362** of them in prod. Those markers
+  are what populates the human review queue (the same population the
+  "REVIEW QUEUE" funnel row above dedups to its most-recent-per-card
+  figure). Its absence from every vote table on this page is correct
+  behaviour and not evidence of dormancy; it is listed here so that a
+  reader auditing vote counts does not mistake "no votes" for "not
+  running."
+- **`stage-d-illustration-v1`** (`ILLUSTRATION_ANONYMOUS_ID`,
+  [`MPCAutofill/cardpicker/local_illustration.py`](../MPCAutofill/cardpicker/local_illustration.py)) —
+  **DORMANT, under repair. 3 votes in its entire existence.** It is meant
+  to cast a printing vote from illustration identity (issue #507), and it
+  is not doing so. Root cause diagnosed: its eligibility gate reads
+  `ImageEvidence.layout_class` believing that field carries the card's
+  faced-ness, when what it actually holds is a **border colour** — so the
+  gate excludes essentially the whole catalog. A fix is in flight on a
+  separate branch. Do not read this engine's near-zero vote count as a
+  measured statement about illustration matching's yield; nothing has
+  been measured yet.
+- **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
+  [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —
+  **ZERO output of any kind. Under diagnosis; may be retired.** The
+  name-frequency elimination pass deduces a match structurally, with no
+  image fetch at all, for a name where exactly one printing is uncovered
+  AND exactly one eligible card is unresolved. It has produced **no
+  votes and no `CardScanLog` rows** — not even a skip log, which means it
+  is not merely abstaining, it is not being reached. Whether it gets
+  fixed or deleted is undecided; it is recorded here as a known hole
+  rather than left off the page.
+
 ### Operational notes
 
 - **Scryfall cache lost on every container rebuild** — [issue #402](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/402),
