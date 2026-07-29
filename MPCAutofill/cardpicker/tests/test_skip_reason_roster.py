@@ -149,6 +149,14 @@ def test_every_declared_skip_reason_value_is_unchanged():
 
     Values only — this is what a `CardScanLog` row actually stores. A failure
     here means production data semantics changed, not that a name moved.
+
+    STRICTLY SUBSUMED by `test_every_declared_constant_name_is_accounted_for`
+    below (dict equality implies key-set equality), and kept anyway as a
+    DIAGNOSTIC rather than as independent coverage: when a value changes, this
+    one's failure output is the two value sets, which names the changed
+    production string directly, where the dict comparison buries it in a
+    value-to-name-set diff. It adds no mutation coverage of its own — do not
+    count it as a second check.
     """
     assert set(_declared()) == set(EXPECTED_SKIP_REASONS)
 
@@ -159,14 +167,33 @@ def test_every_declared_constant_name_is_accounted_for():
     assert _declared() == EXPECTED_SKIP_REASONS
 
 
-@pytest.mark.parametrize("value", sorted(EXPECTED_SKIP_REASONS))
+@pytest.mark.parametrize("value", sorted(_declared()))
 def test_no_declared_value_is_empty_or_whitespace(value):
     """`CardScanLog.skip_reason` uses `""` as its own "not a skip" sentinel
     (`local_illustration`/`local_calculate_verdicts` both branch on
     `if verdict.skip_reason:`), so an empty or whitespace-only reason would be
-    invisible to every consumer of the column."""
+    invisible to every consumer of the column.
+
+    Parametrised over `_declared()` — the values actually read out of the
+    production modules — NOT over `EXPECTED_SKIP_REASONS`. Over the hand-written
+    dict this test was unfalsifiable: it asserted that literals typed into this
+    file are non-empty and stripped, which no implementation change can make
+    false. `test_declared_roster_is_not_empty` below covers the other way this
+    shape goes vacuous (a derivation that finds nothing yields zero params and
+    passes silently).
+    """
     assert value == value.strip()
     assert value
+
+
+def test_declared_roster_is_not_empty():
+    """Guards the parametrised test above from going vacuous. If `_declared()`
+    ever returns `{}` — a moved `cardpicker/` directory, a regex that stops
+    matching, a glob that finds no modules — pytest generates zero cases for it
+    and the suite stays green while checking nothing. The roster is dozens of
+    entries; a couple of dozen is a floor no legitimate change crosses."""
+    declared = _declared()
+    assert len(declared) >= 20, f"skip-reason derivation found only {len(declared)} values — it is probably broken"
 
 
 def test_declared_roster_matches_docs_lint_derivation():
