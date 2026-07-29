@@ -64,6 +64,39 @@ VoteSource models.py:643-647 = USER/ADMIN/DEDUCTION/OCR/FEDERATED.
   *** IMPLICIT DOES NOT EXIST. Any implicit row's "current code" column
   is N/A: _SOURCE_WEIGHTS[IMPLICIT] raises KeyError; the source cannot
   be constructed. ***
+  SUPERSEDED 2026-07-22 by PR #325 (correction recorded 2026-07-29,
+  PR #578): IMPLICIT EXISTS. Both starred claims above, and the
+  "643-647" citation on the line above them, are false against current
+  master; they were true of 574d6e65, the pre-ratification tree this
+  matrix was written from, and were superseded hours later by commit
+  e70c778b - the very implementation of this matrix that the header
+  block cites. Against master 9952865b (line numbers as of 2026-07-29,
+  symbol names are the durable reference):
+    - `VoteSource.IMPLICIT = "implicit"` exists
+      (`MPCAutofill/cardpicker/models.py`:845; the enum itself is now
+      at :811, not the :643-647 cited above).
+    - `_SOURCE_WEIGHTS[VoteSource.IMPLICIT]` is
+      `settings.PRINTING_TAG_IMPLICIT_WEIGHT`, default 0.25
+      (`vote_consensus.py`:28, `settings.py`:81). No KeyError; every
+      TABLE C "current code = N/A" caption is likewise superseded.
+    - `_MACHINE_DERIVED_SOURCES` contains IMPLICIT
+      (`vote_consensus.py`:52), so an implicit vote is never
+      human-backed and can never satisfy the gate at :143 alone.
+    - `resolve_weighted_consensus` hard-caps the SUM of implicit weight
+      per outcome group at `settings.PRINTING_TAG_IMPLICIT_CAP`,
+      default 1.0, before that weight contributes to either quorum or
+      share (`vote_consensus.py`:502-505, `settings.py`:87).
+  So the LOW-WT+CAP column of TABLE C is what shipped, at w=0.25 and
+  cap=1.0 - exactly the ruling this document's own header records
+  ("D5/S3 implicit = low-weight+cap w=0.25 cap=1.0"). Note TABLE C's
+  arithmetic is computed at the ILLUSTRATIVE C=1.5 stated in its
+  caption, not the shipped 1.0, so those cells are the ruling's worked
+  example rather than a description of current behaviour. For the
+  living description of shipped implicit-vote semantics see
+  `docs/features/printing-tags.md`'s implicit-vote section and
+  `docs/federation-v1.md`'s "Implicit-vote weight semantics" section.
+  The original text is left intact above as the record of what was true
+  at 574d6e65, per this repo's dated-record convention.
 VotePolarity models.py:870-871: APPLY=1, NOT_APPLICABLE=-1.
 Persisted-status divergence:
   - Printing (models.py:347-349): UNRESOLVED / RESOLVED / NO_MATCH.
@@ -321,6 +354,12 @@ VERIFICATION: all file:line claims read from working tree @ 574d6e65
 Printing-path has-no-privileged confirmed printing_consensus.py:88-101.
 All B-table arithmetic hand-computed against gate :143; recommend Sark
 assert them as the regression floor before Stage D executes.
+  SUPERSEDED 2026-07-22 by PR #325 (correction recorded 2026-07-29,
+  PR #578): the "IMPLICIT absence confirmed (models.py:643-647, grep)"
+  clause immediately above is no longer true - see the correction note
+  under the GROUND TRUTH section's `VoteSource` line for what current
+  code does. Every other verification claim in this paragraph remains
+  point-in-time-accurate for 574d6e65 and is untouched.
 OPEN: D1-D7, S1-S3, DF are owner rulings, not review findings -- this
 matrix is UNRESOLVED-pending-ratification by construction, which is its
 purpose. No prod action authorized or implied by this document.
