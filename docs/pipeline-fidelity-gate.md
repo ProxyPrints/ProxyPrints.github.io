@@ -178,7 +178,7 @@ The knowledge-inventory sweep confirmed three pilot-era constants have
    run of `deductive_backfill_printing_tags` casts votes carrying the
    ordinary `PRINTING_TAG_MACHINE_WEIGHT`. The `run_id=None` fact
    recorded above is no longer true of these rows: migration
-   `0096_freeze_deductive_backfill_zero_weight_cohort` stamped them with
+   `0097_freeze_deductive_backfill_zero_weight_cohort` stamped them with
    `vote_consensus.DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID`, which is now
    what the zero-weight override matches on (together with
    `source=deduction` and the `deductive-backfill` calculator family).

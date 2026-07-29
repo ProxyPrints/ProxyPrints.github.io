@@ -51,7 +51,7 @@ def generate_run_id() -> str:
 
     This run was NOT stamped before 2026-07-29 - the 2026-07-14 production cohort's rows carry
     `run_id = NULL`, which is why they needed a retroactive stamp (migration
-    `0096_freeze_deductive_backfill_zero_weight_cohort`) before the zero-weight override could be
+    `0097_freeze_deductive_backfill_zero_weight_cohort`) before the zero-weight override could be
     scoped to that run. Stamping every future run keeps that from ever being true again: from here
     on, every deductive-backfill vote says which invocation cast it, and `purge_machine_votes
     --run-id <id>` can retract one bad run without touching another.

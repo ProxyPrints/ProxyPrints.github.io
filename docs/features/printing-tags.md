@@ -87,7 +87,7 @@ printings, artists, tags, and moderation from one screen.
   28,112 votes cast by the 2026-07-14 deductive-name-backfill **run**
   (`source=deduction`, `anonymous_id="deductive-backfill-v1"`, and
   `run_id=vote_consensus.DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID` — the stamp
-  migration `0096_freeze_deductive_backfill_zero_weight_cohort` put on
+  migration `0097_freeze_deductive_backfill_zero_weight_cohort` put on
   exactly those rows) carry weight **0**, permanently, per the 2026-07-23
   owner ruling (see [`theory.md`](../theory.md)'s soundness section and
   [`pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md)'s §3 item 3).
