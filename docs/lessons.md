@@ -965,3 +965,26 @@ cannot see blank-VALUE evidence - the pipeline-fidelity gate's Bug-A tier-1 card
 `extractor_versions__has_keys` (their extractors ran and wrote keys) despite carrying blank OCR
 values, so they're invisible to a keys-only sweep even though they genuinely need re-scanning
 (2026-07-25 reconciliation; see `docs/proposals/stage-e-streaming.md` SS6 item 1).
+
+## Scoping a calculator to a batch: narrow the TARGETS by card id, the LOOKUPS by join-key value - and check first whether it can be scoped at all
+
+Batch-scoping a whole-catalog calculator is two decisions, not one, and only the first is the
+obvious one. **Targets** (which cards this invocation writes for) narrow by card id. **Lookups**
+(which other rows it may find - an md5 sibling, a `content_phash`-sharing card, a name's other
+cards) must narrow by the batch's own JOIN-KEY VALUES, not by its card ids: scope a lookup by
+card id and a card whose only sibling sits outside the batch finds nothing, which from inside the
+calculator is indistinguishable from having no sibling at all. Nothing raises, no counter moves,
+the run looks clean and quietly does less. `run_d0_sibling_artist_propagation`'s source index in
+PR #541 is the shape to copy - `content_phash__in=<lazy subquery over the batch's phashes>`, with
+a test asserting a source card OUTSIDE the scope still propagates INTO it.
+
+Before either decision, ask what the calculator's conclusion actually depends on, because some
+cannot be batch-scoped at any batch size. If the premise is a COUNT over the eligible population
+("this name has exactly one unresolved card"), the window is part of what the inference asserts
+and a batch simply cannot supply it -
+`local_identify_printing_tags.run_name_frequency_elimination` is the live example, and it is a
+trap precisely because it does no fetch, no OCR and no hashing, so every cost heuristic says
+"trivially parallelisable." Cheapness is not the discriminator; population-dependence is. Such a
+step stays a whole-catalog tail pass, and rewriting it to count catalog-wide while writing
+batch-scoped is a correctness change needing ratification, not a wiring fix. Full classification
+and the measured numbers: `docs/theory.md` §10a.
