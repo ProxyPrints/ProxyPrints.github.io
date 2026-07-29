@@ -387,7 +387,25 @@ votes now carry zero weight in every consensus computation — winner
 selection, the quorum/share gate math above, and every downstream
 suggestion or prioritization scalar built on vote weight — permanently,
 regardless of how any future recompute or code change might otherwise
-treat `VoteSource.DEDUCTION`. The rows themselves are never deleted or
+treat `VoteSource.DEDUCTION`.
+
+**Scope, clarified by the owner 2026-07-29.** What is zeroed is that
+**cohort** — the fixed block of 28,112 rows the 2026-07-14 run wrote —
+and the reason it is held out permanently is that it then functions as a
+**measurement control**: a known-provenance set of purely name-derived
+claims that never influenced any resolution, and so can be compared
+against later evidence channels without circularity. The **method** is
+not disqualified. Name-matching deductive inference remains an ordinary
+machine evidence channel, and a vote cast by that same calculator in
+future carries the normal machine weight, under the same human-backed
+gate as any other machine vote. The implementation between 2026-07-23
+and 2026-07-29 scoped the override to the calculator _family_, which
+zeroed every vote the method would ever cast — more than was ruled; it
+is now scoped to the original run, identified by a `run_id` stamped onto
+exactly those 28,112 rows (`cardpicker.vote_consensus.DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID`, written by migration
+`0096_freeze_deductive_backfill_zero_weight_cohort`). The audit numbers
+above are unchanged by this clarification: they are still exactly why
+this particular block of votes is the one held out. The rows themselves are never deleted or
 hidden: they remain visible in raw vote tallies and every display
 surface (e.g. the `/whatsthat` per-outcome tally, the questionFeed
 tier-1 "confirm suggestion" surface, and `Card.suggestedCanonicalCard`)
@@ -1281,6 +1299,15 @@ the live-audit basis numbers and the "image-derived + human evidence
 only" framing. Full mechanism:
 `cardpicker.vote_consensus.resolve_vote_weight`; full ruling:
 [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) §3 item 3.
+
+**§4 re-scoped 2026-07-29** (owner clarification): that zero-weighting
+covers the 2026-07-14 **cohort**, held out permanently as a measurement
+control — not the name-matching **method**, which keeps ordinary machine
+weight for votes cast in future. The cohort is now identified by a
+`run_id` stamp on exactly those 28,112 rows rather than by the
+calculator family. The soundness claim above is unchanged for
+resolutions computed today; what changes is that a future
+deductive-backfill run's votes count.
 
 **§10 added 2026-07-24** (Stage E Phase 1, `docs/proposals/stage-e-streaming.md`,
 itself still HOLD pending owner review of its own §3-§5): the argument

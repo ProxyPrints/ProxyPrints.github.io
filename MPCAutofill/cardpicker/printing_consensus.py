@@ -337,6 +337,21 @@ def agent_dedupe_key(anonymous_id: str) -> str:
     INDEPENDENT AGENTS the moment its version is bumped, because `pool_group_votes` compares
     keys for equality and "x-v1" != "x-v2".
 
+    DELIBERATELY STILL FAMILY-KEYED after the 2026-07-29 re-scoping of the deductive-backfill
+    zero-weight ruling (which moved THAT rule from the calculator family to one run's `run_id` -
+    see `vote_consensus.resolve_vote_weight`). Pooling identity and vote weight are answering
+    different questions, and this one is unchanged by that clarification: "is this the same agent
+    speaking twice about byte-identical images?" has nothing to do with which run cast the vote.
+    Keying pooling on `run_id` would make one calculator N independent agents, one per invocation
+    - a far worse version of the version-bump bug described below.
+
+    The consequence, spelled out because it looks alarming and is not: inside an md5 identity
+    group, a frozen-cohort vote (weight 0) and a fresh deductive-backfill vote (weight 0.5) for
+    the SAME outcome now pool together as one agent, and `pool_group_votes` keeps that agent's
+    HIGHEST weight - 0.5. No weight is manufactured: 0.5 is exactly what the group would carry if
+    the cohort row did not exist at all, which is precisely what "held out of the math" means.
+    Disagreeing across the group still withholds the agent entirely, as for any other agent.
+
     That is reachable in ordinary operation, not a hypothetical: a version bump re-votes cards
     INCREMENTALLY, so an md5 identity group whose members straddle the migration holds some
     members' votes under the old version and some under the new one. Under a raw-id key those
@@ -416,8 +431,9 @@ def build_group_printing_vote_tuples(
     this never touches `vote.printing`, so it costs no per-vote related lookup for them.
 
     Per-vote weight is resolved via `vote_consensus.resolve_vote_weight` (not a bare
-    `_SOURCE_WEIGHTS[vote.source]` lookup) so the 2026-07-23 owner ruling zeroing the
-    deductive-backfill cohort's weight (see that function's own docstring) is honoured here -
+    `_SOURCE_WEIGHTS[vote.source]` lookup) so the 2026-07-23 owner ruling zeroing the 2026-07-14
+    deductive-backfill COHORT's weight - as re-scoped from the method to that one run by the
+    2026-07-29 clarification (see that function's own docstring) - is honoured here -
     the one call site every printing consensus computation (winner selection, the gate checks
     and share math inside `resolve_weighted_consensus`, and every caller of `resolve_printing`,
     including `consensus_impact_report`/`consensus_recompute`) ultimately funnels through.
@@ -437,7 +453,14 @@ def build_group_printing_vote_tuples(
         vote_tuples.append(
             VoteTuple(
                 outcome_key=key,
-                weight=resolve_vote_weight(vote.source, vote.anonymous_id),
+                # `vote.run_id` is load-bearing here, not incidental metadata: it is what
+                # distinguishes the frozen, zero-weighted 2026-07-14 deductive-backfill cohort
+                # from an ordinary machine vote cast by the same calculator today (see
+                # `resolve_vote_weight`). It is a plain column on the row this loop already
+                # holds, so passing it costs no extra query - but do NOT add a `.only()`/
+                # `.defer()` to any queryset feeding this that drops it, which would turn every
+                # weight resolution into a per-row fetch.
+                weight=resolve_vote_weight(vote.source, vote.anonymous_id, vote.run_id),
                 is_human_backed=is_human_backed_source(vote.source),
                 # agent identity, not the raw id - see `agent_dedupe_key`'s docstring for why a
                 # version bump must not turn one calculator into two agents.

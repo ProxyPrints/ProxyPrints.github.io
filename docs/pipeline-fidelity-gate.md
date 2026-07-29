@@ -171,7 +171,19 @@ The knowledge-inventory sweep confirmed three pilot-era constants have
    paths unaffected — see `vote_consensus.DEDUCTIVE_BACKFILL_ANONYMOUS_ID`'s
    own docstring for the exact mechanism and the live-audit numbers
    behind the ruling, and [`theory.md`](theory.md)'s soundness section,
-   §4, for the write-up). This is a distinct decision from the
+   §4, for the write-up). **Re-scoped 2026-07-29 (owner clarification)**:
+   that ruling zeroes THIS COHORT — the 28,112 rows this one run wrote,
+   held out permanently as a measurement control — and does NOT
+   disqualify name-matching deductive inference as a method, so a future
+   run of `deductive_backfill_printing_tags` casts votes carrying the
+   ordinary `PRINTING_TAG_MACHINE_WEIGHT`. The `run_id=None` fact
+   recorded above is no longer true of these rows: migration
+   `0096_freeze_deductive_backfill_zero_weight_cohort` stamped them with
+   `vote_consensus.DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID`, which is now
+   what the zero-weight override matches on (together with
+   `source=deduction` and the `deductive-backfill` calculator family).
+   The `created_at` window above is what that migration selected on, and
+   is not consulted at runtime by anything. This is a distinct decision from the
    Stage-D-exclusion question this whole numbered item is about (whether
    Stage D re-votes a card the backfill already touched, resolved NOT-
    RESTORED above) — that ruling is unchanged by this one.

@@ -2017,13 +2017,22 @@ class TestCalculatorVersionBump:
     def test_the_calculator_family_is_unchanged_by_the_bump(self, db):
         """`models.calculator_family` strips the `-vN` suffix, so every family-keyed behaviour
         (`purge_stale_machine_votes`' family-scoped DELETE, `printing_consensus.agent_dedupe_key`
-        one-agent-one-vote pooling, `vote_consensus.resolve_vote_weight`'s zero-weight override)
-        follows the bump automatically rather than needing its own edit."""
+        one-agent-one-vote pooling) follows the bump automatically rather than needing its own
+        edit.
+
+        `vote_consensus.resolve_vote_weight` used to belong on that list and no longer does: the
+        deductive-backfill zero-weight override was re-scoped 2026-07-29 from the calculator
+        FAMILY to one specific RUN's `run_id` (owner clarification - the ruling zeroed a cohort
+        as a measurement control, not a method). It never applied to this calculator either way;
+        what the last assertion pins is simply that a version bump does not change this
+        calculator's weight, now true for the simpler reason that neither version is in that
+        cohort - and `run_id` is passed explicitly because it is a required argument, deliberately
+        not defaulted (see `test_vote_consensus.TestZeroWeightCohortScopeIsPinned`)."""
         assert calculator_family(ILLUSTRATION_ANONYMOUS_ID) == "stage-d-illustration"
         assert calculator_family("stage-d-illustration-v1") == calculator_family(ILLUSTRATION_ANONYMOUS_ID)
         assert agent_dedupe_key("stage-d-illustration-v1") == agent_dedupe_key(ILLUSTRATION_ANONYMOUS_ID)
-        assert resolve_vote_weight(VoteSource.DEDUCTION, ILLUSTRATION_ANONYMOUS_ID) == resolve_vote_weight(
-            VoteSource.DEDUCTION, "stage-d-illustration-v1"
+        assert resolve_vote_weight(VoteSource.DEDUCTION, ILLUSTRATION_ANONYMOUS_ID, None) == resolve_vote_weight(
+            VoteSource.DEDUCTION, "stage-d-illustration-v1", None
         )
 
     def test_a_v1_multi_faced_scan_log_no_longer_excludes_the_card(self, db):

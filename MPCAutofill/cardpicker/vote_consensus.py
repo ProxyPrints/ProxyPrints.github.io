@@ -4,7 +4,7 @@ from typing import Any, Hashable, Iterable, NamedTuple, TypedDict
 from django.conf import settings
 from django.db.models import Case, Count, IntegerField, Q, QuerySet, When
 
-from cardpicker.models import VoteSource, calculator_family
+from cardpicker.models import AbstractWeightedVote, VoteSource, calculator_family
 
 # Shared across printing/artist/tag consensus - previously duplicated identically in each of
 # their own modules; hoisted here so a new source (e.g. `FEDERATED`) can't be forgotten in one
@@ -61,63 +61,162 @@ def is_human_backed_source(source: str) -> bool:
 # importing that module - keeps this shared consensus core free of a dependency on one specific
 # backfill script.
 #
-# Owner ruling 2026-07-23: the 28,112 `CardPrintingTag` votes this backfill run wrote (source=
-# DEDUCTION, anonymous_id=this constant - pure name-matching inference, zero image inspection,
-# see `deductive_backfill.py`'s own module docstring) carry ZERO weight in every consensus
-# computation, forever - the rows themselves are KEPT as history (raw tallies/display paths,
-# e.g. `get_vote_tally`/`_suggested_canonical_card`/the questionFeed tier-1 surface, are
-# unaffected - this only zeroes WEIGHT). Basis, verified live against the production run at
-# ratification time: 60% of the 28,112 were already redundant with an agreeing image-channel
-# (DEDUCTION/OCR) vote, 17% were opposed by an explicit human no-match vote, 66 were directly
-# contradicted by a later human vote for a different printing, and only 459 were unopposed yet
-# unverifiable against any independent evidence. Soundness is strictly tightening: this removes
-# name-derived weight from resolution, leaving only image-derived machine evidence (OCR/phash/
-# fallback - see `local_phash.py`/`local_fallback.py`) plus human votes - see docs/theory.md's
-# soundness section for the full writeup. This is scoped to (source, calculator FAMILY) together
-# - see `DEDUCTIVE_BACKFILL_FAMILY` and `resolve_vote_weight` below - not to
-# `VoteSource.DEDUCTION` alone, so a future, differently-sourced DEDUCTION-labelled cohort
-# (should one ever be ratified) isn't silently swept in by this same override without its own
-# separate review.
+# Owner ruling 2026-07-23, AS CLARIFIED BY THE OWNER 2026-07-29 (the clarification is the
+# operative statement of the ruling; read both together):
+#
+#   The 28,112 `CardPrintingTag` votes the 2026-07-14 deductive-name-backfill RUN wrote
+#   (source=DEDUCTION, anonymous_id=this constant - pure name-matching inference, zero image
+#   inspection, see `deductive_backfill.py`'s own module docstring) carry ZERO consensus weight.
+#   That COHORT is zeroed so it can serve as a MEASUREMENT CONTROL: a fixed, known-provenance
+#   block of name-derived claims held permanently outside the resolution math, against which
+#   later evidence channels can be compared without the control's own votes having influenced
+#   the thing being measured. The rows themselves are KEPT as history (raw tallies/display
+#   paths, e.g. `get_vote_tally`/`_suggested_canonical_card`/the questionFeed tier-1 surface,
+#   are unaffected - this only zeroes WEIGHT).
+#
+#   THE METHOD IS NOT DISQUALIFIED. Name-matching deductive inference remains an ordinary
+#   machine evidence channel: a vote cast by this same calculator in FUTURE resolves to the
+#   normal `PRINTING_TAG_MACHINE_WEIGHT` (0.5), like any other machine vote, and is subject to
+#   the same human-backed gate as any other. Only the frozen 2026-07-14 run is zeroed.
+#
+# Evidence behind zeroing that cohort (verified live against the production run at ratification
+# time, and NOT superseded by the 2026-07-29 clarification - it is still exactly why this
+# particular block of votes is held out): 60% of the 28,112 were already redundant with an
+# agreeing image-channel (DEDUCTION/OCR) vote, 17% were opposed by an explicit human no-match
+# vote, 66 were directly contradicted by a later human vote for a different printing, and only
+# 459 were unopposed yet unverifiable against any independent evidence. Holding that block out
+# of the math is strictly tightening for resolutions computed today, and is what makes it usable
+# as a control - see docs/theory.md's soundness section for the full writeup.
+#
+# WHAT THE PREVIOUS IMPLEMENTATION CLAIMED, AND WHY IT WAS WRONG (2026-07-29)
+# --------------------------------------------------------------------------
+# This override used to match on the versionless calculator FAMILY, with a comment arguing that
+# family-scoping is what makes "forever" mean forever: under a family match, bumping the
+# calculator to "deductive-backfill-v2" could not restore weight, because a re-versioned run of
+# the same method is the same method. That argument is internally sound but it answers a
+# question the owner never asked. It zeroed the METHOD - permanently, for every vote that method
+# would ever cast - where the ruling zeroed a COHORT. The implementation claimed more than was
+# ratified, and the anti-drift mechanism (family-scoping chosen precisely so a version bump could
+# not restore weight) was what made the over-claim durable. The scope is now the original run.
 DEDUCTIVE_BACKFILL_ANONYMOUS_ID = "deductive-backfill-v1"
 
-# The versionless FAMILY of the id above ("deductive-backfill"), which is what the zero-weight
-# override actually matches on. DERIVED, not written out as a second literal, so the two can
-# never drift: `models.calculator_family` is the single definition of how a version suffix is
-# stripped. The assert makes a rename that took this constant outside the machine naming
-# convention fail loudly at import time rather than silently disabling a ratified ruling.
+# The versionless FAMILY of the id above ("deductive-backfill") - the AGENT identity behind these
+# votes (`printing_consensus.agent_dedupe_key`, `models.purge_stale_machine_votes`), and one of
+# the three conjuncts `resolve_vote_weight` matches the zeroed cohort on. DERIVED, not written
+# out as a second literal, so the two can never drift: `models.calculator_family` is the single
+# definition of how a version suffix is stripped. NOTE this is deliberately no longer the WHOLE
+# of the zero-weight predicate - see `DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID` below.
 DEDUCTIVE_BACKFILL_FAMILY = calculator_family(DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
+
+# THE COHORT BOUNDARY. This exact string is stamped on the `run_id` column of the 28,112 rows the
+# 2026-07-14 run wrote, by data migration `0096_freeze_deductive_backfill_zero_weight_cohort`,
+# and on nothing else - ever. It is the whole of what "that cohort" means in code: a row is in
+# the zeroed cohort if and only if it carries this run_id.
+#
+# WHY run_id, AND NOT A `created_at` CUTOFF (the trade-off, stated where the mechanism lives)
+# ------------------------------------------------------------------------------------------
+# The obvious mechanism was a timestamp constant - the 28,112 rows all landed in one 16-second
+# window on 2026-07-14, so `created_at < <cutoff>` selects them exactly. It was rejected because
+# it is a COINCIDENCE, not a provenance record: "was written before 18:22:30 UTC" is not a fact
+# about which run cast a vote, it is a fact that happens to distinguish them today. Nothing about
+# a vote row asserts it, nothing fails if it stops being true, and a reader of the conditional
+# cannot tell whether the boundary is meaningful or merely fitted. `run_id` is the field this
+# codebase already defines for exactly this question - "which invocation wrote this row"
+# (`AbstractWeightedVote.run_id`'s own docstring: it exists so one invocation's votes can be
+# identified without touching another invocation's votes under the same anonymous_id) - so
+# scoping to it states the boundary rather than approximating it, and makes the cohort selectable
+# by every tool that already understands run_id (e.g. `purge_machine_votes --run-id`).
+#
+# THE COST, PAID KNOWINGLY: the 28,112 production rows had `run_id = NULL` (the backfill predated
+# run_id stamping), so adopting this required a WRITE to production vote rows. That write is
+# migration 0096, and it is deliberately the narrowest possible one: it sets a single NULL
+# metadata column, on rows selected by an exhaustive three-way predicate (anonymous_id, run_id IS
+# NULL, created_at inside the measured window), touching no `source`, no `printing`, no `card`,
+# no `confidence` - nothing any consensus computation reads except this override itself. It is
+# reversible (the migration's own reverse sets the column back to NULL). The alternatives were
+# worse: a dedicated boolean column encodes one 2026 policy decision into the schema of all three
+# `AbstractWeightedVote` subclasses forever, and the timestamp cutoff buys "no write" at the cost
+# of the boundary not being a fact about the data at all. A one-time metadata write that makes
+# the provenance real is cheaper than either.
+#
+# The timestamp does appear ONCE, in migration 0096's selection predicate. That is the right and
+# only place for it: a migration is a dated historical artifact by construction, it runs once, and
+# after it runs the datetime is never consulted again by anything.
+DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID = "deductive-backfill-v1/20260714-ratified-zero-weight"
+
+# ANTI-DRIFT GUARDS. The property the family-scoped implementation had - a rename or a redeploy
+# cannot silently disable a ratified ruling - has to survive the re-scoping, or this change trades
+# an over-claim for a fragility. A re-scoped rule must not become an UN-scoped one by accident.
+#
+#   1. the id must still follow the machine naming convention, so the family below is real (this
+#      is the original 2026-07-23 assert, kept verbatim in intent);
+#   2. the frozen run_id must still be a marker for THIS calculator - a run_id that stopped naming
+#      the backfill would be a boundary around nothing;
+#   3. the frozen run_id must fit the column it is stored in, checked against the field itself
+#      rather than a copy of its width: a value longer than `run_id`'s max_length would be
+#      silently truncated or rejected at write time, i.e. the cohort would end up unmarked.
+#
+# The fourth and most important guard cannot live here, because it is a claim about the DATABASE
+# rather than about this module: the string above must equal the string migration 0096 actually
+# wrote. Editing this constant without editing history would silently un-scope the ruling with no
+# error, so `test_vote_consensus.TestZeroWeightCohortScopeIsPinned` imports that migration module
+# and asserts the two are equal. Migrations are append-only; that is what makes it a real check.
 assert DEDUCTIVE_BACKFILL_FAMILY is not None, (
     "DEDUCTIVE_BACKFILL_ANONYMOUS_ID must follow the machine calculator naming convention "
-    "(<family>-v<N>): the 2026-07-23 zero-weight ruling is enforced by family, not by literal."
+    "(<family>-v<N>): the 2026-07-23 zero-weight ruling is matched on the family, among other "
+    "conjuncts, not on a literal."
 )
+assert DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID.startswith(f"{DEDUCTIVE_BACKFILL_ANONYMOUS_ID}/"), (
+    "DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID must name the calculator whose 2026-07-14 run it "
+    "freezes ('<anonymous_id>/<marker>'): the 2026-07-23 ruling, as clarified 2026-07-29, is "
+    "scoped to that ONE run, and this string is the only thing that says which run that is."
+)
+assert len(DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID) <= (
+    AbstractWeightedVote._meta.get_field("run_id").max_length or 0
+), "DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID does not fit AbstractWeightedVote.run_id - it could not be stamped."
 
 
-def resolve_vote_weight(source: str, anonymous_id: str) -> float:
+def resolve_vote_weight(source: str, anonymous_id: str, run_id: str | None) -> float:
     """
-    Resolves a single vote's consensus weight from its `source` (via `_SOURCE_WEIGHTS`), with
-    one override: a vote carrying `source=VoteSource.DEDUCTION` AND an `anonymous_id` in the
-    DEDUCTIVE-BACKFILL CALCULATOR FAMILY resolves to 0.0 regardless of
-    `_SOURCE_WEIGHTS[DEDUCTION]`. See `DEDUCTIVE_BACKFILL_ANONYMOUS_ID`'s own comment above for
-    the 2026-07-23 owner ruling that zeroed that cohort's 28,112 votes and the evidence behind
-    it.
+    Resolves a single vote's consensus weight from its `source` (via `_SOURCE_WEIGHTS`), with one
+    override: a vote from the ZEROED DEDUCTIVE-BACKFILL COHORT - the 28,112 rows the 2026-07-14
+    run wrote - resolves to 0.0 regardless of `_SOURCE_WEIGHTS[DEDUCTION]`. A vote is in that
+    cohort when ALL THREE of these hold together:
 
-    WHY THE MATCH IS SCOPED TO THE FAMILY, NOT TO THE EXACT ID
-    ---------------------------------------------------------
-    This was an exact string comparison against "deductive-backfill-v1" until it was noticed
-    that a machine calculator's version lives INSIDE its `anonymous_id` rather than beside it as
-    metadata (see `models.calculator_family`). Under an exact match, bumping this calculator to
-    "deductive-backfill-v2" - an ordinary, unremarkable redeploy - would silently restore the
-    whole cohort to full DEDUCTION weight: no error, no log line, no failing test, a ratified
-    owner ruling reversed by a version string. Matching on the family is what makes "forever" in
-    that ruling mean forever. The ruling was about the METHOD (pure name-matching inference,
-    zero image inspection), and a re-versioned run of the same method is the same method.
+      - `source == VoteSource.DEDUCTION`; AND
+      - `calculator_family(anonymous_id) == DEDUCTIVE_BACKFILL_FAMILY`; AND
+      - `run_id == DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID` (the discriminator - see that
+        constant's own comment for what it is, how those rows came to carry it, and why the
+        boundary is a run stamp rather than a `created_at` cutoff).
 
-    It is scoped to that ONE family and NO WIDER, deliberately: the ruling zeroed one cohort,
-    not `VoteSource.DEDUCTION` as a class. Every call site that builds a `VoteTuple`'s (or an
-    inline weighted-sum's) `weight` from a vote row's `source` should route through this rather
-    than indexing `_SOURCE_WEIGHTS` directly, so a future zero-weight cohort (should one ever be
-    ratified) has exactly ONE place to be added - preserve that property when adding one, and
-    give the new cohort its own family check rather than broadening this one.
+    See `DEDUCTIVE_BACKFILL_ANONYMOUS_ID`'s own comment above for the 2026-07-23 owner ruling,
+    the 2026-07-29 clarification that re-scoped it from the method to that one cohort, and the
+    evidence behind zeroing the cohort.
+
+    THE SCOPE IS THE COHORT, NOT THE METHOD (2026-07-29)
+    ---------------------------------------------------
+    This matched on the calculator FAMILY alone until 2026-07-29, which zeroed every vote the
+    deductive-backfill method would ever cast, at any version, forever. The owner's clarification
+    is that the ruling zeroed that cohort as a measurement control and did not disqualify
+    name-matching inference as an evidence channel. So: a NEW vote from this same calculator -
+    same code, same method, same anonymous_id - carries the ordinary machine weight (0.5),
+    because it is not part of the frozen control. Re-running `deductive_backfill_printing_tags`
+    now casts votes that COUNT. That is intended, and it is the live behavioural consequence of
+    this scoping: check that you want it before you run it.
+
+    The run_id conjunct is what draws that line, and the other two conjuncts are kept rather than
+    collapsed into it: the cohort is all three facts at once, and stating all three means an
+    accidental re-stamp of the frozen run_id onto a differently-sourced row (or the reverse)
+    cannot silently pull it into a ratified ruling. `deductive_backfill.generate_run_id` refuses
+    to mint the frozen value, so a future run of this same calculator cannot re-enter the cohort
+    by collision.
+
+    Every call site that builds a `VoteTuple`'s (or an inline weighted-sum's) `weight` from a
+    vote row should route through this rather than indexing `_SOURCE_WEIGHTS` directly, so a
+    future zero-weight cohort (should one ever be ratified) has exactly ONE place to be added.
+    `run_id` is a REQUIRED argument, deliberately not defaulted to `None`: a defaulted "not in
+    the cohort" would let a new call site silently hand a cohort row full weight by simply not
+    knowing this parameter exists, which is the precise failure mode this whole change is about.
 
     CONFIDENCE IS NOT A PARAMETER OF THIS FUNCTION and must not become one. A vote's weight is a
     function of WHO cast it and by what method - not of how sure that agent reports being.
@@ -130,7 +229,11 @@ def resolve_vote_weight(source: str, anonymous_id: str) -> float:
     ever writes `CardPrintingTag` rows) but are safe to route through this too - the override
     simply never matches for them.
     """
-    if source == VoteSource.DEDUCTION and calculator_family(anonymous_id) == DEDUCTIVE_BACKFILL_FAMILY:
+    if (
+        source == VoteSource.DEDUCTION
+        and calculator_family(anonymous_id) == DEDUCTIVE_BACKFILL_FAMILY
+        and run_id == DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
+    ):
         return 0.0
     return _SOURCE_WEIGHTS[source]
 
@@ -478,5 +581,7 @@ __all__ = [
     "contested_queryset",
     "is_human_backed_source",
     "DEDUCTIVE_BACKFILL_ANONYMOUS_ID",
+    "DEDUCTIVE_BACKFILL_FAMILY",
+    "DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID",
     "resolve_vote_weight",
 ]

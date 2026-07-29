@@ -863,7 +863,26 @@ def purge_stale_machine_votes(model_class: Any, anonymous_id: str, target_field:
     current one) for those targets. Returns rows deleted.
 
     Purges nothing and returns 0 if calculator_family() returns None
-    (i.e. anonymous_id is a UUID — human votes are never touched)."""
+    (i.e. anonymous_id is a UUID — human votes are never touched).
+
+    DELIBERATELY STILL FAMILY-KEYED after the 2026-07-29 re-scoping of the
+    deductive-backfill zero-weight ruling (which moved THAT rule from the
+    calculator family to one specific run's `run_id`). The two are about
+    different things and must not be aligned for the sake of symmetry: this
+    purge is about AGENT IDENTITY — "replace what this calculator previously
+    said about these targets" — and a version bump does not make a calculator
+    a second, independent agent whose stale rows should be left lying beside
+    the fresh ones. Narrowing this to a run_id would leave every previous
+    run's rows behind on every re-run.
+
+    Note the interaction with the frozen 2026-07-14 deductive-backfill cohort,
+    which is real but cannot bite: a fresh run of that calculator purges the
+    family's rows for the cards it is about to write, and cohort rows are in
+    that family. It never reaches them, because deductive_backfill's own
+    `_eligible_base_queryset` admits only cards with ZERO existing votes of any
+    kind, and every cohort card by definition already carries one. Retiring or
+    re-versioning a caster does not rewrite history; this is the one path that
+    could, and it is closed upstream."""
     family = calculator_family(anonymous_id)
     if family is None:
         return 0

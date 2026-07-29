@@ -507,6 +507,10 @@ def _eligible_base_queryset(
             printing_tag_status=PrintingTagStatus.UNRESOLVED, canonical_card__isnull=True, card_type=CardTypes.CARD
         )
         .exclude(printing_tags__anonymous_id=anonymous_id)
+        # Left keyed on the EXACT id, unchanged by the 2026-07-29 re-scoping of the
+        # deductive-backfill zero-weight ruling: this exclusion is a workload choice ("don't
+        # spend a scan piling a weaker vote onto a card the exact-by-construction deductive
+        # backfill already covered"), not an expression of that ruling, and it predates it.
         .exclude(printing_tags__anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
         .exclude(pk__in=non_rescannable_scanned_card_ids)
         .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[0]])

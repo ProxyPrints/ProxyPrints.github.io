@@ -4,6 +4,7 @@ import cardpicker.deductive_backfill as module
 from cardpicker.deductive_backfill import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
     DeductiveVote,
+    generate_run_id,
     run_backfill,
     select_d1_candidates,
     select_d2_candidates,
@@ -17,6 +18,11 @@ from cardpicker.tests.factories import (
     CanonicalPrintingMetadataFactory,
     CardFactory,
     CardPrintingTagFactory,
+)
+from cardpicker.vote_consensus import (
+    _SOURCE_WEIGHTS,
+    DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
+    resolve_vote_weight,
 )
 
 
@@ -173,6 +179,11 @@ class TestRunBackfillWriteShape:
         assert vote.anonymous_id == DEDUCTIVE_BACKFILL_ANONYMOUS_ID
         assert vote.source == VoteSource.DEDUCTION
         assert vote.confidence == 0.95
+        # 2026-07-29: every run stamps a run_id, and it is never the frozen 2026-07-14 cohort's
+        # (which is what a zero-weight vote would look like) - see generate_run_id's docstring.
+        assert vote.run_id is not None
+        assert vote.run_id.startswith(f"{DEDUCTIVE_BACKFILL_ANONYMOUS_ID}/")
+        assert vote.run_id != DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
 
     def test_d2_vote_row_shape(self, db):
         matching = _unique_printing("Shape Test D2", expansion=CanonicalExpansionFactory(code="csp"))
@@ -204,6 +215,22 @@ class TestRunBackfillWriteShape:
         result = run_backfill(tier="d1", limit=2)
         assert result.total_written == 2
 
+    def test_one_run_id_is_shared_by_every_vote_the_invocation_writes(self, db):
+        # one run_id generated once per invocation and threaded through the whole run - that is
+        # what makes `purge_machine_votes --run-id <id>` able to retract exactly one bad run.
+        # Two chunks (batch_size=2 over 5 cards) so this also proves it is not re-generated
+        # per flush.
+        for suffix in ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]:
+            _unique_printing(f"Run Id Card {suffix}")
+            CardFactory(name=f"Run Id Card {suffix}")
+        run_backfill(tier="d1", batch_size=2)
+        run_ids = set(
+            CardPrintingTag.objects.filter(anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID).values_list(
+                "run_id", flat=True
+            )
+        )
+        assert len(run_ids) == 1
+
     def test_idempotent_on_rerun(self, db):
         _unique_printing("Idempotence Card")
         card = CardFactory(name="Idempotence Card")
@@ -215,6 +242,47 @@ class TestRunBackfillWriteShape:
         second = run_backfill(tier="d1")
         assert second.d1_written == 0
         assert card.printing_tags.count() == 1  # no duplicate vote
+
+
+class TestFreshRunVotesCarryWeight:
+    """
+    2026-07-29 owner clarification, at this module's own level. The 2026-07-23 ruling zeroed the
+    2026-07-14 COHORT as a measurement control; it did not disqualify name-matching deductive
+    inference as a method. So the votes THIS module writes today carry the ordinary machine
+    weight, and the frozen cohort is identified by its stamped run_id rather than by this
+    module's identity.
+
+    Named plainly because it is a live behavioural consequence, not a refactor: re-running
+    `deductive_backfill_printing_tags --tier d1` now casts votes that COUNT in consensus. They
+    still cannot resolve anything on their own - the human-backed gate is untouched, and
+    `TestZeroResolutionsGate` below verifies that against real data on every run.
+    """
+
+    def test_a_vote_this_module_writes_now_resolves_to_ordinary_machine_weight(self, db):
+        _unique_printing("Weighted Vote Card")
+        card = CardFactory(name="Weighted Vote Card")
+        run_backfill(tier="d1")
+
+        vote = card.printing_tags.get()
+        assert resolve_vote_weight(vote.source, vote.anonymous_id, vote.run_id) == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+
+    def test_generate_run_id_never_mints_the_frozen_cohort_stamp(self):
+        # if it could, a future run's votes would silently join a ratified zero-weight control
+        # cohort - re-creating by collision the over-broad reading this clarification removed
+        assert all(generate_run_id() != DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID for _ in range(50))
+
+    def test_the_frozen_cohort_is_still_zero_weight(self, db):
+        # the other half of the pair: a row carrying the 2026-07-14 stamp, as the 28,112
+        # production rows do after migration 0095, still weighs nothing
+        card = CardFactory()
+        vote = CardPrintingTagFactory(
+            card=card,
+            printing=CanonicalCardFactory(),
+            source=VoteSource.DEDUCTION,
+            anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+            run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
+        )
+        assert resolve_vote_weight(vote.source, vote.anonymous_id, vote.run_id) == 0.0
 
 
 class TestZeroResolutionsGate:
