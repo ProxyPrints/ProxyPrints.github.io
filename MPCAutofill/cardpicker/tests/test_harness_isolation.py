@@ -2,9 +2,14 @@
 Tests for the TEST HARNESS itself (2026-07-28) - the ways concurrent agents/CI runs on one box were
 corrupting each other's results:
 
-  1. Fixed container host ports (`POSTGRES_PORT` / `ELASTICSEARCH_PORT` in `conftest.py`) made a
-     second concurrent suite die at container start with "port is already allocated". Now
-     overridable via `TEST_POSTGRES_PORT` / `TEST_ELASTICSEARCH_PORT`.
+  1. Fixed container host ports (`POSTGRES_PORT = 47000` / `ELASTICSEARCH_PORT = 9300` in
+     `conftest.py`) made a second concurrent suite die at container start with "port is already
+     allocated". Making them merely OVERRIDABLE (via `TEST_POSTGRES_PORT` /
+     `TEST_ELASTICSEARCH_PORT`) did not fix it, because nothing assigned distinct values and the
+     default still collided. Now the default is EPHEMERAL: the containers are started with no host
+     binding at all, Docker assigns a free port, and the suite reads it back with
+     `get_exposed_port()`. The env overrides survive for anyone who needs a deterministic port
+     (2026-07-29).
   2. `stage_e_dispatch._sample_envelope_signals` samples the real `os.getloadavg()`, so every Stage
      E dispatch test was a function of ambient host load - at load 8.67 they fail `halted-new-trip`
      against the ratified `HOST_LOAD_CEILING = 7.0`; at load 3.4 they pass. Now pinned by
@@ -28,36 +33,106 @@ from django.conf import settings as conf_settings
 from cardpicker import process_metrics, stage_e_dispatch
 from cardpicker.operating_envelope import HOST_LOAD_CEILING, RSS_MB_PER_WORKER_CEILING
 from cardpicker.tests.conftest import (
-    ELASTICSEARCH_PORT,
-    POSTGRES_PORT,
+    ELASTICSEARCH_CONTAINER_PORT,
+    ELASTICSEARCH_PORT_OVERRIDE,
+    POSTGRES_CONTAINER_PORT,
+    POSTGRES_PORT_OVERRIDE,
     TEST_HOST_LOAD_AVG,
     TEST_PROCESS_RSS_MB,
 )
 
+HISTORICAL_FIXED_POSTGRES_PORT = 47000
+HISTORICAL_FIXED_ELASTICSEARCH_PORT = 9300
 
-class TestPortOverrides:
-    def test_postgres_port_follows_the_environment(self) -> None:
-        assert POSTGRES_PORT == int(os.environ.get("TEST_POSTGRES_PORT", 47000))
 
-    def test_elasticsearch_port_follows_the_environment(self) -> None:
-        assert ELASTICSEARCH_PORT == int(os.environ.get("TEST_ELASTICSEARCH_PORT", 9300))
+def _requested_host_binding(container, container_port: int):
+    """
+    What the container ASKED Docker for on `container_port`: `None` means "any free host port".
 
-    def test_django_database_settings_point_at_the_overridden_postgres_port(self, db) -> None:
-        """The override is worthless if the container moves but Django keeps dialling 47000."""
-        assert conf_settings.DATABASES["default"]["PORT"] == POSTGRES_PORT
+    Keys are normalised to `str` because testcontainers is unpinned in `requirements.txt` and the
+    two versions in play disagree on the key type - 4.14.x stores whatever was passed (an `int`
+    here), 4.15.x coerces to `str`. Reading the map by one of those alone would make this test pass
+    vacuously with a `KeyError`-free lookup on one version and blow up on the other.
+    """
+    bindings = {str(key): value for key, value in container.ports.items()}
+    return bindings[str(container_port)]
 
-    def test_elasticsearch_dsl_points_at_the_overridden_elasticsearch_port(self, elasticsearch) -> None:
-        assert conf_settings.ELASTICSEARCH_DSL["default"]["hosts"].endswith(f":{ELASTICSEARCH_PORT}")
-        assert conf_settings.ELASTICSEARCH_PORT == ELASTICSEARCH_PORT
 
-    def test_elasticsearch_port_is_threaded_into_the_pytest_elasticsearch_plugin(self, request) -> None:
+class TestContainerPortAllocation:
+    """
+    The pin is not "the ports are configurable" - that was the fix that did not work - but "by
+    default NOTHING asks for a specific host port", which is the only shape under which two suites
+    on one box cannot collide.
+    """
+
+    def test_postgres_default_is_ephemeral(self) -> None:
+        if "TEST_POSTGRES_PORT" in os.environ:
+            pytest.skip("TEST_POSTGRES_PORT deliberately overridden - this asserts the SHIPPED default")
+        assert POSTGRES_PORT_OVERRIDE is None
+
+    def test_elasticsearch_default_is_ephemeral(self) -> None:
+        if "TEST_ELASTICSEARCH_PORT" in os.environ:
+            pytest.skip("TEST_ELASTICSEARCH_PORT deliberately overridden - this asserts the SHIPPED default")
+        assert ELASTICSEARCH_PORT_OVERRIDE is None
+
+    def test_postgres_container_requests_no_host_binding_by_default(self, postgres_container) -> None:
+        """
+        The assertion that actually closes the race: a `None` host port in the container's port map
+        is what makes Docker pick a free one. A constant here - however exotic, however
+        randomly chosen at import time - only narrows the window in which two runs can both want it.
+        """
+        if POSTGRES_PORT_OVERRIDE is not None:
+            pytest.skip("TEST_POSTGRES_PORT deliberately overridden - a fixed host binding is expected")
+        assert _requested_host_binding(postgres_container, POSTGRES_CONTAINER_PORT) is None
+
+    def test_elasticsearch_container_requests_no_host_binding_by_default(self, elasticsearch_container) -> None:
+        if ELASTICSEARCH_PORT_OVERRIDE is not None:
+            pytest.skip("TEST_ELASTICSEARCH_PORT deliberately overridden - a fixed host binding is expected")
+        assert _requested_host_binding(elasticsearch_container, ELASTICSEARCH_CONTAINER_PORT) is None
+
+    def test_postgres_override_is_honoured_when_set(self, postgres_container, postgres_port) -> None:
+        """The deterministic-port escape hatch (CI, debugging, attaching psql) must keep working."""
+        if POSTGRES_PORT_OVERRIDE is None:
+            pytest.skip("TEST_POSTGRES_PORT not set - nothing to honour")
+        assert POSTGRES_PORT_OVERRIDE == int(os.environ["TEST_POSTGRES_PORT"])
+        assert postgres_port == POSTGRES_PORT_OVERRIDE
+
+    def test_elasticsearch_override_is_honoured_when_set(self, elasticsearch_container, elasticsearch_port) -> None:
+        if ELASTICSEARCH_PORT_OVERRIDE is None:
+            pytest.skip("TEST_ELASTICSEARCH_PORT not set - nothing to honour")
+        assert ELASTICSEARCH_PORT_OVERRIDE == int(os.environ["TEST_ELASTICSEARCH_PORT"])
+        assert elasticsearch_port == ELASTICSEARCH_PORT_OVERRIDE
+
+    def test_resolved_ports_are_read_back_from_docker(self, postgres_port, elasticsearch_port) -> None:
+        """Both are real host ports, and the two containers never share one."""
+        assert 1 <= postgres_port <= 65535
+        assert 1 <= elasticsearch_port <= 65535
+        assert postgres_port != elasticsearch_port
+
+    def test_django_database_settings_point_at_the_real_container_port(self, db, postgres_port) -> None:
+        """An ephemeral port is worthless if the container moves but Django keeps dialling 47000."""
+        assert conf_settings.DATABASES["default"]["PORT"] == postgres_port
+        if POSTGRES_PORT_OVERRIDE is None:
+            assert conf_settings.DATABASES["default"]["PORT"] != HISTORICAL_FIXED_POSTGRES_PORT
+
+    def test_elasticsearch_dsl_points_at_the_real_container_port(self, elasticsearch, elasticsearch_port) -> None:
+        assert conf_settings.ELASTICSEARCH_DSL["default"]["hosts"].endswith(f":{elasticsearch_port}")
+        assert conf_settings.ELASTICSEARCH_PORT == elasticsearch_port
+        if ELASTICSEARCH_PORT_OVERRIDE is None:
+            assert conf_settings.ELASTICSEARCH_PORT != HISTORICAL_FIXED_ELASTICSEARCH_PORT
+
+    def test_elasticsearch_port_is_threaded_into_the_pytest_elasticsearch_plugin(
+        self, request, elasticsearch, elasticsearch_port
+    ) -> None:
         """
         `elasticsearch_nooproc` reads its port from the plugin's own config (defaulting to a
-        hardcoded 9300), not from our constant - `conftest.pytest_configure` bridges the two. No
-        test resolves that fixture today; this guards the latent trap for the one that eventually
-        does.
+        hardcoded 9300), not from our fixtures - `conftest` bridges the two (in `pytest_configure`
+        when the port is pinned up front, in the session-scoped `elasticsearch` fixture once Docker
+        has assigned an ephemeral one). No test resolves that fixture today; this guards the latent
+        trap for the one that eventually does, which under ephemeral ports would otherwise dial a
+        9300 that belongs to nobody.
         """
-        assert request.config.getoption("elasticsearch_port") == str(ELASTICSEARCH_PORT)
+        assert request.config.getoption("elasticsearch_port") == str(elasticsearch_port)
 
 
 class TestDeterministicHostLoad:
