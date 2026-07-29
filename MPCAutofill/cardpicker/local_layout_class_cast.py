@@ -90,9 +90,9 @@ from cardpicker.models import (
     Tag,
     VotePolarity,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
+from cardpicker.vote_write import purge_and_write_votes
 
 # Own anonymous_id (distinct from local_fallback.FALLBACK_ANONYMOUS_ID and every other engine's -
 # see module docstring's "OWN ANONYMOUS_ID" section for the full reasoning).
@@ -295,10 +295,20 @@ def run_layout_class_cast(
         # uniqueness constraint - the eligibility query above already excludes any card this
         # identity has voted on, so a conflict here would only ever come from two concurrent
         # invocations racing, not from this invocation's own logic.
-        purge_stale_machine_votes(
-            CardTagVote, LAYOUT_CLASS_CAST_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch]
+        #
+        # CANCEL-SAFETY (2026-07-28): the purge is a DELETE and the insert a separate statement,
+        # so a run killed between them left these cards with their previous vote deleted and no
+        # replacement written. `vote_write.purge_and_write_votes` runs the pair inside one
+        # `transaction.atomic()`, and scopes the purge to exactly the rows it then inserts. This
+        # site has no already-voted split (the eligibility query is this module's idempotence), so
+        # the purged set and the written set are the same batch either way.
+        purge_and_write_votes(
+            CardTagVote,
+            votes_batch,
+            anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID,
+            target_field="card_id",
+            ignore_conflicts=True,
         )
-        CardTagVote.objects.bulk_create(votes_batch, ignore_conflicts=True)
         CardScanLog.objects.bulk_create(scan_log_batch)
         result.votes_written = len(votes_batch)
 

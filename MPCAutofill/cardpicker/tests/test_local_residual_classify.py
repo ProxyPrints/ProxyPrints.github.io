@@ -6,6 +6,8 @@ OCR-refetch path is mocked exactly like test_local_identify_printing_tags.py moc
 fetch_card_image/run_ocr_for_card.
 """
 
+import pytest
+
 import cardpicker.local_residual_classify as module
 from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID, FallbackOutcome
 from cardpicker.local_identify_printing_tags import (
@@ -285,3 +287,72 @@ class TestVerifyNoSingleMachineVoteResolutions:
         CardArtistVoteFactory(card=card, artist=artist, source=VoteSource.OCR)
 
         assert verify_no_single_machine_vote_resolutions([card.pk]) == []
+
+
+class TestPurgeWriteAtomicity:
+    """Cancel-safety at all three of this module's vote-write sites (2026-07-28, generalising PR
+    #526's fix for the Stage D calculators): purge and insert are now one `transaction.atomic()`
+    pair, so a run killed between them no longer leaves the affected cards with their previous
+    same-family vote deleted and nothing written in its place."""
+
+    @staticmethod
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+    def _frame_mismatch_fixture(self):
+        """The same recipe as `TestRunFrameMismatchRecovery::test_write_casts_dual_yield_votes` -
+        a phash-recoverable frame-mismatch card, which yields BOTH an artist vote and an
+        altered-frame tag vote (this module's two adjacent write sites)."""
+        artist = CanonicalArtistFactory()
+        CanonicalCardFactory(name="Forest", image_hash=100, artist=artist)
+        card = CardFactory(name="Forest", content_phash=100)
+        CardScanLog.objects.create(card=card, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+        TagFactory(name=ALTERED_FRAME_TAG_NAME)
+        return card, artist
+
+    def test_frame_mismatch_artist_vote_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
+        card, artist = self._frame_mismatch_fixture()
+        stale = CardArtistVote.objects.create(
+            card=card, artist=artist, is_unknown=False, anonymous_id="residual-classify-v0", source=VoteSource.OCR
+        )
+
+        monkeypatch.setattr(CardArtistVote.objects, "bulk_create", self._boom)
+
+        with pytest.raises(RuntimeError):
+            run_frame_mismatch_recovery(dry_run=False)
+
+        assert CardArtistVote.objects.filter(pk=stale.pk).exists()
+
+    def test_frame_mismatch_tag_vote_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
+        card, _artist = self._frame_mismatch_fixture()
+        tag = module.Tag.objects.get(name=ALTERED_FRAME_TAG_NAME)
+        stale = CardTagVote.objects.create(
+            card=card,
+            tag=tag,
+            polarity=VotePolarity.APPLY,
+            anonymous_id="residual-classify-v0",
+            source=VoteSource.OCR,
+        )
+
+        monkeypatch.setattr(CardTagVote.objects, "bulk_create", self._boom)
+
+        with pytest.raises(RuntimeError):
+            run_frame_mismatch_recovery(dry_run=False)
+
+        assert CardTagVote.objects.filter(pk=stale.pk).exists()
+
+    def test_d0_sibling_propagation_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        CardFactory(content_phash=555, canonical_card=printing)
+        sibling = CardFactory(content_phash=555)
+        stale = CardArtistVote.objects.create(
+            card=sibling, artist=artist, is_unknown=False, anonymous_id="art-hash-artist-v0", source=VoteSource.OCR
+        )
+
+        monkeypatch.setattr(CardArtistVote.objects, "bulk_create", self._boom)
+
+        with pytest.raises(RuntimeError):
+            run_d0_sibling_artist_propagation(dry_run=False)
+
+        assert CardArtistVote.objects.filter(pk=stale.pk).exists()

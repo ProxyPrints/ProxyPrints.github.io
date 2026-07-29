@@ -115,8 +115,8 @@ from cardpicker.models import (
     ImageEvidence,
     LandsAmbiguousResidue,
     VoteSource,
-    purge_stale_machine_votes,
 )
+from cardpicker.vote_write import purge_and_write_votes
 
 # "=s800" tier addendum (task #130's tier-routing idea, applied here first): OCR only needs to
 # read small collector-line/artist-credit text, not print resolution - fetching at the normal
@@ -638,10 +638,27 @@ def run_lands_identify(
         )
 
     if not dry_run and votes_batch:
-        purge_stale_machine_votes(CardPrintingTag, LANDS_ANONYMOUS_ID, "card_id", [_v.card_id for _v in votes_batch])
+        # ORDER MATTERS - split/count FIRST, purge SECOND, purge+insert inside ONE transaction
+        # (2026-07-28; the same fix PR #526 made at local_calculate_verdicts'/local_illustration's
+        # equivalent sites). `purge_stale_machine_votes` deletes by calculator FAMILY, which
+        # includes LANDS_ANONYMOUS_ID itself, so purging the RAW batch first deleted exactly the
+        # rows `_split_new_votes` then went looking for. That was masked here rather than
+        # harmless: this batch also carries OCR_ANONYMOUS_ID votes (`_process_land_card`'s
+        # OCR-resolved branch), and the lands-family purge never touched those - so the one
+        # collision this module's tests exercise still counted, while a genuine LANDS_ANONYMOUS_ID
+        # collision was silently un-counted AND its winner's row destroyed (the loser is dropped
+        # by the split, so nothing was re-inserted in its place).
+        #
+        # The purge identity stays LANDS_ANONYMOUS_ID explicitly, NOT per-row: widening it to
+        # every identity present would start purging the OCR family too, which this site has
+        # never done and which is a behaviour change well outside an atomicity fix.
         new_votes, result.already_voted = _split_new_votes(votes_batch)
-        if new_votes:
-            CardPrintingTag.objects.bulk_create(new_votes)
+        purge_and_write_votes(
+            CardPrintingTag,
+            new_votes,
+            anonymous_id=LANDS_ANONYMOUS_ID,
+            target_field="card_id",
+        )
         result.votes_written = len(new_votes)
 
     if not dry_run and residue_batch:

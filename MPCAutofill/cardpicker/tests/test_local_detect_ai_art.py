@@ -409,3 +409,35 @@ class TestRunAiArtDetector:
         assert result.votes_written == 1
         assert CardTagVote.objects.filter(card=hit_card).exists()
         assert not CardTagVote.objects.filter(card=clean_card).exists()
+
+
+class TestPurgeWriteAtomicity:
+    """Cancel-safety at this module's own vote-write site (2026-07-28, generalising PR #526's fix
+    for the Stage D calculators): the purge and the insert are now one `transaction.atomic()`
+    pair, so a run killed between them no longer leaves these cards with their previous
+    same-family vote deleted and nothing written in its place."""
+
+    def test_a_failed_insert_rolls_the_purge_back(self, db, monkeypatch):
+        tag = _seed_tag()
+        card = CardFactory(name="Some Card", content_phash=42)
+        _evidence(card, legal_line_raw_text="2024 not for resale trademtgen midjourney")
+        # an older version of THIS detector's own family - purged on write, and the row whose
+        # survival proves the DELETE was rolled back. `-v0` is not the current anonymous_id, so
+        # the eligibility query still selects the card and the run reaches the write.
+        stale = CardTagVote.objects.create(
+            card=card,
+            tag=tag,
+            polarity=VotePolarity.APPLY,
+            anonymous_id="ai-art-detector-v0",
+            source=VoteSource.OCR,
+        )
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated mid-flight kill between DELETE and INSERT")
+
+        monkeypatch.setattr(CardTagVote.objects, "bulk_create", _boom)
+
+        with pytest.raises(RuntimeError):
+            run_ai_art_detector(dry_run=False)
+
+        assert CardTagVote.objects.filter(pk=stale.pk).exists()

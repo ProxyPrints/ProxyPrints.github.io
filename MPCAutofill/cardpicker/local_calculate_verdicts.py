@@ -377,7 +377,6 @@ from typing import Iterable, Optional
 
 import imagehash
 
-from django.db import transaction
 from django.db.models import Count, Max, Q, QuerySet
 
 from cardpicker.image_evidence import current_evidence_queryset
@@ -413,11 +412,11 @@ from cardpicker.models import (
     ImageEvidence,
     PrintingTagStatus,
     VoteSource,
-    purge_stale_machine_votes,
 )
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.printing_metadata_import import is_back_face
 from cardpicker.utils import twos_complement
+from cardpicker.vote_write import purge_and_write_votes
 
 logger = logging.getLogger(__name__)
 
@@ -1101,8 +1100,12 @@ def _split_new_printing_tag_votes(
 
 def _purge_and_write_printing_tag_votes(anonymous_id: str, new_votes: list[CardPrintingTag]) -> None:
     """
-    PURGE/SPLIT ORDERING + CANCEL-SAFETY (2026-07-28) - the single write primitive every
-    `CardPrintingTag`-casting calculator in this module (and `local_illustration`'s) now shares.
+    PURGE/SPLIT ORDERING + CANCEL-SAFETY (2026-07-28) - the `CardPrintingTag`/`card_id`-bound
+    spelling of the shared `vote_write.purge_and_write_votes` primitive, kept as a named function
+    because this module and `local_illustration` both call it under exactly these two bindings and
+    the docstring below is the reasoning both call sites point at. Every other calculator in the
+    app (four vote models, two target fields) calls `vote_write.purge_and_write_votes` directly;
+    the semantics are identical and are implemented once, there.
 
     ORDERING: callers MUST run `_split_new_printing_tag_votes` BEFORE calling this, and pass its
     `new_votes` output, never the raw batch. `purge_stale_machine_votes` deletes by CALCULATOR
@@ -1131,11 +1134,13 @@ def _purge_and_write_printing_tag_votes(anonymous_id: str, new_votes: list[CardP
     `ignore_conflicts=True` is retained as the second line of defense for the residual
     check-then-insert window `_split_new_printing_tag_votes`' own docstring describes.
     """
-    if not new_votes:
-        return
-    with transaction.atomic():
-        purge_stale_machine_votes(CardPrintingTag, anonymous_id, "card_id", [_v.card_id for _v in new_votes])
-        CardPrintingTag.objects.bulk_create(new_votes, ignore_conflicts=True)
+    purge_and_write_votes(
+        CardPrintingTag,
+        new_votes,
+        anonymous_id=anonymous_id,
+        target_field="card_id",
+        ignore_conflicts=True,
+    )
 
 
 # ---------------------------------------------------------------------------------------------
