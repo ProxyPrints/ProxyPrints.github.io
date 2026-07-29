@@ -12,12 +12,17 @@ import {
   artistCandidatesTwoResults,
   artistConsensusUnresolved,
   defaultHandlers,
+  illustrationGroupCandidateA,
+  illustrationGroupCandidateB,
+  illustrationGroupCandidateC,
+  illustrationGroupCandidateD,
   questionFeedArtist,
   questionFeedArtistConfidentlyKnown,
   questionFeedArtistWithIllustration,
   questionFeedConfirmSuggestion,
   questionFeedConfirmSuggestionSingleton,
   questionFeedIdentifyPrinting,
+  questionFeedIdentifyPrintingGroupedByIllustration,
   questionFeedTag,
   submitArtistVoteResolvesToCanonicalArtist1,
   submitPrintingTagNoMatch,
@@ -216,6 +221,112 @@ test.describe("question feed - Level 3 (conditional open-attribute confirm)", ()
     // than a post-advance UI state the mock can't actually produce.
     await page.waitForTimeout(200);
     expect(tagVoteSubmitted).toBe(false);
+  });
+});
+
+// Issue #503 (WTC phase C1) - grouping the Level 2 candidate grid by shared Scryfall
+// illustration. `questionFeedIdentifyPrintingGroupedByIllustration` serves a MIXED set:
+// candidateA/B share an illustration (a real cluster), candidateC has its own distinct
+// illustrationId (no sibling), candidateD carries no illustrationId at all - the nullable,
+// frequently-absent shape (CanonicalPrintingMetadata.illustration_id, see
+// local_illustration.py:137's isnull filter).
+test.describe("question feed - Level 2 illustration grouping", () => {
+  test("every candidate in a mixed illustration set still renders in the grid - none silently dropped", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrintingGroupedByIllustration,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    // The regression guard this task calls out explicitly: an exact count, not just "at least
+    // one" - a candidate silently vanishing (e.g. because it has no illustrationId) is exactly
+    // the correctness regression a weaker assertion would miss.
+    for (const candidate of [
+      illustrationGroupCandidateA,
+      illustrationGroupCandidateB,
+      illustrationGroupCandidateC,
+      illustrationGroupCandidateD,
+    ]) {
+      await expect(
+        page.locator(`[data-card-identifier="${candidate.identifier}"]`)
+      ).toHaveCount(1);
+    }
+  });
+
+  test("candidates sharing an illustration render inside one illustration-group container; unique/null-illustration candidates don't", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrintingGroupedByIllustration,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const group = page.getByTestId("question-feed-illustration-group");
+    await expect(group).toHaveCount(1);
+    await expect(group).toHaveAttribute(
+      "data-illustration-id",
+      "illustration-shared"
+    );
+    await expect(
+      group.locator(
+        `[data-card-identifier="${illustrationGroupCandidateA.identifier}"]`
+      )
+    ).toHaveCount(1);
+    await expect(
+      group.locator(
+        `[data-card-identifier="${illustrationGroupCandidateB.identifier}"]`
+      )
+    ).toHaveCount(1);
+
+    // candidateC (distinct illustrationId, no sibling) and candidateD (null illustrationId)
+    // both render OUTSIDE the clustered group - neither forms (or joins) a cluster of one.
+    await expect(
+      group.locator(
+        `[data-card-identifier="${illustrationGroupCandidateC.identifier}"]`
+      )
+    ).toHaveCount(0);
+    await expect(
+      group.locator(
+        `[data-card-identifier="${illustrationGroupCandidateD.identifier}"]`
+      )
+    ).toHaveCount(0);
+  });
+
+  test("selecting a grouped candidate submits the identical payload to the identical endpoint as an ungrouped one", async ({
+    page,
+    network,
+  }) => {
+    let submittedPrinting:
+      | { printingIdentifier?: string; isNoMatch?: boolean }
+      | undefined;
+    network.use(
+      questionFeedIdentifyPrintingGroupedByIllustration,
+      submitPrintingTagResolvesToPrintingCandidate1,
+      submitTagVoteResolvesToApply,
+      ...defaultHandlers
+    );
+    page.on("request", (request) => {
+      if (request.url().includes("/2/submitPrintingTag/")) {
+        submittedPrinting = request.postDataJSON();
+      }
+    });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await page
+      .locator(
+        `[data-card-identifier="${illustrationGroupCandidateA.identifier}"]`
+      )
+      .click();
+
+    await expect
+      .poll(() => submittedPrinting?.printingIdentifier)
+      .toBe(illustrationGroupCandidateA.identifier);
+    expect(submittedPrinting?.isNoMatch).toBe(false);
   });
 });
 

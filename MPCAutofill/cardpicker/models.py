@@ -165,6 +165,14 @@ class CanonicalCard(models.Model):
             isExtendedArt="extendedart" in frame_effects,
             isEtched="etched" in frame_effects,
             releasedAt=metadata.released_at.isoformat() if metadata is not None and metadata.released_at else None,
+            # Scryfall's illustration UUID, shared across every printing carrying the same
+            # artwork - see CanonicalPrintingMetadata.illustration_id. Null-tolerant: the field
+            # legitimately lacks a value for some printings (local_illustration.py:137 filters
+            # on illustration_id__isnull=False for exactly this reason), so this stays optional
+            # on PrintingCandidate rather than defaulting to a sentinel.
+            illustrationId=(
+                str(metadata.illustration_id) if metadata is not None and metadata.illustration_id else None
+            ),
         )
 
 

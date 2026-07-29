@@ -312,6 +312,28 @@ const QHint = styled.p`
   margin: -6px 0 12px;
 `;
 
+// Issue #503 (WTC phase C1) - a small labelled cluster around one `CandidateGrid` (imported,
+// unmodified) per shared Scryfall illustration, so candidates that are visually near-identical
+// group together instead of forcing a guess across a flat grid. Deliberately reuses
+// `CandidateGrid`'s own grid/gap/columns rather than a new grid primitive - this is a
+// regrouping of the same tiles, not a new component family.
+const IllustrationGroup = styled.div`
+  margin-bottom: 10px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+`;
+
+const IllustrationGroupLabel = styled.p`
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 4px;
+`;
+
 // The spec's `.btn` base + variants (section 1c) - min 44px thumb targets (mobile funnel
 // pass, WCAG 2.5.5/Apple HIG), replacing the old `ThumbButton`/`FilterToggleButton` gold
 // overrides with plain token-derived variants. A native <button>, not a react-bootstrap
@@ -1049,6 +1071,39 @@ export function QuestionFeed() {
     chipStates
   );
   const hiddenCount = nonRejectedCandidates.length - visibleCandidates.length;
+
+  // Issue #503 (WTC phase C1) - group the level-2 grid by shared Scryfall illustration.
+  // PURELY visual: tapping any candidate below, grouped or not, still calls selectCandidate
+  // with that exact PrintingCandidate through the exact same path as before this change (no
+  // group-level vote, no artist-vote derivation - that's phase C2). A cluster only forms for
+  // >=2 candidates sharing a non-null illustrationId; every other candidate - a unique
+  // illustrationId, or no illustrationId at all (CanonicalPrintingMetadata.illustration_id is
+  // nullable and frequently absent, see local_illustration.py:137) - renders in the flat
+  // "ungrouped" grid below the clusters, so nothing is ever dropped from the grid.
+  const illustrationGroupsById = new Map<string, PrintingCandidate[]>();
+  visibleCandidates.forEach((candidate) => {
+    if (!candidate.illustrationId) {
+      return;
+    }
+    const existingGroup = illustrationGroupsById.get(candidate.illustrationId);
+    if (existingGroup != null) {
+      existingGroup.push(candidate);
+    } else {
+      illustrationGroupsById.set(candidate.illustrationId, [candidate]);
+    }
+  });
+  const illustrationGroups = Array.from(illustrationGroupsById.values()).filter(
+    (group) => group.length > 1
+  );
+  const groupedCandidateIds = new Set(
+    illustrationGroups.flatMap((group) =>
+      group.map((candidate) => candidate.identifier)
+    )
+  );
+  const ungroupedCandidates = visibleCandidates.filter(
+    (candidate) => !groupedCandidateIds.has(candidate.identifier)
+  );
+
   const suggestionRejectedWithNoneLeft =
     item.type === "confirm_suggestion" &&
     item.suggestedPrinting != null &&
@@ -1321,6 +1376,48 @@ export function QuestionFeed() {
           : isOpenEndedShape
           ? "hard"
           : "pick";
+      // Shared by both the illustration-clustered and flat/ungrouped rendering below - keeps
+      // the tile markup (and its data-card-* attributes / mpc:card-selected event / testids)
+      // byte-for-byte identical regardless of which grid a candidate ends up in.
+      const renderCandidateTile = (candidate: PrintingCandidate) => (
+        <CandidateButton
+          key={candidate.identifier}
+          className={
+            item.type === "confirm_suggestion" &&
+            item.suggestedPrinting?.identifier === candidate.identifier
+              ? "highlighted"
+              : ""
+          }
+          disabled={submitting}
+          onClick={() => selectCandidate(candidate, false)}
+          {...getPrintingCandidateDataAttributes(item.card.name, candidate)}
+        >
+          <ArtPlaceholder>
+            <MysteryCard />
+            <ZoomableThumbnail>
+              <img
+                src={candidate.mediumThumbnailUrl}
+                alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+              />
+            </ZoomableThumbnail>
+            {submitting && selectedCandidateId === candidate.identifier && (
+              <div
+                data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
+              >
+                <Spinner size={1.5} zIndex={2} positionAbsolute />
+              </div>
+            )}
+          </ArtPlaceholder>
+          <CandidateCaption>
+            <div className="cn">
+              <SetIcon expansionCode={candidate.expansionCode} />{" "}
+              {candidate.expansionCode.toUpperCase()}{" "}
+              {candidate.collectorNumber}
+            </div>
+            <div className="cs">{candidate.artist}</div>
+          </CandidateCaption>
+        </CandidateButton>
+      );
       const level2Body = (
         <>
           <QHead>
@@ -1411,50 +1508,27 @@ export function QuestionFeed() {
               </Btn>
             </div>
           )}
-          <CandidateGrid>
-            {visibleCandidates.map((candidate) => (
-              <CandidateButton
-                key={candidate.identifier}
-                className={
-                  item.type === "confirm_suggestion" &&
-                  item.suggestedPrinting?.identifier === candidate.identifier
-                    ? "highlighted"
-                    : ""
-                }
-                disabled={submitting}
-                onClick={() => selectCandidate(candidate, false)}
-                {...getPrintingCandidateDataAttributes(
-                  item.card.name,
-                  candidate
-                )}
-              >
-                <ArtPlaceholder>
-                  <MysteryCard />
-                  <ZoomableThumbnail>
-                    <img
-                      src={candidate.mediumThumbnailUrl}
-                      alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-                    />
-                  </ZoomableThumbnail>
-                  {submitting && selectedCandidateId === candidate.identifier && (
-                    <div
-                      data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
-                    >
-                      <Spinner size={1.5} zIndex={2} positionAbsolute />
-                    </div>
-                  )}
-                </ArtPlaceholder>
-                <CandidateCaption>
-                  <div className="cn">
-                    <SetIcon expansionCode={candidate.expansionCode} />{" "}
-                    {candidate.expansionCode.toUpperCase()}{" "}
-                    {candidate.collectorNumber}
-                  </div>
-                  <div className="cs">{candidate.artist}</div>
-                </CandidateCaption>
-              </CandidateButton>
-            ))}
-          </CandidateGrid>
+          {illustrationGroups.map((group) => (
+            <IllustrationGroup
+              key={group[0].illustrationId}
+              data-testid="question-feed-illustration-group"
+              data-illustration-id={group[0].illustrationId}
+            >
+              <IllustrationGroupLabel>
+                Same illustration - {group.length} printings
+              </IllustrationGroupLabel>
+              <CandidateGrid>
+                {group.map((candidate) => renderCandidateTile(candidate))}
+              </CandidateGrid>
+            </IllustrationGroup>
+          ))}
+          {ungroupedCandidates.length > 0 && (
+            <CandidateGrid data-testid="question-feed-candidate-grid-ungrouped">
+              {ungroupedCandidates.map((candidate) =>
+                renderCandidateTile(candidate)
+              )}
+            </CandidateGrid>
+          )}
           {followUp === "no-match-reason" && (
             // Shape (c) - quick-negative (SPEC-wtc-rebuild.md's "negative wrapper"/"negative
             // header" rows) - danger-framed (WD7: visibly not a confirm), wrapping the

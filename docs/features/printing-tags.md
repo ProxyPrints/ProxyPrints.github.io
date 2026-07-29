@@ -683,6 +683,27 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     match" until a chip was explicitly set is gone — it existed only to
     force a description before a now-superseded flow, and directly
     conflicted with the filter panel defaulting to collapsed.
+  - **Illustration grouping** (issue #503, WTC phase C1): the Level 2 grid
+    now clusters candidates that share a Scryfall illustration — printings
+    that are visually near-identical, so asking a voter to pick between
+    them in a flat grid mostly produced a guess. `PrintingCandidate` gained
+    an optional, nullable `illustrationId` (backend:
+    `CanonicalCard.serialise_as_printing_candidate`, sourced from
+    `CanonicalPrintingMetadata.illustration_id`); `QuestionFeed.tsx` groups
+    `visibleCandidates` by that field into `>= 2`-member clusters, each
+    rendered as its own labelled `CandidateGrid` inside an
+    `IllustrationGroup` wrapper
+    (`data-testid="question-feed-illustration-group"`). `illustration_id`
+    is nullable and frequently absent (see
+    `local_illustration.py`'s `illustration_id__isnull=False` filter) —
+    a candidate with no illustration, or a candidate whose illustration has
+    no other member, is never dropped: it renders in a flat "ungrouped"
+    `CandidateGrid` below the clusters, visually identical to Level 2's
+    pre-grouping grid. This is a display-only regrouping — tapping any
+    candidate, clustered or not, still calls the same `selectCandidate`
+    with the same `PrintingCandidate` through the same
+    `/2/submitPrintingTag/` path as before; no group-level vote, artist-
+    vote derivation, or persistence was added (that's phase C2).
   - **No-re-presentation rule** (owner-directed fix, was a real live bug:
     Level 1 "Is it M21 203?" → NO → Level 2 grid containing only M21 203
     again): within a single question item's flow, a candidate the user
