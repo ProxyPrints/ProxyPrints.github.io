@@ -22,10 +22,15 @@ from django.utils import timezone
 from cardpicker.models import EnvelopeTrip, ImageEvidence, PilotRunLedger
 from cardpicker.soak_gate import (
     COHORT_COUNT_TOLERANCE,
+    CriterionOutcome,
+    CriterionResult,
+    GateVerdict,
+    SoakGateResult,
     _check_envelope_trips,
     _check_evidence_cohort_count,
     _check_fetch_failure_rate,
     _check_ledger_heartbeat,
+    _check_run_observed,
     _check_vote_yield,
     _check_zero_machine_resolutions,
     evaluate_soak_gate,
@@ -120,10 +125,18 @@ class TestFetchFailureRate:
         result = _check_fetch_failure_rate("run-c1-fail")
         assert result.passed is False
 
-    def test_no_evidence_returns_none(self) -> None:
-        """No evidence rows → passed=None (informational)."""
+    def test_no_evidence_is_insufficient_data_not_a_pass(self) -> None:
+        """No evidence rows → INSUFFICIENT-DATA, and it GATES.
+
+        Regression for the gate-semantics defect: an un-taken measurement used
+        to be `passed=None`, which `all_passed` filtered out of its own check.
+        A step whose fetches produced no evidence rows at all is what a total
+        fetch outage looks like - it must never read as a 0% failure rate.
+        """
         result = _check_fetch_failure_rate("run-c1-empty")
-        assert result.passed is None
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+        assert result.passed is not True
+        assert result.is_gating is True
         assert "No ImageEvidence" in result.detail
 
     def test_single_ok_row(self) -> None:
@@ -220,12 +233,17 @@ class TestEvidenceCohortCount:
         result = _check_evidence_cohort_count("run-c3-above", cohort_size=cohort)
         assert result.passed is False
 
-    def test_no_cohort_size_returns_none(self) -> None:
-        """No cohort_size and no ledger → passed=None."""
+    def test_no_cohort_size_is_insufficient_data_not_a_pass(self) -> None:
+        """No cohort_size and no ledger → INSUFFICIENT-DATA, and it GATES.
+
+        "We don't know the denominator" must not resolve to "coverage was fine".
+        """
         for _ in range(10):
             _make_evidence("run-c3-nocohort")
         result = _check_evidence_cohort_count("run-c3-nocohort", cohort_size=None)
-        assert result.passed is None
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+        assert result.passed is not True
+        assert result.is_gating is True
 
     def test_uses_ledger_counters_fallback(self) -> None:
         """Without --step-cohort-size, falls back to PilotRunLedger.counters."""
@@ -295,10 +313,17 @@ class TestLedgerHeartbeat:
         result = _check_ledger_heartbeat("run-c5-one")
         assert result.passed is True
 
-    def test_pass_no_rows(self) -> None:
-        """No ledger rows → trivially OK → PASS."""
+    def test_no_ledger_row_is_insufficient_data_not_a_pass(self) -> None:
+        """No ledger rows → INSUFFICIENT-DATA (was: "trivially OK → PASS").
+
+        The ledger row is this criterion's only instrument. A missing row means
+        liveness was NOT measured, not that the run was alive - the old reading
+        let a run that never started report a healthy heartbeat.
+        """
         result = _check_ledger_heartbeat("run-c5-none")
-        assert result.passed is True
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+        assert result.passed is not True
+        assert result.is_gating is True
 
     def test_pass_running_recently(self) -> None:
         """RUNNING ledger with started_at 30min ago → PASS."""
@@ -342,14 +367,20 @@ class TestLedgerHeartbeat:
         assert result.passed is True
 
     def test_different_run_not_counted(self) -> None:
-        """Ledger rows from a different run_id are not in scope."""
+        """A stalled ledger for ANOTHER run_id does not fail this run.
+
+        The target run gets its own healthy (COMPLETED) ledger row, so a PASS
+        here proves scoping - rather than accidentally passing because no row
+        was found at all, which is now INSUFFICIENT-DATA.
+        """
         _make_ledger(
             "run-other",
             status="running",
             started_at=timezone.now() - timedelta(hours=5),
         )
+        _make_ledger("run-c5-diff")
         result = _check_ledger_heartbeat("run-c5-diff")
-        assert result.passed is True
+        assert result.outcome is CriterionOutcome.PASS
 
 
 # ── Criterion 7: vote yield (informational) ─────────────────────────────
@@ -357,10 +388,16 @@ class TestLedgerHeartbeat:
 
 @pytest.mark.django_db
 class TestVoteYield:
-    def test_no_ledger_returns_none(self) -> None:
-        """No ledger row → passed=None."""
+    def test_no_ledger_is_informational_and_never_gates(self) -> None:
+        """No ledger row → INFORMATIONAL (no threshold in v1), never gating.
+
+        The other half of the vocabulary split: this criterion is genuinely NOT
+        APPLICABLE to the verdict, as distinct from criteria 1/3/5's un-taken
+        measurements, so it must not block a widen.
+        """
         result = _check_vote_yield("run-c7-none")
-        assert result.passed is None
+        assert result.outcome is CriterionOutcome.INFORMATIONAL
+        assert result.is_gating is False
 
     def test_reports_counters(self) -> None:
         """Ledger row with counters → reports them."""
@@ -376,7 +413,8 @@ class TestVoteYield:
             votes_written=980,
         )
         result = _check_vote_yield("run-c7-counters")
-        assert result.passed is None  # informational only
+        assert result.outcome is CriterionOutcome.INFORMATIONAL  # reported, never gating
+        assert result.is_gating is False
         assert "votes_written=980" in result.measured
         assert "completed=990/1000" in result.measured
 
@@ -423,14 +461,14 @@ class TestEvaluateSoakGate:
         assert "crash-drill-reminder" not in names
 
     def test_criteria_count_without_canary(self) -> None:
-        """Without canary step, should have 6 criteria (1-5 + 7)."""
+        """Without canary step: criterion 0 plus criteria 1-5 and 7 = 7 rows."""
         result = evaluate_soak_gate("run-count", canary_step=False)
-        assert len(result.criteria) == 6
+        assert len(result.criteria) == 7
 
     def test_criteria_count_with_canary(self) -> None:
-        """With canary step, should have 7 criteria."""
+        """With canary step, criterion 6 is added = 8 rows."""
         result = evaluate_soak_gate("run-count-canary", canary_step=True)
-        assert len(result.criteria) == 7
+        assert len(result.criteria) == 8
 
 
 # ── Management command ───────────────────────────────────────────────────
@@ -472,16 +510,26 @@ class TestSoakGateReportCommand:
         assert exc_info.value.code == 1
 
     def test_output_contains_all_criteria(self) -> None:
-        """Output block contains per-criterion lines."""
+        """Output block contains per-criterion lines.
+
+        The run is fully populated: an empty run now exits 2 before a caller
+        could read the block, so a bare `call_command` here would be asserting
+        on output the command never got to print.
+        """
         run_id = "run-cmd-full"
+        for _ in range(10):
+            _make_evidence(run_id, fetch_ok=True)
+        _make_ledger(run_id, counters={"cohort_size": 10})
         out = io.StringIO()
         call_command(
             "soak_gate_report",
             run_id=run_id,
+            step_cohort_size=10,
             stdout=out,
             stderr=io.StringIO(),
         )
         output = out.getvalue()
+        assert "run-observed" in output
         assert "fetch-failure-rate" in output
         assert "unacknowledged-envelope-trips" in output
         assert "evidence-cohort-count" in output
@@ -490,15 +538,178 @@ class TestSoakGateReportCommand:
         assert "vote-yield" in output
 
     def test_canary_step_flag(self) -> None:
-        """--canary-step includes the crash-drill reminder."""
+        """--canary-step includes the crash-drill reminder, and it does not gate."""
         run_id = "run-cmd-canary"
+        for _ in range(10):
+            _make_evidence(run_id, fetch_ok=True)
+        _make_ledger(run_id, counters={"cohort_size": 10})
         out = io.StringIO()
         call_command(
             "soak_gate_report",
             run_id=run_id,
+            step_cohort_size=10,
             canary_step=True,
             stdout=out,
             stderr=io.StringIO(),
         )
         output = out.getvalue()
         assert "crash-drill-reminder" in output
+        # INFORMATIONAL prints as REPORT and must not stop the widen
+        assert "[REPORT] crash-drill-reminder" in output
+        assert "VERDICT: PASS" in output
+
+
+# ── Criterion 0 + verdict vocabulary (2026-07-29 gate-semantics fix) ─────
+#
+# These are the regression tests for the defect the rest of this file could not
+# have caught: the gate's aggregate could not return a negative answer for a run
+# that was never observed. `all_passed` was
+#
+#     all(c.passed is True for c in self.criteria if c.passed is not None)
+#
+# which drops every un-computable criterion from its own check and then, on the
+# remaining zero-row "passes", reports PASS over what is effectively an empty
+# sequence. Each test below fails against that implementation.
+
+
+@pytest.mark.django_db
+class TestRunObserved:
+    def test_unobserved_run_is_insufficient_data(self) -> None:
+        """A run_id with no evidence, no ledger and no votes → INSUFFICIENT-DATA."""
+        result = _check_run_observed("run-c0-never-happened")
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+        assert result.is_gating is True
+
+    def test_evidence_alone_is_an_observation(self) -> None:
+        _make_evidence("run-c0-evidence")
+        assert _check_run_observed("run-c0-evidence").outcome is CriterionOutcome.PASS
+
+    def test_ledger_alone_is_an_observation(self) -> None:
+        _make_ledger("run-c0-ledger")
+        assert _check_run_observed("run-c0-ledger").outcome is CriterionOutcome.PASS
+
+    def test_votes_alone_are_an_observation(self) -> None:
+        from cardpicker.models import CardPrintingTag, VoteSource
+
+        CardPrintingTag.objects.create(
+            card=CardFactory(),
+            printing=CanonicalCardFactory(),
+            is_no_match=False,
+            anonymous_id="local-ocr-v1",
+            run_id="run-c0-votes",
+            source=VoteSource.OCR,
+        )
+        assert _check_run_observed("run-c0-votes").outcome is CriterionOutcome.PASS
+
+    def test_other_runs_observations_do_not_count(self) -> None:
+        """Another run's rows must not make THIS run look observed."""
+        _make_evidence("run-c0-other")
+        _make_ledger("run-c0-other-ledger")
+        assert _check_run_observed("run-c0-mine").outcome is CriterionOutcome.INSUFFICIENT_DATA
+
+
+@pytest.mark.django_db
+class TestSoakWithNoObservationsIsNotSafeToWiden:
+    """THE regression test the brief requires: a soak with zero observations."""
+
+    def test_nonexistent_run_does_not_pass(self) -> None:
+        result = evaluate_soak_gate("run-that-never-happened")
+        assert result.verdict is GateVerdict.INSUFFICIENT_DATA
+        assert result.all_passed is False
+
+    def test_nonexistent_run_with_canary_step_does_not_pass(self) -> None:
+        """The manual crash-drill reminder must not dilute an unobserved run."""
+        result = evaluate_soak_gate("run-that-never-happened-canary", canary_step=True)
+        assert result.verdict is GateVerdict.INSUFFICIENT_DATA
+        assert result.all_passed is False
+
+    def test_command_exits_2_and_says_not_a_pass(self) -> None:
+        out, err = io.StringIO(), io.StringIO()
+        with pytest.raises(SystemExit) as exc_info:
+            call_command("soak_gate_report", run_id="run-cmd-unobserved", stdout=out, stderr=err)
+        assert exc_info.value.code == 2
+        output = out.getvalue()
+        assert "VERDICT: INSUFFICIENT-DATA" in output
+        assert "VERDICT: PASS" not in output
+        assert "safe to widen" not in output
+        assert "run-observed" in output
+        # No rollback advice: there are no votes from this run to purge.
+        assert "purge_machine_votes" not in output
+
+    def test_empty_criteria_list_is_not_a_pass(self) -> None:
+        """`all()` over an empty sequence is True - that must not leak back in."""
+        assert SoakGateResult().verdict is GateVerdict.INSUFFICIENT_DATA
+        assert SoakGateResult().all_passed is False
+
+
+@pytest.mark.django_db
+class TestVerdictVocabulary:
+    """PASS / FAIL / INSUFFICIENT-DATA are three distinct operator actions."""
+
+    def _observed_run(self, run_id: str, *, rows: int = 10) -> None:
+        for _ in range(rows):
+            _make_evidence(run_id, fetch_ok=True)
+        _make_ledger(run_id, counters={"cohort_size": rows})
+
+    def test_healthy_run_still_passes(self) -> None:
+        """The positive case: the fix must not make a good soak unwidenable."""
+        self._observed_run("run-v-pass")
+        result = evaluate_soak_gate("run-v-pass", step_cohort_size=10)
+        assert result.verdict is GateVerdict.PASS
+        assert result.all_passed is True
+        assert all(c.outcome is not CriterionOutcome.INSUFFICIENT_DATA for c in result.criteria)
+
+    def test_measured_bad_run_fails(self) -> None:
+        self._observed_run("run-v-fail")
+        _make_envelope_trip("run-v-fail", acknowledged=False)
+        result = evaluate_soak_gate("run-v-fail", step_cohort_size=10)
+        assert result.verdict is GateVerdict.FAIL
+        assert result.all_passed is False
+
+    def test_unmeasurable_criterion_blocks_an_otherwise_clean_run(self) -> None:
+        """Observed run, clean criteria, but cohort size unknowable → not a PASS.
+
+        This is the narrow case the old aggregate silently widened on: every
+        criterion it could compute was fine, and the one it could not was
+        dropped from the check.
+        """
+        run_id = "run-v-unmeasurable"
+        for _ in range(10):
+            _make_evidence(run_id, fetch_ok=True)
+        _make_ledger(run_id, counters={})  # ledger exists, but carries no cohort_size
+        result = evaluate_soak_gate(run_id, step_cohort_size=None)
+        assert result.verdict is GateVerdict.INSUFFICIENT_DATA
+        assert result.all_passed is False
+        unmeasured = [c.name for c in result.criteria if c.outcome is CriterionOutcome.INSUFFICIENT_DATA]
+        assert unmeasured == ["evidence-cohort-count"]
+
+    def test_fail_outranks_insufficient_data(self) -> None:
+        """Both halt, but only FAIL carries the rollback instruction."""
+        run_id = "run-v-both"
+        for _ in range(10):
+            _make_evidence(run_id, fetch_ok=True)
+        _make_ledger(run_id, counters={})  # → criterion 3 INSUFFICIENT-DATA
+        _make_envelope_trip(run_id, acknowledged=False)  # → criterion 2 FAIL
+        result = evaluate_soak_gate(run_id, step_cohort_size=None)
+        assert result.verdict is GateVerdict.FAIL
+
+        out = io.StringIO()
+        with pytest.raises(SystemExit) as exc_info:
+            call_command("soak_gate_report", run_id=run_id, stdout=out, stderr=io.StringIO())
+        assert exc_info.value.code == 1
+        assert "purge_machine_votes" in out.getvalue()
+
+    def test_informational_criteria_never_gate(self) -> None:
+        """A run whose only non-PASS rows are INFORMATIONAL still passes."""
+        self._observed_run("run-v-info")
+        result = evaluate_soak_gate("run-v-info", step_cohort_size=10, canary_step=True)
+        informational = [c.name for c in result.criteria if not c.is_gating]
+        assert set(informational) == {"crash-drill-reminder", "vote-yield"}
+        assert result.verdict is GateVerdict.PASS
+
+    def test_passed_property_never_reports_true_for_a_non_verdict(self) -> None:
+        """The compat shim must not resurrect the defect through the back door."""
+        for outcome in CriterionOutcome:
+            result = CriterionResult(name="x", outcome=outcome, measured="", detail="")
+            assert (result.passed is True) == (outcome is CriterionOutcome.PASS)
+            assert (result.passed is False) == (outcome is CriterionOutcome.FAIL)
