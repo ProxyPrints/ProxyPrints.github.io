@@ -59,7 +59,11 @@ function NotComputedYet() {
 // Exported (unlike the equivalent pre-transform ContributionsOrDefault) so Jest can exercise the
 // no-backend/loading/cache-miss/populated state machine directly without also mounting
 // ProjectContainer's useNavbarHeight (ResizeObserver/MutationObserver) machinery - see
-// stats.test.tsx.
+// features/stats/StatsPage.test.tsx. That test lives under src/features/, NOT src/pages/ -
+// Next.js compiles every file under src/pages/ into the app's routable/client bundle, and a
+// test file there would drag in src/mocks/server.ts (the msw NODE server, needs `async_hooks`)
+// and break `next build` (confirmed: this broke CI on this branch's first push - "Module not
+// found: Can't resolve 'async_hooks'" - before the test was relocated here).
 export function CatalogStatsBody() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   const catalogStatsQuery = useGetCatalogStatsQuery();

@@ -201,8 +201,12 @@ migration (schedule row created once, `HOURLY`, reverses/reapplies
 cleanly).
 
 **Frontend** (branch `feat/stats-page-frontend`, 2026-07-29):
-`frontend/src/pages/stats.test.tsx` (no-backend/cache-miss/populated state
-machine), `frontend/src/features/stats/RunHistoryPanel.test.tsx` (null
+`frontend/src/features/stats/StatsPage.test.tsx` (no-backend/cache-miss/
+populated state machine - deliberately NOT under `src/pages/`, since
+Next.js compiles every file there into the client bundle and this test
+imports the msw node server; see that file's own header comment and
+`pages/stats.tsx`'s `CatalogStatsBody` export comment),
+`frontend/src/features/stats/RunHistoryPanel.test.tsx` (null
 `votesWritten`/`durationSeconds` render as "—", never "0"), and
 `frontend/src/features/stats/ParticipationGraph.test.tsx` (the homepage
 graph reads correctly under both today's real vote ratio and the

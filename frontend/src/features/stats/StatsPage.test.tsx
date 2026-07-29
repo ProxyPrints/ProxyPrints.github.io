@@ -18,7 +18,7 @@ import {
 import { server } from "@/mocks/server";
 import { setupStore } from "@/store/store";
 
-import { CatalogStatsBody } from "./stats";
+import { CatalogStatsBody } from "../../pages/stats";
 
 function renderBody(backend: { url: string | null }) {
   const store = setupStore({ backend });
