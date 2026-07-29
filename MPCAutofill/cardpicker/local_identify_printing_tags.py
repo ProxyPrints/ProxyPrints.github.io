@@ -440,6 +440,20 @@ def _eligible_base_queryset(
     already bounds them - nothing to push in there. `card_ids=None` (BULK mode - every
     management-command caller, `run_pilot`, `run_name_frequency_elimination`,
     `count_below_resolution_floor`, `select_candidates`) leaves this byte-identical to before.
+
+    NOT EVERY CALLER OF THIS QUERYSET MAY SAFELY BE SCOPED, and the parameter existing here is
+    not permission to pass it - stated explicitly because a future per-batch wiring pass will
+    read this signature before it reads the callers. `run_name_frequency_elimination` gates its
+    vote on `len(card_ids) != 1` over the cards this queryset returns for a NAME - i.e. on
+    "exactly one unresolved eligible card exists CATALOG-WIDE for this name", which that
+    function's own docstring calls "the difference between a sound inference and a coin flip".
+    Narrowing this queryset to a micro-batch would silently reinterpret that count as "exactly
+    one WITHIN THE BATCH" and cast votes for names whose other unresolved cards merely sat
+    outside it; `compute_covered_printing_pks()` alongside it is catalog-wide in the same way.
+    `run_lands_identify` (the caller scoped under issue #533's first prerequisite) is safe
+    because its own predicate is strictly per-card - `is_lands_target` on that card's own name
+    and candidate count - never a count over the returned population. Any further caller must be
+    re-derived against that distinction, not assumed into it.
     """
     non_rescannable_scanned_card_ids_qs = CardScanLog.objects.filter(anonymous_id=anonymous_id).exclude(
         skip_reason__in=RESCANNABLE_SKIP_REASONS
