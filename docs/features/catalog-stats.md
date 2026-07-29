@@ -220,6 +220,57 @@ understate progress" concern - shipping either now would be misleading in
 the other direction. A future pass revisits both once the underlying
 numbers move enough to be worth a chart.
 
+## The gated human-progress series (2026-07-29 owner ruling)
+
+The owner's original idea for the homepage graph was a literal progress bar
+
+- `humanVotes.total` filling up toward `total`. `ParticipationGraph.tsx`'s
+  own module comment explains why that reads as a dead 0.74px stripe at
+  today's real ~0.1% ratio. Rather than drop the idea, it now ships **gated**:
+  the bar joins the homepage graph once the ratio would actually be legible,
+  implemented in `frontend/src/features/stats/humanProgressReveal.ts`.
+
+- **`HUMAN_VOTE_REVEAL_PERCENT`** (default `10`, i.e. 10%) - the threshold,
+  as a real percentage. Adjustable in one line in that file, or overridable
+  at build time (no source edit) via the `NEXT_PUBLIC_HUMAN_VOTE_REVEAL_PERCENT`
+  environment variable - useful for a self-hoster running a much smaller (or
+  larger) catalog than production's ~230k cards, where 10% of THEIR catalog
+  is reached at a very different absolute vote count.
+- **`HUMAN_VOTE_REVEAL_HYSTERESIS_PP`** (`1`, in percentage points) - one-way
+  hysteresis around that threshold: the series reveals at
+  `>= HUMAN_VOTE_REVEAL_PERCENT`, but once revealed, only hides again once
+  the ratio drops below `HUMAN_VOTE_REVEAL_PERCENT - HUMAN_VOTE_REVEAL_HYSTERESIS_PP`. This prevents the homepage layout from
+  flipping on every load if the ratio sits right on the boundary.
+- **Single accessor, single computation**: `humanProgressRatioPercent()` is
+  the one place `humanVotes.total / total` is computed; both the reveal gate
+  and the drawn bar's fill width read the SAME value, computed once per
+  render in `ParticipationGraph.tsx`. Gating on one number and drawing
+  another would let the series unlock while still rendering as a hairline -
+  the exact failure this feature exists to prevent.
+- **Units caveat**: `participation.humanVotes.total` counts _votes_;
+  `participation.total` counts _cards_. One card can carry several human
+  votes (printing tag + artist + tag), so this ratio over-counts relative to
+  "distinct cards with at least one human vote" - it is an approximation of
+  catalog coverage, not an exact measure. Documented at
+  `humanProgressRatioPercent`'s own definition; swapping in an exact
+  backend field (distinct cards carrying >= 1 human vote) later is a
+  one-line change to that function's body only. That field does not exist
+  yet - not built as part of this pass.
+- **Below the threshold, nothing changes**: no placeholder, no "0%
+  complete" hint, no teaser - the series simply does not exist, and the
+  graph is byte-for-byte the design described above. **At or above it**,
+  the series joins on the graph's existing single axis (never a second
+  y-scale), using the human series' established colour
+  (`var(--bs-primary)`, the same token `VoterDotMatrix`'s dots and the
+  page's CTA buttons already use). Neither state ever renders a percentage,
+  or `participation.total` itself, as literal text - the ratio only ever
+  drives the bar's width.
+- A separate, always-present addition (not gated by this threshold): a
+  "Start with one card" button immediately after the dot-matrix's hollow
+  "you could be next" mark, linking to `/whatsthat`, gated on
+  `remoteBackendConfigured` (same condition `Navbar.tsx` uses for its own
+  What's That Card? link).
+
 ## Endpoint
 
 `GET 1/catalogStats/` (`views.get_catalog_stats`) - no parameters, always
@@ -281,5 +332,10 @@ imports the msw node server; see that file's own header comment and
 `frontend/src/features/stats/ParticipationGraph.test.tsx` (the homepage
 graph reads correctly under both today's real vote ratio and the
 post-machine-sweep ratio, with no percentage ever computed against
-`total` - see that file's own module comment). Playwright:
-`frontend/tests/Stats.spec.ts` and `frontend/tests/ParticipationGraph.spec.ts`.
+`total` - see that file's own module comment; also covers the "Start with
+one card" CTA gating and the gated human-progress series, third fixture
+`participationAtRevealThreshold`), and
+`frontend/src/features/stats/humanProgressReveal.test.ts` (the reveal
+threshold's own hysteresis band, pure-function level - see "The gated
+human-progress series" above). Playwright: `frontend/tests/Stats.spec.ts`
+and `frontend/tests/ParticipationGraph.spec.ts`.

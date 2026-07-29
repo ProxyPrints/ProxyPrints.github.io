@@ -13,6 +13,14 @@
  * ParticipationGraph.test.tsx's own "reads correctly against both fixtures" test) - if it
  * doesn't, that component has smuggled in a dependency on the ratio this task's directive
  * forbids rendering.
+ *
+ * A third fixture, `participationAtRevealThreshold` (2026-07-29 owner ruling,
+ * `features/stats/humanProgressReveal.ts`) - a hypothetically much smaller catalog (2,370 cards)
+ * carrying the SAME real 237 human votes, so `humanVotes.total / total` lands at exactly
+ * `HUMAN_VOTE_REVEAL_PERCENT`'s default of 10%. Pinned to that default rather than computed from
+ * the live `HUMAN_VOTE_REVEAL_PERCENT` export on purpose - a fixture that silently retargets
+ * itself whenever the threshold constant changes would stop testing "exactly at the boundary" and
+ * start testing "wherever the boundary currently is", which is not the same guarantee.
  */
 import { Participation } from "@/common/schema_types";
 
@@ -55,6 +63,22 @@ export const participationPostSweep: Participation = {
   md5Groups: {
     groupsWithMultipleCards: 16_957,
     cardsInMultiCardGroups: 34_095,
+    largestGroupSize: 5,
+  },
+};
+
+// 237 / 2_370 = exactly 10% - see this file's own module comment for why the denominator is
+// pinned to a literal rather than derived from the live HUMAN_VOTE_REVEAL_PERCENT export.
+export const participationAtRevealThreshold: Participation = {
+  total: 2_370,
+  confirmable: 1_400,
+  contested: 300,
+  fresh: 670,
+  humanVotes: { printingTag: 125, artist: 6, tag: 106, total: 237 },
+  distinctHumanVoters: 11,
+  md5Groups: {
+    groupsWithMultipleCards: 169,
+    cardsInMultiCardGroups: 340,
     largestGroupSize: 5,
   },
 };
