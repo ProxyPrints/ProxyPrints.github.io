@@ -19,6 +19,7 @@ from cardpicker.collector_line_artist import (
     MIN_CANDIDATE_LETTERS,
     MIN_TRUNCATED_LETTERS,
     PrintingArtistLookup,
+    _joint_credit_components,
     build_artist_lexicon,
     build_name_artist_lookup,
     recover_artist_from_card_text,
@@ -67,6 +68,38 @@ LEXICON_NAMES = [
     "Richard Whitters",
     "Richard Wright",
     "Rebecca Guay",
+    # JOINT / COLLABORATIVE CREDITS (2026-07-29). Every entry below is a verbatim live
+    # `CanonicalArtist.name` - both the joint rows and the standalone rows for their components -
+    # chosen to cover each shape the separator census turned up:
+    #   - "Greg Hildebrandt & Tim Hildebrandt", the reported production defect (card 679), with
+    #     BOTH standalone components also on record, and its own reversed-order twin
+    #     "Tim Hildebrandt & Greg Hildebrandt", which the live lexicon really does carry as a
+    #     separate row;
+    #   - "Paolo Parente & Brian Snõddy", the ORDER-REVERSED case - the recovered name is the
+    #     SECOND component, so a first-component-only rule would miss it;
+    #   - "M. W. Kaluta & DiTerlizzi", whose components are both standalone entries and whose
+    #     first one carries the initials/periods `_normalize` has to erase;
+    #   - "Anthony S. Waters & Edward P. Beard, Jr.", a joint credit with a COMMA inside its
+    #     second component - the reason comma is not a separator;
+    #   - "Wesley Burt & コーヘー", whose second component normalizes to the EMPTY string - the
+    #     reason the degenerate-split guard tests the raw part, not the normalized one;
+    #   - "Daarken & Jared Blando" was already here, and "Jared Blando" is deliberately NOT added:
+    #     a component with no standalone lexicon row of its own must still decompose.
+    "Greg Hildebrandt",
+    "Tim Hildebrandt",
+    "Greg Hildebrandt & Tim Hildebrandt",
+    "Tim Hildebrandt & Greg Hildebrandt",
+    "Paolo Parente",
+    "Brian Snõddy",
+    "Paolo Parente & Brian Snõddy",
+    "M. W. Kaluta",
+    "DiTerlizzi",
+    "M. W. Kaluta & DiTerlizzi",
+    "Anthony S. Waters",
+    "Edward P. Beard, Jr.",
+    "Anthony S. Waters & Edward P. Beard, Jr.",
+    "Wesley Burt",
+    "Wesley Burt & コーヘー",
 ]
 LEXICON = build_artist_lexicon(LEXICON_NAMES)
 
@@ -448,6 +481,189 @@ class TestCardNameNarrowing:
         )
         assert result is not None
         assert result.canonical_name == "Lindsey Look"
+
+
+class TestJointArtistCredits:
+    """JOINT / COLLABORATIVE CREDITS (2026-07-29) - a recovered artist that is a COMPONENT of a
+    joint credit must not contradict that credit.
+
+    The production defect, verbatim (card 679, "Weathered Wayfarer (NormalPlus Greg Hildebrandt &
+    Tim Hildebrandt)"): the legal line reads `... GREG HILDEBRANDT & TIM HILDEBRAMBT2022 ...` with
+    tesseract garbling the second surname. `GREG HILDEBRANDT` matches the STANDALONE entry at ratio
+    1.0; the card's real printing is credited to the JOINT entry, which is longer than the
+    candidate and so reachable only in TRUNCATED mode - which is off for the legal line. So the
+    joint entry never entered the compatible set and a correct vote was judged contradicted, and
+    the live Stage D veto (`skip_reason="artist-mismatch"`) withheld it.
+
+    Separator vocabulary is MEASURED, not assumed - a read-only census of all 2,523 live
+    `CanonicalArtist` rows on 2026-07-29 found `' & '` on 219 rows and NO other joint form at all
+    (`' and '`, `' + '`, `';'`, `' x '`, `'|'`, dashes: zero rows each). Its 20 comma rows are name
+    suffixes and Unfinity age gags, never collaborations, and its one `'/'` row is a single
+    person's name in two scripts. All 219 joint rows have exactly two components.
+
+    Every string below is a real production artist name or a real production OCR line."""
+
+    def test_the_reported_production_defect_card_679(self):
+        """Verbatim legal line from production card 679, with tesseract's own garbling of the
+        second surname. Before this fix `is_compatible_with` returned False here and Stage D
+        vetoed a CORRECT vote."""
+        raw_legal = "034/577 R ,\n2X2 « EN © GREG HILDEBRANDT & TIM HILDEBRAMBT2022 Proxy * Not for Sale\n"
+        result = recover_artist_from_card_text("", raw_legal, LEXICON)
+        assert result is not None
+        assert result.compatible_names == ("Greg Hildebrandt",)
+        assert result.is_compatible_with("Greg Hildebrandt & Tim Hildebrandt")
+
+    def test_the_second_component_is_just_as_compatible_as_the_first(self):
+        """`Brian Snõddy` is the SECOND component of "Paolo Parente & Brian Snõddy" - a
+        first-component-only (prefix) rule would miss the entire order-reversed population. The
+        `õ` also proves the comparison runs through `_normalize` on both sides."""
+        result = recover_artist_from_card_text("", "233/281 R\nMH2 « EN BRIAN SNODDY\n", LEXICON)
+        assert result is not None
+        assert result.compatible_names == ("Brian Snõddy",)
+        assert result.is_compatible_with("Paolo Parente & Brian Snõddy")
+
+    def test_it_works_when_only_the_first_component_survives_truncation(self):
+        """THE COMMON CASE. The crop clips the RIGHT edge, so the second component of a joint
+        credit is exactly what gets lost. Here the collector line is clipped mid-surname and there
+        is no legal-line text at all, so only a truncated prefix of the first component exists -
+        and the joint printing still must not be contradicted."""
+        result = recover_artist_from_collector_line("034/577 R\n2X2 « EN GREG HILDEBRAN", LEXICON)
+        assert result is not None
+        assert result.is_compatible_with("Greg Hildebrandt & Tim Hildebrandt")
+        assert result.is_compatible_with("Tim Hildebrandt & Greg Hildebrandt")
+
+    def test_a_component_that_has_no_standalone_lexicon_row_still_decomposes(self):
+        """ "Jared Blando" is deliberately absent from the fixture lexicon, exactly as ~34% of the
+        live joint credits' components are absent from the real one. Decomposition is a property
+        of the ARGUMENT STRING, not a lexicon lookup, so it does not depend on that."""
+        result = recover_artist_from_card_text("", "003/030 M\nZNE «FR > DAARKEN\n", LEXICON)
+        assert result is not None
+        assert "Daarken" in result.compatible_names
+        assert result.is_compatible_with("Daarken & Jared Blando")
+
+    def test_initials_and_an_internal_comma_do_not_break_decomposition(self):
+        """Two live shapes at once: "M. W. Kaluta" carries initials and periods `_normalize` has
+        to erase, and "Anthony S. Waters & Edward P. Beard, Jr." carries a COMMA inside its second
+        component - which is why the split is on `&` alone and components are never re-split."""
+        kaluta = recover_artist_from_card_text("", "038/249 U\nSTA « EN M. W. KALUTA\n", LEXICON)
+        assert kaluta is not None
+        assert kaluta.compatible_names == ("M. W. Kaluta",)
+        assert kaluta.is_compatible_with("M. W. Kaluta & DiTerlizzi")
+
+        waters = recover_artist_from_card_text("", "092/281 R\nMH3 « EN ANTHONY S. WATERS\n", LEXICON)
+        assert waters is not None
+        assert waters.compatible_names == ("Anthony S. Waters",)
+        assert waters.is_compatible_with("Anthony S. Waters & Edward P. Beard, Jr.")
+        # The second component is itself a whole real artist, comma and all - not "Jr.".
+        assert not waters.is_compatible_with("Edward P. Beard, Jr.")
+
+    def test_a_component_that_normalizes_to_nothing_still_decomposes(self):
+        """ "Wesley Burt & コーヘー" is a real lexicon row whose second component survives
+        `_normalize` as the EMPTY string (it keeps only `[a-z0-9]`). The degenerate-split guard
+        therefore has to test the RAW stripped part - testing the normalized one would classify
+        this row as non-joint.
+
+        Asserted at `_joint_credit_components`, because through `is_compatible_with` this row
+        cannot distinguish the two: `_normalize("Wesley Burt & コーヘー")` is exactly
+        `"wesleyburt"`, so the DIRECT membership test already answers True either way. That is
+        worth knowing rather than papering over - it is why the compatibility assertion below is
+        not by itself evidence the guard works."""
+        assert _joint_credit_components("Wesley Burt & コーヘー") == ("Wesley Burt", "コーヘー")
+        result = recover_artist_from_card_text("", "0055 R\nSLD « EN WESLEY BURT\n", LEXICON)
+        assert result is not None
+        assert "Wesley Burt" in result.compatible_names
+        assert result.is_compatible_with("Wesley Burt & コーヘー")
+
+    def test_two_unrelated_artists_do_not_become_compatible_with_each_other(self):
+        """THE ASYMMETRY THAT MAKES THIS SAFE. Only the joint STRING is ever explained by one of
+        its own components; the components are never made compatible with each other, and an
+        artist who merely shares a joint entry with the recovered one is still a contradiction."""
+        result = recover_artist_from_card_text("", "034/577 R\n2X2 « EN GREG HILDEBRANDT\n", LEXICON)
+        assert result is not None
+        assert result.compatible_names == ("Greg Hildebrandt",)
+        # Both are components of one live joint credit. That must not make them each other's
+        # equal - this is a real disagreement about which printing the card is.
+        assert not result.is_compatible_with("Tim Hildebrandt")
+        # Nor does sharing a joint entry with somebody make an unrelated joint credit compatible.
+        assert not result.is_compatible_with("Paolo Parente & Brian Snõddy")
+
+    def test_a_genuine_contradiction_against_a_joint_printing_is_still_detected(self):
+        """The fix must not buy its number by making everything compatible. A reading of a real
+        artist who appears NOWHERE in the printing's joint credit still contradicts it - this is
+        the shape of all 8 joint-credit contradictions that survive the fix in the full production
+        census (e.g. "Dermot Power" vs "Greg Hildebrandt & Tim Hildebrandt")."""
+        result = recover_artist_from_card_text("", "204/361R\nCLB ¢ EN LINDSEY LOOK\n", LEXICON)
+        assert result is not None
+        assert result.compatible_names == ("Lindsey Look",)
+        assert not result.is_compatible_with("Greg Hildebrandt & Tim Hildebrandt")
+        assert not result.is_compatible_with("Paolo Parente & Brian Snõddy")
+        assert not result.is_compatible_with("Rebecca Guay")
+
+    def test_the_reverse_direction_is_deliberately_still_a_contradiction(self):
+        """A reading of the WHOLE joint credit against a printing credited to one component alone
+        is NOT truncation - the pixels named a collaborator the printing does not credit, which is
+        a real disagreement. Measured cost of holding this line over the full 41,129-vote census:
+        zero restored votes, so the extra false-agreement surface buys nothing."""
+        result = recover_artist_from_card_text("", "017/016 M\nSLD « EN WESLEY BURT & コーヘー\n", LEXICON)
+        assert result is not None
+        assert "Wesley Burt & コーヘー" in result.compatible_names
+        assert not result.is_compatible_with("コーヘー")
+
+    def test_a_degenerate_split_is_not_reported_as_a_joint_credit(self):
+        """A leading or trailing ampersand leaves only one side carrying a name, and that is not a
+        collaboration - decomposition must report NOTHING rather than a one-sided credit, so that
+        "& Foo" can never make everything compatible with "Foo".
+
+        Asserted at `_joint_credit_components` rather than through `is_compatible_with`, and
+        deliberately so: `_normalize` erases a stray ampersand along with every other non-
+        alphanumeric character, so "& Greg Hildebrandt" and "Greg Hildebrandt" are the SAME string
+        by the time the direct membership test sees them and that test already answers both
+        identically. The guard is therefore unobservable from outside - it exists to keep the
+        decomposition itself honest for any future consumer, which is what this asserts."""
+        assert _joint_credit_components("& Greg Hildebrandt") == ()
+        assert _joint_credit_components("Greg Hildebrandt &") == ()
+        assert _joint_credit_components("&") == ()
+        assert _joint_credit_components(" & ") == ()
+
+    def test_a_non_joint_printing_artist_is_compared_exactly_as_before(self):
+        """Nothing about the ordinary path moves: an artist with no separator in it is still a
+        plain normalized set-membership test, both ways."""
+        result = recover_artist_from_card_text("", "204/361R\nCLB ¢ EN LINDSEY LOOK\n", LEXICON)
+        assert result is not None
+        assert result.is_compatible_with("Lindsey Look")
+        assert result.is_compatible_with("lindsey look")  # normalized comparison, unchanged
+        assert not result.is_compatible_with("Mark Tedin")
+        assert result.is_compatible_with("")  # absent data is never a contradiction, unchanged
+
+    def test_storage_is_untouched_by_the_widening(self):
+        """`compatible_names` is NOT widened - only the contradiction test is - so the value the
+        module is willing to STORE cannot change. Card 679 still resolves to exactly one canonical
+        name, and the honesty property (store only when exactly one artist fits) is intact."""
+        result = recover_artist_from_card_text(
+            "", "034/577 R ,\n2X2 « EN © GREG HILDEBRANDT & TIM HILDEBRAMBT2022 Proxy * Not for Sale\n", LEXICON
+        )
+        assert result is not None
+        assert result.canonical_name == "Greg Hildebrandt"
+        assert len(result.compatible_names) == 1
+        # An ambiguous read is still unstorable - widening compatibility did not force a choice.
+        ambiguous = recover_artist_from_collector_line("059/274R\nDMR ¢ EN RON SPEA", LEXICON)
+        assert ambiguous is not None and ambiguous.canonical_name is None
+
+    def test_the_separator_vocabulary_is_ampersand_and_nothing_else(self):
+        """Guards the census's own finding (module docstring): comma is a name suffix, `/` is a
+        transliteration, and no other joint form exists in the live lexicon. Splitting on any of
+        them would manufacture "Jr." as an artist."""
+        assert _joint_credit_components("Greg Hildebrandt & Tim Hildebrandt") == (
+            "Greg Hildebrandt",
+            "Tim Hildebrandt",
+        )
+        assert _joint_credit_components("A&B") == ("A", "B")  # whitespace around `&` is optional
+        assert _joint_credit_components("Edward P. Beard, Jr.") == ()
+        assert _joint_credit_components("宋其金/Song Qijin") == ()
+        assert _joint_credit_components("Tyler Jacobson, age 39") == ()
+        assert _joint_credit_components("Rebecca “Don't Mess with Me” Guay") == ()
+        assert _joint_credit_components("Lindsey Look") == ()
+        assert _joint_credit_components("") == ()
 
 
 class TestNameArtistLookup:
