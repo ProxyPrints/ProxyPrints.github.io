@@ -109,11 +109,47 @@ trips must be acknowledged (via `resolve_envelope_trip --acknowledge-trip <id>`)
 
 **3. Evidence cohort count.** The number of `ImageEvidence` rows
 written for the run must be within ±5% of the step's eligible cohort
-count. The cohort count is either passed via `--step-cohort-size` or
-computed live from `PilotRunLedger.counters["cohort_size"]`. Never
-hardcoded. With neither available the criterion is INSUFFICIENT-DATA —
-"we don't know the denominator" must not resolve to "coverage was fine",
-so pass `--step-cohort-size` to make it evaluable.
+count. Never hardcoded — the reference is read live off the run's own
+ledger row.
+
+The reference cohort is **derived by default**; `--step-cohort-size` is
+an override, not a precondition. Resolution order:
+
+1. `--step-cohort-size` when given (operator knows better);
+2. `PilotRunLedger.counters["cohort_size"]` — written by
+   `run_image_evidence_cohort` at completion;
+3. `PilotRunLedger.counters["batch_size"]` — written by
+   `stage_e_dispatch` at ledger **creation**, alongside `trigger_reason`.
+   Creation-time matters: it is on the row from the start, so a run that
+   crashed halfway — the case this criterion most needs to catch — still
+   has a reference. It is also the only intent counter the streaming
+   Stage E dispatcher records, so without it criterion 3 would need a
+   flag for the very runs the width ramp is made of.
+
+**What the reference may never be derived from.** Only counters
+recording what the run _set out_ to do are eligible. Achievement
+counters (`completed`, `stage_c_completed`, …) and the `ImageEvidence`
+count itself are excluded on purpose: a reference computed from the
+outcome agrees with the outcome by construction, so the criterion would
+compare the run against itself and could never fail. A step that
+silently processed half its cohort writes half the evidence _and_ half
+the completions — they agree perfectly, and the gate would certify it.
+Buying flag-free operation that way would re-introduce an unfailable
+gate, which is a worse trade than the flag it removes.
+
+If no intent counter is present the criterion is INSUFFICIENT-DATA and
+the message **names `--step-cohort-size`**, so a first-time instance
+maintainer can act on it.
+
+**While the run is still RUNNING** the criterion is INSUFFICIENT-DATA
+regardless of where the reference came from: `batch_size` is on the row
+from creation, so an in-flight dispatch has its full intent recorded
+while its evidence is still accumulating, and comparing the two reports
+a shortfall that is merely work not done _yet_. A FAIL there would be
+wrong twice — it accuses a healthy run, and its rollback advice would
+send an operator to `purge_machine_votes` against a live one. The ramp
+still halts (never widen off an in-flight step), and a run stuck
+RUNNING is caught by criterion 5 once it goes stale.
 
 **4. Zero machine-only resolutions.** Mirrors the
 `deductive_backfill.verify_zero_resolutions` pattern: for each card
@@ -151,10 +187,30 @@ After each width-ramp step completes:
 1. Run the soak gate:
 
    ```
-   python manage.py soak_gate_report --run-id <run_id> --step-cohort-size <size>
+   python manage.py soak_gate_report
    ```
 
-   For canary step 0, add `--canary-step`.
+   **No flags are required.** A bare invocation evaluates the most
+   recently started ledger run — reporting which run it picked and the
+   ledger row it came from — and derives criterion 3's cohort from that
+   run's own counters. This is the owner directive "default the default
+   things, disable them with flags" (2026-07-29): an instance owner must
+   get a real verdict without knowing which flags to pass.
+
+   Every flag narrows or overrides that default; none is a precondition:
+
+   ```
+   python manage.py soak_gate_report --run-id <run_id>
+   python manage.py soak_gate_report --run-id <run_id> --step-cohort-size <size>
+   python manage.py soak_gate_report --run-id <run_id> --canary-step
+   ```
+
+   Pin `--run-id` when evaluating a specific run: `stage_e_dispatch`
+   writes one ledger row **per micro-batch**, so the auto-selected
+   default is one batch of a multi-batch step. For canary step 0, add
+   `--canary-step` — it only adds a manual crash-drill reminder and
+   never affects the verdict. With an empty ledger there is nothing to
+   default to, and the command errors naming `--run-id`.
 
 2. Interpret the output (see "The three verdicts" above):
 

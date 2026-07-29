@@ -22,6 +22,7 @@ from django.utils import timezone
 from cardpicker.models import EnvelopeTrip, ImageEvidence, PilotRunLedger
 from cardpicker.soak_gate import (
     COHORT_COUNT_TOLERANCE,
+    COHORT_SIZE_COUNTER_KEYS,
     CriterionOutcome,
     CriterionResult,
     GateVerdict,
@@ -34,6 +35,7 @@ from cardpicker.soak_gate import (
     _check_vote_yield,
     _check_zero_machine_resolutions,
     evaluate_soak_gate,
+    latest_run_id,
 )
 from cardpicker.tests.factories import (
     CanonicalCardFactory,
@@ -713,3 +715,231 @@ class TestVerdictVocabulary:
             result = CriterionResult(name="x", outcome=outcome, measured="", detail="")
             assert (result.passed is True) == (outcome is CriterionOutcome.PASS)
             assert (result.passed is False) == (outcome is CriterionOutcome.FAIL)
+
+
+# ── Flag-free operation (owner directive 2026-07-29) ─────────────────────
+#
+# "default the default things, disable them with flags" - an instance owner
+# must get a real verdict from `soak_gate_report` with no flags at all. These
+# tests pin the pair of properties that have to hold TOGETHER: a bare
+# invocation produces a real verdict, AND the gate still cannot pass a run
+# that never happened.
+
+
+@pytest.mark.django_db
+class TestCohortSizeDerivation:
+    """Criterion 3 derives its reference from the run's own INTENT counters."""
+
+    def test_derives_from_cohort_size_counter(self) -> None:
+        """run_image_evidence_cohort's completion-time counter."""
+        for _ in range(100):
+            _make_evidence("run-d-cohort")
+        _make_ledger("run-d-cohort", counters={"cohort_size": 100, "completed": 100})
+        result = _check_evidence_cohort_count("run-d-cohort", cohort_size=None)
+        assert result.outcome is CriterionOutcome.PASS
+        assert "counters[cohort_size]" in result.measured
+
+    def test_derives_from_batch_size_counter(self) -> None:
+        """stage_e_dispatch's CREATION-time counter - the streaming width ramp's only one."""
+        for _ in range(100):
+            _make_evidence("run-d-batch")
+        _make_ledger("run-d-batch", counters={"trigger_reason": "backlog", "batch_size": 100})
+        result = _check_evidence_cohort_count("run-d-batch", cohort_size=None)
+        assert result.outcome is CriterionOutcome.PASS
+        assert "counters[batch_size]" in result.measured
+
+    def test_batch_size_reference_can_still_FAIL(self) -> None:
+        """The derived reference must be able to produce a negative verdict."""
+        for _ in range(50):  # half the batch's evidence written
+            _make_evidence("run-d-batch-short")
+        _make_ledger("run-d-batch-short", counters={"batch_size": 100})
+        result = _check_evidence_cohort_count("run-d-batch-short", cohort_size=None)
+        assert result.outcome is CriterionOutcome.FAIL
+
+    def test_derives_on_a_crashed_row(self) -> None:
+        """batch_size is written at CREATION, so a run that died halfway is measurable.
+
+        This is the case the criterion most needs to catch, and the one a
+        completion-time-only counter cannot serve.
+        """
+        for _ in range(50):
+            _make_evidence("run-d-crashed")
+        _make_ledger(
+            "run-d-crashed",
+            status="failed",
+            counters={"batch_size": 100, "failure_reason": "RuntimeError: boom"},
+            finished_at=timezone.now(),
+        )
+        result = _check_evidence_cohort_count("run-d-crashed", cohort_size=None)
+        assert result.outcome is CriterionOutcome.FAIL
+        assert "counters[batch_size]" in result.measured
+
+    def test_running_run_is_insufficient_data_not_a_failure(self) -> None:
+        """Coverage is not decidable mid-run - and must not emit rollback advice.
+
+        `batch_size` is on the row from creation, so a healthy in-flight dispatch
+        has full intent recorded while its evidence is still accumulating. FAIL
+        would accuse a healthy run AND tell the operator to purge a live one.
+        """
+        for _ in range(40):
+            _make_evidence("run-d-running")
+        _make_ledger(
+            "run-d-running",
+            status="running",
+            counters={"batch_size": 100},
+            started_at=timezone.now() - timedelta(minutes=5),
+        )
+        result = _check_evidence_cohort_count("run-d-running", cohort_size=None)
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+        assert result.is_gating is True  # still halts the ramp
+
+    def test_running_guard_applies_even_with_an_explicit_flag(self) -> None:
+        """The guard is about the run still moving, not about the reference."""
+        for _ in range(40):
+            _make_evidence("run-d-running-flag")
+        _make_ledger(
+            "run-d-running-flag",
+            status="running",
+            started_at=timezone.now() - timedelta(minutes=5),
+        )
+        result = _check_evidence_cohort_count("run-d-running-flag", cohort_size=100)
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+
+    def test_cohort_size_wins_over_batch_size(self) -> None:
+        """Most specific key first, per COHORT_SIZE_COUNTER_KEYS' ordering."""
+        assert COHORT_SIZE_COUNTER_KEYS == ("cohort_size", "batch_size")
+        for _ in range(100):
+            _make_evidence("run-d-both")
+        _make_ledger("run-d-both", counters={"cohort_size": 100, "batch_size": 9999})
+        result = _check_evidence_cohort_count("run-d-both", cohort_size=None)
+        assert result.outcome is CriterionOutcome.PASS
+        assert "counters[cohort_size]" in result.measured
+
+    def test_explicit_flag_overrides_the_derived_value(self) -> None:
+        for _ in range(100):
+            _make_evidence("run-d-override")
+        _make_ledger("run-d-override", counters={"batch_size": 9999})
+        result = _check_evidence_cohort_count("run-d-override", cohort_size=100)
+        assert result.outcome is CriterionOutcome.PASS
+        assert "--step-cohort-size override" in result.measured
+
+    def test_achievement_counters_are_NOT_used_as_a_reference(self) -> None:
+        """The anti-tautology guard: `completed`/`stage_c_completed` must not stand in.
+
+        A reference taken from the outcome agrees with the outcome by
+        construction. A step that silently processed half its cohort writes half
+        the evidence AND half the completions - if completions were a valid
+        reference the two would agree and the gate would certify it.
+        """
+        for _ in range(50):
+            _make_evidence("run-d-achievement")
+        _make_ledger(
+            "run-d-achievement",
+            counters={"completed": 50, "stage_c_completed": 50, "stage_c_fetch_failures": 0},
+        )
+        result = _check_evidence_cohort_count("run-d-achievement", cohort_size=None)
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+
+    def test_undecidable_case_names_the_flag(self) -> None:
+        """An instance maintainer must be able to act on the message."""
+        for _ in range(10):
+            _make_evidence("run-d-nokey")
+        _make_ledger("run-d-nokey", counters={"scope": "abc"})
+        result = _check_evidence_cohort_count("run-d-nokey", cohort_size=None)
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+        assert "--step-cohort-size" in result.detail
+
+    def test_non_numeric_counter_is_not_a_reference(self) -> None:
+        for _ in range(10):
+            _make_evidence("run-d-badtype")
+        _make_ledger("run-d-badtype", counters={"batch_size": "lots"})
+        result = _check_evidence_cohort_count("run-d-badtype", cohort_size=None)
+        assert result.outcome is CriterionOutcome.INSUFFICIENT_DATA
+
+
+@pytest.mark.django_db
+class TestLatestRunId:
+    def test_empty_ledger_returns_none(self) -> None:
+        assert latest_run_id() is None
+
+    def test_returns_most_recently_started(self) -> None:
+        _make_ledger("run-old", started_at=timezone.now() - timedelta(hours=3))
+        _make_ledger("run-new", started_at=timezone.now() - timedelta(minutes=1))
+        _make_ledger("run-middle", started_at=timezone.now() - timedelta(hours=1))
+        assert latest_run_id() == "run-new"
+
+
+@pytest.mark.django_db
+class TestNoFlagsInvocation:
+    """THE pair of properties the owner ruling requires, held together."""
+
+    def test_bare_invocation_produces_a_real_PASS(self) -> None:
+        """No flags at all -> a real verdict on a healthy run, exit 0."""
+        run_id = "run-noflags-pass"
+        for _ in range(100):
+            _make_evidence(run_id, fetch_ok=True)
+        _make_ledger(run_id, counters={"batch_size": 100})
+        out = io.StringIO()
+        call_command("soak_gate_report", stdout=out, stderr=io.StringIO())  # no flags
+        output = out.getvalue()
+        assert "VERDICT: PASS" in output
+        assert run_id in output
+        assert "auto-selected" in output  # the choice is announced, never silent
+        assert "counters[batch_size]" in output
+
+    def test_bare_invocation_can_still_FAIL(self) -> None:
+        """Flag-free operation must not cost the gate its ability to say no."""
+        run_id = "run-noflags-fail"
+        for _ in range(50):  # only half the batch's evidence
+            _make_evidence(run_id, fetch_ok=True)
+        _make_ledger(run_id, counters={"batch_size": 100})
+        out = io.StringIO()
+        with pytest.raises(SystemExit) as exc_info:
+            call_command("soak_gate_report", stdout=out, stderr=io.StringIO())
+        assert exc_info.value.code == 1
+        assert "VERDICT: FAIL" in out.getvalue()
+        assert "evidence-cohort-count" in out.getvalue()
+
+    def test_bare_invocation_still_cannot_pass_an_unobserved_run(self) -> None:
+        """The other half of the pair: defaulting must not resurrect the defect.
+
+        The latest ledger row exists but the run wrote nothing else - no
+        evidence, no votes. It must not widen.
+        """
+        _make_ledger("run-noflags-empty", status="completed", counters={"batch_size": 100})
+        out = io.StringIO()
+        with pytest.raises(SystemExit) as exc_info:
+            call_command("soak_gate_report", stdout=out, stderr=io.StringIO())
+        assert exc_info.value.code in (1, 2)
+        assert "VERDICT: PASS" not in out.getvalue()
+        assert "safe to widen" not in out.getvalue()
+
+    def test_bare_invocation_on_a_totally_absent_run_still_cannot_pass(self) -> None:
+        """Ledger row for run A, gate defaults to A, but A wrote nothing anywhere."""
+        _make_ledger("run-noflags-nothing", status="completed")
+        out = io.StringIO()
+        with pytest.raises(SystemExit) as exc_info:
+            call_command("soak_gate_report", stdout=out, stderr=io.StringIO())
+        assert exc_info.value.code == 2
+        assert "VERDICT: PASS" not in out.getvalue()
+        assert "safe to widen" not in out.getvalue()
+
+    def test_bare_invocation_on_an_empty_ledger_errors_naming_the_flag(self) -> None:
+        """Nothing to default to -> an actionable error, not a bare verdict."""
+        from django.core.management.base import CommandError
+
+        with pytest.raises(CommandError) as exc_info:
+            call_command("soak_gate_report", stdout=io.StringIO(), stderr=io.StringIO())
+        assert "--run-id" in str(exc_info.value)
+
+    def test_explicit_run_id_does_not_announce_auto_selection(self) -> None:
+        run_id = "run-explicit"
+        for _ in range(100):
+            _make_evidence(run_id, fetch_ok=True)
+        _make_ledger(run_id, counters={"batch_size": 100})
+        _make_ledger("run-decoy", started_at=timezone.now())
+        out = io.StringIO()
+        call_command("soak_gate_report", run_id=run_id, stdout=out, stderr=io.StringIO())
+        output = out.getvalue()
+        assert "auto-selected" not in output
+        assert f"run_id={run_id}" in output

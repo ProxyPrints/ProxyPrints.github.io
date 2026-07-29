@@ -109,6 +109,47 @@ FETCH_FAILURE_RATE_CEILING = 0.01  # ≤ 1%
 COHORT_COUNT_TOLERANCE = 0.05  # ± 5%
 LEDGER_HEARTBEAT_MAX_GAP = timedelta(hours=1)
 
+#: `PilotRunLedger.counters` keys that record how many cards a run SET OUT to process, most
+#: specific first. Criterion 3 reads its reference cohort from the first one present, which is
+#: what lets `soak_gate_report --run-id X` return a real verdict with no other flags.
+#:
+#: Both entries are the run's own statement of INTENT, recorded independently of the
+#: `ImageEvidence` table this criterion counts against them - which is the property that makes
+#: the comparison meaningful rather than circular (see `_check_evidence_cohort_count`):
+#:
+#:   - `cohort_size` - `run_image_evidence_cohort` writes `len(cohort_ids)` at COMPLETION time
+#:     (both the real-cohort and the empty-cohort paths).
+#:   - `batch_size`  - `stage_e_dispatch` writes `len(batch_ids)` at ledger CREATION time,
+#:     alongside `trigger_reason`. Creation-time matters: it is present on a RUNNING row and
+#:     survives a crash, so a step that died halfway - the case this criterion most needs to
+#:     catch - still has a reference to be measured against. It is also the ONLY intent counter
+#:     the streaming Stage E dispatcher records, so without this key criterion 3 would be
+#:     unmeasurable-without-a-flag for the very runs the width ramp is made of.
+#:
+#: DO NOT add achievement counters here (`completed`, `stage_c_completed`, `stage_c_transferred`,
+#: ...) or fall back to the ImageEvidence row count. See `_check_evidence_cohort_count`'s
+#: docstring: a reference derived from the outcome agrees with the outcome by construction, and
+#: turns this criterion back into one that cannot fail.
+COHORT_SIZE_COUNTER_KEYS: tuple[str, ...] = ("cohort_size", "batch_size")
+
+
+def latest_run_id() -> Optional[str]:
+    """The most recently STARTED run's id, or None if the ledger is empty.
+
+    Backs `soak_gate_report`'s flag-free default (owner directive 2026-07-29,
+    "default the default things, disable them with flags"): the gate's own
+    runbook says to run it after a width-ramp step completes, so "the run that
+    started most recently" is the run an operator invoking it bare means.
+
+    Ordering is by `started_at` (`auto_now_add`, never null) rather than pk, so
+    the answer does not depend on insertion order. The caller is responsible
+    for REPORTING which run this picked - a soak gate that silently chooses its
+    own subject is a worse failure than one that asks for a flag, and
+    `stage_e_dispatch` writes one ledger row PER MICRO-BATCH, so the latest row
+    is one batch of a multi-batch step rather than the whole step.
+    """
+    return PilotRunLedger.objects.order_by("-started_at").values_list("run_id", flat=True).first()
+
 
 class CriterionOutcome(Enum):
     """
@@ -308,35 +349,90 @@ def _check_envelope_trips(run_id: str) -> CriterionResult:
 
 def _check_evidence_cohort_count(run_id: str, cohort_size: Optional[int]) -> CriterionResult:
     """Criterion 3: ImageEvidence rows written for the run within ±5% of the
-    step's eligible cohort count. Cohort count is passed in or computed live -
-    NEVER hardcoded (directive: the DB has grown, all counts come from live
-    queries).
+    step's eligible cohort count.
+
+    The reference cohort is DERIVED FROM THE RUN'S OWN LEDGER by default;
+    `--step-cohort-size` is an OVERRIDE for when the operator knows better, not
+    a precondition (owner directive, 2026-07-29: "default the default things,
+    disable them with flags" - an instance owner must get a real verdict from
+    `soak_gate_report --run-id X` with no other flags). Never hardcoded: every
+    reference below is read live off this run's own row.
+
+    WHERE THE REFERENCE MAY COME FROM, AND THE ONE PLACE IT MUST NOT
+    ---------------------------------------------------------------
+    `COHORT_SIZE_COUNTER_KEYS` are the counters recording what the run SET OUT
+    to process. A reference may only ever come from one of those, because this
+    criterion's whole content is "did the run's output cover its intent".
+
+    It must NOT be derived from the run's ACHIEVEMENT counters (`completed`,
+    `stage_c_completed`, ...) and must NOT be derived from the ImageEvidence
+    count itself. Both are the same mistake in different clothing: a reference
+    computed from the outcome makes the criterion compare the run against
+    itself, so it agrees by construction and can never fail. A step that
+    silently processed half its cohort reports half the evidence AND half the
+    completions, the two agree perfectly, and the gate certifies it. That is
+    precisely the defect class this module's docstring exists to document -
+    "count the run's actual observations and call that the cohort" would buy
+    flag-free operation by re-introducing an unfailable gate, which is a worse
+    trade than the flag it removes.
+
+    If no intent counter is present the criterion is INSUFFICIENT-DATA and the
+    detail NAMES `--step-cohort-size`, so a first-time instance maintainer can
+    act on the message rather than be handed an uninterpretable verdict.
     """
     evidence_count = ImageEvidence.objects.filter(run_id=run_id).count()
+    ledger = PilotRunLedger.objects.filter(run_id=run_id).first()
+
+    # COVERAGE IS NOT DECIDABLE WHILE THE RUN IS STILL GOING, and this check must precede the
+    # reference resolution below because it holds no matter where the reference came from.
+    # `batch_size` is recorded at ledger CREATION, so a healthy in-flight dispatch has its full
+    # intent on record while its evidence rows are still accumulating - comparing the two
+    # mid-run reports a shortfall that is simply work not done YET. Left as a FAIL that would
+    # be wrong twice over: it accuses a healthy run, and the FAIL verdict's rollback advice
+    # would tell an operator to `purge_machine_votes` against a live run. INSUFFICIENT-DATA
+    # still halts the ramp (never widen off an in-flight step) while naming the real action.
+    # A run stuck RUNNING is not let through by this: criterion 5 fails it once stale.
+    if ledger is not None and ledger.status == PilotRunLedger.Status.RUNNING:
+        return CriterionResult(
+            name="evidence-cohort-count",
+            outcome=CriterionOutcome.INSUFFICIENT_DATA,
+            measured=f"{evidence_count} evidence rows, run still RUNNING",
+            detail=(
+                f"Run {run_id!r} has not finished (PilotRunLedger.status=running, "
+                f"finished_at unset), so its evidence count is still climbing and cohort "
+                f"coverage cannot be judged yet. Not a pass, and nothing to roll back - "
+                f"wait for the step to finish, then re-run this gate."
+            ),
+        )
 
     if cohort_size is not None and cohort_size > 0:
         reference = cohort_size
-        source = "CLI argument"
+        source = "--step-cohort-size override"
     else:
-        # Compute live from the pilot run ledger's counters.
-        # run_image_evidence_cohort stores counters as a JSONField on PilotRunLedger.
-        ledger = PilotRunLedger.objects.filter(run_id=run_id).first()
-        if ledger is not None and ledger.counters and "cohort_size" in ledger.counters:
-            reference = int(ledger.counters["cohort_size"])
-            source = "PilotRunLedger.counters[cohort_size]"
+        counters = (ledger.counters if ledger is not None else None) or {}
+        for key in COHORT_SIZE_COUNTER_KEYS:
+            if isinstance(counters.get(key), (int, float)):
+                reference = int(counters[key])
+                source = f"PilotRunLedger.counters[{key}]"
+                break
         else:
+            present = ", ".join(sorted(counters)) if counters else "(none)"
             return CriterionResult(
                 name="evidence-cohort-count",
                 # INSUFFICIENT_DATA: gating, unmeasurable. Without a reference cohort there is
                 # no statement to make about whether the step covered its cohort - and "we
                 # don't know the denominator" must not resolve to "the coverage was fine".
                 outcome=CriterionOutcome.INSUFFICIENT_DATA,
-                measured=f"{evidence_count} evidence rows, cohort_size unknown",
+                measured=f"{evidence_count} evidence rows, cohort size unknown",
                 detail=(
-                    "No --step-cohort-size provided and no PilotRunLedger.counters "
-                    "[cohort_size] found for this run - gate cannot compare evidence "
-                    "count against cohort. Pass --step-cohort-size to make this criterion "
-                    "evaluable."
+                    f"Could not derive this run's intended cohort size: none of "
+                    f"{list(COHORT_SIZE_COUNTER_KEYS)} is present in "
+                    f"PilotRunLedger.counters for run_id={run_id!r} "
+                    f"(keys present: {present}). "
+                    f"FIX: re-run with --step-cohort-size <n> to supply it explicitly. "
+                    f"The gate deliberately will NOT substitute this run's own evidence or "
+                    f"completion counts for the cohort - a reference taken from the outcome "
+                    f"agrees with the outcome by construction and could never fail."
                 ),
             )
 
