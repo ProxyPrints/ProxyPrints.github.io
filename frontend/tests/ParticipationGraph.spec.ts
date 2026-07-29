@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
 
 import {
+  catalogStatsAtRevealThreshold,
   catalogStatsCurrentRatio,
   catalogStatsNotComputedYet,
   catalogStatsPostSweep,
@@ -54,5 +55,67 @@ test.describe("homepage participation graph", () => {
     await loadPageWithDefaultBackend(page, "");
 
     await expect(page.getByTestId("participation-graph")).not.toBeVisible();
+  });
+
+  // 2026-07-29 owner ruling - the "Start with one card" CTA after the hollow dot.
+  test("shows a 'Start with one card' button linking to /whatsthat when a backend is configured", async ({
+    page,
+    network,
+  }) => {
+    network.use(catalogStatsCurrentRatio, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "");
+
+    const cta = page.getByTestId("participation-graph-start-one-card");
+    await expect(cta).toBeVisible();
+    await expect(cta).toHaveAttribute("href", "/whatsthat");
+
+    await cta.click();
+    await expect(page).toHaveURL(/\/whatsthat/);
+  });
+
+  test("hides the 'Start with one card' button on a self-hosted instance with no backend configured", async ({
+    page,
+    network,
+  }) => {
+    network.use(catalogStatsCurrentRatio, ...defaultHandlers);
+    await page.goto("/");
+
+    await expect(
+      page.getByTestId("participation-graph-start-one-card")
+    ).toHaveCount(0);
+  });
+
+  // 2026-07-29 owner ruling - the threshold-gated human-progress series
+  // (features/stats/humanProgressReveal.ts).
+  test("reveals the human-progress series once the ratio reaches the threshold", async ({
+    page,
+    network,
+  }) => {
+    network.use(catalogStatsAtRevealThreshold, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "");
+
+    await expect(page.getByTestId("participation-graph")).toBeVisible();
+    await expect(
+      page.getByTestId("participation-graph-human-progress")
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("participation-graph-human-progress-bar")
+    ).toBeVisible();
+    await expect(
+      page.getByText("People are turning that into progress")
+    ).toBeVisible();
+  });
+
+  test("does not show the human-progress series below the threshold", async ({
+    page,
+    network,
+  }) => {
+    network.use(catalogStatsCurrentRatio, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "");
+
+    await expect(
+      page.getByTestId("participation-graph-human-progress")
+    ).toHaveCount(0);
+    await expect(page.getByText("The catalog needs human eyes")).toBeVisible();
   });
 });
