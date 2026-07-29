@@ -201,26 +201,32 @@ rather than risk poisoning the cache with an empty or partial result -
 today's or yesterday's good data stays in place until a fetch actually
 succeeds.
 
-**OPEN OPERATIONAL ITEM (owner decision, not resolved by this change):**
-two things need action before this is actually live in production, and
-neither is something a Claude Code session should decide unilaterally:
+**OPEN ITEMS (owner decisions, neither resolved by this change):**
 
 1. **A daily cron must be scheduled** to run
    `warm_artist_external_links` - nothing runs it automatically yet.
-2. **The cache backend gap.** This project's `CACHES` setting has no
-   override, so Django falls back to its default `LocMemCache` - a cache
-   that lives in ONE PYTHON PROCESS's memory only (the same documented,
-   load-bearing assumption behind `cardpicker.review_clusters`'s own
-   module docstring and `views.py`'s rate-limit caches: "the app runs a
-   single gunicorn worker with Django's default (per-process) LocMemCache
-   backend"). A cron-invoked `manage.py warm_artist_external_links` runs
-   in a SEPARATE OS process from gunicorn and therefore writes to a cache
-   the running web server can never see. Until either (a) a shared cache
-   backend (e.g. Redis) is introduced, or (b) this command is triggered to
-   run inside the gunicorn process itself, warming the cache from an
-   external cron entry will not reach the read path at all. See
-   `cardpicker/management/commands/warm_artist_external_links.py`'s own
-   docstring for the full explanation.
+2. **A shared cache backend is a tracked prerequisite, not something this
+   PR fixes.** This feature uses the standard Django cache framework
+   (`django.core.cache`), same as `get_funnel_counts` and
+   `cardpicker.review_clusters` - both of which work correctly today under
+   this project's default `LocMemCache`, because gunicorn runs a single
+   worker (`docker/django/Dockerfile`'s `CMD` has no `--workers` flag) and
+   the SAME process both computes/writes and later reads its own cache.
+   This feature is different in one specific way, independent of worker
+   count: `warm_artist_external_links` runs as a separate `manage.py`
+   invocation (a cron entry), which is a DIFFERENT OS process from the
+   running web server regardless of how many gunicorn workers exist. That
+   process's cache writes are therefore never visible to the process
+   serving `2/artistExternalLinks/` requests - until a shared backend is
+   configured, this endpoint returns its not-found fallback on every
+   request (the frontend degrades to today's existing behaviour, which is
+   safe) while the cron itself reports success every run. Tracked as
+   **issue #538** (filed generically - the unbuilt vote-stats design would
+   have the same cross-process shape). The likely fix
+   (`django.core.cache.backends.db.DatabaseCache` on the Postgres already
+   present - no new service, no new dependency) is a **separate PR**; this
+   endpoint's cache-read/cache-write code needs no further edit once that
+   lands, since it already uses the standard `django.core.cache` API.
 
 ### Licence status
 

@@ -17,10 +17,24 @@ third-party data whose licence terms are still an open question (tracked separat
 refreshable cache is the right posture rather than a permanent copy in our own database. Follows
 the `funnel-counts-v1` pattern already established in `views.py` (`get_funnel_counts`), with one
 structural difference: funnel-counts computes AND caches inline, in the same request that serves
-it, so a same-process cache is sufficient by construction. This feature's cache is instead
-populated by a SEPARATE management-command invocation (see that command's own docstring for why
-this is a real, currently-unresolved operational gap on this project's LocMemCache deployment,
-not just "schedule a cron job").
+it; this feature's cache is instead populated by a SEPARATE management-command invocation.
+
+**Shared cache-backend prerequisite (issue #538, not this module's to fix).** This module uses
+the standard Django cache framework, same as `get_funnel_counts` and `cardpicker.review_clusters`
+- both of which work correctly today under this project's default `LocMemCache`, because gunicorn
+runs a single worker (`docker/django/Dockerfile`'s `CMD` has no `--workers` flag) and the SAME
+process both writes and later reads its own cache. This feature is different in one specific way,
+independent of worker count: `warm_artist_external_links` runs as a separate `manage.py`
+invocation (a cron entry) - a DIFFERENT OS process from the running web server regardless of
+worker count - so its cache writes are never visible to the process serving
+`2/artistExternalLinks/` requests. Until a shared backend is configured, this endpoint returns
+its not-found fallback on every request (safe degradation - the frontend falls back to today's
+existing behaviour) while the cron itself reports success every run. Tracked as issue #538
+(filed generically, since the unbuilt vote-stats design would have the same cross-process shape);
+the likely fix is a shared backend (`django.core.cache.backends.db.DatabaseCache` on the Postgres
+already present) landing in a SEPARATE infrastructure PR - this module's `cache.get`/`cache.set`
+calls need no further edit once that lands, since they already use the standard API. See
+`docs/features/artist-support-links.md`'s "Warming the cache" section for the full writeup.
 
 **The normaliser (`normalise_artist_record`) is the core of this module.** The upstream data is
 dirty in specific, measured ways (all confirmed against the real bulk export, 2,389 records):
