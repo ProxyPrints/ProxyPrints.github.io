@@ -1,3 +1,5 @@
+import gzip
+import io
 import json
 import os
 import uuid
@@ -431,7 +433,14 @@ class TestGetBackFaceNames:
 
 
 class _FakeBulkDataResponse:
-    """Stand-in for the (non-streamed) /bulk-data API response - status_code + text only."""
+    """
+    Stand-in for the (non-streamed) /bulk-data API response - status_code + text only.
+
+    Carries TODAY'S entry shape: `jsonl_download_uri` + `compressed_size`. The retired
+    `download_uri`/`size` pair is deliberately absent, so this fake can never let a call site
+    that still reads the old names pass. `tests/test_scryfall_bulk_data.py` pins the same shape
+    against a captured copy of the real API response.
+    """
 
     def __init__(self, updated_at: str, size: int, status_code: int = 200):
         self.status_code = status_code
@@ -441,9 +450,9 @@ class _FakeBulkDataResponse:
                 "data": [
                     {
                         "type": "default_cards",
-                        "download_uri": "https://example.test/default_cards.json",
+                        "jsonl_download_uri": "https://example.test/default_cards.jsonl.gz",
                         "updated_at": updated_at,
-                        "size": size,
+                        "compressed_size": size,
                     }
                 ],
             }
@@ -474,24 +483,46 @@ class _FakeStreamResponse:
             raise self._error
 
 
+_DOWNLOAD_URL = "https://example.test/default_cards.jsonl.gz"
+
+
+def _gzip_chunks(payload: bytes, chunk_size: int = 16) -> list[bytes]:
+    """
+    `payload` as a gzip stream, split across several network chunks - which is what the real
+    download now delivers. Scryfall serves `.jsonl.gz` as `Content-Type: application/gzip` with
+    NO `Content-Encoding: gzip` (verified against the live CDN), so `requests` hands the raw
+    gzip bytes straight through and the downloader inflates them itself. Splitting small forces
+    the streaming decompressor to be exercised across chunk boundaries rather than getting the
+    whole member in one call.
+    """
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as f:
+        f.write(payload)
+    raw = buffer.getvalue()
+    return [raw[i : i + chunk_size] for i in range(0, len(raw), chunk_size)]
+
+
 def _mock_scryfall_requests(
     monkeypatch: pytest.MonkeyPatch,
     updated_at: str = "2026-07-28T00:00:00.000Z",
     size: int = 123,
-    download_chunks: list[bytes] | None = None,
+    download_payload: bytes | None = None,
 ) -> list[str]:
     """
     Routes `requests.get` to fakes: the /bulk-data API returns one default_cards entry carrying
-    `updated_at`/`size`; any other URL is treated as the bulk download itself. Returns the list
-    of requested URLs so tests can assert whether the download was actually hit.
+    `updated_at`/`compressed_size`; any other URL is treated as the bulk download itself and is
+    served as a GZIP STREAM of `download_payload` (the bytes expected to land on disk after
+    decompression). Returns the list of requested URLs so tests can assert whether the download
+    was actually hit.
     """
     requested_urls: list[str] = []
+    payload = download_payload if download_payload is not None else b""
 
     def fake_get(url: str, **kwargs: Any) -> Any:
         requested_urls.append(url)
         if url == "https://api.scryfall.com/bulk-data":
             return _FakeBulkDataResponse(updated_at=updated_at, size=size)
-        return _FakeStreamResponse(chunks=download_chunks if download_chunks is not None else [b"[\n]\n"])
+        return _FakeStreamResponse(chunks=_gzip_chunks(payload))
 
     monkeypatch.setattr(requests, "get", fake_get)
     return requested_urls
@@ -507,14 +538,17 @@ class TestAtomicDownload:
     """
     Issue #513 download-side, part 1: `_download_default_cards` streams to a temp file in the
     same directory and atomically `os.replace`s it over the cache only on success, so a
-    mid-stream failure can never truncate the real cache. All network is mocked - no real
-    Scryfall calls, no real ~558MB files.
+    mid-stream failure can never truncate the real cache. Preserved verbatim across the
+    2026-07-20 JSONL/gzip cutover - the only change is that the bytes arriving off the wire are
+    now a gzip stream that the downloader inflates on the way to the temp file. All network is
+    mocked - no real Scryfall calls, no real ~620MB files.
     """
 
     def test_successful_download_lands_via_os_replace_and_writes_sidecar(self, db, tmp_path, monkeypatch):
         cache_path = _use_tmp_cache(monkeypatch, tmp_path)
-        payload = b'[\n{"id": "11111111-1111-1111-1111-111111111111"}\n]\n'
-        _mock_scryfall_requests(monkeypatch, download_chunks=[payload])
+        # JSONL, as Scryfall now serves it: one object per line, no wrapping array, no commas.
+        payload = b'{"id": "11111111-1111-1111-1111-111111111111"}\n'
+        _mock_scryfall_requests(monkeypatch, download_payload=payload)
         replaced: list[tuple[Path, Path]] = []
         real_replace = os.replace
 
@@ -527,26 +561,34 @@ class TestAtomicDownload:
         import_scryfall_printing_metadata()
 
         assert replaced == [(Path(str(cache_path) + ".tmp"), cache_path)]
+        # DECOMPRESSED on disk - the persistent cache stays plain JSONL that every other
+        # consumer reads without gunzipping on each pass.
         assert cache_path.read_bytes() == payload
         assert not Path(str(cache_path) + ".tmp").exists()
         sidecar = json.loads((tmp_path / "default_cards.meta.json").read_text())
+        # The sidecar's `size` key now records the entry's `compressed_size` (the gzipped
+        # artefact), not the retired uncompressed `size` - see `_write_sidecar`'s own note.
         assert sidecar == {"updated_at": "2026-07-28T00:00:00.000Z", "size": 123}
 
     def test_mid_stream_failure_leaves_original_cache_and_no_temp_file(self, tmp_path, monkeypatch):
         cache_path = tmp_path / "default_cards.json"
         original = b"original cache contents"
         cache_path.write_bytes(original)
+        # A VALID gzip prefix, then the connection dies - so the failure under test is the
+        # transport dropping, not a decode error (that case is covered in
+        # test_scryfall_bulk_data.py's truncation/corruption tests).
+        valid_prefix = _gzip_chunks(b'{"id": "11111111-1111-1111-1111-111111111111"}\n')[0]
 
         def failing_get(url: str, **kwargs: Any) -> _FakeStreamResponse:
             return _FakeStreamResponse(
-                chunks=[b"partial"],
+                chunks=[valid_prefix],
                 error=requests.exceptions.ConnectionError("connection dropped mid-stream"),
             )
 
         monkeypatch.setattr(requests, "get", failing_get)
 
         with pytest.raises(requests.exceptions.ConnectionError):
-            _download_default_cards("https://example.test/default_cards.json", cache_path)
+            _download_default_cards(_DOWNLOAD_URL, cache_path)
 
         assert cache_path.read_bytes() == original
         assert not Path(str(cache_path) + ".tmp").exists()
@@ -575,12 +617,14 @@ class TestRemoteFreshness:
     def test_missing_sidecar_triggers_download(self, db, tmp_path, monkeypatch):
         cache_path = _use_tmp_cache(monkeypatch, tmp_path)
         cache_path.write_bytes(b"stale cache")
-        requested_urls = _mock_scryfall_requests(monkeypatch)
+        requested_urls = _mock_scryfall_requests(monkeypatch, download_payload=b"")
 
         import_scryfall_printing_metadata()
 
-        assert requested_urls == ["https://api.scryfall.com/bulk-data", "https://example.test/default_cards.json"]
-        assert cache_path.read_bytes() == b"[\n]\n"
+        # The download URL now comes from the entry's `jsonl_download_uri` - the retired
+        # `download_uri` no longer exists on any /bulk-data entry.
+        assert requested_urls == ["https://api.scryfall.com/bulk-data", _DOWNLOAD_URL]
+        assert cache_path.read_bytes() == b""
         sidecar = json.loads((tmp_path / "default_cards.meta.json").read_text())
         assert sidecar == {"updated_at": "2026-07-28T00:00:00.000Z", "size": 123}
 
@@ -594,7 +638,7 @@ class TestRemoteFreshness:
 
         import_scryfall_printing_metadata()
 
-        assert requested_urls == ["https://api.scryfall.com/bulk-data", "https://example.test/default_cards.json"]
+        assert requested_urls == ["https://api.scryfall.com/bulk-data", _DOWNLOAD_URL]
         sidecar = json.loads((tmp_path / "default_cards.meta.json").read_text())
         assert sidecar == {"updated_at": "2026-07-28T00:00:00.000Z", "size": 123}
 

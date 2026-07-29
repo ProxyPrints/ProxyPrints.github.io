@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import uuid
 from collections import Counter
 from datetime import date
@@ -8,14 +7,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import requests
 from pydantic import BaseModel, ValidationError
 
 from django.conf import settings
 from django.core.management.base import CommandError
 from django.db import transaction
 
-from cardpicker.integrations.game.mtg import Scryfall
+from cardpicker.integrations.game import scryfall_bulk_data
+from cardpicker.integrations.game.scryfall_bulk_data import BulkDataEntry
 from cardpicker.models import CanonicalCard, CanonicalPrintingMetadata
 from cardpicker.utils import section_timer
 
@@ -40,21 +39,12 @@ logger = logging.getLogger(__name__)
 DOUBLE_FACED_LAYOUTS = frozenset({"transform", "modal_dfc", "double_faced_token", "battle", "reversible_card"})
 
 
-class BulkDataEntry(BaseModel):
-    type: str
-    download_uri: str
-    # `updated_at`/`size` ride along on the same /bulk-data entry - issue #513's remote-diff
-    # freshness check compares the remote `updated_at` against the sidecar written at download
-    # time (see `_is_fresh`) and skips the ~558MB re-download when they match. Kept as the raw
-    # API string on purpose: the comparison is exact-equality, so no datetime parsing/format
-    # drift can ever produce a spurious "unchanged" verdict (a format change just re-downloads
-    # once, the safe direction).
-    updated_at: str
-    size: int
-
-
-class BulkDataResponse(BaseModel):
-    data: list[BulkDataEntry]
+# NOTE: this module used to declare its OWN `BulkDataEntry`/`BulkDataResponse` models here.
+# They now live in ONE place - `cardpicker.integrations.game.scryfall_bulk_data` - which is what
+# `_get_default_cards_entry` below returns and what `_is_fresh`/`_write_sidecar` annotate
+# against. See that module's docstring for why three separate copies of this same model existed
+# across three importers, and why exactly one of them survived Scryfall's 2026-07-20 retirement
+# of `download_uri`/`size`.
 
 
 class PrintingMetadataRow(BaseModel):
@@ -113,14 +103,22 @@ def _sidecar_path(path: Path) -> Path:
 
 def _write_sidecar(path: Path, entry: BulkDataEntry) -> None:
     """
-    Issue #513: records the remote `updated_at`/`size` of the bulk entry `path` was just
+    Issue #513: records the remote `updated_at`/size of the bulk entry `path` was just
     downloaded from, next to the cache itself (e.g. `default_cards.meta.json`) - `_is_fresh`'s
     only input on later runs. Written AFTER `_download_default_cards`'s atomic replace has
     landed, so a sidecar on disk always describes the cache file beside it; if this write
     itself fails, the next run simply sees no/stale sidecar and re-downloads once (the safe
     direction).
+
+    THE `size` KEY NOW CARRIES A DIFFERENT QUANTITY. Scryfall retired the entry's `size`
+    (uncompressed byte count) in favour of `compressed_size` (the size of the gzipped `.jsonl.gz`
+    artefact actually served - ~77MB against ~620MB uncompressed for default_cards). The sidecar
+    key is deliberately left named `size` so an already-deployed sidecar written before the
+    cutover still parses, and because `_is_fresh` compares `updated_at` ONLY - this value is a
+    recorded secondary change detector, never a byte budget. DO NOT read a sidecar's `size` as
+    "how many bytes the cache file on disk is": before 2026-07-20 it was, and now it is not.
     """
-    _sidecar_path(path).write_text(json.dumps({"updated_at": entry.updated_at, "size": entry.size}))
+    _sidecar_path(path).write_text(json.dumps({"updated_at": entry.updated_at, "size": entry.compressed_size}))
 
 
 def _is_fresh(path: Path, entry: BulkDataEntry) -> bool:
@@ -183,53 +181,55 @@ def ensure_scryfall_cache_present(default_cards_path: Path | None = None) -> Non
 
 @section_timer(name="get default_cards bulk data URL")
 def _get_default_cards_entry() -> BulkDataEntry:
-    # Fails LOUD on any API error (the asserts below) on purpose: per issue #513, a failed
-    # bulk-data lookup must never silently fall back to reusing a cache of unknown age.
-    response = requests.get("https://api.scryfall.com/bulk-data", headers=Scryfall.get_headers())
-    assert response.status_code == 200
-    parsed = BulkDataResponse.model_validate_json(response.text)
-    matches = [entry for entry in parsed.data if entry.type == "default_cards"]
-    assert matches, "Scryfall bulk-data response did not contain a 'default_cards' entry"
-    return matches.pop()
+    # Fails LOUD on any API error on purpose: per issue #513, a failed bulk-data lookup must
+    # never silently fall back to reusing a cache of unknown age. Both the HTTP assert and the
+    # "no such entry type" RuntimeError now live in `scryfall_bulk_data` so all three importers
+    # share one implementation of that rule - this stays a named function because
+    # `stream_full_catalog`'s stage-0 imports it directly to ask for the freshness verdict
+    # without triggering a download.
+    return scryfall_bulk_data.get_bulk_data_entry(scryfall_bulk_data.DEFAULT_CARDS)
 
 
 @section_timer(name="download default_cards bulk data")
 def _download_default_cards(url: str, path: Path) -> None:
     """
-    Streams to a temporary file in the SAME directory as `path` first, then atomically
-    `os.replace`s it over `path` only once the stream has fully completed - previously this
-    streamed directly over `path`, so a mid-stream failure left a truncated cache with a fresh
-    mtime that later runs treated as valid (silent degradation, the same class as issue #402).
-    The temp file must live beside `path` so the replace stays on a single filesystem
-    (os.replace is not atomic across filesystems); the try/finally guarantees no partial temp
-    file is left behind and the original cache is untouched on any failure.
+    Downloads the gzipped-JSONL bulk file at `url` and lands it DECOMPRESSED at `path`,
+    atomically. Both properties are delegated to
+    `scryfall_bulk_data.download_and_decompress`, which is where the reasoning lives:
+
+      * the atomic temp-file + `os.replace` swap (PR #515) is preserved exactly - a mid-stream
+        failure can never truncate the real cache;
+      * since 2026-07-20 the remote artefact is a `.jsonl.gz` that is gzipped ON DISK rather
+        than served with `Content-Encoding: gzip`, so `requests` no longer decompresses it for
+        us and we inflate the stream ourselves as it arrives;
+      * a non-gzip or truncated body raises `BulkDataDownloadError` instead of quietly landing a
+        short file that would "successfully import" a fraction of the catalog.
+
+    Kept as a named function in this module rather than inlined at the call site: the download
+    step is what `@section_timer` reports as its own phase in this command's log, and the
+    existing tests target it directly.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    logger.info("Downloading default_cards bulk data from %s", url)
-    tmp_path = Path(str(path) + ".tmp")
-    try:
-        with requests.get(url, stream=True, headers=Scryfall.get_headers()) as r:
-            assert r.status_code == 200
-            with open(tmp_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        os.replace(tmp_path, path)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    scryfall_bulk_data.download_and_decompress(url, path)
 
 
 def _parse_rows(path: Path) -> list[PrintingMetadataRow]:
+    """
+    Parses the on-disk bulk cache into rows, one line at a time.
+
+    The file is JSONL as of Scryfall's 2026-07-20 cutover - one card object per line, no
+    wrapping array, no separating commas - and this has always read line-by-line rather than
+    `json.load`ing 620MB at once, so the format change needs nothing here. The tolerance for the
+    RETIRED pretty-printed-array shape (bare `[`/`]` lines, trailing commas) lives in
+    `scryfall_bulk_data.iter_json_lines` and is deliberately retained: the deployed persistent
+    volume still holds a pre-cutover `default_cards.json` that must stay readable until the next
+    refresh replaces it.
+    """
     rows = []
-    with open(path, "rb") as f:
-        for raw_line in f:
-            line = raw_line.rstrip(b"\n")
-            if line in [b"[", b"]"]:
-                continue
-            decoded_line = line.decode("utf-8").rstrip(",")
-            try:
-                rows.append(PrintingMetadataRow.model_validate_json(decoded_line))
-            except ValidationError:
-                logger.warning("failed to validate line: %s", decoded_line)
+    for line in scryfall_bulk_data.iter_json_lines(path):
+        try:
+            rows.append(PrintingMetadataRow.model_validate_json(line))
+        except ValidationError:
+            logger.warning("failed to validate line: %s", line)
     return rows
 
 
@@ -424,7 +424,7 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
         if _is_fresh(path, entry):
             logger.info("Using cached default cards at %s (remote updated_at %s unchanged)", path, entry.updated_at)
         else:
-            _download_default_cards(entry.download_uri, path)
+            _download_default_cards(entry.jsonl_download_uri, path)
             _write_sidecar(path, entry)
 
     rows = _parse_rows(path)

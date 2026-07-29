@@ -16,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 
 from django.conf import settings
 
+from cardpicker.integrations.game import scryfall_bulk_data
 from cardpicker.integrations.game.base import GameIntegration, ImportSite
 from cardpicker.models import (
     CanonicalArtist,
@@ -249,7 +250,9 @@ class MTGGoldfish(ImportSite):
 class Scryfall(ImportSite):
     @staticmethod
     def get_headers() -> dict[str, Any]:
-        return {"User-Agent": "mpc-autofill/1.0", "Accept": "application/json"}
+        # Single definition, in `scryfall_bulk_data` alongside the rest of the Scryfall wire
+        # knowledge - this stays as the long-established call site every caller already uses.
+        return scryfall_bulk_data.get_headers()
 
     @staticmethod
     def get_host_names() -> list[str]:
@@ -288,21 +291,11 @@ class TappedOut(ImportSite):
 # endregion
 
 
-class BulkDataRow(BaseModel):
-    object: str
-    id: uuid.UUID
-    type: str
-    uri: str
-    name: str
-    description: str
-    size: int
-    download_uri: str
-    content_type: str
-    content_encoding: str
-
-
-class BulkDataResponse(BaseModel):
-    data: list[BulkDataRow]
+# NOTE: this module used to declare its own `BulkDataRow`/`BulkDataResponse` here, requiring
+# `size`, `download_uri`, `content_type` and `content_encoding` - ALL FOUR of which Scryfall
+# retired on 2026-07-20 along with the pre-JSONL bulk format. That model now lives once, in
+# `scryfall_bulk_data`, so the next upstream change to this endpoint is a single fix instead of
+# three; see that module's docstring for the full history.
 
 
 class ImageURIs(BaseModel):
@@ -468,16 +461,13 @@ class MTGIntegration(GameIntegration):
 
         @section_timer(name="get bulk data URLs")
         def get_bulk_data_urls() -> BulkDataURLs:
-            response = requests.get("https://api.scryfall.com/bulk-data", headers=Scryfall.get_headers(), timeout=30)
-            assert response.status_code == 200
-            validated_response = BulkDataResponse.model_validate_json(response.text)
-            default_cards = [entry for entry in validated_response.data if entry.type == "default_cards"].pop()
-            oracle_cards = [entry for entry in validated_response.data if entry.type == "oracle_cards"].pop()
-            assert default_cards is not None
-            assert oracle_cards is not None
+            # One index fetch, one shared model, one lookup-by-type. `entry_for` raises a
+            # descriptive RuntimeError when a type is absent, replacing the bare `.pop()`
+            # IndexError this used to die with.
+            index = scryfall_bulk_data.fetch_bulk_data_index()
             return BulkDataURLs(
-                default_cards=default_cards.download_uri,
-                oracle_cards=oracle_cards.download_uri,
+                default_cards=index.entry_for(scryfall_bulk_data.DEFAULT_CARDS).jsonl_download_uri,
+                oracle_cards=index.entry_for(scryfall_bulk_data.ORACLE_CARDS).jsonl_download_uri,
             )
 
         @section_timer(name="cache default cards")
@@ -487,10 +477,14 @@ class MTGIntegration(GameIntegration):
                 return
             cache_dir.mkdir(parents=True, exist_ok=True)
             print(f"Downloading default cards from {url}")
-            with requests.get(url, stream=True, headers=Scryfall.get_headers(), timeout=60) as r:
-                with open(default_cards_path, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
+            # Since 2026-07-20 `url` points at a `.jsonl.gz` that is gzipped ON DISK (no
+            # `Content-Encoding: gzip`, so `requests` does not inflate it for us). This helper
+            # inflates the stream as it arrives, lands the result via an atomic temp-file +
+            # `os.replace` swap so a mid-stream failure cannot truncate an existing cache, and
+            # raises rather than installing a short or non-gzip body. The written file stays
+            # DECOMPRESSED JSONL at the same `default_cards.json` path every other consumer
+            # already reads.
+            scryfall_bulk_data.download_and_decompress(url, default_cards_path)
 
         @section_timer(name="cache oracle cards")
         def cache_oracle_cards(url: str) -> None:
@@ -499,10 +493,7 @@ class MTGIntegration(GameIntegration):
                 return
             cache_dir.mkdir(parents=True, exist_ok=True)
             print(f"Downloading oracle cards from {url}")
-            with requests.get(url, stream=True, headers=Scryfall.get_headers(), timeout=60) as r:
-                with open(oracle_cards_path, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
+            scryfall_bulk_data.download_and_decompress(url, oracle_cards_path)
 
         def row_to_canonical_card(row: CardRow) -> CanonicalCard | None:
             try:
@@ -561,18 +552,17 @@ class MTGIntegration(GameIntegration):
         def process_file(path: Path, counter: enlighten.Counter, mark_existing_as_default: bool) -> None:
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
                 pending: list[tuple[CardRow, "concurrent.futures.Future[CanonicalCard | None]"]] = []
-                with open(path, "rb") as f:
-                    for line in f:
-                        line = line.rstrip(b"\n")
-                        if line in [b"[", b"]"]:
-                            continue
-                        decoded_line = line.decode("utf-8").rstrip(",")
-                        try:
-                            row = CardRow.model_validate_json(decoded_line)
-                            process_row(row, pool, pending, mark_existing_as_default=mark_existing_as_default)
-                            counter.update()
-                        except ValidationError:
-                            print(f"failed to validate line: {decoded_line}")
+                # JSONL as of the 2026-07-20 cutover (one object per line, no wrapping array, no
+                # commas). This already read line-by-line, so the format change needs nothing
+                # here; the shared reader additionally keeps the retired pretty-array shape
+                # readable so a pre-cutover cache still on disk does not become an outage.
+                for decoded_line in scryfall_bulk_data.iter_json_lines(path):
+                    try:
+                        row = CardRow.model_validate_json(decoded_line)
+                        process_row(row, pool, pending, mark_existing_as_default=mark_existing_as_default)
+                        counter.update()
+                    except ValidationError:
+                        print(f"failed to validate line: {decoded_line}")
                 for row, future in pending:
                     card = future.result()
                     if not card:

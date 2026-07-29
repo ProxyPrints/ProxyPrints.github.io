@@ -53,12 +53,11 @@ refresh against updated Tagger data where a printing was UN-tagged upstream: pur
 run_id, then re-run.
 """
 
-import gzip
 import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
 import requests
 from pydantic import BaseModel, ValidationError
@@ -66,7 +65,7 @@ from pydantic import BaseModel, ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from cardpicker.integrations.game.mtg import Scryfall
+from cardpicker.integrations.game import scryfall_bulk_data
 from cardpicker.local_identify_printing_tags import generate_run_id
 from cardpicker.models import (
     CanonicalCard,
@@ -100,20 +99,17 @@ EXTERNAL_IP_TAG_SLUG = "external-ip"
 # obvious, but the two are independent namespaces and must not be conflated elsewhere.
 EXTERNAL_IP_TAG_NAME = "external-ip"
 
-_BULK_DATA_METADATA_URL = "https://api.scryfall.com/bulk-data"
-_ART_TAGS_BULK_TYPE = "art_tags"
+_ART_TAGS_BULK_TYPE = scryfall_bulk_data.ART_TAGS
 
 
-class _BulkDataEntry(BaseModel):
-    type: str
-    download_uri: str
-    # The .jsonl.gz streaming form - present on every entry today, but optional here so a
-    # response predating it falls back to download_uri rather than hard-failing validation.
-    jsonl_download_uri: Optional[str] = None
-
-
-class _BulkDataResponse(BaseModel):
-    data: list[_BulkDataEntry]
+# NOTE: this module used to declare its OWN `_BulkDataEntry`/`_BulkDataResponse` here - the one
+# of the three importer-local copies that had been hardened for the JSONL cutover, carrying
+# `jsonl_download_uri: Optional[str] = None` with a fallback to `download_uri`. That fallback is
+# now DEAD: `download_uri` no longer exists on any entry (retired 2026-07-20), so the "optional"
+# field is in fact the only one there is. The model lives once now, in `scryfall_bulk_data`,
+# with `jsonl_download_uri` REQUIRED - which is what makes the next upstream field removal fail
+# loudly in CI instead of silently resolving to None. That exactly one of three importers had
+# been hardened, while the other two hard-failed in production, is why that module exists.
 
 
 class _Tagging(BaseModel):
@@ -143,22 +139,11 @@ class _DefaultCardsRow(BaseModel):
     card_faces: Optional[list[dict[str, Any]]] = None
 
 
-def _iter_json_lines(path: Path) -> Iterator[str]:
-    """
-    Yields one decoded JSON-object line at a time from a JSONL(.gz) OR pretty-printed
-    JSON-array(.gz) bulk file - the same tolerant line handling printing_metadata_import.
-    _parse_rows already uses for the default_cards cache (skip bare "["/"]" lines, strip the
-    trailing comma between array elements), so --file accepts any of the three shapes Scryfall
-    actually publishes (`.jsonl`, `.jsonl.gz`, pretty `.json`). Streams line-by-line: the full
-    art_tags file (~40MB compressed) is never held in memory.
-    """
-    opener = gzip.open if path.name.endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8") as f:  # type: ignore[operator]
-        for line in f:
-            stripped = line.strip()
-            if stripped in ("", "[", "]"):
-                continue
-            yield stripped.rstrip(",")
+# This module's own tolerant JSONL(.gz)/pretty-array reader has moved to
+# `scryfall_bulk_data.iter_json_lines` - same behaviour, one copy, now shared with
+# `printing_metadata_import._parse_rows` and `mtg.py`'s catalog pass. Aliased rather than
+# renamed at every call site so this module's three passes stay readable.
+_iter_json_lines = scryfall_bulk_data.iter_json_lines
 
 
 def find_external_ip_subtree(tags_path: Path) -> tuple[set[uuid.UUID], int]:
@@ -417,14 +402,16 @@ def run_external_ip_tag_import(
 
 
 def _find_art_tags_download_uri() -> str:
-    response = requests.get(_BULK_DATA_METADATA_URL, headers=Scryfall.get_headers())
-    response.raise_for_status()
-    parsed = _BulkDataResponse.model_validate_json(response.text)
-    matches = [entry for entry in parsed.data if entry.type == _ART_TAGS_BULK_TYPE]
-    if not matches:
-        raise CommandError(f"Scryfall bulk-data response did not contain an {_ART_TAGS_BULK_TYPE!r} entry")
-    entry = matches.pop()
-    return entry.jsonl_download_uri or entry.download_uri
+    """
+    The `art_tags` bulk entry's `.jsonl.gz` URL, via the one shared index fetch + lookup-by-type.
+    `CommandError` is preserved as this command's own failure surface (Django prints it without a
+    traceback), wrapping the shared lookup's RuntimeError.
+    """
+    try:
+        entry = scryfall_bulk_data.get_bulk_data_entry(_ART_TAGS_BULK_TYPE)
+    except RuntimeError as e:
+        raise CommandError(str(e)) from e
+    return entry.jsonl_download_uri
 
 
 class Command(BaseCommand):
@@ -506,10 +493,17 @@ class Command(BaseCommand):
         if tags_path is None:
             uri = _find_art_tags_download_uri()
             print(f"Downloading art tags from {uri}")
-            suffix = ".jsonl.gz" if uri.endswith(".gz") else ".json"
+            # Deliberately kept GZIPPED on disk here, unlike the default_cards cache: this is a
+            # transient tempfile deleted in the `finally` below, read exactly once, and
+            # `_iter_json_lines` gunzips `.gz` transparently - so inflating ~40MB to several
+            # hundred MB in /tmp would buy nothing. The persistent default_cards cache makes the
+            # opposite trade (see scryfall_bulk_data.download_and_decompress' own note) because
+            # it is re-read on every pass by several commands. The suffix is derived from the
+            # URL rather than assumed, so a future non-gzip artefact still lands readable.
+            suffix = ".jsonl.gz" if uri.endswith(".gz") else ".jsonl"
             with tempfile.NamedTemporaryFile(prefix="art-tags-", suffix=suffix, delete=False) as tmp:
                 tmp_path = Path(tmp.name)
-                with requests.get(uri, stream=True, headers=Scryfall.get_headers()) as r:
+                with requests.get(uri, stream=True, headers=scryfall_bulk_data.get_headers(), timeout=60) as r:
                     r.raise_for_status()
                     for chunk in r.iter_content(chunk_size=1024 * 1024):
                         tmp.write(chunk)

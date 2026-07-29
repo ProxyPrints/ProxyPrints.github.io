@@ -1744,6 +1744,68 @@ catches the failure mode structurally even if the volume mount is ever
 missed again (e.g. a fresh box rebuild that skips the compose file, or
 a manual `docker run` bypassing compose entirely).
 
+## Scryfall bulk-data refresh aborts on pydantic `data.N.download_uri`/`data.N.size` validation errors
+
+**Symptom**: `stream_full_catalog`'s stage-0 freshness check exits
+non-zero (`EXIT_STAGE_ZERO_FAILED`) with a pydantic `ValidationError`
+naming `data.N.download_uri` and `data.N.size` as missing, for every
+entry in the `/bulk-data` response. `import_canonical_card_data` fails
+the same way (`data.N.download_uri`, `data.N.size`,
+`data.N.content_type`, `data.N.content_encoding`). The on-disk cache is
+intact and recent, so nothing is _wrong_ with the data - only the
+refresh path is broken. First seen 2026-07-28.
+
+**Cause**: Scryfall retired the pre-JSONL bulk format. Per their blog
+post "Two New Ways to Sync Scryfall Data" (2026-07-01), both formats
+were offered until 2026-07-20, after which `jsonl_download_uri` is the
+only download property and the old files are gone. THREE separate
+things changed, and fixing only the first leaves a broken importer:
+
+1. **Fields**: `download_uri` → `jsonl_download_uri`, `size` →
+   `compressed_size` (and `content_type`/`content_encoding` removed
+   outright). Note `compressed_size` measures the _gzipped_ artefact
+   (~77MB for `default_cards`) where `size` measured the uncompressed
+   payload (~620MB) - it still works as a change detector, but it is
+   not the same quantity.
+2. **Format**: the payload is JSONL - one object per line, no wrapping
+   array, no separating commas. Anything doing `json.load()` over the
+   whole file must read line-by-line.
+3. **Compression**: the file is gzipped _on disk_ (`.jsonl.gz`,
+   `Content-Type: application/gzip`), NOT gzip transfer-encoding. The
+   old files carried `Content-Encoding: gzip`, which an HTTP client
+   decompressed transparently; now you receive a `.gz` and must inflate
+   it yourself. This is the part most likely to be missed, because the
+   download "succeeds" and lands binary garbage.
+
+**Fix**: the schema and the index fetch now live once, in
+`cardpicker/integrations/game/scryfall_bulk_data.py`, and all three
+importers resolve a download URL through it by entry type. That module
+inflates the stream as it arrives, keeps PR #515's atomic temp-file +
+`os.replace` swap, and raises `BulkDataDownloadError` on a non-gzip or
+truncated body rather than installing a partial catalog. The on-disk
+cache stays _decompressed_ JSONL at the same `scryfall_cache/ default_cards.json` path (readers re-read it on every pass; inflating
+620MB each time to save disk is the wrong trade), and the shared line
+reader still tolerates the retired pretty-printed-array shape so a
+pre-cutover cache already on the persistent volume keeps working until
+the next refresh replaces it.
+
+**Why two of three importers broke and one did not**: each importer had
+its own pydantic model of the same endpoint, so hardening one did
+nothing for the other two. `tests/test_scryfall_bulk_data.py` now pins
+the model against a captured copy of the real `/bulk-data` response and
+asserts no importer re-declares a bulk-data field, so the next upstream
+change surfaces in CI rather than in a production stage-0 abort. An
+opt-in live check against the real API runs under
+`SCRYFALL_LIVE_CONTRACT=1`.
+
+**Not adopted**: the same blog post announced a `/cards/manifest`
+method (a paginated list of which cards exist and when their images
+last changed). It is an incremental-sync primitive; every consumer here
+does a whole-catalog pass, and "has anything changed at all" is already
+answered by the entry's `updated_at` against the freshness sidecar.
+Adopting it would be a new incremental-import design, not a fix for
+this break.
+
 ## Stage E concurrency cap configured but zero `throttled-concurrency-cap` outcomes, host load trips anyway
 
 **Symptom**: `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` is set (e.g.
