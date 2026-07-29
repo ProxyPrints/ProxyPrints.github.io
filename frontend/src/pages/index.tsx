@@ -6,14 +6,32 @@ import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
 import { ProjectName } from "@/common/constants";
+import { ParticipationGraph } from "@/features/stats/ParticipationGraph";
 import { DynamicLogo } from "@/features/ui/DynamicLogo";
 import Footer from "@/features/ui/Footer";
 import { HomepagePanel } from "@/features/ui/HomepagePanel";
 import { ProjectContainer } from "@/features/ui/Layout";
+import { useGetCatalogStatsQuery } from "@/store/api";
 import {
   useAnyBackendConfigured,
   useProjectName,
 } from "@/store/slices/backendSlice";
+
+// Homepage front-page graph (Proposal F item 4, upgraded from a text strip to a real graph per
+// the 2026-07-29 coordinator amendment - see ParticipationGraph.tsx's own module comment for the
+// full reasoning). Renders nothing until the cache-only `1/catalogStats/` endpoint has a real,
+// warmed blob (`generatedAt` non-null) - a cold-cache/zeroed skeleton would otherwise render a
+// graph with an empty "cards ready to confirm" bar and zero contributor dots, which reads as
+// "there is nothing to do here" rather than the intended "not computed yet" (the same
+// cache-miss distinction pages/stats.tsx's own CatalogStatsBody makes).
+function HomepageParticipationGraph() {
+  const catalogStatsQuery = useGetCatalogStatsQuery();
+  const stats = catalogStatsQuery.data;
+  if (stats == null || stats.generatedAt == null) {
+    return null;
+  }
+  return <ParticipationGraph participation={stats.participation} />;
+}
 
 function JumpIntoEditorButton() {
   const anyBackendConfigured = useAnyBackendConfigured();
@@ -111,6 +129,7 @@ export default function Index() {
       <JumpIntoEditorButton />
       <hr />
       <HomepagePanel />
+      <HomepageParticipationGraph />
       <hr />
       <ProjectOverview />
       <Footer />

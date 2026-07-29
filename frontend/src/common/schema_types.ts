@@ -1219,8 +1219,12 @@ export interface Participation {
  * model instead). Cache-only - a cache miss returns every field at its zero/empty value
  * (generatedAt: null), never a 500. Proposal F charts 1 (resolutionProgress) and 5
  * (hashCoverage) are deliberately absent from this shape this pass - see catalog_stats.py's own
- * module docstring. This type has no `Convert` wiring below, added by whichever session builds
- * the /stats page consumer.
+ * module docstring. `Convert.toCatalogStatsResponse`/`catalogStatsResponseToJson` and this type's
+ * (and its five nested panel types') `typeMap` entries were added by the /stats page consumer
+ * session (feat/stats-page-frontend) - `frontend/src/store/api.ts`'s `getCatalogStats` endpoint
+ * doesn't call either (RTK Query trusts the fetch response's shape directly, same as every other
+ * endpoint in that file), so this wiring exists for parity/future use rather than being exercised
+ * on the request path today.
  */
 export interface CatalogStatsResponse {
   generatedAt: null | string;
@@ -1795,6 +1799,16 @@ export class Convert {
       null,
       2
     );
+  }
+
+  public static toCatalogStatsResponse(json: string): CatalogStatsResponse {
+    return cast(JSON.parse(json), r("CatalogStatsResponse"));
+  }
+
+  public static catalogStatsResponseToJson(
+    value: CatalogStatsResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("CatalogStatsResponse")), null, 2);
   }
 
   public static toContributionsResponse(json: string): ContributionsResponse {
@@ -3116,6 +3130,130 @@ const typeMap: any = {
       { json: "clusterId", js: "clusterId", typ: "" },
       { json: "confirmedIdentifiers", js: "confirmedIdentifiers", typ: a("") },
       { json: "votesCast", js: "votesCast", typ: 0 },
+    ],
+    false
+  ),
+  CatalogStatsResponse: o(
+    [
+      {
+        json: "catalogComposition",
+        js: "catalogComposition",
+        typ: r("CatalogComposition"),
+      },
+      {
+        json: "contributionsOverTime",
+        js: "contributionsOverTime",
+        typ: r("ContributionsOverTime"),
+      },
+      { json: "generatedAt", js: "generatedAt", typ: u(null, "") },
+      { json: "participation", js: "participation", typ: r("Participation") },
+      { json: "runHistory", js: "runHistory", typ: r("RunHistory") },
+      { json: "skipBreakdown", js: "skipBreakdown", typ: r("SkipBreakdown") },
+    ],
+    false
+  ),
+  ContributionsOverTime: o(
+    [
+      { json: "bucketDays", js: "bucketDays", typ: 0 },
+      {
+        json: "series",
+        js: "series",
+        typ: a(r("ContributionsOverTimeWeek")),
+      },
+    ],
+    false
+  ),
+  ContributionsOverTimeWeek: o(
+    [
+      { json: "bySurface", js: "bySurface", typ: m(0) },
+      { json: "weekStart", js: "weekStart", typ: "" },
+    ],
+    false
+  ),
+  SkipBreakdown: o(
+    [
+      { json: "byReason", js: "byReason", typ: a(r("SkipReasonCount")) },
+      {
+        json: "byReasonAndEngine",
+        js: "byReasonAndEngine",
+        typ: a(r("SkipReasonEngineCount")),
+      },
+    ],
+    false
+  ),
+  SkipReasonCount: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "reason", js: "reason", typ: "" },
+    ],
+    false
+  ),
+  SkipReasonEngineCount: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "engine", js: "engine", typ: "" },
+      { json: "reason", js: "reason", typ: "" },
+    ],
+    false
+  ),
+  RunHistory: o(
+    [{ json: "recent", js: "recent", typ: a(r("PilotRunHistoryEntry")) }],
+    false
+  ),
+  PilotRunHistoryEntry: o(
+    [
+      { json: "command", js: "command", typ: "" },
+      { json: "durationSeconds", js: "durationSeconds", typ: u(null, 0) },
+      { json: "finishedAt", js: "finishedAt", typ: u(null, "") },
+      { json: "runId", js: "runId", typ: "" },
+      { json: "startedAt", js: "startedAt", typ: "" },
+      { json: "status", js: "status", typ: "" },
+      { json: "votesWritten", js: "votesWritten", typ: u(null, 0) },
+    ],
+    false
+  ),
+  CatalogComposition: o(
+    [
+      { json: "cardCountByType", js: "cardCountByType", typ: m(0) },
+      { json: "sources", js: "sources", typ: a(r("SourceContribution")) },
+      { json: "totalDatabaseSize", js: "totalDatabaseSize", typ: 0 },
+    ],
+    false
+  ),
+  HumanVoteCounts: o(
+    [
+      { json: "artist", js: "artist", typ: 0 },
+      { json: "printingTag", js: "printingTag", typ: 0 },
+      { json: "tag", js: "tag", typ: 0 },
+      { json: "total", js: "total", typ: 0 },
+    ],
+    false
+  ),
+  Md5GroupStats: o(
+    [
+      {
+        json: "cardsInMultiCardGroups",
+        js: "cardsInMultiCardGroups",
+        typ: 0,
+      },
+      {
+        json: "groupsWithMultipleCards",
+        js: "groupsWithMultipleCards",
+        typ: 0,
+      },
+      { json: "largestGroupSize", js: "largestGroupSize", typ: 0 },
+    ],
+    false
+  ),
+  Participation: o(
+    [
+      { json: "confirmable", js: "confirmable", typ: 0 },
+      { json: "contested", js: "contested", typ: 0 },
+      { json: "distinctHumanVoters", js: "distinctHumanVoters", typ: 0 },
+      { json: "fresh", js: "fresh", typ: 0 },
+      { json: "humanVotes", js: "humanVotes", typ: r("HumanVoteCounts") },
+      { json: "md5Groups", js: "md5Groups", typ: r("Md5GroupStats") },
+      { json: "total", js: "total", typ: 0 },
     ],
     false
   ),

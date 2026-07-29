@@ -80,8 +80,11 @@ describe("Footer", () => {
   it("renders the site links the navbar dropped, plus Terms and the chilli_axe credit", () => {
     renderFooter(localBackend);
 
-    const contributions = screen.getByText("Contributions");
-    expect(contributions).toHaveAttribute("href", "/contributions");
+    // 2026-07-29 (Proposal F / issue #233) - Contributions was reinstated to the top nav,
+    // transformed into /stats (see Footer.tsx/Navbar.tsx's own comments) - this footer link now
+    // reads "Stats" -> /stats directly rather than "Contributions" -> /contributions.
+    const stats = screen.getByText("Stats");
+    expect(stats).toHaveAttribute("href", "/stats");
 
     const wiki = screen.getByText("Wiki");
     expect(wiki).toHaveAttribute("href", "/guide");
