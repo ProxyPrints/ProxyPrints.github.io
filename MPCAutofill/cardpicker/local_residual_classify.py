@@ -262,16 +262,25 @@ def run_frame_mismatch_recovery(
     materialised into Python - rather than intersected against the catalog-wide sets afterwards.
     `card_ids=None` (the management command's only calling shape) is byte-identical to before.
 
-    FETCH BUDGETS ARE A SEPARATE DECISION FROM SCOPING (issue #533, and the reason this note
-    exists): `ocr_refetch_budget`/`fallback_refetch_budget` still admit real CDN image fetches +
-    fresh OCR/fallback passes, delegated into `local_identify_printing_tags`' helpers via
-    `recover_frame_mismatch_printing_via_ocr_refetch`/`_via_fallback_refetch`. Making this
-    function scopeable does NOT make per-batch fetching safe - both budgets are per-INVOCATION,
-    so a per-batch caller invoking this once per micro-batch multiplies the effective fetch
-    ceiling by the number of batches against a shared, rate-limited CDN. A per-batch caller must
-    therefore consider the budgets EXPLICITLY: pass 0 (the default, and the only value that
-    guarantees zero network cost - the phash path is genuinely free) unless #533's own separate
-    fetch decision has authorised otherwise. No default budget is changed by this scoping work.
+    A NON-ZERO FETCH BUDGET TOGETHER WITH `card_ids` RAISES `ValueError` - GUARDED, not merely
+    warned about (issue #533). `ocr_refetch_budget`/`fallback_refetch_budget` admit real CDN image
+    fetches + fresh OCR/fallback passes, delegated into `local_identify_printing_tags`' helpers
+    via `recover_frame_mismatch_printing_via_ocr_refetch`/`_via_fallback_refetch`, and both are
+    per-INVOCATION ceilings. Today this calculator runs once over the whole catalog, so a budget
+    of N means N fetches; under `card_ids` it can be invoked once per micro-batch, where N
+    silently becomes N x (number of batches) - roughly N x 5,400 at micro_batch_size=25 against a
+    ~135,000-row queue. The zero defaults are the only reason that is not already a live problem
+    (0 x 5,400 = 0), which is exactly why it would never announce itself: it detonates the first
+    time somebody picks a sensible WHOLE-RUN number for a per-batch caller. Nothing downstream
+    catches it - `harvest_fetch_limiter` is per-destination RATE governance (3 req/sec) and bounds
+    rate, not volume, and its own docstring records the CDN Worker's own limiter as empirically
+    leaky, making the client-side limiter the sole real enforcement. These budgets are the only
+    volume cap in the system. A run-scoped budget that means the same thing however the work is
+    sliced needs state shared across invocations; that is #533's design decision, not this
+    function's. So the unsafe combination is rejected rather than documented. Still allowed and
+    unchanged: `card_ids=None` with any budget (whole-catalog, byte-identical to before), and
+    `card_ids` with both budgets 0 (the scoped, genuinely free phash-only path). No default
+    budget is changed by this work.
 
     STILL O(CATALOG) ON ONE AXIS: `CandidateNameIndex()` below builds an in-memory index over
     CanonicalCard's 113k+ rows on every invocation. That is keyed by card NAME over a different
@@ -279,6 +288,30 @@ def run_frame_mismatch_recovery(
     stamp treatment PR #526 established for the illustration calculator, which is deliberately
     out of scope here (scoping queries is this change; caching indexes is the follow-up).
     """
+    if card_ids is not None and (ocr_refetch_budget or fallback_refetch_budget):
+        # Raised BEFORE any query, index build or fetch - see the docstring section above for
+        # the full reasoning. Names the offending budget(s) so the caller doesn't have to guess
+        # which of the two it passed.
+        offending = ", ".join(
+            name
+            for name, value in (
+                ("ocr_refetch_budget", ocr_refetch_budget),
+                ("fallback_refetch_budget", fallback_refetch_budget),
+            )
+            if value
+        )
+        raise ValueError(
+            f"run_frame_mismatch_recovery() was called with card_ids set and a non-zero {offending}. "
+            "Fetch budgets are PER-INVOCATION ceilings: a whole-catalog run invokes this once, so a "
+            "budget of N means N fetches, but a per-batch caller invokes it once per micro-batch and "
+            "N becomes N x (number of batches) - roughly N x 5,400 at micro_batch_size=25 over a "
+            "~135,000-row queue. Nothing downstream caps total volume (harvest_fetch_limiter governs "
+            "RATE, not volume), so this would issue every one of those fetches, politely paced. A "
+            "run-scoped budget that means the same thing however the work is sliced does not exist "
+            "yet - it is issue #533's decision. Pass card_ids with both budgets 0 for the scoped, "
+            "fetch-free phash path, or card_ids=None to keep the whole-catalog behaviour a non-zero "
+            "budget was written for."
+        )
     run_id = run_id or generate_run_id()
     altered_frame_tag = Tag.objects.filter(name=ALTERED_FRAME_TAG_NAME).first()
     index = CandidateNameIndex()
