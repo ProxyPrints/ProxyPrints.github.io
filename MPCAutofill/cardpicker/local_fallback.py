@@ -79,6 +79,42 @@ BORDER_ATTRIBUTE_VOTE_CONFIDENCE = 0.75
 # a ground-truth reading is than an estimate from the same OCR-weight source.
 GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE = 0.95
 
+# THIS MODULE'S SKIP VOCABULARY (2026-07-29, see docs/reference/skip-reasons.md).
+# `run_fallback_for_card` below returns these three strings on `FallbackOutcome.skip_reason`.
+# They are LATENT roster members, not live ones: the module's own `CardScanLog`/printing-vote
+# write branch was retired on 2026-07-29 (see this module's docstring), and its one non-test
+# caller - `local_residual_classify.recover_frame_mismatch_printing_via_fallback_refetch` -
+# reads `outcome.printing_pk` and discards `skip_reason`. Nothing persists them TODAY. They go
+# live the moment anything does, which is exactly why they must be enumerable BEFORE that
+# happens: the docs_lint roster tether derives the roster from module-level
+# `*_SKIP_REASON = "<literal>"` declarations and CANNOT see a bare inline literal, so a new
+# literal added inside `run_fallback_for_card` plus one new write would reach
+# `CardScanLog.skip_reason` (~2.7M rows, no `choices` list, no FK) with no lint failure anywhere.
+#
+# THIS FILE IS PROTECTED CORE (docs/upstreaming/license-provenance.md section 2). These three
+# declarations exist under a NARROW, EXPLICIT owner exception granted 2026-07-29 and recorded in
+# section 2.1 there - it authorises declaring skip-reason constants HERE and nothing else. The
+# file remains protected; any other change to it still needs its own ruling.
+#
+# Naming: `LOCAL_FALLBACK_` and not `FALLBACK_`, because `local_calculate_verdicts` already
+# declares a `FALLBACK_*_SKIP_REASON` family for the Stage D `stage-d-fallback-v1` calculator -
+# a DIFFERENT calculator with its own rows and its own vocabulary, which deliberately shares
+# `eliminated`/`ambiguous` verbatim with this module and deliberately renames this module's
+# `no-evidence` to `no-sub-check-evidence`. Those are not mirrors of these and must not be
+# collapsed into them; the prefix keeps the two families legible at a glance. `LOCAL_FALLBACK_`
+# matches this module's own `FALLBACK_ANONYMOUS_ID = "local-fallback-v1"` identity.
+#
+# Each declaration must stay on ONE line starting at column 0 - that is the shape the tether's
+# regex matches. Comments go ABOVE, never trailing: a trailing comment long enough to push the
+# line past black's limit makes black wrap the value in parentheses, silently dropping the
+# constant out of the derived roster.
+# Not one sub-check (border, artist, symbol) produced a reading at all.
+LOCAL_FALLBACK_NO_EVIDENCE_SKIP_REASON = "no-evidence"
+# Sub-checks ran and ruled out every candidate - zero survivors.
+LOCAL_FALLBACK_ELIMINATED_SKIP_REASON = "eliminated"
+# More than one candidate survived the sub-check intersection.
+LOCAL_FALLBACK_AMBIGUOUS_SKIP_REASON = "ambiguous"
+
 # ---------------------------------------------------------------------------------------------
 # 2a: artist OCR - full-width bottom band (not pass 1's narrower left-side collector-line crop):
 # old border prints "Illus. <name>" centred at the very bottom; modern frames put the artist
@@ -635,6 +671,9 @@ def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str], run_id: Optiona
 class FallbackOutcome:
     printing_pk: Optional[int] = None
     evidence_types_used: list[str] = field(default_factory=list)
+    # One of this module's three `LOCAL_FALLBACK_*_SKIP_REASON` constants, or `""` for "matched,
+    # not a skip". Anything set here must be a named module-level constant, never a bare literal:
+    # the roster tether cannot enumerate what it cannot see. See the declarations at the top.
     skip_reason: str = ""
     # whether the "Illus." anchor was found at all (independent of whether the extracted name
     # went on to fuzzy-match a candidate) - the frame-style classifier's "old border" signal,
@@ -654,7 +693,17 @@ def run_fallback_for_card(
     redundant tesseract call on cards where the artist line already happened to be visible in
     the narrower pass-1 crop. `bleed_class` (from classify_bleed_edge, run once per card ahead
     of everything else - see run_pilot) is threaded through to every sub-check's own
-    fixed-fraction crop box via normalize_crop_box."""
+    fixed-fraction crop box via normalize_crop_box.
+
+    `FallbackOutcome.skip_reason` is one of LOCAL_FALLBACK_NO_EVIDENCE_SKIP_REASON
+    ("no-evidence" - not one sub-check produced a reading), LOCAL_FALLBACK_ELIMINATED_SKIP_REASON
+    ("eliminated" - zero survivors), LOCAL_FALLBACK_AMBIGUOUS_SKIP_REASON ("ambiguous" - more
+    than one survivor), or "" (matched).
+
+    Any NEW skip reason added here must be declared as a module-level `*_SKIP_REASON` constant
+    above and documented in docs/reference/skip-reasons.md - a bare literal returned from here
+    is invisible to the roster tether, and would reach `CardScanLog` unnoticed the moment
+    anything persists this outcome."""
     candidate_pks = {c.pk for c in selected.candidates}
     canonicals = {
         c.pk: c
@@ -684,14 +733,20 @@ def run_fallback_for_card(
             evidence_types_used.append(name)
 
     if not evidence_types_used:
-        return FallbackOutcome(skip_reason="no-evidence", illus_anchor_fired=illus_anchor_fired)
+        return FallbackOutcome(
+            skip_reason=LOCAL_FALLBACK_NO_EVIDENCE_SKIP_REASON, illus_anchor_fired=illus_anchor_fired
+        )
     if len(survivors) == 0:
         return FallbackOutcome(
-            skip_reason="eliminated", evidence_types_used=evidence_types_used, illus_anchor_fired=illus_anchor_fired
+            skip_reason=LOCAL_FALLBACK_ELIMINATED_SKIP_REASON,
+            evidence_types_used=evidence_types_used,
+            illus_anchor_fired=illus_anchor_fired,
         )
     if len(survivors) > 1:
         return FallbackOutcome(
-            skip_reason="ambiguous", evidence_types_used=evidence_types_used, illus_anchor_fired=illus_anchor_fired
+            skip_reason=LOCAL_FALLBACK_AMBIGUOUS_SKIP_REASON,
+            evidence_types_used=evidence_types_used,
+            illus_anchor_fired=illus_anchor_fired,
         )
 
     return FallbackOutcome(
@@ -707,6 +762,9 @@ __all__ = [
     "FALLBACK_CONFIDENCE_SINGLE_EVIDENCE",
     "BORDER_ATTRIBUTE_VOTE_CONFIDENCE",
     "GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE",
+    "LOCAL_FALLBACK_NO_EVIDENCE_SKIP_REASON",
+    "LOCAL_FALLBACK_ELIMINATED_SKIP_REASON",
+    "LOCAL_FALLBACK_AMBIGUOUS_SKIP_REASON",
     "BORDER_COLOR_TO_TAG",
     "FRAME_VOTE_CONFIDENCE",
     "FRAME_STYLE_TO_TAG",

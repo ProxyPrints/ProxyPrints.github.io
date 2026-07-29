@@ -156,8 +156,12 @@ nobody can point at doesn't function as one:
 - `MPCAutofill/cardpicker/printing_consensus.py`
 - `MPCAutofill/cardpicker/tag_consensus.py`
 - `MPCAutofill/cardpicker/artist_consensus.py`
-- `MPCAutofill/cardpicker/local_phash.py`
-- `MPCAutofill/cardpicker/local_fallback.py`
+- `MPCAutofill/cardpicker/local_phash.py` — **still protected**; carries
+  one authorised exception, 2026-07-29, logged in §2.1. The exception
+  covers that one change, not the file.
+- `MPCAutofill/cardpicker/local_fallback.py` — **still protected**; carries
+  one authorised exception, 2026-07-29, logged in §2.1. The exception
+  covers that one change, not the file.
 - `federation-hash-tool/hash_my_cards.py` (+ its test)
 - `MPCAutofill/cardpicker/tests/test_federation_hash_tool_parity.py` (the
   parity tether between the previous two)
@@ -229,6 +233,201 @@ part of this pass); it catches the specific risk the absorption protocol
 is actually worried about: someone pasting AGPL-licensed _source code_
 directly into a protected-core file, not a third-party package turning
 out to have an unexpected license three dependencies deep.
+
+### 2.1 Authorised exceptions — the log
+
+Protection here means **deliberate review**, not immutability. A change to
+a listed file is allowed when the owner rules on it specifically. Every
+such ruling gets an entry below, so a reviewer who was not present can see
+what was changed, why, who authorised it, and — the part that matters most
+— **how far the authorisation reaches**. An entry that reads as a
+precedent would be worse than no entry: the whole value of the policy is
+that the next change has to be asked for again.
+
+The file stays on the list in §2 either way. An exception authorises **one
+change**; it does not un-protect a file.
+
+**2026-07-29 — `MPCAutofill/cardpicker/local_phash.py`: declare the two
+skip-reason constants at source.**
+
+- **What changed.** `find_best_match` returned two skip reasons as bare
+  inline string literals, `"no-hashable-candidates"` and
+  `"no-clear-winner"`. They are now declared as module-level
+  `PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON` and
+  `PHASH_NO_CLEAR_WINNER_SKIP_REASON`, exported in `__all__`, and returned
+  by name. The mirrored copies of both constants in
+  `local_identify_printing_tags.py` (added by PR #567 precisely because
+  this file could not be edited) were deleted; that module now imports the
+  one it uses. Nothing else in the file was touched.
+- **Why.** The `*_SKIP_REASON` declaration convention and the roster tether
+  `check_skip_reason_roster_tether()` (PR #567,
+  `docs/reference/skip-reasons.md`) derive the skip-reason roster by
+  scanning for module-level `NAME = "<literal>"` declarations. **The tether
+  cannot enumerate literals it cannot see.** With the values declared only
+  in the consuming module, a NEW literal added inside `find_best_match`
+  would have reached `CardScanLog.skip_reason` — a column with ~2.7M
+  production rows and no `choices` list or foreign key protecting it — with
+  no lint failure anywhere. PR #567 documented that hole and could not
+  close it, because closing it required editing this file. Two declarations
+  in a protected file is the smaller risk; an undetectable roster gap in
+  the vote system's own scan log is the larger one.
+- **Who authorised it.** The owner, ruling on 2026-07-29 on a request that
+  named this file and this change specifically.
+- **Effect: none, and it is proved rather than asserted.** This is a
+  naming-only change. The string VALUES are untouched, so a `CardScanLog`
+  row written after it is byte-identical to one written before. Proof, in
+  the PR: (a) the after-source with the two constants inlined back to their
+  literals parses to an AST identical to the before-source; (b) the
+  sequence of strings `find_best_match` can return, resolved statically
+  through the module's constant table, is unchanged; (c)
+  `tests/test_skip_reason_roster.py`, which pins every roster value against
+  a hand-written expected set, needed **no edit** — the constant NAMES were
+  kept byte-identical too, so nothing about the roster moved except its
+  declaration site. There is no licensing effect of any kind: no import was
+  added to or removed from this file, no external code was introduced, and
+  the file's GPL-3.0 status and `PROVENANCE:`-header cleanliness are
+  unchanged. `check_protected_core_license.py` passes, and
+  `local_phash.py` remains in `PROTECTED_CORE_FILES` and in §2's list
+  above.
+
+- **What keeps the hole closed.** The tether alone cannot: it is blind to
+  exactly the two regressions that would undo this. Two guards in
+  `tests/test_skip_reason_roster.py` cover them —
+  `test_phash_skip_reasons_are_declared_at_their_origin_and_nowhere_else`
+  (fails if any other `cardpicker` module re-declares either value, i.e. if
+  the mirror comes back) and
+  `test_find_best_match_returns_no_bare_skip_reason_literal` (fails if a
+  skip reason is returned from `find_best_match` as a bare literal rather
+  than a named module-level constant). Both were mutation-checked against
+  the regression each claims to catch.
+
+- **SCOPE OF THIS EXCEPTION — read this before citing it.** It permits
+  **declaring skip-reason constants in `local_phash.py`**, and that is its
+  entire reach. It is specifically NOT:
+  - a general licence to edit `local_phash.py`;
+  - a licence to edit any other protected-core file, including the four
+    consensus modules, `local_fallback.py`, or the federation hash tool —
+    several of which emit skip-reason-shaped literals of their own (see
+    `docs/reference/skip-reasons.md`), and none of which are covered here;
+  - a standing rule that "lint-driven refactors are exempt". The next
+    change of any shape to any file on this list, including the next
+    lint-driven one, **needs its own ruling and its own entry below.**
+
+**2026-07-29 — `MPCAutofill/cardpicker/local_fallback.py`: declare the
+three skip-reason constants at source.**
+
+The second entry in this log, and it is the second entry rather than a
+continuation of the first: the previous entry's own SCOPE section names
+`local_fallback.py` explicitly as a file it does **not** cover. This change
+was asked for and ruled on separately.
+
+- **What changed.** `run_fallback_for_card` set
+  `FallbackOutcome.skip_reason` from three bare inline string literals,
+  `"no-evidence"`, `"eliminated"` and `"ambiguous"`. They are now declared
+  as module-level `LOCAL_FALLBACK_NO_EVIDENCE_SKIP_REASON`,
+  `LOCAL_FALLBACK_ELIMINATED_SKIP_REASON` and
+  `LOCAL_FALLBACK_AMBIGUOUS_SKIP_REASON`, exported in `__all__`, and passed
+  by name. Two docstrings and one field comment were extended to say so.
+  **Nothing else in the file was touched, and no mirror was deleted because
+  none existed** — unlike the `local_phash` case, these values were never
+  re-declared in a consuming module, because this engine's one non-test
+  caller never reads them (see "Effect" below). The `FALLBACK_*_SKIP_REASON`
+  family in `local_calculate_verdicts.py` is **not** a mirror of these: it
+  belongs to the separate `stage-d-fallback-v1` calculator, has its own
+  rows, and deliberately renames this engine's `no-evidence` to
+  `no-sub-check-evidence`. It was checked and left alone; collapsing the two
+  families would erase a real distinction. The `LOCAL_FALLBACK_` prefix
+  exists to keep them apart, and matches this module's own
+  `FALLBACK_ANONYMOUS_ID = "local-fallback-v1"`.
+- **Completeness — verified, not taken on trust.** The request named three
+  literals. The file was re-scanned with an AST pass for every `skip_reason=`
+  keyword argument, every `.skip_reason` attribute assignment, and every
+  lowercase/hyphenated string constant it contains. Three is the complete
+  set. The other lowercase literals the scan surfaced (`black`, `white`,
+  `silver`, `borderless`, `modern`, `old`, `trimmed`, `bleed`,
+  `appropriate-bleed`) are classifier outputs and tag names on paths that
+  never touch `skip_reason`.
+- **Why.** Identical to the previous entry's reasoning, and the reasoning is
+  the point rather than the precedent: the `*_SKIP_REASON` declaration
+  convention and the roster tether `check_skip_reason_roster_tether()`
+  (PR #567, `docs/reference/skip-reasons.md`) derive the roster by scanning
+  for module-level `NAME = "<literal>"` declarations. **The tether cannot
+  enumerate literals it cannot see.** A fourth reason added inside
+  `run_fallback_for_card` would have joined three invisible siblings, and
+  `CardScanLog.skip_reason` — ~2.7M production rows, no `choices` list, no
+  foreign key — is what it would eventually reach.
+- **The defect was LATENT, not live, and that is an argument for closing it
+  rather than against.** Nothing persists this outcome today: the module's
+  own printing-vote/scan-log write branch was retired by PR #560 on
+  2026-07-29, and its one non-test caller,
+  `local_residual_classify.recover_frame_mismatch_printing_via_fallback_refetch`,
+  reads `outcome.printing_pk` and discards `skip_reason` entirely. So no row
+  reaches the column through this path right now. The invisibility, however,
+  is a property of the literals and not of the caller: it becomes a live
+  hole the instant anything persists the outcome, and nothing would fail at
+  that moment to mark it. Closing it while it is cheap, and while the change
+  is provably inert, is the smaller intervention in a protected file — not
+  the larger one.
+- **Who authorised it.** The owner, ruling on 2026-07-29 on a request that
+  named this file, this function and these literals specifically, and that
+  set the same condition as the first ruling: that it hold up to audit.
+- **Effect: none, and it is proved rather than asserted.** This is a
+  naming-only change. The string VALUES are untouched, so a `CardScanLog`
+  row written after it is byte-identical to one written before. Proof, in
+  the PR: (a) the after-source, with the three constants inlined back to
+  their literals and their declarations and `__all__` entries removed,
+  parses to an AST identical to the before-source once docstrings are
+  normalised — docstrings are the only other difference, and they are not
+  executable; (b) the sequence of strings `run_fallback_for_card` can put on
+  `skip_reason`, resolved statically through the module's constant table, is
+  `['no-evidence', 'eliminated', 'ambiguous']` before and after; (c)
+  `tests/test_local_fallback.py` asserts two of the three (`eliminated`,
+  `no-evidence`) against `run_fallback_for_card`'s live output as raw string
+  literals, and was deliberately **not** edited — it is an independent,
+  behavioural pin that does not read the new constants at all and would fail
+  if a value moved. (`ambiguous` has no such behavioural test; it is pinned
+  statically instead, by `EXPECTED_SKIP_REASONS` and by the origin guard in
+  `tests/test_skip_reason_roster.py`. Stated rather than glossed: the
+  behavioural coverage is 2/3, and adding a third case is a test-coverage
+  question outside this exception's scope, not a gap in the proof — (a) and
+  (b) already cover all three at the source level.) There is no licensing
+  effect of any kind: no import was added to or removed from this file, no
+  external code was introduced, and the file's GPL-3.0 status and
+  `PROVENANCE:`-header cleanliness are unchanged.
+  `check_protected_core_license.py` passes, and `local_fallback.py` remains
+  in `PROTECTED_CORE_FILES` and in §2's list above.
+- **What keeps the hole closed.** The tether alone cannot; it is blind to
+  both ways this can be undone. Two guards in
+  `MPCAutofill/cardpicker/tests/test_skip_reason_roster.py` cover them —
+  `test_local_fallback_skip_reasons_are_not_re_mirrored_elsewhere` (fails if
+  any other `cardpicker` module declares one of these three values under a
+  constant name not already pinned for it, and fails outright on any
+  `LOCAL_FALLBACK_`-prefixed declaration outside this file) and
+  `test_run_fallback_for_card_sets_no_bare_skip_reason_literal` (fails if
+  `skip_reason` is set from a bare literal rather than a named module-level
+  constant). A third,
+  `test_local_fallback_skip_reasons_are_declared_at_their_origin`, pins the
+  three name/value pairs to this file. The mirror guard is deliberately
+  narrower than the `local_phash` one: `no-evidence`, `eliminated` and
+  `ambiguous` are shared vocabulary that several calculators legitimately
+  declare under their own prefixes, so a flat "declared nowhere else" ban
+  would forbid the roster's own design. All three were mutation-checked
+  against the regression each claims to catch.
+- **SCOPE OF THIS EXCEPTION — read this before citing it.** It permits
+  **declaring skip-reason constants in `local_fallback.py`**, and that is
+  its entire reach. It is specifically NOT:
+  - a general licence to edit `local_fallback.py` — every other function in
+    it (the border/artist/symbol sub-checks, the three `cast_*_vote`
+    helpers, `classify_bleed_edge`, `normalize_crop_box`) is untouched and
+    stays untouchable without a fresh ruling;
+  - a licence to edit any other protected-core file, including
+    `local_phash.py` (whose own exception is likewise spent), the four
+    consensus modules, the federation hash tool, or the saved-deck decrypt
+    tool;
+  - a precedent that the _pattern_ is now pre-authorised. Two rulings on two
+    files with the same defect do not make a third automatic. **The next
+    change of any shape to any file on this list needs its own ruling and
+    its own entry in this log** — including the next skip-reason one.
 
 ## 3. Absorption protocol
 

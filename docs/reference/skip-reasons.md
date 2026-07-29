@@ -140,11 +140,63 @@ longer exists in the code; it wrote `fetch_failed` like the rest.
 | `no-clear-winner-margin`         | `PHASH_NO_CLEAR_WINNER_MARGIN_SKIP_REASON`   | `local-phash-v1` | A candidate cleared the threshold, but the runner-up was too close behind it.                                                                                                                                                                            | Live                                                                                                               |
 
 `no-hashable-candidates` and `no-clear-winner` are the two values whose
-strings physically originate inside `MPCAutofill/cardpicker/local_phash.py`,
-which is PROTECTED CORE (`docs/upstreaming/license-provenance.md` section 2) and therefore cannot be edited to declare them at their true source.
-They are **mirrored** in the consuming module, which is the one place in
-the roster where the declaration is not co-located with the origin. See
-"The values that are not declared at their origin" below.
+strings physically originate inside `MPCAutofill/cardpicker/local_phash.py`
+(`find_best_match`), and that is where their constants are **declared** —
+not in this section's own module. That file is PROTECTED CORE
+(`docs/upstreaming/license-provenance.md` section 2); the two declarations
+sit there under the narrow owner exception granted 2026-07-29 and recorded
+in that section. They were briefly mirrored in
+`local_identify_printing_tags.py`, while that file was the only editable
+one; the mirror is gone, so every roster value now has exactly one
+declaration and it is co-located with its origin.
+`local_identify_printing_tags` imports `PHASH_NO_CLEAR_WINNER_SKIP_REASON`
+from `local_phash` for its `_classify_no_clear_winner` refinement test.
+
+## Local-fallback pilot engine — `MPCAutofill/cardpicker/local_fallback.py`
+
+`anonymous_id` is `local-fallback-v1` (`FALLBACK_ANONYMOUS_ID`). The pilot's
+pass 2: border / artist / symbol sub-checks intersected against the card's
+own name-candidates, run against a fresh per-invocation image fetch.
+`run_fallback_for_card` puts one of these three on
+`FallbackOutcome.skip_reason`.
+
+| Reason        | Constant                                 | Means                                                                 | Status                 |
+| ------------- | ---------------------------------------- | --------------------------------------------------------------------- | ---------------------- |
+| `no-evidence` | `LOCAL_FALLBACK_NO_EVIDENCE_SKIP_REASON` | Not one sub-check (border, artist, symbol) produced a reading at all. | **Latent — see below** |
+| `eliminated`  | `LOCAL_FALLBACK_ELIMINATED_SKIP_REASON`  | Sub-checks ran and ruled out every candidate — zero survivors.        | **Latent — see below** |
+| `ambiguous`   | `LOCAL_FALLBACK_AMBIGUOUS_SKIP_REASON`   | More than one candidate survived the sub-check intersection.          | **Latent — see below** |
+
+**Latent, not live, and that is the reason they are declared.** Nothing
+persists these three today. This module's own printing-vote / `CardScanLog`
+write branch was retired on 2026-07-29 (redundancy doctrine — see the
+module's docstring), and its one non-test caller,
+`local_residual_classify.recover_frame_mismatch_printing_via_fallback_refetch`,
+reads `outcome.printing_pk` and discards `skip_reason`. The existing
+`local-fallback-v1` rows in `CardScanLog` are historical. They go live the
+moment anything persists this outcome — which is why they had to become
+enumerable **before** that happens rather than after: the tether cannot
+enumerate a literal it cannot see, so a fourth reason added inside
+`run_fallback_for_card` plus one new write would have reached the column
+with no lint failure anywhere.
+
+`local_fallback.py` is PROTECTED CORE
+(`docs/upstreaming/license-provenance.md` section 2). The three declarations
+sit there under a second narrow owner exception, granted 2026-07-29 and
+recorded in section 2.1 alongside the `local_phash.py` one. The exception
+covers skip-reason constants in that one file; the file remains protected.
+
+**Not the same constants as the Stage D fallback calculator's, on purpose.**
+The `FALLBACK_*_SKIP_REASON` family two sections below belongs to
+`stage-d-fallback-v1` in `local_calculate_verdicts.py` — a different
+calculator, a different population of rows, its own vocabulary. It shares
+`eliminated` and `ambiguous` verbatim with this engine (same meaning, no
+rename needed) and deliberately renames this engine's `no-evidence` to
+`no-sub-check-evidence` to avoid colliding with Stage D's own established
+`no-evidence`. Those are parallel declarations, not mirrors of these, and
+collapsing them would erase a real distinction between two row populations —
+exactly the "one prefixed constant per calculator per value" shape
+`no-evidence` already has five times over. The `LOCAL_FALLBACK_` prefix here
+keeps the two families legible.
 
 ## Stage D join-key calculator — `MPCAutofill/cardpicker/local_calculate_verdicts.py`
 
@@ -178,6 +230,10 @@ reselection.
 
 `anonymous_id` is `stage-d-fallback-v1` (`STAGE_D_FALLBACK_ANONYMOUS_ID`).
 Border / artist / symbol sub-checks intersected against the candidate pool.
+A port of the pilot engine's decision model onto stored `ImageEvidence`; its
+constants are its own, **not** mirrors of the pilot's `LOCAL_FALLBACK_*`
+three — see the Local-fallback pilot engine section above for why the two
+families are kept separate.
 
 | Reason                  | Constant                                     | Means                                                                                                                                                                                | Status           |
 | ----------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
@@ -266,38 +322,68 @@ persisted values with no further work.
 
 Stated explicitly rather than forced, per the sweep's own brief.
 
-**`local_phash.find_best_match`'s two return literals**
-(`no-hashable-candidates`, `no-clear-winner`) are emitted from
+**`local_phash.find_best_match`'s two return values — CLOSED 2026-07-29.**
+`no-hashable-candidates` and `no-clear-winner` were the sweep's one
+exception: they are produced inside
 `MPCAutofill/cardpicker/local_phash.py`, which is PROTECTED CORE
-(`docs/upstreaming/license-provenance.md` section 2) and cannot be edited
-to declare them at source without an owner exception. They are mirrored as
-constants in the consuming module,
-`MPCAutofill/cardpicker/local_identify_printing_tags.py`, and that module's
-equality test reads the mirrored constant, so the coupling is named rather
-than anonymous. The roster is still complete — but the guarantee is
-"declared where it is consumed", not "declared where it is produced", for
-these two alone. A NEW literal added to `find_best_match` would flow
-through to `CardScanLog` without any lint failure. That residual gap closes
-only by editing a protected file.
+(`docs/upstreaming/license-provenance.md` section 2), so the sweep could
+not declare them at source and mirrored them in the consuming module
+instead. That left a real hole — a NEW literal added inside
+`find_best_match` would have reached `CardScanLog` without the tether ever
+seeing it, because the tether cannot enumerate literals it cannot see.
+The owner granted a narrow exception on 2026-07-29 (recorded in
+`license-provenance.md` section 2, which also states its limits): the two
+constants are now declared in `local_phash.py` itself, the mirror in
+`local_identify_printing_tags.py` is removed, and the tether reports
+`local_phash.py` as the declaration site. The exception covers skip-reason
+constants in that one file only; the file remains protected.
+
+**`local_fallback.run_fallback_for_card`'s three return values — CLOSED
+2026-07-29.** `no-evidence`, `eliminated` and `ambiguous` were bare inline
+literals inside `MPCAutofill/cardpicker/local_fallback.py`, PROTECTED CORE
+under the same section 2, for the same reason. The defect was **latent**,
+not live: this module's own write branch was retired the same day and its
+one non-test caller discards `skip_reason` (see the Local-fallback pilot
+engine section above), so nothing reached `CardScanLog`. That made it
+cheaper to close, not less necessary to — the invisibility is a property of
+the literals, and it would have become a live hole the instant anything
+persisted the outcome, with no lint failure to mark the moment. The owner
+granted a second narrow exception on 2026-07-29 (recorded in
+`license-provenance.md` section 2.1, which also states its limits, and which
+is a per-change log rather than a precedent): the three constants are now
+declared in `local_fallback.py` itself as
+`LOCAL_FALLBACK_NO_EVIDENCE_SKIP_REASON` /
+`LOCAL_FALLBACK_ELIMINATED_SKIP_REASON` /
+`LOCAL_FALLBACK_AMBIGUOUS_SKIP_REASON`, and the tether reports
+`local_fallback.py` as their declaration site. There was no mirror to
+remove: unlike the phash pair, these values were never re-declared for this
+engine anywhere else, because its one caller never reads them. **Every
+roster value is now declared where it is produced.**
 
 **The lands module's phash-branch composition.** That module reports
 `f"{LANDS_PHASH_SKIP_REASON_PREFIX}{reason}"` — a `phash-` prefix
 concatenated onto whatever `find_best_match` returned. The prefix is a
-constant and the routing test reads it, but the composed value is not a
-declared string and cannot be made one without enumerating protected-core
-returns. This is harmless today precisely because nothing in that module is
-persisted; the constant's own comment records that a `CardScanLog` write
+constant and the routing test reads it, but the composed value is still not
+a declared string — the concatenation is what the tether cannot see, and
+that is true regardless of the two `find_best_match` returns now being
+named constants. This is harmless today precisely because nothing in that
+module is persisted; the constant's own comment records that a
+`CardScanLog` write
 must not be added there until the composition is replaced with explicit
 per-outcome constants.
 
-**Not in scope, and why.** `local_ocr.validate_against_candidates` and
-`local_fallback.compute_fallback_outcome` both return skip-reason-shaped
-strings as inline literals. Neither reaches `CardScanLog`:
-`validate_against_candidates`' three values are consumed as control flow
-and re-expressed by the caller's own declared constants, and the fallback
-outcome's write branch was retired on 2026-07-29 — the `local-fallback-v1`
-rows in production are historical. `local_fallback.py` is PROTECTED CORE in
-any case.
+**Not in scope, and why.** `local_ocr.validate_against_candidates` returns
+skip-reason-shaped strings as inline literals. They do not reach
+`CardScanLog`: all three are consumed as control flow and re-expressed by
+the caller's own declared constants, which is a different situation from an
+undeclared value flowing through to the column.
+
+This paragraph previously also listed `local_fallback` here, under the
+function name `compute_fallback_outcome` — a name that does not exist in the
+code; the function is `run_fallback_for_card`. Both the wrong name and the
+"not in scope" classification are corrected: those three values are now
+declared at their origin (see the entry above and the Local-fallback pilot
+engine section) and are ordinary roster members, latent rather than live.
 
 ## Related
 
