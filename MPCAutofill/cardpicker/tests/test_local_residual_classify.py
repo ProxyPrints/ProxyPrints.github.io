@@ -450,6 +450,106 @@ class TestFrameMismatchRecoveryCardIdScoping:
         assert result.ocr_refetch_attempted == 0
 
 
+class TestRunFrameMismatchRecoveryScopedFetchBudgetGuard:
+    """`ocr_refetch_budget`/`fallback_refetch_budget` are PER-INVOCATION ceilings. A whole-catalog
+    run invokes this once, so a budget of N means N fetches; a per-batch caller invokes it once per
+    micro-batch, where N becomes N x (number of batches) - roughly N x 5,400 at micro_batch_size=25
+    over a ~135,000-row queue. The zero defaults are the only thing holding that today
+    (0 x 5,400 = 0), which is exactly why it would never announce itself: it detonates the first
+    time somebody picks a sensible WHOLE-RUN number for a per-batch caller. Nothing downstream caps
+    total VOLUME (`harvest_fetch_limiter` governs rate, 3 req/sec, and records the CDN Worker's own
+    limiter as empirically leaky), so these budgets are the only volume cap in the system. The
+    combination is rejected outright rather than documented - #533 owns the real fix."""
+
+    @staticmethod
+    def _flagged_card():
+        CanonicalCardFactory(name="Forest", image_hash=100)
+        card = CardFactory(name="Forest", content_phash=100)
+        CardScanLog.objects.create(card=card, anonymous_id=OCR_ANONYMOUS_ID, skip_reason="frame-mismatch")
+        return card
+
+    def test_card_ids_with_a_non_zero_ocr_refetch_budget_raises(self, db):
+        card = self._flagged_card()
+
+        with pytest.raises(ValueError) as excinfo:
+            run_frame_mismatch_recovery(dry_run=True, card_ids=[card.pk], ocr_refetch_budget=10)
+
+        message = str(excinfo.value)
+        # the message must explain WHY, and name which budget offended.
+        assert "ocr_refetch_budget" in message
+        assert "PER-INVOCATION" in message
+        assert "number of batches" in message
+        assert "#533" in message
+
+    def test_card_ids_with_a_non_zero_fallback_refetch_budget_raises(self, db):
+        card = self._flagged_card()
+
+        with pytest.raises(ValueError) as excinfo:
+            run_frame_mismatch_recovery(dry_run=True, card_ids=[card.pk], fallback_refetch_budget=10)
+
+        assert "fallback_refetch_budget" in str(excinfo.value)
+
+    def test_both_budgets_non_zero_names_both(self, db):
+        card = self._flagged_card()
+
+        with pytest.raises(ValueError) as excinfo:
+            run_frame_mismatch_recovery(
+                dry_run=True, card_ids=[card.pk], ocr_refetch_budget=10, fallback_refetch_budget=5
+            )
+
+        message = str(excinfo.value)
+        assert "ocr_refetch_budget" in message
+        assert "fallback_refetch_budget" in message
+
+    def test_the_guard_fires_before_any_query_index_build_or_fetch(self, db, monkeypatch):
+        """It must reject the call outright - otherwise a rejected invocation still pays
+        `CandidateNameIndex()`'s catalog-wide read, and could have issued fetches before
+        noticing."""
+        card = self._flagged_card()
+
+        def _unexpected_fetch(*args, **kwargs):
+            raise AssertionError("the guard must fire before any fetch")
+
+        monkeypatch.setattr(module, "fetch_card_image", _unexpected_fetch)
+
+        with CaptureQueriesContext(connection) as captured:
+            with pytest.raises(ValueError):
+                run_frame_mismatch_recovery(dry_run=True, card_ids=[card.pk], ocr_refetch_budget=10)
+
+        assert captured.captured_queries == []
+
+    def test_a_non_zero_budget_without_card_ids_is_still_allowed(self, db, monkeypatch):
+        """Whole-catalog behaviour is byte-identical: an unscoped run is invoked once, so its
+        budget still means exactly what it says. This is the management command's calling shape
+        and the guard must not have narrowed it."""
+        card = self._flagged_card()
+        assert card is not None
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda *args, **kwargs: None)
+        monkeypatch.setattr(module, "run_ocr_for_card", lambda selected, image: OcrCardResult(skip_reason="no-text"))
+
+        result = run_frame_mismatch_recovery(dry_run=True, ocr_refetch_budget=10)
+
+        assert result.ocr_refetch_attempted == 1
+
+    def test_card_ids_with_both_budgets_zero_is_still_allowed(self, db):
+        """The scoped, genuinely free phash-only path this PR exists to enable - explicitly NOT
+        caught by the guard."""
+        artist = CanonicalArtistFactory()
+        CanonicalCardFactory(name="Forest", image_hash=100, artist=artist)
+        TagFactory(name=ALTERED_FRAME_TAG_NAME)
+        card = CardFactory(name="Forest", content_phash=100)
+        CardScanLog.objects.create(card=card, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+
+        result = run_frame_mismatch_recovery(
+            dry_run=True, card_ids=[card.pk], ocr_refetch_budget=0, fallback_refetch_budget=0
+        )
+
+        assert result.phash_recovered == 1
+        assert result.ocr_refetch_attempted == 0
+        assert result.fallback_refetch_attempted == 0
+
+
 class TestD0SiblingPropagationCardIdScoping:
     """`run_d0_sibling_artist_propagation` gained a `card_ids` parameter. Three reads had to be
     narrowed, not one: the `CardArtistVote` idempotence read, the target queryset, and - the one

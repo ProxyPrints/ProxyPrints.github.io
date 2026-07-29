@@ -359,6 +359,11 @@ committed to the catalog, and, since 2026-07-22, never a silently
 _reverted_ right answer either: passive/machine/federated evidence can
 now neither form nor overturn a human-backed quorum on its own.
 
+All three mechanisms are per-card or per-vote and therefore hold under
+any dispatch schedule (§10); §10a sets them against the separate class
+of inference whose premise is a count over the population, for which
+the processing window is itself a parameter.
+
 A further, narrower tightening landed 2026-07-23 and only concerns one
 specific historical cohort: the 28,112 `CardPrintingTag` votes cast by
 the 2026-07-14 deductive-name-backfill run (`source="deduction"`,
@@ -996,8 +1001,169 @@ run cadence, or wall-clock timing anywhere in their own definition:
    This is a property of the composition `decode → gate`, not of the
    loop that decides when `decode` runs for a given card next.
 
-**What genuinely IS new under continuous operation**, and the only
-soundness-adjacent surface this section flags: a human vote's own
+### 10a. The class those four properties do not cover: inference whose premise is a statement about the population
+
+The four properties above are each genuinely per-card or per-vote, and
+the **No** they support is correct for what it covers — decode
+soundness, weight assignment, and the gate. It is not, by itself, an
+answer for the pipeline as a whole. Schedule-independence is not a
+property a pipeline has; it is a property an individual inference has,
+and it follows from **what that inference's premise ranges over** —
+never from what the step costs, and never from whether it touches an
+image at all. Sorted by that one question, the calculators in this
+codebase fall into three kinds, and only the first two are
+schedule-independent.
+
+**Kind 1 — per-card predicates.** The conclusion depends only on
+properties of the single card in hand. The decode-or-abstain rule
+itself (§1, point 1 above) is the archetype, and it is not alone:
+`local_lands_identify.is_lands_target` decides target-pool membership
+from one card's own name and its own candidate count;
+`local_layout_class_cast.calculate_layout_class_verdict` casts a border
+tag by reading that one card's already-persisted
+`ImageEvidence.layout_class` and mapping it, performing no
+re-classification and no comparison against anything else;
+`local_detect_ai_art.calculate_ai_art_verdict` scans the same card's
+stored OCR fields (`artist_ocr_name`, `legal_line_raw_text`,
+`collector_line_raw_text`) for known generator marker strings. Each
+computes the identical answer for a given card whether that card is
+reached partway through a full-catalog cohort or alone, seconds after
+upload. This is schedule-independence in the strong sense, and it is
+what the four properties above establish.
+
+**Kind 2 — neighbourhood lookups.** The question is "which other cards
+share this property with me?" The conclusion genuinely references the
+population, but it remains **window-independent**, because the
+neighbourhood is defined by a **join key** — an md5 checksum, a
+perceptual hash, a name — and not by the batch. The set of cards
+sharing a given checksum is the same set no matter which cards happen
+to be dispatched together. Four live instances:
+`printing_consensus.md5_group_card_ids` (every card indexing a
+byte-identical image file — §4 item 3's identity group);
+`evidence_transfer.find_transfer_source` (the md5-sibling
+`ImageEvidence` row eligible to be copied onto a card instead of
+re-fetching it); `local_residual_classify.run_d0_sibling_artist_propagation`
+(an artist propagated from a `content_phash`-sharing sibling); and
+consensus resolution itself — `printing_consensus.resolve_printing`
+reads a card's votes **pooled across its md5 group**, via
+`group_printing_votes`.
+
+These are sound under any schedule, and they carry an implementation
+hazard worth naming precisely because nothing about it errors. A wiring
+pass moving such a calculator to per-batch dispatch has two different
+things it could scope: the **targets** (which cards this invocation
+writes for) and the **lookup** (which cards it is allowed to find as
+neighbours). Scoping the first is the point of the exercise; scoping
+the second along with it is a silent defect, because a card whose only
+neighbour lies outside the batch then finds nothing — indistinguishable,
+from inside the calculator, from a card that genuinely has no
+neighbour. The correct handling is to scope by the batch's own
+**join-key values** rather than by its card ids. PR #541 (open at the
+time of writing) is the worked example: it narrows
+`run_d0_sibling_artist_propagation`'s source index by a lazy subquery
+over the batch's own `content_phash` values, so a source card
+**outside** the batch still propagates **into** it, pinned by a
+dedicated test
+(`test_a_source_card_outside_the_scope_still_propagates_into_it`).
+
+What a lost neighbour costs is not uniform across the four, and
+flattening that would oversell the hazard in one direction and
+undersell it in the other. For the transfer and propagation cases it
+degrades to a **missed** inference: evidence that was available is not
+used, the card falls through to the ordinary path, and §1's
+decode-or-abstain rule turns absent evidence into abstention, never
+into a wrong commitment. For consensus pooling it is sharper. A tally
+over part of an identity group is not a weakened version of that
+group's tally, it is a **different** tally, and "one target gets one
+tally" (§4 item 3) is exactly the invariant a batch-truncated group
+breaks — not `g₅` itself, which holds over whatever votes it is given,
+but the identity-group premise the pooled tally is computed under. That
+hazard is stated in the abstract: no call site in this codebase passes
+a batch-narrowed group to `resolve_printing` today.
+
+**Kind 3 — census predicates.** The question is "am I the only one?"
+The premise is a **count over the eligible population**, so **the
+processing window is a parameter of the inference**, not an
+implementation detail of when it runs. This class is not
+schedule-independent at any cost, and no amount of care in the
+dispatcher makes it so.
+
+The instance in production is
+`local_identify_printing_tags.run_name_frequency_elimination`. It votes
+for a name only when **exactly one** of that name's printings remains
+uncovered **and exactly one** unresolved pilot-eligible card carries
+that name. Its own docstring is emphatic that the second conjunct is
+load-bearing rather than a refinement — a name can have one uncovered
+printing while several unresolved cards share it, in which case
+elimination establishes that _some_ card is the missing printing but
+never **which** one, since any of the others could as easily be a
+redundant depiction of an already-covered printing. The docstring's own
+words for the ungated version: "the difference between a sound
+inference and a coin flip." That is not a stylistic claim, it is
+measured. **Against the full (not sampled) catalog, 2026-07-16: 2,076
+names have exactly one uncovered printing, and only 1,678 of those also
+have exactly one unresolved eligible card.** The conjunct-1-only
+version would have voted, incorrectly, on the remaining ~400 names —
+roughly a fifth of its own output. Both figures are counts over the
+whole catalog, and a batch cannot produce either: inside any window
+smaller than the catalog, a name with three unresolved cards can
+present as a name with one, and the gate that separates a sound
+inference from a coin flip is precisely the one that stops being
+computable. `compute_covered_printing_pks`, which supplies the first
+conjunct, is catalog-wide in the same way — a set over every `Card`
+carrying a confirmed or RESOLVED-inferred printing, recomputed fresh on
+every call specifically so that it reflects the whole catalog's current
+state rather than a stale or partial view of it.
+
+**The discriminator is population, not pixels.** This is the
+non-obvious part, and it is worth stating in the form most likely to be
+mis-applied. `run_name_frequency_elimination` performs **no fetch, no
+OCR, no perceptual hash — no image I/O of any kind**; it is arithmetic
+over already-persisted catalog state. By every cost heuristic that
+normally guides a parallelisation decision, it looks like the most
+trivially distributable step in the pipeline. It is also the one step
+here that cannot be distributed at all, because what it needs is not
+image data but a **census**, and a batch cannot produce one. **A step
+is schedule-independent when its conclusion does not depend on knowing
+something about the whole population — not when it is cheap, and not
+when it never touches an image.**
+
+**What follows for continuous operation.** Continuous operation is
+therefore not uniformly "run everything per card as it arrives." It is
+per-card work (kind 1) and neighbourhood work (kind 2) under streaming
+dispatch, with census inferences (kind 3) remaining **whole-catalog
+passes** — a tail phase, run against the catalog as it then stands, not
+a step inside the loop. Reformulating a census predicate so that the
+**count** is taken catalog-wide while only the **write** is scoped to
+the batch is possible in principle, and would restore per-batch
+dispatch for such a step without changing what it asserts. That is a
+**correctness change requiring ratification, not a wiring detail** —
+it alters the conditions under which a vote is cast — and it is
+**future work: nothing is built**. Nothing in this subsection proposes
+changing any calculator; it states which class each belongs to and what
+that class permits.
+
+**One case examined and deliberately left outside the three.**
+`review_clusters.compute_review_clusters` groups review-queue cards by
+exact equality on `content_phash`, `ImageEvidence.symbol_phash`, or
+normalized legal-line text. Its **edges** are kind-2 join keys, but a
+cluster is the **transitive closure** of those edges over the eligible
+population, deliberately including cross-signal chaining (see that
+module's own docstring), so which cards land in one cluster is a
+function of which cards exist: a window holding A and C but not the B
+that links them yields two clusters where the catalog-wide computation
+yields one. Verified by reading `_build_clusters`, not inferred from
+its caching. It sits outside the classification above because it casts
+no votes and reaches no verdict — it is a presentation surface deciding
+what a moderator is shown on one screen, so its window-dependence
+changes review ergonomics, not what the pipeline concludes. Named here
+so the next reader need not re-derive that it was considered.
+
+### 10b. Served-mix effects on human vote quality
+
+**What genuinely IS new under continuous operation on the human side**,
+and the other soundness-adjacent surface this section flags (§10a
+above being the first): a human vote's own
 quality can, in principle, depend on the served MIX of cards a person
 is shown in a session — a queue that serves long, repetitive stretches
 of visually similar cards (a plausible byproduct of an event-driven
@@ -1130,6 +1296,24 @@ yet exist in the written record — see §10's own "Not yet backed by
 written data" note. Like §§7-9, §10's **text** is pending the same owner
 review §§1-6 received; the top-of-document STATUS banner is unchanged by
 this addition.
+
+**§10a added 2026-07-29** (and the pre-existing served-mix material
+given its own §10b heading, text unchanged): §10's four properties are
+correct and untouched, but they cover only inference whose conclusion
+depends on one card or one vote. §10a adds the classification §10 did
+not consider — per-card predicates, neighbourhood lookups (population
+referenced but window-independent, since the neighbourhood is a join
+key), and **census predicates**, whose premise is a count over the
+eligible population and for which the processing window is therefore a
+parameter of the inference. The verified census instance is
+`local_identify_printing_tags.run_name_frequency_elimination`, anchored
+on its own full-catalog 2026-07-16 measurement (2,076 names with
+exactly one uncovered printing; 1,678 also with exactly one unresolved
+eligible card). No calculator is changed and none is proposed to
+change; the reformulation §10a names (count catalog-wide, write scoped)
+is **future work, nothing built**, and would be a ratifiable
+correctness change rather than a wiring detail. Like §§7-10, this
+text is pending the same owner review §§1-6 received.
 
 **§4 item 3 (identity-group pooling) reviewed and approved by the
 owner, 2026-07-25**: the delta-gate round addressing the 2026-07-25
