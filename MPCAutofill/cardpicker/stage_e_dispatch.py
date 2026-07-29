@@ -91,6 +91,10 @@ from typing import Any, Callable, Deque, Iterable, Optional
 from django.conf import settings
 from django.utils import timezone
 
+from cardpicker.collector_line_artist import (
+    build_printing_artist_lookup,
+    load_artist_lexicon,
+)
 from cardpicker.evidence_transfer import find_transfer_source, transfer_evidence
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.local_calculate_verdicts import (
@@ -826,6 +830,13 @@ def _run_stage_c(
             ).values_list("card_id", flat=True)
         )
     lexicon = known_set_codes()
+    # COLLECTOR-LINE ARTIST GATE (2026-07-29 - see `image_evidence.compute_card_evidence`'s own
+    # `artist_lexicon` docstring paragraph): built once per batch and threaded through, the same
+    # shape `known_set_codes()` immediately above already has, so `compute_card_evidence` keeps
+    # issuing no DB query of its own. `build_printing_artist_lookup()` returns a stateful resolver
+    # that caches one query per EXPANSION (not per card) across this whole batch.
+    artist_lexicon = load_artist_lexicon()
+    printing_artist_lookup = build_printing_artist_lookup()
 
     # PHASE 1 (module docstring): build the work list, resolving evidence transfer BEFORE
     # deciding whether a card needs a fetch at all.
@@ -896,6 +907,8 @@ def _run_stage_c(
                 fetch_latency_ms=fetch_outcome.fetch_latency_ms,
                 short_circuit=short_circuit,
                 known_set_codes=lexicon,
+                artist_lexicon=artist_lexicon,
+                printing_artist_lookup=printing_artist_lookup,
                 md5_checksum=fetch_outcome.md5_checksum,
                 sha256_checksum=fetch_outcome.sha256_checksum,
             )

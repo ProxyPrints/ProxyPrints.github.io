@@ -237,12 +237,16 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import imagehash
 
 from django.db.models import Q, QuerySet
 
+from cardpicker.collector_line_artist import (
+    ArtistLexicon,
+    recover_artist_from_collector_line,
+)
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import (
@@ -487,6 +491,44 @@ def _parse_is_lexicon_valid(parsed: Any, known_set_codes: Optional[frozenset[str
     return parsed.set_code is None or known_set_codes is None or parsed.set_code in known_set_codes
 
 
+def _parse_artist_is_contradicted(
+    parsed: Any,
+    raw_text: str,
+    artist_lexicon: "Optional[ArtistLexicon]",
+    printing_artist_lookup: "Optional[Callable[[Optional[str], Optional[str]], Optional[str]]]",
+) -> bool:
+    """COLLECTOR-LINE ARTIST GATE (2026-07-29 - see `compute_card_evidence`'s own `artist_lexicon`
+    docstring paragraph for the full autopsy). The second half of the escalation loop's acceptance
+    criterion, sitting immediately after `_parse_is_lexicon_valid`: True iff the artist credit
+    printed in THIS attempt's own collector line contradicts the artist of the printing THIS
+    attempt's own (set_code, collector_number) resolves to - i.e. the parse is lexicon-valid but
+    internally inconsistent, which is the signature of a MISREAD NUMBER (right set code, wrong
+    digits) rather than a good read.
+
+    Every one of the four ways this can't decide returns False ("no contradiction"), never True -
+    absent data is not evidence, the same rule `local_calculate_verdicts._apply_agreement_checks`
+    applies to all of its own agreement checks:
+      - the gate isn't wired (either argument `None` - the default for every direct caller/test,
+        so this is purely additive and pre-2026-07-29 behavior is byte-identical);
+      - no `set_code` was parsed (the pre-M15 collector-number-only case: a bare collector number
+        is globally ambiguous across the catalog, so there is no single printing to compare
+        against - the same carve-out `_parse_is_lexicon_valid` itself makes);
+      - the (set, number) pair resolves to no real printing (nothing to compare against);
+      - the collector line yields no confident artist reading at all.
+    """
+    if artist_lexicon is None or printing_artist_lookup is None:
+        return False
+    if parsed.set_code is None or parsed.collector_number is None:
+        return False
+    recovered = recover_artist_from_collector_line(raw_text, artist_lexicon)
+    if recovered is None:
+        return False
+    printing_artist = printing_artist_lookup(parsed.set_code, parsed.collector_number)
+    if not printing_artist:
+        return False
+    return not recovered.is_compatible_with(printing_artist)
+
+
 def _confidently_digit_free(tier1_raw_texts: list[str]) -> bool:
     """Gate for the pre-classification short-circuit (2026-07-22, pipeline-fidelity parity
     replay #154 "unexplained" divergence autopsy - 155 of 373 conservative-abstention
@@ -511,6 +553,8 @@ def extract_card_evidence(
     profile: Optional[dict[str, float]] = None,
     short_circuit: Optional[bool] = None,
     known_set_codes: Optional[frozenset[str]] = None,
+    artist_lexicon: Optional[ArtistLexicon] = None,
+    printing_artist_lookup: Optional[Callable[[Optional[str], Optional[str]], Optional[str]]] = None,
 ) -> ExtractionResult:
     """
     The per-card callable work unit - fetch, then compute. `card.content_phash` (not recomputed
@@ -544,6 +588,11 @@ def extract_card_evidence(
 
     `known_set_codes`, if given, is forwarded straight through to `compute_card_evidence` below -
     see that function's own docstring for the escalation-loop lexicon gate this controls.
+
+    `artist_lexicon`/`printing_artist_lookup`, if given, are forwarded straight through to
+    `compute_card_evidence` below - see that function's own docstring for the COLLECTOR-LINE
+    ARTIST GATE they control. Both default to `None` (gate off, behavior identical to
+    pre-2026-07-29).
     """
 
     fetch_started_at = time.monotonic()
@@ -564,6 +613,8 @@ def extract_card_evidence(
         profile=profile,
         short_circuit=short_circuit,
         known_set_codes=known_set_codes,
+        artist_lexicon=artist_lexicon,
+        printing_artist_lookup=printing_artist_lookup,
         md5_checksum=card.md5_checksum,
         sha256_checksum=card.sha256_checksum,
     )
@@ -581,6 +632,8 @@ def compute_card_evidence(
     profile: Optional[dict[str, float]] = None,
     short_circuit: Optional[bool] = None,
     known_set_codes: Optional[frozenset[str]] = None,
+    artist_lexicon: Optional[ArtistLexicon] = None,
+    printing_artist_lookup: Optional[Callable[[Optional[str], Optional[str]], Optional[str]]] = None,
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
 ) -> ExtractionResult:
@@ -665,6 +718,52 @@ def compute_card_evidence(
     the gate entirely - every parse is accepted exactly as before, the pre-2026-07-23 behavior -
     so this is purely additive: a card whose first parse is already lexicon-valid (the overwhelming
     majority) sees zero behavior or compute change either way.
+
+    `artist_lexicon`/`printing_artist_lookup` (2026-07-29): the COLLECTOR-LINE ARTIST GATE - the
+    second half of the escalation loop's acceptance criterion, layered directly on top of the
+    set-code lexicon gate above and built for the failure mode that gate structurally cannot see.
+
+    THE GAP. A lexicon-valid parse can still be a MISREAD NUMBER: right set code, wrong digits.
+    `_parse_is_lexicon_valid` passes it, escalation terminates on the spot, and tiers 2-8 - the
+    tiers built for exactly this recovery - never run. Owner-confirmed symptom, 2026-07-29: "cards
+    where the artist and illustration were accurate but the reported collector ID was incorrect."
+    The set-code axis has nothing to say about it, because the set code was read correctly.
+
+    THE SIGNAL, AND WHY IT COSTS NOTHING NEW TO GET. The artist credit is printed in the SAME
+    collector line this loop is already OCR-ing, and `cardpicker.collector_line_artist` recovers it
+    from that already-in-hand string (no extra crop, no extra tesseract call, no image fetch - see
+    that module's docstring for the measurement and the truncation/OCR-noise handling). So a parse
+    can be checked against ITSELF: does the printing that this attempt's own (set, number) resolves
+    to have an artist compatible with the artist this attempt's own text prints? Measured
+    read-only against 6,000 production rows (2026-07-29): 49.5% yield a confident artist reading,
+    and 10.7% of THOSE contradict the printing their own stored collector number resolves to.
+
+    THE GATE CONTROLS WHETHER ESCALATION CONTINUES, NOT MERELY WHETHER A VOTE IS CAST. That
+    distinction is the whole design: suppressing only the downstream vote would leave the pipeline
+    having flagged a read as suspect with nothing better to offer. Here a contradicted parse does
+    NOT terminate the loop - later tiers get their chance to produce a read that is internally
+    consistent, and frequently do. Cost is bounded by the existing 8-attempt ceiling (no new tiers,
+    no unbounded work) and lands inside Stage C's measured ~22.6% idle compute (~170 ms/card idle
+    against a 688 ms/card extraction, fetch-rate-limiter-bound) - the artist recovery itself
+    measures at ~4.6 ms per evaluated attempt.
+
+    FALLBACK PRECEDENCE, so a card that never parses cleanly still stores a deterministic artifact
+    (the pre-existing "best invalid candidate" contract, extended rather than replaced). If no
+    attempt is ever both lexicon-valid AND artist-consistent, the stored outcome is, in order:
+      1. the FIRST lexicon-valid-but-artist-contradicted parse (by tier order) - preferred over a
+         lexicon-invalid one because its set code is at least real, so it is the strictly better
+         artifact of the two, and Stage D's own artist check (`local_calculate_verdicts`) will
+         abstain on it rather than cast a wrong vote;
+      2. otherwise the FIRST lexicon-invalid parse - the pre-2026-07-23 `best_invalid_*` slot,
+         completely unchanged;
+      3. otherwise the first attempt's (empty-ish) parse - the "no-text" case, unchanged.
+
+    BOTH ARGUMENTS DEFAULT TO `None`, WHICH DISABLES THE GATE ENTIRELY, so this is purely
+    additive: every existing caller and test that doesn't thread them sees byte-identical stored
+    fields and byte-identical compute. Threaded through explicitly rather than queried here for the
+    same reason `known_set_codes` is - this function still issues no DB query of its own;
+    `collector_line_artist.load_artist_lexicon`/`build_printing_artist_lookup` are called once per
+    batch by the caller (`stage_e_dispatch._run_stage_c`).
 
     `md5_checksum`/`sha256_checksum` (2026-07-25, issue #473 PR-2, folded with issue #472): the
     calling card's own live `Card.md5_checksum`/`Card.sha256_checksum` at the moment of THIS real
@@ -809,6 +908,19 @@ def compute_card_evidence(
         # attempt across every tier ever produces a lexicon-valid parse, the best invalid
         # candidate becomes the stored outcome below - identical to what pre-gate code already
         # stored for this bucket (see that paragraph for why the two are provably the same).
+        #
+        # COLLECTOR-LINE ARTIST GATE (2026-07-29 - see `compute_card_evidence`'s own
+        # `artist_lexicon` docstring paragraph for the full autopsy, and
+        # `_parse_artist_is_contradicted` for the decision itself): the SECOND half of the same
+        # acceptance criterion, and the half that catches what the set-code axis structurally
+        # cannot - a MISREAD NUMBER paired with a correctly-read set code, which passes
+        # `_parse_is_lexicon_valid` and terminates escalation before tiers 2-8 ever run. A parse
+        # whose resulting printing's artist CONTRADICTS the artist printed in that same attempt's
+        # own collector line no longer stops the loop; it is remembered in its own
+        # `best_contradicted_*` slot (the FIRST such parse, by tier order) and escalation
+        # CONTINUES. This is deliberately a gate on CONTINUING, not merely on casting a vote -
+        # suppressing the vote alone would leave the pipeline having flagged a read as suspect
+        # with nothing better to offer.
         collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
         selected_index = 0
         parsed = parse_collector_line("")
@@ -817,17 +929,25 @@ def compute_card_evidence(
         tier1_raw_texts: list[str] = []
         best_invalid_index: Optional[int] = None
         best_invalid_parse: Any = None
+        best_contradicted_index: Optional[int] = None
+        best_contradicted_parse: Any = None
         for i, (variant, config, tier) in enumerate(_collector_line_ocr_attempts(collector_crop)):
             raw_text, word_boxes = run_tesseract_text_and_words(variant, config=config)
             collector_texts_and_words.append((raw_text, word_boxes))
             candidate_parse = parse_collector_line(raw_text)
             if candidate_parse.collector_number is not None:
                 if _parse_is_lexicon_valid(candidate_parse, known_set_codes):
-                    parsed = candidate_parse
-                    selected_index = i
-                    matched = True
-                    break
-                if best_invalid_index is None:
+                    if not _parse_artist_is_contradicted(
+                        candidate_parse, raw_text, artist_lexicon, printing_artist_lookup
+                    ):
+                        parsed = candidate_parse
+                        selected_index = i
+                        matched = True
+                        break
+                    if best_contradicted_index is None:
+                        best_contradicted_index = i
+                        best_contradicted_parse = candidate_parse
+                elif best_invalid_index is None:
                     best_invalid_index = i
                     best_invalid_parse = candidate_parse
             if tier == 1:
@@ -840,7 +960,20 @@ def compute_card_evidence(
                     short_circuited = True
                     break
         if not matched:
-            if best_invalid_index is not None:
+            if best_contradicted_index is not None:
+                # COLLECTOR-LINE ARTIST GATE fallback, precedence step 1 (see
+                # `compute_card_evidence`'s own `artist_lexicon` docstring paragraph): no attempt
+                # was ever both lexicon-valid AND artist-consistent, so keep the first
+                # lexicon-valid-but-contradicted parse. Preferred over the lexicon-INVALID slot
+                # below because its set code is at least a real one - the strictly better of two
+                # imperfect artifacts - and Stage D
+                # (`local_calculate_verdicts._apply_agreement_checks`) applies the same artist
+                # check to it there and abstains rather than casting a wrong vote. Unreachable
+                # unless the gate is wired, so the pre-2026-07-29 precedence below is untouched
+                # for every existing caller.
+                parsed = best_contradicted_parse
+                selected_index = best_contradicted_index
+            elif best_invalid_index is not None:
                 # every attempt either found nothing or a lexicon-invalid parse - keep the BEST
                 # invalid candidate (the first collector_number-bearing parse by tier order,
                 # matching exactly what pre-2026-07-23 code already stored for this bucket, since
@@ -910,6 +1043,38 @@ def compute_card_evidence(
         fields["illus_anchor_fired"] = artist_name is not None
         if artist_name is None:
             skip_reasons["artist_ocr"] = "no-text"
+
+        # COLLECTOR-LINE ARTIST RECOVERY (2026-07-29 - `cardpicker.collector_line_artist`), the
+        # storage half of the same feature the escalation gate above uses for its own decision.
+        # Fills `artist_ocr_name` from the WINNING collector-line text when, and only when, the
+        # "Illus." anchor found nothing - the anchor's own reading always wins, this can never
+        # overwrite it. Measured read-only against production, 2026-07-29: `artist_ocr_name` is
+        # blank on 93.7% of the 220,669 evidence rows, and this recovers a single unambiguous
+        # canonical artist for 21.8% of that blank population from a string already in hand.
+        #
+        # WHY THE EXISTING FIELD RATHER THAN A NEW PARALLEL ONE (owner preference, 2026-07-29):
+        # `artist_ocr_name` already has live consumers - `local_calculate_verdicts.
+        # _apply_agreement_checks`'s artist-OCR corroboration and `local_identify_printing_tags`'
+        # equivalent - so every name recovered here flows into printing identification with no
+        # new wiring, and a new column would mean a migration on a 220k-row table for a value with
+        # identical semantics ("the artist this card's own pixels name"). It also keeps this
+        # consistent with `modern_artist_credit`'s own backfill, which already writes
+        # previously-blank `artist_ocr_name` values from a re-read of a different stored string.
+        # `illus_anchor_fired`, `artist_ocr_raw_text` and the `artist_ocr` skip reason are all
+        # deliberately left EXACTLY as the anchor pass set them: they describe the artist_ocr
+        # extractor's own outcome, which this recovery neither performs nor changes, and
+        # `illus_anchor_fired` in particular is a real downstream input (`classify_frame_style`)
+        # that must keep meaning "the Illus. anchor fired", nothing else. No extractor_versions
+        # key is added and no version bumped, deliberately - either would invalidate every
+        # existing row against `run_image_evidence_cohort.MANIFEST_EXTRACTOR_CURRENT_VERSIONS` and
+        # force a full 220k-card Stage C re-extraction.
+        if artist_name is None and artist_lexicon is not None:
+            recovered_artist = recover_artist_from_collector_line(fields["collector_line_raw_text"], artist_lexicon)
+            if recovered_artist is not None and recovered_artist.canonical_name is not None:
+                # `canonical_name` is a verbatim `CanonicalArtist.name` and is `None` unless the
+                # reading is compatible with exactly one of them - fuzzy MATCHING is permitted,
+                # fuzzy STORAGE is not (owner ruling, 2026-07-29).
+                fields["artist_ocr_name"] = recovered_artist.canonical_name
 
     extractor_versions["collector_line_ocr"] = COLLECTOR_LINE_OCR_EXTRACTOR_VERSION
     extractor_versions["artist_ocr"] = ARTIST_OCR_EXTRACTOR_VERSION

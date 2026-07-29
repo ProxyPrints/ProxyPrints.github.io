@@ -27,12 +27,14 @@ import pytest
 from django.core.management import CommandError
 from django.db import connection
 
+from cardpicker.collector_line_artist import build_artist_lexicon, load_artist_lexicon
 from cardpicker.local_calculate_verdicts import (
     COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS,
     EXCLUDED_RESOLVED_TAGS,
     FALLBACK_NO_EVIDENCE_SKIP_REASON,
     FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
     JOIN_KEY_ANONYMOUS_ID,
+    JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON,
     JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT,
     JOIN_KEY_CONFIDENCE_BOTH,
     JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY,
@@ -1250,6 +1252,126 @@ class TestAgreementChecks:
 
         assert verdict.printing_pk == printing.pk
         assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
+
+    # --- THE COLLECTOR-LINE ARTIST GATE (2026-07-29, module docstring) -----------------------
+    # `run_join_key_calculator` parses set+number out of `collector_line_raw_text` and DISCARDS
+    # the artist printed in that same string. When the parsed printing's artist disagrees with
+    # that recovered artist, the parse contradicts its own source - abstain, don't vote.
+
+    ARTIST_GATE_LEXICON = build_artist_lexicon(["Rebecca Guay", "Lindsey Look", "Ron Spears", "Ron Spencer"])
+
+    def test_collector_line_artist_disagreement_abstains_instead_of_voting(self, db):
+        """The stored parse resolves to a Rebecca Guay printing, but the very collector line it
+        was parsed out of reads `LINDSEY L` - a misread collector number. No vote is cast."""
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN LINDSEY L",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, artist_lexicon=self.ARTIST_GATE_LEXICON)
+
+        assert verdict.skip_reason == JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON
+        assert verdict.printing_pk is None
+        assert verdict.is_no_match is False  # an abstention, NOT a negative vote
+
+    def test_the_same_evidence_votes_when_the_gate_is_not_wired(self, db):
+        """The control for the test above - identical inputs, no `artist_lexicon`, so the
+        pre-2026-07-29 behaviour (a confident vote on a parse the card's own pixels contradict) is
+        reproduced exactly. Proves the abstention above comes from the gate, not from anything
+        incidental about the fixture."""
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN LINDSEY L",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.skip_reason == ""
+
+    def test_collector_line_artist_agreement_leaves_the_match_alone(self, db):
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Lindsey Look"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN LINDSEY L",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, artist_lexicon=self.ARTIST_GATE_LEXICON)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
+
+    def test_an_ambiguous_truncated_reading_never_manufactures_an_abstention(self, db):
+        """`RON SPEA` is compatible with both "Ron Spears" and "Ron Spencer" - a printing by
+        EITHER must still get its vote. Only a reading incompatible with every plausible
+        interpretation abstains."""
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Ron Spencer"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN RON SPEA",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, artist_lexicon=self.ARTIST_GATE_LEXICON)
+
+        assert verdict.printing_pk == printing.pk
+
+    def test_unreadable_collector_line_artist_leaves_the_match_alone(self, db):
+        """Missing data is not evidence - the same rule every other check in this layer applies."""
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, artist_lexicon=self.ARTIST_GATE_LEXICON)
+
+        assert verdict.printing_pk == printing.pk
+
+    def test_artist_mismatch_still_routes_to_human_review(self, db):
+        """An abstention that doesn't route is a review-queue gap - `artist-mismatch` is exactly
+        the cohort a reviewer should see, so it must be a `JOIN_KEY_NO_HIT_SKIP_REASONS` member."""
+        assert JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON in JOIN_KEY_NO_HIT_SKIP_REASONS
+
+    def test_load_artist_lexicon_reads_the_real_canonical_artist_table(self, db):
+        """The one DB-touching entry point, against the real ORM - `run_join_key_calculator`
+        builds this once per batch."""
+        CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158", artist__name="Ron Spears")
+
+        lexicon = load_artist_lexicon()
+
+        assert "Ron Spears" in lexicon.names
 
     def test_truncated_image_vetoes_a_direct_match(self, db):
         card = CardFactory(name="Some Card")

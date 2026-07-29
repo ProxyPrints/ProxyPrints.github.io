@@ -82,6 +82,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 import cardpicker.image_evidence as module
+from cardpicker.collector_line_artist import build_artist_lexicon
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import (
     ARTBOX_MODERN_CROP_BOX,
@@ -1365,6 +1366,279 @@ class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
         assert len(calls) == 2  # tier 1 only - short-circuit fires exactly as without the gate
         assert result.short_circuited is True
+
+
+class TestExtractCardEvidenceCollectorLineArtistGate:
+    """2026-07-29, the COLLECTOR-LINE ARTIST GATE (see `compute_card_evidence`'s own
+    `artist_lexicon` docstring paragraph): the escalation loop's acceptance criterion gains a
+    second half. A parse can be lexicon-valid - correct set code - and still be a MISREAD NUMBER,
+    which `_parse_is_lexicon_valid` structurally cannot see; the artist printed in the SAME
+    collector line is what catches it.
+
+    THE POINT OF THESE TESTS IS THAT ESCALATION CONTINUES, not merely that a suspect read gets
+    flagged. `test_artist_contradiction_does_not_terminate_escalation` was verified to FAIL against
+    the pre-2026-07-29 loop (acceptance branch reverted, test re-run: the loop stops at attempt 1,
+    `len(calls) == 1` instead of 3, and the stored collector number stays the misread `158`) - it
+    is not a vacuously-green assertion over behaviour that already held.
+    `test_gate_off_accepts_the_contradicted_parse_immediately` pins that old behaviour in place as
+    the permanent control.
+
+    Same controlled-text style as `TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate`
+    above: `run_tesseract_text_and_words` is monkeypatched for exact per-attempt text, and the
+    printing-artist resolver is a plain dict-backed callable rather than the real
+    `PrintingArtistLookup` (whose ORM query is covered by the Stage D tests) - this class is about
+    the LOOP, not about how an artist name is fetched.
+    """
+
+    # The two printings the misread/correct number pair below resolve to.
+    PRINTING_ARTISTS = {("mom", "158"): "Alessandra Pisano", ("mom", "159"): "Lindsey Look"}
+    LEXICON = build_artist_lexicon(["Alessandra Pisano", "Lindsey Look", "Ron Spears"])
+
+    @classmethod
+    def _lookup(cls, set_code, collector_number):
+        return cls.PRINTING_ARTISTS.get((set_code, collector_number))
+
+    def test_artist_contradiction_does_not_terminate_escalation(self, db, monkeypatch):
+        """The defect this whole feature exists for. Attempts 1-2 read the collector number as
+        `158` - lexicon-valid ('mom' is real), so the pre-2026-07-29 loop accepted it and stopped.
+        But `158` resolves to a printing by Alessandra Pisano while that same line plainly reads
+        `LINDSEY L`: the parse contradicts its own source string. Escalation must CONTINUE, and
+        attempt 3's correct `159` (whose printing IS by Lindsey Look) is what gets stored."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        texts = iter(
+            [
+                "158/281R\nMOM ¢ EN LINDSEY L",  # misread number, right set code, wrong artist
+                "158/281R\nMOM ¢ EN LINDSEY L",
+                "159/281R\nMOM ¢ EN LINDSEY L",  # the correct read - artist now agrees
+            ]
+        )
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return next(texts), []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(
+            card,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+        )
+
+        assert result.fields["collector_line_collector_number"] == "159"
+        assert result.fields["collector_line_set_code"] == "mom"
+        assert len(calls) == 3  # escalated past the contradicted parse, stopped at the good one
+        assert "collector_line_ocr" not in result.skip_reasons
+
+    def test_gate_off_accepts_the_contradicted_parse_immediately(self, db, monkeypatch):
+        """The same three texts with the gate NOT wired - the pre-2026-07-29 behaviour, kept as
+        the explicit control for the test above: attempt 1 is accepted, escalation never happens,
+        and the misread `158` is what gets stored."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        texts = iter(
+            [
+                "158/281R\nMOM ¢ EN LINDSEY L",
+                "158/281R\nMOM ¢ EN LINDSEY L",
+                "159/281R\nMOM ¢ EN LINDSEY L",
+            ]
+        )
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return next(texts), []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}))
+
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert len(calls) == 1
+
+    def test_all_attempts_contradicted_keeps_the_first_as_a_deterministic_artifact(self, db, monkeypatch):
+        """Fallback precedence step 1: no attempt is ever both lexicon-valid and artist-consistent,
+        so the FIRST lexicon-valid-but-contradicted parse becomes the stored outcome - a card that
+        never parses cleanly still stores something deterministic, and every tier was genuinely
+        tried on the way there."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "158/281R\nMOM ¢ EN LINDSEY L", []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(
+            card,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+            short_circuit=False,
+        )
+
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert result.fields["collector_line_set_code"] == "mom"
+        assert "collector_line_ocr" not in result.skip_reasons  # a collector_number WAS found
+        assert len(calls) == 8  # every tier tried before falling back
+
+    def test_contradicted_parse_is_preferred_over_a_lexicon_invalid_one(self, db, monkeypatch):
+        """Fallback precedence: a lexicon-valid-but-contradicted parse beats a lexicon-INVALID
+        one even though the invalid one came first by tier order - its set code is at least real,
+        making it the strictly better of two imperfect artifacts."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        texts = iter(["777/281R\nFAK ¢ EN LINDSEY L"] * 2 + ["158/281R\nMOM ¢ EN LINDSEY L"] * 6)
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda image_arg, config: (next(texts), []))
+
+        result = extract_card_evidence(
+            card,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+            short_circuit=False,
+        )
+
+        assert result.fields["collector_line_set_code"] == "mom"  # not the earlier 'fak'
+        assert result.fields["collector_line_collector_number"] == "158"
+
+    def test_unresolvable_printing_is_never_a_contradiction(self, db, monkeypatch):
+        """Absent data is not evidence - a (set, number) pair the lookup can't resolve must
+        terminate escalation exactly as before, not be treated as a disagreement."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "999/281R\nMOM ¢ EN LINDSEY L", []  # 'mom' 999 is in no lookup table
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(
+            card,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+        )
+
+        assert result.fields["collector_line_collector_number"] == "999"
+        assert len(calls) == 1
+
+    def test_unreadable_artist_is_never_a_contradiction(self, db, monkeypatch):
+        """A collector line with no recoverable artist credit at all leaves the gate with nothing
+        to say - accept immediately, exactly as before."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return "158/281R\nMOM ¢ EN", []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(
+            card,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+        )
+
+        assert result.fields["collector_line_collector_number"] == "158"
+        assert len(calls) == 1
+
+    def test_recovered_artist_populates_the_blank_artist_ocr_name(self, db, monkeypatch):
+        """The storage half: `artist_ocr_name` is blank on 93.7% of production evidence rows
+        because the "Illus." anchor never fires on modern frames - yet the collector line already
+        carries the name. `illus_anchor_fired` and the `artist_ocr` skip reason are deliberately
+        untouched: they describe the artist_ocr extractor's own outcome, not this recovery."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "")
+        monkeypatch.setattr(
+            module, "run_tesseract_text_and_words", lambda image_arg, config: ("159/281R\nMOM ¢ EN LINDSEY L", [])
+        )
+
+        result = extract_card_evidence(
+            card,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+        )
+
+        assert result.fields["artist_ocr_name"] == "Lindsey Look"  # canonical, never the OCR span
+        assert result.fields["illus_anchor_fired"] is False
+        assert result.skip_reasons["artist_ocr"] == "no-text"
+
+    def test_illus_anchor_reading_is_never_overwritten(self, db, monkeypatch):
+        """The anchor's own reading always wins - this recovery only ever fills a BLANK value."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(
+            module,
+            "run_tesseract_text_and_words",
+            lambda image_arg, config: ("159/281R\nMOM ¢ EN LINDSEY L\nIllus. Ron Spears", []),
+        )
+
+        result = extract_card_evidence(
+            card,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+        )
+
+        assert result.fields["artist_ocr_name"] == "Ron Spears"
+        assert result.fields["illus_anchor_fired"] is True
+
+    def test_ambiguous_reading_stores_nothing_but_still_gates_escalation(self, db, monkeypatch):
+        """A reading compatible with more than one canonical artist is deliberately not storable
+        (fuzzy matching yes, fuzzy storage no) - but it is still perfectly able to rule an artist
+        OUT, so it must still be able to stop a contradicted parse from ending escalation."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "")
+
+        ambiguous_lexicon = build_artist_lexicon(["Alessandra Pisano", "Lindsey Look", "Lindsey Lopez"])
+        texts = iter(["158/281R\nMOM ¢ EN LINDSEY L", "159/281R\nMOM ¢ EN LINDSEY L"])
+        calls: list[str] = []
+
+        def _stub(image_arg, config):
+            calls.append(config)
+            return next(texts), []
+
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
+
+        result = extract_card_evidence(
+            card,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=ambiguous_lexicon,
+            printing_artist_lookup=self._lookup,
+        )
+
+        assert len(calls) == 2  # 'Alessandra Pisano' is compatible with neither Lindsey
+        assert result.fields["collector_line_collector_number"] == "159"
+        assert result.fields["artist_ocr_name"] == ""  # ambiguous - nothing storable
 
 
 class TestCollectorLineOcrAttempts:

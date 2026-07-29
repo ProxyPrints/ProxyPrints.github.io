@@ -132,6 +132,26 @@ confirmations start accumulating in volume.
    check at its own "parsed-but-no-match" outcome: a lexicon-invalid parse
    there abstains (`unknown-set-code`, non-rescannable) instead of casting the
    confident `is_no_match` vote it used to.
+   **Collector-line artist gate on acceptance (2026-07-29):** the second half of
+   the same criterion, for the failure the set-code axis structurally cannot see
+   — a MISREAD NUMBER paired with a correctly-read set code. The collector line
+   also prints the ARTIST, and `cardpicker.collector_line_artist` recovers it
+   from the already-OCR'd text (no extra crop, no extra tesseract call; tolerant
+   of the right-edge truncation and glyph noise that crop produces). If the
+   printing a tier's own (set, number) resolves to has an artist INCOMPATIBLE
+   with the artist that same tier's own text prints, the parse contradicts its
+   own source string, and escalation CONTINUES rather than stopping there —
+   later tiers frequently produce an internally-consistent read. Fallback
+   precedence if none ever does: first artist-contradicted parse, then first
+   lexicon-invalid parse, then the "no-text" artifact. Measured read-only over
+   6,000 production rows: 49.5% yield a confident artist reading, and 10.7% of
+   those contradict. Off unless the caller threads a lexicon + resolver
+   (`stage_e_dispatch._run_stage_c` does, built once per batch).
+   The same recovery also fills `ImageEvidence.artist_ocr_name` when the
+   "Illus." anchor found nothing — blank on 93.7% of production rows, since that
+   anchor is an old-border convention modern frames don't use. Only ever a
+   verbatim `CanonicalArtist.name`, and only when exactly one canonical artist
+   fits the reading (fuzzy matching yes, fuzzy storage no).
 4. **Parse**: set code + collector number from the collector line
    (slash-format-aware since #260); the legal band is scanned for proxy
    marking — `not for sale`, `proxy/proxies/proxied`, `playtest` variants
@@ -182,7 +202,19 @@ identity, and (safety) nothing already resolved. Then five stages per card:
   never manufacture a match: border-color contradiction → withhold;
   frame-style contradiction → withhold; copyright year predating the matched
   set by >2 years → withhold; artist-OCR disagreement → match proceeds at
-  lowered confidence. **Proxy marking is identification-neutral** (#294):
+  lowered confidence. **Collector-line artist veto (2026-07-29):** this
+  calculator parses set+number out of `collector_line_raw_text` and used to
+  DISCARD the artist printed in that same string. It no longer does — when the
+  artist recovered from that string is incompatible with the artist of the
+  printing the parse resolves to, the parse contradicts its own source (the
+  signature of a misread collector number, right set code and wrong digits), so
+  it abstains (`artist-mismatch`, non-rescannable, routed to the slow path like
+  every other named skip) instead of casting a vote the card's own pixels
+  contradict. Harsher than the artist-OCR check above on purpose: that one
+  compares two readings of DIFFERENT crops, either of which could be the wrong
+  one; this one is an internal inconsistency inside a single string. A
+  truncated reading compatible with several real artists only abstains when it
+  fits none of them. **Proxy marking is identification-neutral** (#294):
   catalog-required on every genuine upload, so presence proves nothing about
   which printing this is. (Until the #294 re-scan it wrongly vetoed 1,552
   validated matches — the re-scan un-blocks them.)
