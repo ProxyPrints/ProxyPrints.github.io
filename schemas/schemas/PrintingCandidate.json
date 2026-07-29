@@ -18,7 +18,8 @@
     "isShowcase": { "type": "boolean" },
     "isExtendedArt": { "type": "boolean" },
     "isEtched": { "type": "boolean" },
-    "releasedAt": { "type": ["string", "null"] }
+    "releasedAt": { "type": ["string", "null"] },
+    "illustrationId": { "type": ["string", "null"] }
   },
   "required": [
     "identifier",
