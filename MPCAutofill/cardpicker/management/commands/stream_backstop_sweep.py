@@ -27,8 +27,8 @@ _cursor_chunk_walk`, issue #458 for (a), issue #460 for (b) - see `_next_stage_d
 docstring): NEITHER issues a query whose cost scales with catalog size, regardless of how sparse the
 backlog is or how large the catalog grows.
 
-STOPPING CONDITIONS, per batch: both backlogs come back empty (see the EXHAUSTED VS CAP-HIT
-paragraph below for what "empty" actually means for backlog (b)), the envelope trips
+STOPPING CONDITIONS, per batch: both backlogs are PROVEN empty (see the WRAP IS NOT EXHAUSTION
+paragraph below - a proof takes a full observed lap of each cursor, not a wrap), the envelope trips
 ("halted-new-trip"/"halted-open-trip" - the sweep does not retry past a halt; the next scheduled
 sweep invocation picks up where this one stopped, exactly like a re-invoked BULK command would),
 every concurrency-cap slot is already held ("throttled-concurrency-cap" - same "stop, don't retry,
@@ -36,18 +36,40 @@ the next scheduled sweep invocation picks up where this one stopped" posture as 
 looping here would just re-sample an already-saturated cap with no backoff), or `--max-batches` is
 reached (a safety bound for a single invocation, not a design limit).
 
-EXHAUSTED VS CAP-HIT (issue #460 §4): `_next_stage_d_backlog_ids` returns `(ids, exhausted)`, not
-just `ids` - `exhausted=True` means backlog (b)'s cursor walk reached the end of the pk space and
-wrapped (genuinely nothing left, at least until the next full sweep of the pk space), `exhausted=
-False` on an EMPTY `ids` means the walk hit `STAGE_E_SELECTION_SCAN_CAP` (or its CAS retry budget)
-with more pk space still unscanned ahead of the cursor - a common outcome on a backlog that's sparse
-relative to the catalog (mostly-voted cards between the rare eligible ones). The `handle()` loop
-below breaks with "Backlog exhausted" ONLY on `exhausted=True`; a cap-hit-empty result CONTINUES to
-the NEXT `batch_num` iteration instead (the cursor already advanced past the examined range, so the
-next iteration's walk starts fresh from there) - already bounded by `range(max_batches)`, so this
-can never become an unbounded loop. Treating cap-hit-empty as exhaustion (the pre-#460 bug this
-fixes) would have wrongly ended the sweep with backlog (b) cards still waiting, unexamined, past the
-scan cap.
+WRAP IS NOT EXHAUSTION (2026-07-29; supersedes this docstring's pre-fix "EXHAUSTED VS CAP-HIT"
+paragraph, and closes issue #468's half of the same defect). Both backlog walks return
+`(ids, wrapped)`. `wrapped=True` means only that the walk ran off the end of the pk space and reset
+its cursor to 0 - ONE LAP FINISHED. It does NOT mean the backlog is empty: cards can still be
+eligible behind the cursor (a concurrent walker claimed ranges this walk never verified; a scan-cap
+or CAS-budget stop ended an earlier call mid-lap), and nothing about a wrap says how much work the
+lap that just ended actually dispatched. This command used to break with "Backlog exhausted -
+nothing left to dispatch." the first time backlog (b) reported `wrapped` - a run on 2026-07-28
+dispatched 41 batches and stopped on exactly that message with the stage_c cursor at position 46,297
+and `wrap_count` 7, i.e. mid-catalog after seven laps of a 230,753-card catalog, leaving the
+remainder for nobody. `wrapped=False` on an EMPTY `ids` still means what issue #460 §4 said: the
+walk hit `STAGE_E_SELECTION_SCAN_CAP` (or its CAS retry budget) with more pk space still unscanned
+ahead of the cursor - a common outcome on a backlog that's sparse relative to the catalog.
+
+WHAT THIS COMMAND REQUIRES INSTEAD, for BOTH backlogs (issue #468: backlog (a)'s walk status used to
+be discarded entirely by `_select_micro_batch`, so only backlog (b) even had a flag to misread):
+evidence that a COMPLETE lap - from one observed wrap of that cursor through to its next - yielded
+zero eligible cards. `stage_e_dispatch.SweepLapTracker` is the bookkeeping; `handle()` below breaks
+with "Backlog exhausted" only once BOTH cursors have produced that evidence. The first wrap this
+command sees for a cursor is deliberately not evidence - the cursor started mid-pk-space, so the
+stretch that just ended is a partial lap. Everything short of the bar CONTINUES to the next
+`batch_num` iteration instead of ending the sweep - already bounded by `range(max_batches)`, so this
+can never become an unbounded loop.
+
+THE COST OF THE CONFIRMING LAP, stated plainly because it is the price of the property above. Every
+individual iteration is still bounded exactly as before - `STAGE_E_SELECTION_SCAN_CAP` candidates
+examined across `SCAN_CAP/CHUNK_SIZE` bounded queries, nothing in this command ever issues a query
+whose cost scales with catalog size (issues #458/#460) - but an invocation that finds nothing now
+keeps going until it has walked a cursor's whole pk space twice rather than stopping at the first
+wrap. On a small catalog (or a cursor already near the end of the pk space) that is two iterations;
+on a 230k-card catalog with `STAGE_E_SELECTION_SCAN_CAP=1000` a lap is ~231 iterations, so ~460 of
+`--max-batches`' default 1000 go to confirming an empty backlog. That is the intended trade: the
+alternative is the 2026-07-28 behaviour, where the sweep declared victory after 41 batches with the
+catalog 20% swept, and the cards it never reached had no other recovery path at all.
 
 THE SWEEP IS THE ONLY RECOVERY PATH FOR A THROTTLED EVENT DISPATCH: `Q_CLUSTER["max_attempts"] = 1`
 (`MPCAutofill/MPCAutofill/settings.py`) means an event-driven `async_task` that returns
@@ -79,6 +101,7 @@ from cardpicker.local_calculate_verdicts import (
 from cardpicker.models import StageESweepCursor
 from cardpicker.stage_e_dispatch import (
     DEFAULT_MICRO_BATCH_SIZE,
+    SweepLapTracker,
     _cursor_chunk_walk,
     dispatch_micro_batch,
 )
@@ -105,8 +128,9 @@ def _next_stage_d_backlog_ids(batch_size: int) -> tuple[list[int], bool]:
     never re-derived) - so every query this function issues is bounded by
     `STAGE_E_SELECTION_CHUNK_SIZE`/`STAGE_E_SELECTION_SCAN_CAP`, never by catalog size.
 
-    Returns `(ids, exhausted)` - see this module's own docstring's "EXHAUSTED VS CAP-HIT" paragraph
-    for what the caller must do with each.
+    Returns `(ids, wrapped)` - see this module's own docstring's "WRAP IS NOT EXHAUSTION" paragraph
+    for what the caller must do with each, and why `wrapped` on its own is never a licence to
+    conclude this backlog is empty.
     """
 
     def _verify_stage_d_chunk(chunk: list[int]) -> Iterable[int]:
@@ -154,6 +178,10 @@ class Command(BaseCommand):
         total_stage_d_votes = 0
         halted_status = None
         stopped_reason = None
+        # Lap-completion evidence for BOTH cursors (module docstring's "WRAP IS NOT EXHAUSTION").
+        # One tracker per invocation, starting cold - the conservative direction: it can only ever
+        # decline to conclude emptiness, never conclude it on less than a full observed lap.
+        laps = SweepLapTracker()
 
         for batch_num in range(max_batches):
             outcome = dispatch_micro_batch(
@@ -178,17 +206,30 @@ class Command(BaseCommand):
                 )
                 break
 
+            # Backlog (a)'s walk status, now that `dispatch_micro_batch` actually reports it
+            # (issue #468) - folded in for EVERY dispatch below, halts/throttles aside, since the
+            # backlog (b) leg's own dispatch fills its remaining batch room from backlog (a) too.
+            stage_c_lap_empty = laps.record(
+                StageESweepCursor.STAGE_C, outcome.stage_c_backlog_found, outcome.stage_c_backlog_wrapped
+            )
+
             if outcome.status == "empty":
-                # Backlog (a) exhausted for this pass - try backlog (b) before concluding the whole
-                # sweep is done (module docstring).
-                stage_d_backlog_ids, stage_d_exhausted = _next_stage_d_backlog_ids(batch_size)
+                # Backlog (a) had nothing for THIS batch - try backlog (b) before considering
+                # whether the whole sweep is done (module docstring).
+                stage_d_backlog_ids, stage_d_wrapped = _next_stage_d_backlog_ids(batch_size)
+                stage_d_lap_empty = laps.record(StageESweepCursor.STAGE_D, len(stage_d_backlog_ids), stage_d_wrapped)
                 if not stage_d_backlog_ids:
-                    if stage_d_exhausted:
-                        self.stdout.write("Backlog exhausted - nothing left to dispatch.")
+                    if stage_c_lap_empty and stage_d_lap_empty:
+                        # The ONLY conclusion-of-emptiness this command draws: a complete observed
+                        # lap of EACH cursor dispatched nothing (module docstring's "WHAT THIS
+                        # COMMAND REQUIRES INSTEAD"). Worded as the evidence actually gathered - a
+                        # concurrent walker's own work is invisible to this sweep, so this is "this
+                        # sweep has nothing left to do", not "the catalog is clean".
+                        self.stdout.write("Backlog exhausted - a full lap of both sweep cursors dispatched nothing.")
                         break
-                    # Module docstring's "EXHAUSTED VS CAP-HIT" paragraph: the scan cap (or CAS
-                    # retry budget) was hit with more pk space still unscanned ahead of the cursor -
-                    # NOT exhaustion. Move on to the next batch_num rather than ending the sweep;
+                    # Not proven yet: a wrap that only closed a partial lap, a lap that DID dispatch
+                    # work, or a scan-cap/CAS-budget stop with more pk space still unscanned ahead
+                    # of the cursor. Move on to the next batch_num rather than ending the sweep;
                     # already bounded by range(max_batches), so this can never loop unboundedly.
                     continue
                 outcome = dispatch_micro_batch(
@@ -208,9 +249,11 @@ class Command(BaseCommand):
                         "next scheduled sweep will resume."
                     )
                     break
-                if outcome.status == "empty":
-                    self.stdout.write("Backlog exhausted - nothing left to dispatch.")
-                    break
+                # This dispatch's own batch was seeded from backlog (b) but topped up from backlog
+                # (a) (`_select_micro_batch` fills any remaining room) - so it carries backlog (a)
+                # lap evidence of its own, which would otherwise be lost. `status == "empty"` is
+                # unreachable here: the seed above is non-empty, so the batch never is.
+                laps.record(StageESweepCursor.STAGE_C, outcome.stage_c_backlog_found, outcome.stage_c_backlog_wrapped)
 
             batches_dispatched += 1
             total_stage_c += outcome.stage_c_completed
