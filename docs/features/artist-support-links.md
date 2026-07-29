@@ -230,14 +230,34 @@ integration is gated on a single env var, `MTGAC_BULK_URL`
 configured", which means the command no-ops cleanly (a clear stdout
 message, exit 0) instead of fetching - see
 `cardpicker.artist_external_links`'s own "Opt-in, per instance" docstring
-section and the command's own docstring. To enable this integration on
-your own instance, set `MTGAC_BULK_URL` to MTGAC's bulk export endpoint
-(`https://mtgartistconnectionwebservice-production.up.railway.app/api/public/artists`
-as of 2026-07-29 - not a secret, public and unauthenticated, but **you
-should contact MTGAC yourself before enabling this** - the permission and
-rate limits below were granted to this project's operator specifically,
-and MTGAC deserves the chance to say yes (or set different limits) for
-your instance too, not just discover your traffic after the fact).
+section and the command's own docstring.
+
+**Complete procedure to enable this on a docker-compose deployment**
+(2026-07-29 - this is the whole procedure, not just the setting):
+
+1. Set `MTGAC_BULK_URL` in `docker/.env` (untracked, host-local) to MTGAC's
+   bulk export endpoint
+   (`https://mtgartistconnectionwebservice-production.up.railway.app/api/public/artists`
+   as of 2026-07-29 - not a secret, public and unauthenticated, but **you
+   should contact MTGAC yourself before enabling this** - the permission
+   and rate limits below were granted to this project's operator
+   specifically, and MTGAC deserves the chance to say yes, or set
+   different limits, for your instance too, not just discover your
+   traffic after the fact).
+2. **Redeploy** - `docker/.env` alone does nothing until the containers
+   restart with it. `docker-compose.prod.yml` only passes a variable into
+   a container if that service's own `environment:` block explicitly lists
+   it (`- MTGAC_BULK_URL=${MTGAC_BULK_URL:-}` under both `django` and
+   `worker`, added alongside this doc update); an env change with no
+   redeploy is invisible to the running process, exactly the same gap the
+   Discord OAuth block's own comment above documents from a 2026-07-15
+   incident. Both services need the redeploy, not just one: `django` serves
+   the read endpoint, and `worker` is what actually runs the weekly
+   `qcluster` schedule below - missing it on `worker` alone means the
+   schedule fires and no-ops forever while `django` looks perfectly
+   healthy from the outside, the worst-shaped failure of the two.
+3. From then on, the weekly schedule (below) does real work on its next
+   scheduled run - no further action needed, and nothing to run by hand.
 
 **Scheduled weekly via django-q2, on every instance, whether or not it's
 configured.**
