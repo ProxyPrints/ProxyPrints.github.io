@@ -287,7 +287,7 @@ class TestReferenceCheck(unittest.TestCase):
         with _repo(files, files) as root:
             code, out = run_tool(root, "--check-references")
             self.assertEqual(code, 0, out)
-            self.assertIn("references clean", out)
+            self.assertIn("all resolve at", out)
 
     def test_local_variable_is_not_mistaken_for_a_missing_constant(self):
         files = {"b.py": 'def f():\n    LOCAL_SKIP_REASON = "x"\n    return LOCAL_SKIP_REASON\n'}
@@ -300,6 +300,118 @@ class TestReferenceCheck(unittest.TestCase):
         }
         with _repo(files, files) as root:
             self.assertEqual(run_tool(root, "--check-references")[0], 0)
+
+    def test_a_clean_run_reports_how_many_references_it_resolved(self):
+        # A green log has to be evidence, not silence: if the scan ever
+        # silently stopped finding references, "clean" would be
+        # indistinguishable from "checked nothing".
+        files = {
+            "a.py": 'PRESENT_SKIP_REASON = "x"\n',
+            "b.py": "from a import PRESENT_SKIP_REASON\n\n\ndef f():\n    return PRESENT_SKIP_REASON\n",
+        }
+        with _repo(files, files) as root:
+            code, out = run_tool(root, "--check-references")
+            self.assertEqual(code, 0, out)
+            self.assertRegex(out, r"\d+ reference\(s\) to constants matching")
+
+    def test_a_tree_with_no_matching_references_says_nothing_to_check(self):
+        files = {"a.py": "def f():\n    return 1\n"}
+        with _repo(files, files) as root:
+            code, out = run_tool(root, "--check-references")
+            self.assertEqual(code, 0, out)
+            self.assertIn("nothing to check", out)
+
+
+class TestScanCoverage(unittest.TestCase):
+    """The scan is whole-tree and recursive ON PURPOSE.
+
+    A 2026-07-29 audit found both roster tethers in docs_lint.py using a
+    non-recursive `src_dir.glob("*.py")`, so
+    `MPCAutofill/cardpicker/management/commands/` was never scanned and
+    `scryfall-tagger-v1` — which writes real PrintingTagVote rows — was
+    invisible to them. These tests pin that this tool does not share the
+    defect, and that including tests/ here is a decision, not an accident.
+    """
+
+    def test_nested_management_command_is_scanned(self):
+        files = {
+            "MPCAutofill/cardpicker/verdicts.py": 'TO_REVIEW_SKIP_REASON = "to-review"\n',
+            "MPCAutofill/cardpicker/management/commands/retag.py": (
+                "from cardpicker.verdicts import TO_REVIEW_REASON\n\n\ndef run():\n    return TO_REVIEW_REASON\n"
+            ),
+        }
+        with _repo(files, files) as root:
+            code, out = run_tool(root, "--check-references")
+            self.assertEqual(code, 1, out)
+            self.assertIn("management/commands/retag.py", out)
+
+    def test_test_modules_are_scanned_deliberately(self):
+        # Four of the six modules broken by the #567/#568 merge were test
+        # modules. The roster tethers exclude tests/ because their question
+        # is "is this value documented?"; this tool's question is "does the
+        # reference still resolve?", and an ImportError in a test module is
+        # just as real.
+        files = {
+            "MPCAutofill/cardpicker/verdicts.py": 'TO_REVIEW_SKIP_REASON = "to-review"\n',
+            "MPCAutofill/cardpicker/tests/test_verdicts.py": (
+                "from cardpicker.verdicts import TO_REVIEW_REASON\n\n\ndef test_x():\n    assert TO_REVIEW_REASON\n"
+            ),
+        }
+        with _repo(files, files) as root:
+            code, out = run_tool(root, "--check-references")
+            self.assertEqual(code, 1, out)
+            self.assertIn("tests/test_verdicts.py", out)
+
+    def test_real_repo_scan_reaches_management_commands_and_tests(self):
+        # Derivation guard against the real tree: if the listing ever stopped
+        # recursing, every real-repo assertion here would pass vacuously.
+        index = cre.RevisionIndex(
+            "HEAD", cre.read_python_tree("HEAD", cwd=REPO_ROOT), cre.re.compile(cre.DEFAULT_PATTERN)
+        )
+        scanned = set(index.modules)
+        self.assertIn("MPCAutofill/cardpicker/management/commands/reparse_collector_evidence.py", scanned)
+        self.assertIn("MPCAutofill/cardpicker/tests/test_catalog_stats.py", scanned)
+
+
+class TestChangedSinceGate(unittest.TestCase):
+    """The cheap no-op path that makes `references` safe to mark required."""
+
+    @staticmethod
+    def _commit(root: Path, message: str) -> None:
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-verify", "-m", message],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+
+    def test_no_python_change_skips_with_an_explicit_message(self):
+        files = {"a.py": 'A_SKIP_REASON = "x"\n\n\ndef f():\n    return A_SKIP_REASON\n'}
+        with _repo(files, files) as root:
+            (root / "docs.md").write_text("docs only\n")
+            self._commit(root, "docs only")
+            code, out = run_tool(root, "--check-references", "--changed-since", "HEAD~1")
+            self.assertEqual(code, 0, out)
+            self.assertIn("nothing to check", out)
+            self.assertIn("no *.py file changed", out)
+
+    def test_a_python_change_still_runs_the_check(self):
+        base = {"a.py": 'PRESENT_SKIP_REASON = "x"\n'}
+        head = {"a.py": 'PRESENT_SKIP_REASON = "x"\n', "b.py": "from a import MISSING_SKIP_REASON\n"}
+        with _repo(base, head) as root:
+            code, out = run_tool(root, "--check-references", "--changed-since", "HEAD~1")
+            self.assertEqual(code, 1, out)
+            self.assertIn("MISSING_SKIP_REASON", out)
+
+    def test_unresolvable_base_runs_the_check_instead_of_failing(self):
+        # A required status check must never wedge because a shallow clone
+        # lacks the base commit. Degrade to running it, and say so.
+        files = {"a.py": 'PRESENT_SKIP_REASON = "x"\n', "b.py": "from a import MISSING_SKIP_REASON\n"}
+        with _repo(files, files) as root:
+            code, out = run_tool(root, "--check-references", "--changed-since", "0" * 40)
+            self.assertIn("could not be resolved in this clone", out)
+            self.assertEqual(code, 1, out)
 
 
 class TestPatternIsAParameter(unittest.TestCase):

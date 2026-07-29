@@ -177,7 +177,30 @@ def default_base(head: str, cwd: Path | None = None) -> str:
 
 def read_python_tree(rev: str, cwd: Path | None = None) -> dict[str, str]:
     """Every *.py file at `rev`, as {repo-relative path: source text}. One
-    `git cat-file --batch` subprocess for the whole tree."""
+    `git cat-file --batch` subprocess for the whole tree.
+
+    RECURSION AND tests/ ARE DELIBERATE, not incidental. `ls-tree -r` walks
+    the ENTIRE tree at any depth, and nothing here filters directories.
+
+    Both choices are load-bearing and must not be "tidied" into a shallow
+    scan:
+
+    * Nested packages count. `MPCAutofill/cardpicker/management/commands/`
+      contains real production code that reads these constants. A
+      non-recursive `glob("*.py")` over `cardpicker/` misses it entirely —
+      exactly the defect a 2026-07-29 audit found in `docs_lint.py`'s two
+      roster tethers, where `scryfall-tagger-v1` writes real
+      `PrintingTagVote` rows from `management/commands/` and was invisible
+      to the tether.
+    * `tests/` counts here, unlike in those tethers. Their question is "is
+      this production value documented?", so fixture declarations are noise
+      and are correctly excluded. THIS tool's question is "does every
+      reference still resolve, and still evaluate to the same value?" — and
+      a test module that imports a renamed constant raises `ImportError`
+      just as loudly as a view does. Four of the six modules broken by the
+      #567/#568 merge were test modules. Excluding them would have hidden
+      two thirds of the incident.
+    """
     listing = git("ls-tree", "-r", "--name-only", rev, cwd=cwd)
     paths = [p for p in listing.splitlines() if p.endswith(".py")]
     if not paths:
@@ -706,21 +729,28 @@ def render(node: object, limit: int = 220) -> str:
 # --------------------------------------------------------------------------
 
 
-def check_references(index: RevisionIndex, label: str) -> list[str]:
+def check_references(index: RevisionIndex, label: str) -> tuple[list[str], int]:
     """The #567/#568 signature, needing only ONE revision: a matching constant
-    that is imported from, or read in, a module where nothing declares it."""
+    that is imported from, or read in, a module where nothing declares it.
+
+    Returns (findings, references checked). The count exists so the CI log
+    can say what the check actually DID — "0 findings over 1,412 references"
+    is evidence, "clean" alone is indistinguishable from a check that
+    silently stopped finding anything."""
     findings: list[str] = []
+    checked = 0
     for rel in sorted(index.modules):
         idx = index.modules[rel]
         if idx.tree is None:
             continue
 
-        for local, (src, original, raw) in sorted(idx.from_imports.items()):
+        for _local, (src, original, raw) in sorted(idx.from_imports.items()):
             if not index.matches(original) or src is None:
                 continue
             target = index.modules.get(src)
             if target is None or target.tree is None:
                 continue
+            checked += 1
             if original not in target.module_bound and original not in target.decls:
                 findings.append(
                     f"::error file={rel}::at {label}: `from {raw} import {original}` — "
@@ -734,13 +764,29 @@ def check_references(index: RevisionIndex, label: str) -> list[str]:
                 continue
             if node.id in idx.any_bound or node.id in idx.from_imports:
                 continue
+            checked += 1
             if index.resolve(node.id, rel) is not None or node.id in index._global_decls:
                 continue
             findings.append(
                 f"::error file={rel},line={node.lineno}::at {label}: `{node.id}` is read here but "
                 f"declared nowhere in the tree. NameError at runtime."
             )
-    return findings
+    return findings, checked
+
+
+def python_changed(base: str, head: str, cwd: Path | None = None) -> bool | None:
+    """Did any *.py file change between the two revisions?
+
+    None means "cannot tell" — `base` is not present in this clone (a shallow
+    CI checkout, a fork without the base branch's history). Callers MUST
+    treat None as "run the check anyway": this gate is an optimisation, and a
+    required status check that errors out because it could not resolve a
+    revision is worse than one that spends seven seconds."""
+    try:
+        changed = git("diff", "--name-only", f"{base}...{head}", "--", "*.py", cwd=cwd)
+    except subprocess.CalledProcessError:
+        return None
+    return bool(changed.strip())
 
 
 def scope_modules(base: RevisionIndex, head: RevisionIndex, everything: bool) -> tuple[list[str], dict[str, str]]:
@@ -867,23 +913,59 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--repo", default=None, help="repository to run in (default: this checkout)")
     parser.add_argument("--quiet-notes", action="store_true", help="suppress informational note: lines")
+    parser.add_argument(
+        "--changed-since",
+        default=None,
+        metavar="REV",
+        help=(
+            "skip with an explicit message when no *.py file changed since REV. "
+            "An optimisation only: if REV is unresolvable (shallow clone) the check runs anyway."
+        ),
+    )
     args = parser.parse_args(argv)
 
     cwd = Path(args.repo).resolve() if args.repo else REPO_ROOT
     pattern = re.compile(args.pattern)
 
     head_rev = git("rev-parse", "--short", args.head, cwd=cwd).strip()
+
+    # The cheap no-op path, before any parsing. A docs-only or frontend-only
+    # PR must be able to satisfy this check in well under a second, because
+    # it is meant to be safe to mark REQUIRED in branch protection.
+    if args.changed_since:
+        touched = python_changed(args.changed_since, args.head, cwd=cwd)
+        if touched is False:
+            print(
+                f"constant-rename-equivalence: nothing to check — no *.py file changed between "
+                f"{args.changed_since} and {args.head} ({head_rev})."
+            )
+            return 0
+        if touched is None:
+            print(
+                f"note: --changed-since {args.changed_since} could not be resolved in this clone; "
+                f"running the full check rather than skipping it."
+            )
+
     head = RevisionIndex(head_rev, read_python_tree(args.head, cwd=cwd), pattern)
 
-    findings = check_references(head, f"{args.head} ({head_rev})")
+    findings, checked = check_references(head, f"{args.head} ({head_rev})")
     notes: list[str] = []
 
     if args.check_references:
         _emit(findings, notes, args)
-        if not findings:
+        if findings:
+            print(f"\n{len(findings)} unresolvable constant reference(s) — each one is an ImportError or NameError.")
+        elif checked:
             print(
-                f"constant-rename-equivalence: references clean at {args.head} ({head_rev}), "
-                f"{len(head.modules)} modules."
+                f"constant-rename-equivalence: {checked} reference(s) to constants matching "
+                f"/{args.pattern}/ all resolve at {args.head} ({head_rev}); "
+                f"{len(head.modules)} modules scanned."
+            )
+        else:
+            print(
+                f"constant-rename-equivalence: nothing to check — no module at {args.head} "
+                f"({head_rev}) references a constant matching /{args.pattern}/ "
+                f"({len(head.modules)} modules scanned)."
             )
         return len(findings)
 
@@ -891,7 +973,7 @@ def main(argv: list[str] | None = None) -> int:
     base_rev = git("rev-parse", "--short", base_ref, cwd=cwd).strip()
     base = RevisionIndex(base_rev, read_python_tree(base_ref, cwd=cwd), pattern)
 
-    findings += check_references(base, f"{base_ref} ({base_rev})")
+    findings += check_references(base, f"{base_ref} ({base_rev})")[0]
 
     targets, moved = scope_modules(base, head, args.all)
     if args.paths:

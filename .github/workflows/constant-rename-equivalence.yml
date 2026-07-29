@@ -13,14 +13,30 @@ name: Constant-rename equivalence
 # their merge was, which is precisely the revision a `pull_request` checkout
 # hands you.
 #
-# DELIBERATELY TWO JOBS, with different trigger characters:
+# ============================================================================
+# NO `paths:` FILTER ON `pull_request`. THIS IS DELIBERATE. DO NOT ADD ONE.
+# ============================================================================
+# GitHub leaves a REQUIRED status check that never RUNS in `pending` forever,
+# rather than treating it as passed. A `paths: "**/*.py"` filter therefore
+# makes any docs-only or frontend-only PR permanently unmergeable the moment
+# an owner marks one of these jobs required — and this repo merges plenty of
+# both. `references` is intended to be required (owner ruling, 2026-07-29),
+# so the filter is gone from every job here rather than only from that one:
+# leaving it on the siblings would just relocate the same trap for whoever
+# marks the next one required.
+#
+# The cost is paid the right way instead — the jobs are cheap and gate
+# THEMSELVES, in the script, where the log can say why:
 #
 #   `references` is an unconditional invariant. A matching constant imported
 #   from, or read in, a module that declares it nowhere is an ImportError or
-#   NameError, always, with no judgment call — so it runs on every Python PR
-#   and can genuinely fail. Same posture as protected-core-license: it passes
-#   with zero findings today, correctly, and exists to catch the day that
-#   stops being true.
+#   NameError, always, with no judgment call. `--changed-since` short-circuits
+#   it to well under a second on a PR that touches no Python, printing
+#   "nothing to check — no *.py file changed between ...". When Python HAS
+#   changed it scans the whole tree in ~7s and reports the number of
+#   references it resolved, so a green log is evidence rather than silence.
+#   Same posture as protected-core-license: it passes with zero findings
+#   today, correctly, and exists to catch the day that stops being true.
 #
 #   `equivalence` is the expensive proof, and its natural trigger is a PR
 #   that RENAMES a constant, which is not most PRs. Rather than run always
@@ -34,9 +50,6 @@ name: Constant-rename equivalence
 
 on:
   pull_request:
-    paths:
-      - "**/*.py"
-      - ".github/workflows/constant-rename-equivalence.yml"
   push:
     branches: ["master"]
     paths:
@@ -49,11 +62,22 @@ permissions:
 jobs:
   references:
     name: Every matching constant reference resolves
+    # SAFE TO REQUIRE in branch protection: runs on every pull_request with no
+    # path filter, and exits 0 quickly (with an explicit reason in the log)
+    # when the PR changes no Python.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Needed only so --changed-since can resolve the base commit. If it
+          # cannot, the script says so and runs the full check rather than
+          # failing — the gate is an optimisation, never a correctness input.
+          fetch-depth: 0
       - name: Resolve every *_SKIP_REASON / *_ANONYMOUS_ID / threshold reference
-        run: python3 .github/scripts/constant_rename_equivalence.py --check-references
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          python3 .github/scripts/constant_rename_equivalence.py \
+            --check-references ${BASE:+--changed-since "$BASE"}
 
   equivalence:
     name: Renamed constants are behaviour-preserving
