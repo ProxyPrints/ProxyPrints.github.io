@@ -127,6 +127,21 @@ ARTIST_AUTOCOMPLETE_RATE = env("ARTIST_AUTOCOMPLETE_RATE", default="120/m")
 # ARTIST_AUTOCOMPLETE_RATE above. Fires at most once per card-detail-view/display-rail render
 # rather than per keystroke, so a much lower budget than autocomplete's is appropriate.
 ARTIST_EXTERNAL_LINKS_RATE = env("ARTIST_EXTERNAL_LINKS_RATE", default="60/m")
+# MTGAC bulk export URL (cardpicker.artist_external_links.fetch_bulk_export, run weekly by
+# cardpicker.migrations.0093_warm_artist_external_links_weekly_schedule's django-q2 Schedule row -
+# see that migration's own docstring). Deliberately defaults to EMPTY, not to the real URL:
+# this is self-hostable software, and MTGAC granted bulk-endpoint access (with disclosed rate
+# limits - 12 requests/hour bulk, 60/15min single-artist) to THIS project specifically, as a
+# favour. An unconditional default would mean every fork/self-hosted instance starts polling
+# their endpoint the moment it deploys this code - traffic they never agreed to. Empty/unset
+# means "not configured", which means the integration is OFF: warm_artist_external_links no-ops
+# cleanly (see that command's own docstring) rather than fetching. One knob, not two - there is
+# no separate "enabled" flag, only this URL. The value itself is NOT a secret (public,
+# unauthenticated), so setting it is safe to do in a plain env var - see
+# docs/features/artist-support-links.md for the value and for why enabling this on a
+# self-hosted instance means contacting MTGAC yourself rather than assuming this project's
+# permission extends to you.
+MTGAC_BULK_URL = env("MTGAC_BULK_URL", default="")
 
 # Saved decks (see docs/proposals/proposal-g-user-accounts-saved-decks.md, decision 4). A
 # generous, configurable soft cap on named decks (SavedDeckKind.DECK rows only - snapshot rows

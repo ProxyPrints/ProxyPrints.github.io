@@ -221,6 +221,59 @@ rather than risk poisoning the cache with an empty or partial result -
 today's or yesterday's good data stays in place until a fetch actually
 succeeds.
 
+**Off by default - opt-in per instance (owner requirement, 2026-07-29).**
+This is self-hostable software, and MTGAC granted bulk-endpoint access
+(and disclosed the rate limits below) to this project specifically, not
+to every fork or self-hosted instance that deploys this code. The whole
+integration is gated on a single env var, `MTGAC_BULK_URL`
+(`MPCAutofill/MPCAutofill/settings.py`), which **defaults to empty**. Empty means "not
+configured", which means the command no-ops cleanly (a clear stdout
+message, exit 0) instead of fetching - see
+`cardpicker.artist_external_links`'s own "Opt-in, per instance" docstring
+section and the command's own docstring.
+
+**Complete procedure to enable this on a docker-compose deployment**
+(2026-07-29 - this is the whole procedure, not just the setting):
+
+1. Set `MTGAC_BULK_URL` in `docker/.env` (untracked, host-local) to MTGAC's
+   bulk export endpoint
+   (`https://mtgartistconnectionwebservice-production.up.railway.app/api/public/artists`
+   as of 2026-07-29 - not a secret, public and unauthenticated, but **you
+   should contact MTGAC yourself before enabling this** - the permission
+   and rate limits below were granted to this project's operator
+   specifically, and MTGAC deserves the chance to say yes, or set
+   different limits, for your instance too, not just discover your
+   traffic after the fact).
+2. **Redeploy** - `docker/.env` alone does nothing until the containers
+   restart with it. `docker-compose.prod.yml` only passes a variable into
+   a container if that service's own `environment:` block explicitly lists
+   it (`- MTGAC_BULK_URL=${MTGAC_BULK_URL:-}` under both `django` and
+   `worker`, added alongside this doc update); an env change with no
+   redeploy is invisible to the running process, exactly the same gap the
+   Discord OAuth block's own comment above documents from a 2026-07-15
+   incident. Both services need the redeploy, not just one: `django` serves
+   the read endpoint, and `worker` is what actually runs the weekly
+   `qcluster` schedule below - missing it on `worker` alone means the
+   schedule fires and no-ops forever while `django` looks perfectly
+   healthy from the outside, the worst-shaped failure of the two.
+3. From then on, the weekly schedule (below) does real work on its next
+   scheduled run - no further action needed, and nothing to run by hand.
+
+**Scheduled weekly via django-q2, on every instance, whether or not it's
+configured.**
+`cardpicker.migrations.0093_warm_artist_external_links_weekly_schedule`
+creates a `django_q.Schedule` row (`schedule_type="W"`,
+`next_run` pinned to the next midnight UTC after the migration runs - see
+that migration's own docstring for why it's pinned explicitly rather than
+left to django-q2's default-to-now behaviour) unconditionally - no new
+container, no OS cron entry: the `worker` container's existing `qcluster`
+process executes it. This row alone does nothing on an unconfigured
+instance, because the command it invokes checks `MTGAC_BULK_URL` first and
+no-ops - the row being unconditional is what makes deploy order between
+"this migration lands" and "an operator sets the env var" not matter.
+First real run, once configured, is the next scheduled midnight UTC after
+deployment.
+
 **MTGAC's disclosed rate limits (as of 2026-07-29, from their reply
 granting permission for this integration to be open-source - they offered
 to adjust these numbers if needed):**
@@ -230,19 +283,27 @@ to adjust these numbers if needed):**
 | Single-artist lookup (`/api/public/artist/<name>`) | 60 requests/15min | No - this is a bulk consumer, never a per-request proxy (see architecture note above) |
 | Bulk list (`/api/public/artists`)                  | 12 requests/hour  | Yes - the one call `fetch_bulk_export` makes                                          |
 
-A daily-or-weekly cron makes this a non-issue at steady state (1 call/day
-against 12/hour = 288/day is roughly 1/288th of the budget). **The real
-exposure is a failure loop, not steady state**: `fetch_bulk_export` and
-`warm_artist_external_links_cache` contain NO retry logic at all,
-deliberately - see `fetch_bulk_export`'s own docstring. A failed run
-costs exactly one request and is not retried until the next scheduled
-cron invocation; do not add retry/backoff without re-reading that
-docstring first.
+The refresh is **weekly by design**, deliberately far inside that 12/hour
+(2,016/week) budget - the whole point of a bulk-cached consumer is that
+steady-state traffic against a partner's API should be negligible, not
+tuned to the edge. **The real exposure is a failure loop, not steady
+state**: `fetch_bulk_export` and `warm_artist_external_links_cache`
+contain NO retry logic at all, deliberately - see `fetch_bulk_export`'s
+own docstring. A failed run costs exactly one request and is not retried
+until the next scheduled cron invocation; do not add retry/backoff
+without re-reading that docstring first.
 
 **OPEN ITEMS (owner decisions, neither resolved by this change):**
 
-1. **A daily cron must be scheduled** to run
-   `warm_artist_external_links` - nothing runs it automatically yet.
+1. ~~A daily cron must be scheduled to run `warm_artist_external_links`~~
+   **Resolved (2026-07-29):** scheduled weekly via the
+   `django_q.Schedule` row
+   `cardpicker.migrations.0093_warm_artist_external_links_weekly_schedule`
+   creates, executed by the `worker` container's `qcluster` - see
+   "Warming the cache" above. Still does nothing on any instance (including
+   this project's own prod, until it's deployed and `MTGAC_BULK_URL` is
+   set there) until both this migration and the opt-in env var are live -
+   prod is currently well behind master.
 2. **A shared cache backend is a tracked prerequisite, not something this
    PR fixes - but merge order no longer matters (see below).** This
    feature reads and writes a NAMED cache, `caches["shared"]`, deliberately
@@ -398,5 +459,15 @@ richer, blessed integration later.
   cache-hit/cache-miss/not-indexed-artist endpoint behaviour (asserting no
   outbound call ever happens on the request path), the warm
   command/function's idempotency and cache-preservation-on-failure
-  behaviour, and the `caches["shared"]`-not-configured graceful-degradation
-  suite.
+  behaviour, the `caches["shared"]`-not-configured graceful-degradation
+  suite, and (2026-07-29) the `MTGAC_BULK_URL`-unset opt-out suite:
+  `bulk_url_configured()` directly, the warm function/command no-op
+  cleanly at exit 0 with no outbound call and no cache write, the endpoint
+  still degrades to its ordinary not-found response, and a negative
+  control proving the configured-instance behaviour is unchanged.
+- `MPCAutofill/cardpicker/tests/test_warm_artist_external_links_schedule.py`
+  (2026-07-29) - the django-q2 `Schedule` row migration
+  (`0093_warm_artist_external_links_weekly_schedule`): exactly one row is
+  created, weekly cadence, the exact `args`/`func` quoting, `next_run` is
+  precisely midnight UTC and in the future, re-applying is idempotent
+  (no second row), and the migration reverses/reapplies cleanly.

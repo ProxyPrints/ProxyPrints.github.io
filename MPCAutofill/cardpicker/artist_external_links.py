@@ -123,6 +123,24 @@ normalised, or names truncated (see that component's docstring / the feature doc
 examples). Those 197 currently land on MTGAC's own "no artist found" page. Surfacing MTGAC's own
 authoritative `pageUrl` (once M2 wires the frontend up to consume it) fixes a real 8.2% broken-
 link rate - this is the concrete justification for the M2 follow-up, not a hypothetical one.
+
+**Opt-in, per instance (`settings.MTGAC_BULK_URL`, owner requirement 2026-07-29).** This is
+self-hostable software. MTGAC granted bulk-endpoint access, and disclosed the rate limits above,
+to THIS project specifically, as a favour - not to every fork or self-hosted instance that
+happens to deploy this code. `settings.MTGAC_BULK_URL` therefore defaults to EMPTY (see
+`MPCAutofill/settings.py`'s own comment), and empty means "not configured", which means the
+integration is OFF: `bulk_url_configured()` below is `False`, `warm_artist_external_links_cache`
+refuses to run (see its own docstring), and the `warm_artist_external_links` management command
+no-ops cleanly - a quiet, expected, exit-0 state on every instance that hasn't deliberately
+opted in, not an error. One knob, not two - there is no separate enable flag, only this URL. The
+weekly `django_q.Schedule` row (`cardpicker.migrations.0093_warm_artist_external_links_weekly_
+schedule`) is still created UNCONDITIONALLY on every instance - see that migration's own
+docstring for why gating row creation on env at migration time doesn't work - so this runtime
+check is what actually makes an unconfigured instance harmless, not the absence of the schedule.
+The URL itself is NOT a secret (public, unauthenticated, already shared openly by MTGAC) - see
+`docs/features/artist-support-links.md` for the value and, importantly, for why an operator who
+enables this on their own instance should contact MTGAC directly rather than assume this
+project's permission extends to them.
 """
 
 from __future__ import annotations
@@ -134,11 +152,10 @@ from urllib.parse import urlparse
 
 import requests
 
+from django.conf import settings
 from django.core.cache import InvalidCacheBackendError, caches
 
 logger = logging.getLogger(__name__)
-
-MTGAC_BULK_URL = "https://mtgartistconnectionwebservice-production.up.railway.app/api/public/artists"
 
 # The named cache alias this feature reads/writes - deliberately NOT Django's `default` cache.
 # See module docstring's "Cache backend: a NAMED shared cache" section for why.
@@ -284,6 +301,18 @@ def compute_artist_external_links_blob(records: list[dict[str, Any]]) -> dict[st
     return blob
 
 
+def bulk_url_configured() -> bool:
+    """
+    Whether this instance has opted into the MTGAC integration - see module docstring's "Opt-in,
+    per instance" section. `settings.MTGAC_BULK_URL` defaults to empty, and empty means "not
+    configured": that's deliberate, this project's bulk-endpoint access is granted to it
+    specifically, not to every self-hosted fork of this code. Read at call time (not cached at
+    import time) so `override_settings`/env changes are picked up immediately, same as every
+    other settings read in this module.
+    """
+    return bool(settings.MTGAC_BULK_URL)
+
+
 def fetch_bulk_export(timeout: float = 30.0) -> list[dict[str, Any]]:
     """
     The ONE outbound call this feature ever makes on a given day - see module docstring for why
@@ -291,9 +320,10 @@ def fetch_bulk_export(timeout: float = 30.0) -> list[dict[str, Any]]:
     stop - no retry loop, no backoff-and-retry, by design (see below), so a single call to this
     function costs at most 1 of MTGAC's disclosed 12-requests/hour bulk-endpoint budget.
 
-    Headroom: the owner runs `warm_artist_external_links` on a daily-or-weekly cron, so one
-    successful call/day against a 12/hour (288/day) allowance is roughly 1/288th of the budget -
-    steady state is nowhere near the ceiling and isn't the risk.
+    Headroom: `warm_artist_external_links` runs weekly (`cardpicker.migrations.0093_warm_artist_
+    external_links_weekly_schedule`), so one successful call/week against a 12/hour (2,016/week)
+    allowance is roughly 1/2,016th of the budget - steady state is nowhere near the ceiling and
+    isn't the risk.
 
     **The real exposure is a failure loop, not steady state** - hammering a partner's
     infrastructure immediately after they granted this project access would be a genuinely bad
@@ -307,8 +337,13 @@ def fetch_bulk_export(timeout: float = 30.0) -> list[dict[str, Any]]:
     without re-reading this docstring; if MTGAC's limits ever need more headroom than a single
     daily/weekly call provides, that's a conversation with MTGAC (who have already offered to
     adjust their numbers), not a reason to retry silently against a rate limit from our side.
+
+    Reads `settings.MTGAC_BULK_URL` at call time - see module docstring's "Opt-in, per instance"
+    section. Callers that might run on an unconfigured instance should check `bulk_url_configured()`
+    themselves rather than rely on this raising cleanly; an empty URL fails inside `requests` with
+    a generic, unhelpful error, not one that names the actual problem.
     """
-    response = requests.get(MTGAC_BULK_URL, timeout=timeout)
+    response = requests.get(settings.MTGAC_BULK_URL, timeout=timeout)
     response.raise_for_status()
     data = response.json()
     if not isinstance(data, list):
@@ -356,10 +391,17 @@ def warm_artist_external_links_cache() -> dict[str, dict[str, Any]]:
     costs at most 1 request against MTGAC's disclosed 12/hour bulk-endpoint budget (see
     `fetch_bulk_export`'s own docstring for the full rate-limit/no-retry rationale).
 
-    Resolves the `"shared"` cache backend BEFORE making any outbound call (`_shared_cache_for_
-    write` raises immediately if it isn't configured) - a misconfigured environment therefore
-    never wastes any of MTGAC's rate-limit budget on a fetch whose result couldn't be written
-    down anyway.
+    Checks `bulk_url_configured()` and resolves the `"shared"` cache backend BEFORE making any
+    outbound call (`_shared_cache_for_write` raises immediately if it isn't configured) - a
+    misconfigured/not-opted-in environment therefore never wastes any of MTGAC's rate-limit
+    budget on a fetch whose result couldn't be written down anyway (or shouldn't have been made
+    at all).
+
+    Raises `RuntimeError` immediately, before any I/O, if `bulk_url_configured()` is `False` -
+    see module docstring's "Opt-in, per instance" section. `warm_artist_external_links` (the
+    management command) checks this itself first and no-ops quietly instead of ever reaching
+    this function on an unconfigured instance; this function's own check is defense in depth for
+    any other caller.
 
     Raises `ValueError` (fetch/shape errors propagate from `fetch_bulk_export` as-is) on ANY
     fetch/shape failure, WITHOUT writing to the cache first - a refresh that can't complete
@@ -368,6 +410,13 @@ def warm_artist_external_links_cache() -> dict[str, dict[str, Any]]:
     scheduled cron run. Returns the blob it wrote, so the calling command can report a real
     summary (artist count, link count, etc.) without a second cache read.
     """
+    if not bulk_url_configured():
+        raise RuntimeError(
+            "MTGAC_BULK_URL is not configured - this instance has not opted into the MTGAC "
+            "integration (see docs/features/artist-support-links.md's opt-in section). Refusing "
+            "to run rather than making a request with no configured URL."
+        )
+
     shared_cache = _shared_cache_for_write()
 
     records = fetch_bulk_export()

@@ -2,10 +2,11 @@
 Refreshes the MTGAC artist-external-links cache (see cardpicker.artist_external_links's own
 module docstring for the full daily-cached-bulk-consumer architecture this belongs to).
 
-Intended for a daily cron. Idempotent and safe to re-run: it always fetches the FULL bulk export
-and overwrites the cache with a freshly-normalised blob keyed by artist name, never merges with
-or diffs against the previous run - re-running twice in a row (or ten times) leaves the cache in
-exactly the same state a single run would.
+Scheduled weekly via django-q2 (see migration 0093's own docstring - `schedule_type="W"`, executed
+by the `worker` container's `qcluster`, not an OS cron entry). Idempotent and safe to re-run: it
+always fetches the FULL bulk export and overwrites the cache with a freshly-normalised blob keyed
+by artist name, never merges with or diffs against the previous run - re-running twice in a row
+(or ten times) leaves the cache in exactly the same state a single run would.
 
 **Makes AT MOST ONE bulk request per invocation - no retry, deliberately.** MTGAC's own disclosed
 limit on the bulk endpoint this command calls is 12 requests/hour (as of 2026-07-29, from their
@@ -39,25 +40,54 @@ ordinary not-found response, never a 500 - see the module docstring's "Graceful 
 section) - a cron run that silently writes nowhere and reports success is exactly the bug this
 feature originally shipped with, and this command must not repeat it a second way. Once `"shared"`
 is configured (a separate infrastructure PR, issue #538), this command needs no further edit -
-merge/deploy order between that PR and this one doesn't matter. Scheduling the actual daily cron
-entry is a separate, still-open owner item too.
+merge/deploy order between that PR and this one doesn't matter.
+
+**OPT-IN PER INSTANCE, and this command reflects that FIRST, before anything else (owner
+requirement, 2026-07-29).** `cardpicker.artist_external_links.bulk_url_configured()` gates on
+`settings.MTGAC_BULK_URL`, which defaults to empty - see that module's own "Opt-in, per instance"
+docstring section for why: this is self-hostable software, MTGAC granted bulk-endpoint access to
+THIS project specifically, and a schedule row for this command now exists unconditionally on
+every instance (`cardpicker.migrations.0093_warm_artist_external_links_weekly_schedule`), so this
+runtime check is the only thing standing between "every fork that deploys this code" and MTGAC's
+rate-limited endpoint. Checked BEFORE the try/except below, not inside it: an unconfigured
+instance must see a clear, quiet, **exit-0** skip message - never an exception, never a
+`CommandError`, since this same command will run weekly, forever, on every instance that hasn't
+opted in, and a red/noisy result from doing nothing would be actively misleading. A genuine fetch
+failure on a CONFIGURED instance is unchanged - still a `CommandError`, still non-zero, still
+cache-preserving (see `warm_artist_external_links_cache`'s own docstring) - "unconfigured" and
+"broken" are different states and must not be conflated.
 """
 
 from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError
 
-from cardpicker.artist_external_links import warm_artist_external_links_cache
+from cardpicker.artist_external_links import (
+    bulk_url_configured,
+    warm_artist_external_links_cache,
+)
 
 
 class Command(BaseCommand):
     help = (
         "Fetches MTG Artist Connection's bulk artist export, normalises it, and writes the "
-        "artist-external-links cache blob. Intended for a daily cron. On any fetch/shape "
-        "failure, leaves the existing cache untouched and exits non-zero."
+        "artist-external-links cache blob. Runs weekly via django-q2 (see migration 0093). "
+        "No-ops cleanly (exit 0) when MTGAC_BULK_URL isn't configured - this integration is "
+        "opt-in per instance. On any fetch/shape failure while configured, leaves the existing "
+        "cache untouched and exits non-zero."
     )
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
+        if not bulk_url_configured():
+            self.stdout.write(
+                self.style.WARNING(
+                    "MTGAC bulk URL not configured (MTGAC_BULK_URL is unset); skipping. This "
+                    "integration is opt-in per instance - see docs/features/artist-support-links.md "
+                    "for how to enable it and why you should contact MTGAC before doing so."
+                )
+            )
+            return
+
         try:
             blob = warm_artist_external_links_cache()
         except Exception as e:
