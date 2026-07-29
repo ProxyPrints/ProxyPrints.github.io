@@ -114,7 +114,7 @@ class AdminCanonicalPrintingMetadata(admin.ModelAdmin[CanonicalPrintingMetadata]
         "border_color",
         "frame",
         "edhrec_rank",
-        "printings_count",
+        "catalogued_printings_count",
         "released_at",
         "lang",
     )

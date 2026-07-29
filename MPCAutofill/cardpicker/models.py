@@ -182,6 +182,10 @@ class CanonicalPrintingMetadata(models.Model):
     `CanonicalCard` (which already stores scryfall_id/oracle_id/set/collector_number/
     artist/image data via its `identifier`/`canonical_id`/`expansion`/`collector_number`
     fields). One row per `CanonicalCard`, populated by `import_scryfall_printing_metadata`.
+
+    NOT EVERY FIELD HERE IS SCRYFALL DATA. `catalogued_printings_count` is computed by us,
+    over our own rows - see its own comment. Every other field on this model is copied
+    verbatim from a bulk-data row.
     """
 
     canonical_card = models.OneToOneField(
@@ -193,7 +197,19 @@ class CanonicalPrintingMetadata(models.Model):
     frame_effects = models.JSONField(default=list, blank=True)
     promo_types = models.JSONField(default=list, blank=True)
     edhrec_rank = models.IntegerField(null=True, blank=True)
-    printings_count = models.IntegerField(default=0)
+    # HOW MANY PRINTINGS OF THIS ORACLE CARD *WE* HAVE CATALOGUED - a COUNT over our own
+    # `CanonicalCard` rows, not a number Scryfall reports. `import_scryfall_printing_metadata`
+    # builds a Counter over `CanonicalCard.canonical_id` (the oracle id) and stores each row's
+    # group size here; rows whose `canonical_id` is NULL (81 in production on 2026-07-29) are
+    # stored as 1 by fiat, because there is no oracle group to count.
+    #
+    # RENAMED FROM `printings_count` 2026-07-29 (migration 0099). The old name, and the docs
+    # written against it, asserted this was Scryfall's own printing total for the oracle card.
+    # It never was, and the difference is not academic: this number cannot detect that our
+    # catalogue holds fewer printings than Scryfall publishes, because it is derived entirely
+    # from what our catalogue holds. Anything that wants "how many printings exist in reality"
+    # must count rows in the bulk-data file, not read this column.
+    catalogued_printings_count = models.IntegerField(default=0)
     released_at = models.DateField(null=True, blank=True)
     lang = models.CharField(max_length=5, default="en")
     # Scryfall's own art-crop image URL, straight from the same bulk-data dump this whole model

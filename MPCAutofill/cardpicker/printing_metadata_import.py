@@ -345,7 +345,7 @@ _METADATA_SYNC_FIELDS = [
     "frame_effects",
     "promo_types",
     "edhrec_rank",
-    "printings_count",
+    "catalogued_printings_count",
     "released_at",
     "lang",
     "art_crop_url",
@@ -436,8 +436,12 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
     """
     Enriches every existing `CanonicalCard` with Scryfall printing metadata fields that
     `CanonicalCard` doesn't itself store (full art, border colour, frame, promo types,
-    EDHREC rank, release date, language, and a denormalised printings-per-oracle-card
-    count). Only enriches rows that `CanonicalCard`'s own weekly import
+    EDHREC rank, release date, language), plus ONE locally-computed field:
+    `catalogued_printings_count`, a denormalised count of how many `CanonicalCard` rows WE
+    hold per oracle card. That one is not read off the bulk data at all - it is a Counter
+    over our own table (see the `canonical_id_counts` build below), so it measures our
+    catalogue's coverage and can never report Scryfall's own printing total.
+    Only enriches rows that `CanonicalCard`'s own weekly import
     (`import_canonical_card_data`) has already decided are canonical - this command does
     no filtering of its own (no separate paper/language/digital rules), since that
     filtering boundary already lives in `MTGIntegration.get_canonical_cards_and_artists`.
@@ -484,7 +488,12 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
             no_matching_card += 1
             continue
         canonical_id = pk_to_canonical_id[canonical_card_pk]
-        printings_count = canonical_id_counts[canonical_id] if canonical_id is not None else 1
+        # OUR row count for this oracle card, not Scryfall's printing total - `canonical_id_counts`
+        # was built above from `CanonicalCard.objects.values_list(...)`, i.e. entirely from our own
+        # table. A card we have imported one printing of scores 1 here even when Scryfall publishes
+        # twenty. `canonical_id is None` has no oracle group to count at all, so it is stored as 1
+        # by fiat - that 1 asserts nothing about the world.
+        catalogued_printings_count = canonical_id_counts[canonical_id] if canonical_id is not None else 1
         metadata_rows.append(
             CanonicalPrintingMetadata(
                 canonical_card_id=canonical_card_pk,
@@ -494,7 +503,7 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
                 frame_effects=row.frame_effects,
                 promo_types=row.promo_types,
                 edhrec_rank=row.edhrec_rank,
-                printings_count=printings_count,
+                catalogued_printings_count=catalogued_printings_count,
                 released_at=row.released_at,
                 lang=row.lang,
                 art_crop_url=row.art_crop_url,

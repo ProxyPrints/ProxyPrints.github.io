@@ -105,7 +105,7 @@ class CanonicalPrintingMetadataFactory(factory.django.DjangoModelFactory):
     frame_effects = factory.LazyFunction(list)
     promo_types = factory.LazyFunction(list)
     edhrec_rank = None
-    printings_count = 1
+    catalogued_printings_count = 1
     released_at = None
     lang = "en"
 

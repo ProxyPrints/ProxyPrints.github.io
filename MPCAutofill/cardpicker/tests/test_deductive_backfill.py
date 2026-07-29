@@ -26,9 +26,9 @@ from cardpicker.vote_consensus import (
 )
 
 
-def _unique_printing(name: str, printings_count: int = 1, **kwargs) -> "CanonicalCardFactory":
+def _unique_printing(name: str, catalogued_printings_count: int = 1, **kwargs) -> "CanonicalCardFactory":
     printing = CanonicalCardFactory(name=name, **kwargs)
-    CanonicalPrintingMetadataFactory(canonical_card=printing, printings_count=printings_count)
+    CanonicalPrintingMetadataFactory(canonical_card=printing, catalogued_printings_count=catalogued_printings_count)
     return printing
 
 
@@ -70,17 +70,28 @@ class TestD1Selection:
         CardFactory(name="Forest")
         assert list(select_d1_candidates()) == []
 
-    def test_printings_count_greater_than_one_excludes_from_d1(self, db):
-        # our table has exactly one CanonicalCard row for this name, but Scryfall's own
-        # printings_count says there are more real printings we haven't imported yet - the
-        # whole point of the cross-check is to not treat this as verified-unique.
-        _unique_printing("Gilded Drake", printings_count=2)
+    def test_catalogued_printings_count_greater_than_one_excludes_from_d1(self, db):
+        # THIS TEST ASSERTS OVER A STATE THE IMPORTER CANNOT PRODUCE (labelled 2026-07-29).
+        # It builds, via the factory, one CanonicalCard row whose catalogued_printings_count is
+        # 2 - and `import_scryfall_printing_metadata` computes that column as the number of
+        # CanonicalCard rows sharing an oracle id, so one row can only ever score 1. The test
+        # passes, and proves nothing about production: measured on the live catalogue
+        # 2026-07-29, all 14,893 uniquely-named rows carry a count of exactly 1, and the
+        # condition under test excluded 0 of 137 D1 candidates.
+        #
+        # It used to be commented as proving a "Scryfall cross-check" catches printings we
+        # haven't imported. It does not - see `select_d1_candidates`' docstring and issue #600.
+        # Kept, deliberately: it pins the branch's behaviour so that whatever real check
+        # replaces the condition has a failing-first test to grow from.
+        _unique_printing("Gilded Drake", catalogued_printings_count=2)
         CardFactory(name="Gilded Drake")
         assert list(select_d1_candidates()) == []
 
     def test_missing_printing_metadata_is_treated_as_unverifiable(self, db):
         # a CanonicalCard with no CanonicalPrintingMetadata sidecar at all (predates that
-        # import) must never be silently treated as printings_count == 1.
+        # import) must never be silently treated as catalogued_printings_count == 1.
+        # Also unreachable in production as of 2026-07-29: all 113,224 CanonicalCard rows
+        # carry a metadata sidecar. Kept as a guard on the -1 sentinel, not as evidence.
         CanonicalCardFactory(name="No Metadata Card")
         CardFactory(name="No Metadata Card")
         assert list(select_d1_candidates()) == []

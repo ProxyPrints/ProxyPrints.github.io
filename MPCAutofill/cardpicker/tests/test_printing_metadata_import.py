@@ -144,7 +144,7 @@ class TestImportScryfallPrintingMetadata:
         assert stats["skipped"] == 0  # skipped counts unchanged rows, not unmatched bulk rows
         assert CanonicalPrintingMetadata.objects.count() == 0
 
-    def test_printings_count_denormalised_per_oracle_card(self, db, tmp_path):
+    def test_catalogued_printings_count_denormalised_per_oracle_card(self, db, tmp_path):
         oracle_id = uuid.uuid4()
         card_a = CanonicalCardFactory(canonical_id=oracle_id)
         card_b = CanonicalCardFactory(canonical_id=oracle_id)
@@ -158,9 +158,9 @@ class TestImportScryfallPrintingMetadata:
 
         import_scryfall_printing_metadata(default_cards_path=path)
 
-        assert CanonicalPrintingMetadata.objects.get(canonical_card=card_a).printings_count == 2
-        assert CanonicalPrintingMetadata.objects.get(canonical_card=card_b).printings_count == 2
-        assert CanonicalPrintingMetadata.objects.get(canonical_card=card_c).printings_count == 1
+        assert CanonicalPrintingMetadata.objects.get(canonical_card=card_a).catalogued_printings_count == 2
+        assert CanonicalPrintingMetadata.objects.get(canonical_card=card_b).catalogued_printings_count == 2
+        assert CanonicalPrintingMetadata.objects.get(canonical_card=card_c).catalogued_printings_count == 1
 
     def test_rerun_updates_existing_metadata(self, db, tmp_path):
         canonical_card = CanonicalCardFactory()

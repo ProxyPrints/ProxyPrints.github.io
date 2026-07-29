@@ -25,12 +25,19 @@ printings, artists, tags, and moderation from one screen.
 - **Data model**: `CanonicalCard` (`cardpicker/models.py`) is already a
   per-printing model (`identifier` = Scryfall printing UUID, unique on
   `(expansion, collector_number)`) — no separate `CanonicalPrinting` model
-  was added. `CanonicalPrintingMetadata` (OneToOne) holds only the
-  Scryfall fields `CanonicalCard` doesn't (full_art, border_color, frame,
-  frame_effects, promo_types, edhrec_rank, printings_count, released_at,
-  lang), populated by `cardpicker/printing_metadata_import.py` +
-  `import_scryfall_printing_metadata`. `CardPrintingTag.printing` FKs
-  directly to `CanonicalCard`.
+  was added. `CanonicalPrintingMetadata` (OneToOne) holds the
+  Scryfall fields `CanonicalCard` doesn't (full*art, border_color, frame,
+  frame_effects, promo_types, edhrec_rank, released_at, lang), populated by
+  `cardpicker/printing_metadata_import.py` +
+  `import_scryfall_printing_metadata`. It also holds one field that is
+  **not** Scryfall data: `catalogued_printings_count` counts how many
+  `CanonicalCard` rows \_we* hold per oracle id, computed by that same
+  importer as a `Counter` over our own table. It says nothing about how
+  many printings Scryfall publishes, and cannot detect that our catalogue
+  is missing printings, because it is derived from the catalogue itself.
+  It was called `printings_count` until 2026-07-29 (migration 0099), and
+  this document described it as Scryfall printing data — that was false.
+  `CardPrintingTag.printing` FKs directly to `CanonicalCard`.
 - **Card payload — machine-suggested printing + tag vote status** (Proposal H
   §4.4′, issue #184, PR #195; consumed by the Select Version section, issue
   #167 — see [[grid-selector.md]]'s own "Select Version section" entry):
@@ -365,15 +372,30 @@ printings, artists, tags, and moderation from one screen.
   `manage.py deductive_backfill_printing_tags` casts `source=deduction`
   votes (weight `PRINTING_TAG_MACHINE_WEIGHT`) for cards whose printing is
   logically entailed by data already in the catalog — D1 (name matches
-  exactly one `CanonicalCard`, cross-verified against Scryfall's own
-  `printings_count`) and D2 (name + `Card.expansion_hint` narrows to
-  exactly one row) tiers. Idempotent/resumable (the "no existing vote"
+  exactly one `CanonicalCard` row in our catalogue) and D2 (name +
+  `Card.expansion_hint` narrows to exactly one row) tiers.
+  Idempotent/resumable (the "no existing vote"
   eligibility check doubles as the checkpoint). `VoteSource.DEDUCTION`
   (pure logical inference) and `VoteSource.OCR` (Stage 8, image-inspecting)
   are a label split of what was originally one `VoteSource.AI` value —
   same weight/gate treatment for both, see `models.py`'s `VoteSource`
   docstring. Production run: 28,112 votes written, 0/28,112 later
   resolved a card on their own (human-backed gate verified at scale).
+
+  **The first tier is not cross-verified against Scryfall, and never
+  was** (corrected 2026-07-29). This entry used to say D1 was "cross-verified against
+  Scryfall's own `printings_count`". No such verification exists. The
+  column that claim referred to counts our own `CanonicalCard` rows (see
+  the Data model entry above), so the condition it feeds restates the
+  name-uniqueness test that immediately precedes it and excludes nothing —
+  measured against the live catalogue on 2026-07-29, 137 D1 candidates
+  before the condition and 137 after, and all 14,893 uniquely-named
+  `CanonicalCard` rows in the catalogue carry a count of exactly 1. The
+  condition is left in the code, labelled as entailed rather than deleted,
+  so the gap stays visible; **issue #600** tracks what a real external
+  check would be. D1's actual claim is the one it can support: the name
+  matches exactly one row _in our catalogue_.
+
 - **External-IP tag import (Scryfall Tagger)** (W9 per-printing design,
   revised 2026-07-27): `manage.py import_external_ip_tags` imports
   `art:external-ip` — a Scryfall Tagger community art tag identifying
