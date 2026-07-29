@@ -12,8 +12,10 @@ import { CardDocument, SlotProjectMembers } from "@/common/types";
 import { chunk } from "@/common/utils";
 import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
 import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
-import { computeLayout } from "@/features/pdf/layout";
+import { computeLayout, LayoutEdgeBleed } from "@/features/pdf/layout";
 import {
+  computeBleedCropMM,
+  computeRenderedBleedMM,
   getPDFImageBlob,
   getPDFImageURL,
   PDFImageQuality,
@@ -143,6 +145,34 @@ const layoutForPage = (
     },
     { row: cardSpacingRowMM, col: cardSpacingColMM }
   );
+
+const ZERO_BLEED: LayoutEdgeBleed = { top: 0, bottom: 0, left: 0, right: 0 };
+
+// #301 (croppable bleed) - the per-edge bleed computeLayout() actually granted every slot on
+// this page (uniform across the whole page - see layout.ts's LayoutSlot.bleedMM comment for
+// why that's the correct answer, not a simplification). Every render site below that used to
+// read the flat `bleedEdgeMM` context value as "the" bleed (PDFCardImage's box size,
+// PDFCardCutLines'/PageCutLines' cut-line placement) now reads THIS instead - `bleedEdgeMM`
+// itself is only the per-edge MAXIMUM a #299-normalized card carries, not what actually
+// renders. Takes the whole PDFProps context object rather than 9 separate fields so call sites
+// don't have to destructure every layout-relevant prop just to ask this one question.
+const contextAvailableBleedMM = (ctx: PDFProps): LayoutEdgeBleed => {
+  const size = getPageSizeMM(ctx.pageSize, ctx.pageWidth, ctx.pageHeight);
+  const layout = layoutForPage(
+    size.width,
+    size.height,
+    ctx.bleedEdgeMM,
+    ctx.cardSpacingRowMM,
+    ctx.cardSpacingColMM,
+    ctx.pageMarginTopMM,
+    ctx.pageMarginBottomMM,
+    ctx.pageMarginLeftMM,
+    ctx.pageMarginRightMM
+  );
+  // computeLayout() always resolves at least 1 slot per axis (see fitAxisWithBleed's own "never
+  // returns 0 cards" note) - the fallback here is purely defensive, not expected to fire.
+  return layout.slots[0]?.bleedMM ?? ZERO_BLEED;
+};
 
 export const PageSize = {
   A4: "A4",
@@ -275,8 +305,14 @@ const CutLineCorner = ({
   verticalUpLengthOverrideMM,
   verticalDownLengthOverrideMM,
 }: CutLineCornerProps) => {
-  const { cutLineThicknessMM, cutLineColor, bleedEdgeMM, cutLineOffsetMM } =
-    usePDFContext();
+  const ctx = usePDFContext();
+  const { cutLineThicknessMM, cutLineColor, cutLineOffsetMM } = ctx;
+  // #301 - the cut line marks the TRUE card edge, which is `bleedMM.<edge>` in from this slot's
+  // own boundary, not a flat `bleedEdgeMM` - left/right (the column axis) and top/bottom (the
+  // row axis) can legitimately differ (one axis full bleed, the other cropped - see layout.ts's
+  // fitAxisWithBleed), so this needs two separate offsets, not the one `totalOffset` the pre-
+  // #301 uniform-bleed version used.
+  const bleedMM = contextAvailableBleedMM(ctx);
 
   const cutLinePlacementToThicknessOffset: {
     [key in keyof typeof CutLinePlacement]: number;
@@ -285,11 +321,7 @@ const CutLineCorner = ({
     [CutLinePlacement.Centre]: 0.5 * cutLineThicknessMM,
     [CutLinePlacement.Outside]: cutLineThicknessMM,
   };
-
-  const totalOffset =
-    bleedEdgeMM -
-    cutLineOffsetMM -
-    cutLinePlacementToThicknessOffset[placement];
+  const thicknessOffset = cutLinePlacementToThicknessOffset[placement];
 
   const positionLookup: {
     [location in CutLineCornerPosition]: {
@@ -330,6 +362,10 @@ const CutLineCorner = ({
     horizontal: inside.horizontal === "left" ? "right" : "left",
     vertical: inside.vertical === "up" ? "down" : "up",
   } as const;
+  const horizontalOffset =
+    bleedMM[inside.horizontalCssProperty] - cutLineOffsetMM - thicknessOffset;
+  const verticalOffset =
+    bleedMM[inside.verticalCssProperty] - cutLineOffsetMM - thicknessOffset;
 
   const showHorizontal = (dir: "left" | "right") => {
     if (shape === "Cross") return true;
@@ -351,16 +387,16 @@ const CutLineCorner = ({
         style={{
           position: "absolute" as const,
           ...(inside.verticalCssProperty === "top" && {
-            top: totalOffset + "mm",
+            top: verticalOffset + "mm",
           }),
           ...(inside.verticalCssProperty === "bottom" && {
-            bottom: totalOffset + cutLineThicknessMM + "mm",
+            bottom: verticalOffset + cutLineThicknessMM + "mm",
           }),
           ...(inside.horizontalCssProperty === "left" && {
-            left: totalOffset + "mm",
+            left: horizontalOffset + "mm",
           }),
           ...(inside.horizontalCssProperty === "right" && {
-            right: totalOffset + cutLineThicknessMM + "mm",
+            right: horizontalOffset + cutLineThicknessMM + "mm",
           }),
         }}
       >
@@ -444,8 +480,16 @@ export const isBleedNormalizationEligible = (
   (cardDocument.sourceType === SourceType.GoogleDrive ||
     cardDocument.sourceType === SourceType.LocalFile);
 
+const uniformBleedMM = (mm: number): LayoutEdgeBleed => ({
+  top: mm,
+  bottom: mm,
+  left: mm,
+  right: mm,
+});
+
 // Renders only the card image, with no cut lines.
 const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
+  const ctx = usePDFContext();
   const {
     bleedEdgeMM,
     roundCorners,
@@ -457,29 +501,145 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     reportImageProgress,
     bleedPriors,
     bleedOverrides,
-  } = usePDFContext();
-  const height = CardHeightMM + 2 * bleedEdgeMM;
-  const heightProportion = (CardHeightMM + 2 * BleedEdgeMM) / height;
-  const width = CardWidthMM + 2 * bleedEdgeMM;
-  const widthProportion = (CardWidthMM + 2 * BleedEdgeMM) / width;
+  } = ctx;
   const radius = roundCorners ? CornerRadiusMM : 0;
   const bleedNormalized = isBleedNormalizationEligible(
     cardDocument,
     imageQuality
   );
-  // Bleed-normalized output is already synthesized at exactly the target bleed box (see
-  // normalizeCardBleed) - the old proportion-based rescale below exists specifically to fix up
-  // an image assumed to be at the STANDARD bleed amount, which no longer applies once this
-  // card's own image has been measured and corrected directly. Omitted (not "none") when
-  // normalized - @react-pdf/renderer's own style processor (processTransform in
-  // @react-pdf/stylesheet) has a real bug where a single-token transform value like "none"
-  // crashes deep inside its parser (normalizeTransformOperation ends up calling .map() on
-  // undefined), hanging the whole render with no error surfaced anywhere - found via a real
-  // Playwright regression, not by reading their source speculatively. Omitting the key entirely
-  // sidesteps their parser altogether, which is what "no transform" actually needs anyway.
+
+  // #301 - what this card's image actually CARRIES vs what the layout has room to RENDER.
+  // Bleed-normalized output is synthesized to exactly `bleedEdgeMM` on every side (see
+  // normalizeCardBleed) - the rare exception (a too-small source hitting bleedExtension.ts's
+  // own `clampOpposingCrop` shortfall) is an already-accepted "slightly-short bleed margin"
+  // trade documented there, not something this layer can see into without touching that
+  // excluded file. A non-normalized source (thumbnail tier, SCM, or any card
+  // isBleedNormalizationEligible rejects) is assumed to carry the fixed STANDARD constant
+  // (matches the pre-#301 proportional-rescale assumption below, unchanged).
+  const carriedBleedMM = uniformBleedMM(
+    bleedNormalized ? bleedEdgeMM : BleedEdgeMM
+  );
+  const availableBleedMM = contextAvailableBleedMM(ctx);
+  const renderedBleedMM = computeRenderedBleedMM(
+    carriedBleedMM,
+    availableBleedMM
+  );
+  const height = CardHeightMM + renderedBleedMM.top + renderedBleedMM.bottom;
+  const width = CardWidthMM + renderedBleedMM.left + renderedBleedMM.right;
+
+  // Non-normalized path only (bleedNormalized short-circuits this - see below): the old
+  // proportion-based rescale, fixing up an image assumed to be at the STANDARD bleed amount
+  // into whatever box size this slot actually grants. @react-pdf/renderer's own style
+  // processor (processTransform in @react-pdf/stylesheet) has a real bug where a single-token
+  // transform value like "none" crashes deep inside its parser (normalizeTransformOperation
+  // ends up calling .map() on undefined), hanging the whole render with no error surfaced
+  // anywhere - found via a real Playwright regression, not by reading their source
+  // speculatively. Omitting the key entirely (not "none") sidesteps their parser altogether,
+  // which is what "no transform" actually needs anyway.
+  const heightProportion = (CardHeightMM + 2 * BleedEdgeMM) / height;
+  const widthProportion = (CardWidthMM + 2 * BleedEdgeMM) / width;
   const scaleTransform = bleedNormalized
     ? undefined
     : `scale(${widthProportion}, ${heightProportion})`;
+
+  // #301 - normalized output is always the FULL carried bleed box (CardSize + 2*bleedEdgeMM,
+  // symmetric on every side by normalizeCardBleed's own contract); this slot may afford less
+  // than that. Rather than re-decode/re-encode a second canvas pass just to crop (pdfImage.ts's
+  // own module doc explains why that boundary - real canvas work vs pure geometry - is kept
+  // thin/imperative), the oversized image is positioned at a negative offset within an
+  // `overflow: hidden` box sized to what's actually rendered - the visible result is pixel-
+  // identical to a real crop, since react-pdf still rasterizes only the visible region into the
+  // final PDF. `computeBleedCropMM` (pdfImage.ts) is the same pure, unit-tested geometry either
+  // approach would need.
+  const cropMM = bleedNormalized
+    ? computeBleedCropMM(carriedBleedMM, availableBleedMM)
+    : ZERO_BLEED;
+  const fullCarriedWidthMM =
+    CardWidthMM + carriedBleedMM.left + carriedBleedMM.right;
+  const fullCarriedHeightMM =
+    CardHeightMM + carriedBleedMM.top + carriedBleedMM.bottom;
+
+  const imageSrc = async () => {
+    try {
+      if (bleedNormalized) {
+        const blob = await getPDFImageBlob(
+          cardDocument,
+          imageDPI,
+          jpgQuality,
+          fileHandles
+        );
+        // cardDocument.dpi is the source's own recorded resolution, but a lower imageDPI
+        // setting can make the Worker serve a downscaled image below that - if so, the
+        // BYTES actually fetched are at imageDPI, not cardDocument.dpi, and px->mm
+        // conversion needs to match what was really decoded, not the source's original
+        // resolution. Never assumed higher than the source's own recorded dpi (that would
+        // imply an upscale, which getWorkerImageURL doesn't do).
+        const effectiveDpi =
+          imageDPI != null && imageDPI < cardDocument.dpi
+            ? imageDPI
+            : cardDocument.dpi;
+        const prior = bleedPriors?.[cardDocument.identifier] ?? "unresolved";
+        const manualOverride =
+          bleedOverrides?.[cardDocument.identifier] ?? "auto";
+        const normalized = await normalizeCardBleed(
+          blob,
+          effectiveDpi,
+          bleedEdgeMM,
+          prior,
+          manualOverride
+        );
+        return URL.createObjectURL(normalized);
+      }
+      return await getPDFImageURL(
+        cardDocument,
+        imageQuality,
+        imageDPI,
+        jpgQuality,
+        fileHandles
+      );
+    } catch {
+      reportImageFailure?.(cardDocument.identifier, cardDocument.name);
+      return undefined;
+    } finally {
+      reportImageProgress?.();
+    }
+  };
+
+  if (bleedNormalized) {
+    // The visible box - exactly what this slot renders, corners rounded HERE (the inner Image
+    // is deliberately larger and offset, so rounding it directly would clip the wrong rect).
+    return (
+      <View
+        style={{
+          width: width + "mm",
+          minWidth: width + "mm",
+          height: height + "mm",
+          minHeight: height + "mm",
+          position: "relative" as const,
+          overflow: "hidden",
+          borderTopLeftRadius: radius + "mm",
+          borderTopRightRadius: radius + "mm",
+          borderBottomRightRadius: radius + "mm",
+          borderBottomLeftRadius: radius + "mm",
+        }}
+      >
+        <Image
+          src={imageSrc}
+          style={
+            {
+              position: "absolute" as const,
+              width: fullCarriedWidthMM + "mm",
+              minWidth: fullCarriedWidthMM + "mm",
+              height: fullCarriedHeightMM + "mm",
+              minHeight: fullCarriedHeightMM + "mm",
+              left: -cropMM.left + "mm",
+              top: -cropMM.top + "mm",
+            } as const
+          }
+        />
+      </View>
+    );
+  }
 
   return (
     <View
@@ -491,52 +651,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
       }}
     >
       <Image
-        src={async () => {
-          try {
-            if (bleedNormalized) {
-              const blob = await getPDFImageBlob(
-                cardDocument,
-                imageDPI,
-                jpgQuality,
-                fileHandles
-              );
-              // cardDocument.dpi is the source's own recorded resolution, but a lower imageDPI
-              // setting can make the Worker serve a downscaled image below that - if so, the
-              // BYTES actually fetched are at imageDPI, not cardDocument.dpi, and px->mm
-              // conversion needs to match what was really decoded, not the source's original
-              // resolution. Never assumed higher than the source's own recorded dpi (that would
-              // imply an upscale, which getWorkerImageURL doesn't do).
-              const effectiveDpi =
-                imageDPI != null && imageDPI < cardDocument.dpi
-                  ? imageDPI
-                  : cardDocument.dpi;
-              const prior =
-                bleedPriors?.[cardDocument.identifier] ?? "unresolved";
-              const manualOverride =
-                bleedOverrides?.[cardDocument.identifier] ?? "auto";
-              const normalized = await normalizeCardBleed(
-                blob,
-                effectiveDpi,
-                bleedEdgeMM,
-                prior,
-                manualOverride
-              );
-              return URL.createObjectURL(normalized);
-            }
-            return await getPDFImageURL(
-              cardDocument,
-              imageQuality,
-              imageDPI,
-              jpgQuality,
-              fileHandles
-            );
-          } catch {
-            reportImageFailure?.(cardDocument.identifier, cardDocument.name);
-            return undefined;
-          } finally {
-            reportImageProgress?.();
-          }
-        }}
+        src={imageSrc}
         style={
           {
             width: width + "mm",
@@ -565,16 +680,20 @@ const PDFCardCutLines = ({
   colIndex: number;
   rowIndex: number;
 }) => {
+  const ctx = usePDFContext();
   const {
-    bleedEdgeMM,
     cardSpacingRowMM,
     cardSpacingColMM,
     cutLineLengthMM,
     cutLinePlacement,
     cutLineShape,
-  } = usePDFContext();
-  const cardSlotWidth = CardWidthMM + 2 * bleedEdgeMM;
-  const cardSlotHeight = CardHeightMM + 2 * bleedEdgeMM;
+  } = ctx;
+  // #301 - this slot's actual rendered size (may be less than CardSize + 2*bleedEdgeMM on a
+  // crowded axis - see layout.ts's fitAxisWithBleed), not the flat target-bleed box the pre-
+  // #301 version assumed every slot always got.
+  const bleedMM = contextAvailableBleedMM(ctx);
+  const cardSlotWidth = CardWidthMM + bleedMM.left + bleedMM.right;
+  const cardSlotHeight = CardHeightMM + bleedMM.top + bleedMM.bottom;
 
   const left = colIndex * (cardSlotWidth + cardSpacingColMM);
   const top = rowIndex * (cardSlotHeight + cardSpacingRowMM);
@@ -637,16 +756,11 @@ const PageCutLines = ({
     pageMarginBottomMM,
     cutLineLengthMM,
   } = usePDFContext();
-  const cardSlotWidth = CardWidthMM + 2 * bleedEdgeMM;
-  const cardSlotHeight = CardHeightMM + 2 * bleedEdgeMM;
-
-  const left = colIndex * (cardSlotWidth + cardSpacingColMM);
-  const top = rowIndex * (cardSlotHeight + cardSpacingRowMM);
 
   const size = getPageSizeMM(pageSize, pageWidth, pageHeight);
   const lengthMM = Math.max(size.width, size.height);
 
-  const { cardsPerRow, cardsPerCol } = layoutForPage(
+  const { cardsPerRow, cardsPerCol, slots } = layoutForPage(
     size.width,
     size.height,
     bleedEdgeMM,
@@ -657,6 +771,13 @@ const PageCutLines = ({
     pageMarginLeftMM,
     pageMarginRightMM
   );
+  // #301 - this slot's actual rendered size (see PDFCardCutLines' own comment - same rationale).
+  const bleedMM = slots[0]?.bleedMM ?? ZERO_BLEED;
+  const cardSlotWidth = CardWidthMM + bleedMM.left + bleedMM.right;
+  const cardSlotHeight = CardHeightMM + bleedMM.top + bleedMM.bottom;
+
+  const left = colIndex * (cardSlotWidth + cardSpacingColMM);
+  const top = rowIndex * (cardSlotHeight + cardSpacingRowMM);
 
   return (
     <View
@@ -738,6 +859,7 @@ const CardGrid = ({
     containerHeightMM: containerHeight,
     cardsPerRow,
     cardsPerCol,
+    slots,
   } = layoutForPage(
     pageWidthMM,
     pageHeightMM,
@@ -749,6 +871,15 @@ const CardGrid = ({
     pageMarginLeftMM,
     pageMarginRightMM
   );
+  // #301 - an empty slot's placeholder must match what a real card in this same row/column
+  // actually renders at (the layout-granted bleed, `slots[0].bleedMM`), not the flat
+  // `bleedEdgeMM` cap - otherwise a placeholder would be OVERSIZED on a crowded axis and throw
+  // off the flex-wrap row alongside real (correctly cropped) card images.
+  const placeholderBleedMM = slots[0]?.bleedMM ?? ZERO_BLEED;
+  const placeholderWidthMM =
+    CardWidthMM + placeholderBleedMM.left + placeholderBleedMM.right;
+  const placeholderHeightMM =
+    CardHeightMM + placeholderBleedMM.top + placeholderBleedMM.bottom;
 
   return (
     <View
@@ -806,10 +937,10 @@ const CardGrid = ({
             <View
               key={`placeholder-${i}`}
               style={{
-                width: CardWidthMM + 2 * bleedEdgeMM + "mm",
-                minWidth: CardWidthMM + 2 * bleedEdgeMM + "mm",
-                height: CardHeightMM + 2 * bleedEdgeMM + "mm",
-                minHeight: CardHeightMM + 2 * bleedEdgeMM + "mm",
+                width: placeholderWidthMM + "mm",
+                minWidth: placeholderWidthMM + "mm",
+                height: placeholderHeightMM + "mm",
+                minHeight: placeholderHeightMM + "mm",
               }}
             />
           )

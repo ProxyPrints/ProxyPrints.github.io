@@ -1,8 +1,12 @@
 import { getBucketImageURL, getWorkerImageURL } from "@/common/image";
 import { SourceType } from "@/common/schema_types";
 import { CardDocument } from "@/common/types";
+import { LayoutEdgeBleed } from "@/features/pdf/layout";
 
 import {
+  computeBleedCropMM,
+  computeBleedCropWindowPx,
+  computeRenderedBleedMM,
   fetchFullResolutionImageAsBlob,
   FULL_RESOLUTION_FETCH_CONCURRENCY,
   FULL_RESOLUTION_FETCH_MAX_RETRIES,
@@ -314,5 +318,121 @@ describe("fetchFullResolutionImageAsBlob - shared pacing and retry (export-image
 
     expect(maxActive).toBeLessThanOrEqual(FULL_RESOLUTION_FETCH_CONCURRENCY);
     expect(maxActive).toBeGreaterThan(1); // confirms it's genuinely concurrent, not serialized
+  });
+});
+
+const uniformBleed = (mm: number): LayoutEdgeBleed => ({
+  top: mm,
+  bottom: mm,
+  left: mm,
+  right: mm,
+});
+
+describe("computeBleedCropMM (#301)", () => {
+  it("crops the deficit when a card carries more bleed than the layout can afford", () => {
+    const carried = uniformBleed(3.175);
+    const available: LayoutEdgeBleed = {
+      top: 3.175,
+      bottom: 3.175,
+      left: 1.5,
+      right: 1.5,
+    };
+    const crop = computeBleedCropMM(carried, available);
+    expect(crop.top).toBe(0);
+    expect(crop.bottom).toBe(0);
+    expect(crop.left).toBeCloseTo(1.675, 9);
+    expect(crop.right).toBeCloseTo(1.675, 9);
+  });
+
+  it("a card whose plan carries no bleed at all (a trimmed source) never computes a negative crop", () => {
+    const carried = uniformBleed(0);
+    const available = uniformBleed(3.175);
+    expect(computeBleedCropMM(carried, available)).toEqual(uniformBleed(0));
+  });
+
+  it("a source carrying LESS than what's available crops nothing (never pads via a negative crop)", () => {
+    const carried = uniformBleed(1);
+    const available = uniformBleed(3.175);
+    expect(computeBleedCropMM(carried, available)).toEqual(uniformBleed(0));
+  });
+
+  it("is genuinely per-edge: one side crops while the opposite side doesn't", () => {
+    const carried = uniformBleed(3.175);
+    const available: LayoutEdgeBleed = {
+      top: 3.175,
+      bottom: 0.5,
+      left: 3.175,
+      right: 3.175,
+    };
+    const crop = computeBleedCropMM(carried, available);
+    expect(crop.top).toBe(0);
+    expect(crop.bottom).toBeCloseTo(2.675, 9);
+    expect(crop.left).toBe(0);
+    expect(crop.right).toBe(0);
+  });
+});
+
+describe("computeRenderedBleedMM (#301)", () => {
+  it("is min(carried, available) per edge", () => {
+    const carried: LayoutEdgeBleed = {
+      top: 3.175,
+      bottom: 0,
+      left: 3.175,
+      right: 1,
+    };
+    const available = uniformBleed(1.5);
+    expect(computeRenderedBleedMM(carried, available)).toEqual({
+      top: 1.5,
+      bottom: 0,
+      left: 1.5,
+      right: 1,
+    });
+  });
+});
+
+describe("computeBleedCropWindowPx (#301)", () => {
+  it("converts the mm crop to a pixel window at the source's own dpi, never non-positive", () => {
+    const dpi = 300;
+    const targetBleedMM = 3.175;
+    const cardWidthPx = Math.round((63 / 25.4) * dpi);
+    const cardHeightPx = Math.round((88 / 25.4) * dpi);
+    const bleedPx = Math.round((targetBleedMM / 25.4) * dpi);
+    const sourceWidthPx = cardWidthPx + 2 * bleedPx;
+    const sourceHeightPx = cardHeightPx + 2 * bleedPx;
+
+    const carried = uniformBleed(targetBleedMM);
+    const available = uniformBleed(1.5); // less than carried - forces a real crop
+
+    const window = computeBleedCropWindowPx(
+      sourceWidthPx,
+      sourceHeightPx,
+      carried,
+      available,
+      dpi
+    );
+
+    expect(window.croppedWidthPx).toBeGreaterThanOrEqual(cardWidthPx);
+    expect(window.croppedHeightPx).toBeGreaterThanOrEqual(cardHeightPx);
+    expect(window.croppedWidthPx).toBeLessThan(sourceWidthPx);
+    expect(window.croppedHeightPx).toBeLessThan(sourceHeightPx);
+    expect(window.cropLeftPx).toBeGreaterThan(0);
+    expect(window.cropTopPx).toBeGreaterThan(0);
+  });
+
+  it("a fully-available (uncropped) card yields the untouched source window", () => {
+    const dpi = 300;
+    const carried = uniformBleed(3.175);
+    const available = uniformBleed(3.175);
+    const window = computeBleedCropWindowPx(
+      1000,
+      1400,
+      carried,
+      available,
+      dpi
+    );
+    expect(window.cropLeftPx).toBe(0);
+    expect(window.cropTopPx).toBe(0);
+    expect(window.croppedWidthPx).toBe(1000);
+    expect(window.croppedHeightPx).toBe(1400);
   });
 });

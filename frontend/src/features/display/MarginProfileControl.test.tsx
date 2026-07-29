@@ -66,6 +66,14 @@ describe("MarginProfileControl", () => {
     );
   });
 
+  it("#301: the warning states the trim disclaimer (cropped bleed + reduced cutting tolerance), not a dropped-column claim", () => {
+    renderControl("bordered", 3.175);
+    const note = screen.getByTestId("display-margin-profile-note");
+    expect(note).toHaveTextContent("cropped to");
+    expect(note).toHaveTextContent("reduced cutting tolerance");
+    expect(note).not.toHaveTextContent("fewer cards per row");
+  });
+
   it("shows no warning under Borderless even at a bleed below its own (higher) cap", () => {
     renderControl("borderless", 1);
     expect(

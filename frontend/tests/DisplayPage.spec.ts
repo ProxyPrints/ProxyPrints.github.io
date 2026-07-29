@@ -358,7 +358,16 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   // defaults to Borderless with no cap warning at the D6 default bleed, and switching profiles
   // actually re-flows the live sheet (real computeLayout() inputs, not a cosmetic-only control),
   // surfacing the D6 trade-off as a warning rather than silently clamping the bleed input.
-  test("the margin-profile control defaults to Borderless (no warning) and switching to Bordered shrinks the sheet from 4x2 to 3x2, with a cap warning shown", async ({
+  //
+  // #301 (croppable bleed, merged bleed boxes, split-the-difference gutters) changed what
+  // exceeding the cap actually DOES: the pre-#301 rigid layout dropped the sheet from 4x2 to
+  // 3x2 the moment full bleed didn't fit at 4 columns - this test used to assert exactly that
+  // (title/body updated below; the old title is ack'd in .github/coverage-acks.txt since it
+  // asserted behavior #301 deliberately removed, not a coverage regression). layout.ts's fit
+  // math is now bare-card-count-first (see layout.ts's own module comment / fitAxisWithBleed) -
+  // the 4th column no longer disappears; bleed on the affected edge crops down to the cap
+  // instead, all 8 slots intact.
+  test("the margin-profile control defaults to Borderless (no warning) and switching to Bordered crops bleed rather than dropping to 3x2, with a cap warning shown (#301)", async ({
     page,
     network,
   }) => {
@@ -374,15 +383,14 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       page.getByTestId("display-margin-profile-note")
     ).not.toContainText("⚠");
 
-    // Bordered (3mm all sides) caps 4-column bleed at ~2.6625mm (D6 table) - below the D6 default
-    // 3.175mm bleed this page ships with, so the width axis drops to 3 columns; the height axis
-    // (unaffected by the column change) still fits its usual 2 rows. See marginProfiles.test.ts
-    // for the cap arithmetic itself.
+    // Bordered (3mm all sides) caps 4-column bleed at ~2.6625mm (D6 table) - below the D6
+    // default 3.175mm bleed this page ships with. #301: the sheet stays a full 4x2 (all 8
+    // slots) - bleed on the cropped edge is what gives, not a card.
     await profileSelect.selectOption("bordered");
-    await expect(page.getByTestId("display-margin-profile-note")).toContainText(
-      "⚠"
-    );
-    await expect(page.getByTestId("page-preview-slot")).toHaveCount(6);
+    const note = page.getByTestId("display-margin-profile-note");
+    await expect(note).toContainText("⚠");
+    await expect(note).toContainText("cropped to");
+    await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
   });
 
   // Issue #239 (design doc §5's SearchSettings row) - the toolbar previously had no way to reach

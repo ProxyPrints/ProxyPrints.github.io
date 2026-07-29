@@ -3,6 +3,8 @@ import { getOrphanFullResolutionImageURL } from "@/common/orphanCard";
 import { SourceType } from "@/common/schema_types";
 import { Semaphore } from "@/common/semaphore";
 import { CardDocument } from "@/common/types";
+import { mmToPx } from "@/features/pdf/bleedNormalize";
+import { LayoutEdgeBleed } from "@/features/pdf/layout";
 
 export type PDFImageQuality =
   | "small-thumbnail"
@@ -336,3 +338,92 @@ export const getPDFImageBlob = async (
       );
   }
 };
+
+/**
+ * #301 (croppable bleed) - per-edge crop geometry, in mm, for a #299-normalized card's source
+ * image against what layout.ts's `computeLayout` actually granted this slot. Pure geometry
+ * (mirrors bleedExtension.ts's own split between pure px-rect math and the imperative canvas
+ * pipeline around it - see that module's comment): `carriedBleedMM` is how much bleed the
+ * source ALREADY has per edge (normalizeCardBleed synthesizes this to exactly the configured
+ * target on every side, MINUS the rare `clampOpposingCrop` shortfall on a too-small source - see
+ * bleedExtension.ts; a card ineligible for normalization at all, e.g. a thumbnail-tier or SCM-
+ * mode source, carries 0 on every edge, since there's no synthesized resource to crop from at
+ * all); `availableBleedMM` is the per-edge ceiling `computeLayout` granted this slot
+ * (`LayoutSlot.bleedMM`). Only ever crops DOWN from what's carried toward what's available -
+ * never the reverse (a source carrying LESS than what's available renders exactly what it has;
+ * see `renderedBleedMM` below, not this crop amount, for that number) - so a card whose plan
+ * carries no bleed at all (a trimmed source, `carriedBleedMM` all zero) always computes a 0 crop
+ * on every edge, never a negative one.
+ */
+export function computeBleedCropMM(
+  carriedBleedMM: LayoutEdgeBleed,
+  availableBleedMM: LayoutEdgeBleed
+): LayoutEdgeBleed {
+  const cropSide = (carriedMM: number, availableMM: number): number =>
+    Math.max(0, carriedMM - availableMM);
+  return {
+    top: cropSide(carriedBleedMM.top, availableBleedMM.top),
+    bottom: cropSide(carriedBleedMM.bottom, availableBleedMM.bottom),
+    left: cropSide(carriedBleedMM.left, availableBleedMM.left),
+    right: cropSide(carriedBleedMM.right, availableBleedMM.right),
+  };
+}
+
+/** The bleed a card actually renders with, per edge, in mm - `min(carried, available)` on each
+ * side: never more than the layout granted (that's the crop `computeBleedCropMM` above
+ * expresses), and never more than the source genuinely carries (there's nothing to render
+ * beyond what a card's own plan produced - see `computeBleedCropMM`'s own comment on why a
+ * trimmed source's crop is always 0, not negative, in that case). Used both to size a card's
+ * destination box (PDF.tsx's `PDFCardImage`) and, identically, its WYSIWYG preview slot
+ * (`PagePreview.tsx`) - the one calculation both surfaces share, so they can't silently drift
+ * apart on what "the bleed this card actually gets" means. */
+export function computeRenderedBleedMM(
+  carriedBleedMM: LayoutEdgeBleed,
+  availableBleedMM: LayoutEdgeBleed
+): LayoutEdgeBleed {
+  const renderedSide = (carriedMM: number, availableMM: number): number =>
+    Math.min(carriedMM, availableMM);
+  return {
+    top: renderedSide(carriedBleedMM.top, availableBleedMM.top),
+    bottom: renderedSide(carriedBleedMM.bottom, availableBleedMM.bottom),
+    left: renderedSide(carriedBleedMM.left, availableBleedMM.left),
+    right: renderedSide(carriedBleedMM.right, availableBleedMM.right),
+  };
+}
+
+/** A per-edge crop window in source-image PIXELS, ready for the canvas/CSS crop step - converts
+ * `computeBleedCropMM`'s mm amounts using the SOURCE image's own dpi (the normalized image is
+ * drawn 1:1 from its source pixels - see bleedExtension.ts's `drawNormalized` - so px/mm never
+ * resamples through a scale factor here, unlike the non-normalized proportional-rescale path
+ * PDF.tsx's `PDFCardImage` still uses for thumbnail-tier/SCM sources). `sourceWidthPx`/
+ * `sourceHeightPx` are the normalized image's own pixel dimensions (post-#299 synthesis, before
+ * this crop). Never produces a non-positive `croppedWidthPx`/`croppedHeightPx` - the crop
+ * amounts are already bounded to `carriedBleedMM` by `computeBleedCropMM`, and a carried bleed
+ * can never (by construction of #299's `normalizeCardBleed`) exceed the source's own dimensions,
+ * so the card's own content is never cropped into. */
+export interface BleedCropWindowPx {
+  cropLeftPx: number;
+  cropTopPx: number;
+  croppedWidthPx: number;
+  croppedHeightPx: number;
+}
+
+export function computeBleedCropWindowPx(
+  sourceWidthPx: number,
+  sourceHeightPx: number,
+  carriedBleedMM: LayoutEdgeBleed,
+  availableBleedMM: LayoutEdgeBleed,
+  dpi: number
+): BleedCropWindowPx {
+  const cropMM = computeBleedCropMM(carriedBleedMM, availableBleedMM);
+  const cropLeftPx = mmToPx(cropMM.left, dpi);
+  const cropTopPx = mmToPx(cropMM.top, dpi);
+  const cropRightPx = mmToPx(cropMM.right, dpi);
+  const cropBottomPx = mmToPx(cropMM.bottom, dpi);
+  return {
+    cropLeftPx,
+    cropTopPx,
+    croppedWidthPx: sourceWidthPx - cropLeftPx - cropRightPx,
+    croppedHeightPx: sourceHeightPx - cropTopPx - cropBottomPx,
+  };
+}

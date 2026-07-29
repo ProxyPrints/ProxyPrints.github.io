@@ -6,6 +6,16 @@
  * Extracted as its own component (mirrors `CardSpacingControl.tsx`'s own precedent) so the
  * cap-math/warning behaviour has a plain unit-test target without needing a full DisplayPage
  * render.
+ *
+ * #301 decision 3 (owner verbatim: "i want the bleed edge warning on the trailing edge rule to
+ * allow trimming calculated bleed. include the disclaimer in the warning"): this warning used to
+ * describe the pre-#301 rigid layout's actual behavior when the cap was exceeded - dropping the
+ * sheet from 4 columns to 3. `layout.ts`'s fit math no longer does that (see `fitAxisWithBleed`'s
+ * own comment) - it crops the bleed on the affected edge down to exactly `maxBleedMM` instead,
+ * all 4 columns intact. The warning copy below reflects that: it now STATES the actual
+ * consequence (bleed cropped to N mm, reduced cutting tolerance on that edge) as a disclaimer,
+ * not a vague pointer to "see the warning above" - still never a hard clamp on the bleed input
+ * itself (unchanged from before this round).
  */
 import React from "react";
 import Form from "react-bootstrap/Form";
@@ -68,8 +78,9 @@ export function MarginProfileControl({
           <>
             ⚠ Bleed edge ({bleedEdgeMM.toFixed(3)}mm) exceeds this
             profile&apos;s {maxBleedMM.toFixed(3)}mm cap for a 4-across sheet -
-            the sheet will still render, just with fewer cards per row.{" "}
-            {definition.description}
+            all cards still render at full size; bleed on the affected edge will
+            be cropped to {maxBleedMM.toFixed(3)}mm, with reduced cutting
+            tolerance on that edge. {definition.description}
           </>
         ) : (
           <>
