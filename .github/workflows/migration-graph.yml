@@ -1,0 +1,101 @@
+name: Migration graph
+
+# ONE LEAF PER DJANGO APP, checked against the MERGE RESULT.
+#
+# Two branches can each add `0098_<something>.py` depending on `0097`. The
+# filenames differ, so there is no textual conflict, GitHub reports the second
+# PR MERGEABLE/CLEAN, and both branches are individually valid. The moment the
+# second merges, `cardpicker` has two leaf nodes - and pytest-django builds its
+# test database by running `migrate`, so the fork fails at test-database SETUP
+# on EVERY branch in the repo, not just the one that introduced it.
+#
+# This has happened twice: at 0096 (#568 vs #570, repaired by #576) and at 0098
+# (#573 vs #601, caught pre-merge and renumbered to 0099 alongside this
+# workflow). #576 repaired the first fork but prevented nothing, which is why
+# the second arrived within days. This is the prevention.
+#
+# WHY --base IS THE WHOLE POINT: #601's own checks were 10/10 green with the
+# collision already live on master, because they had run against master BEFORE
+# #573 merged and GitHub does not re-run a PR's checks when its base moves. A
+# check that reads only the PR branch's files sees one leaf and passes - the
+# fork exists only in the merge. So the job resolves the base branch's CURRENT
+# tip at run time and checks the union.
+#
+# STALENESS, STATED PLAINLY: a check run that PASSED before the base moved
+# stays green in GitHub's UI. No CI job can fix that from the inside. The
+# setting that closes it is branch protection's "Require branches to be up to
+# date before merging", which forces a re-run against the new base; this
+# workflow makes that re-run meaningful. `merge_group` below does the same job
+# if a merge queue is ever turned on.
+#
+# PATH FILTER TRAP: a single `*` in a GitHub path filter does NOT match a
+# slash, so `MPCAutofill/cardpicker/*.py` would NOT match
+# `MPCAutofill/cardpicker/migrations/0099_x.py` (another agent hit exactly this
+# on #588). Every glob below uses `**`.
+#
+# BRANCH-PROTECTION NOTE: because `migration-graph` is path-filtered it does
+# not run at all on a PR that touches no migration - correct, since such a PR
+# cannot fork the graph, but it means marking it "required" would leave those
+# PRs waiting on a check that never reports. Either leave it unrequired, or
+# require it and drop the paths filter (the script is stdlib-only and finishes
+# in about a second, so always-running is cheap - coverage-delta.yml already
+# takes that route for the same reason).
+
+on:
+  pull_request:
+    paths:
+      - "**/migrations/**"
+      - ".github/scripts/check_migration_leaves.py"
+      - ".github/scripts/tests/test_check_migration_leaves.py"
+      - ".github/workflows/migration-graph.yml"
+  push:
+    branches: ["master"]
+    paths:
+      - "**/migrations/**"
+      - ".github/scripts/check_migration_leaves.py"
+      - ".github/workflows/migration-graph.yml"
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migration-graph-rules:
+    name: check_migration_leaves.py unit tests
+    # Fixture tests for the rule itself - that it goes RED on a reconstructed
+    # two-0098 fork and GREEN once renumbered, and that it stays green on a
+    # normal single-migration tree. Mirrors docs-lint.yml's and
+    # coverage-delta.yml's lint-job / rules-job split: this proves the rule
+    # behaves, independent of any particular PR's diff. Stdlib only.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run check_migration_leaves.py unit tests
+        run: python3 .github/scripts/tests/test_check_migration_leaves.py
+
+  migration-graph:
+    name: One leaf per app (merged with the base branch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history: the script asks git for the merge base with the
+          # target branch so it can tell "the PR deleted this migration" from
+          # "the base never had it". A shallow clone has no common ancestor.
+          fetch-depth: 0
+      - name: Check the migration graph against the merge target
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            # Resolve the base branch's tip NOW, not whatever the checkout
+            # happened to bake in - that difference is the entire failure mode
+            # this guard exists for.
+            git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            python3 .github/scripts/check_migration_leaves.py --base "origin/${BASE_REF}" --annotate
+          else
+            # push to master / merge_group / workflow_dispatch: the tree in
+            # hand already IS the merge result, so there is nothing to union.
+            python3 .github/scripts/check_migration_leaves.py --annotate
+          fi
