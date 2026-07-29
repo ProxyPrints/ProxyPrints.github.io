@@ -147,4 +147,46 @@ catalog-completion-plan.md will fire docs-wiki-publish.yml automatically
 (per the standing pipeline) — the Theory wiki page should show SS4's
 correction post-publish; verification of that is the next step once this
 merges.
+
+--- ADDENDUM 2026-07-29: SCOPE GAP CLOSED (branch
+claude/machine-terminology-cardpicker-prose) ---
+
+The sweep above covered docs/, the frontend user-facing strings, and the
+settings rename (PRINTING_TAG_AI_WEIGHT -> PRINTING_TAG_MACHINE_WEIGHT,
+old env var kept as a fallback). It did NOT sweep prose inside
+MPCAutofill/cardpicker/*.py. That gap is exactly the "FLAGGED, NOT ACTED
+ON" item above; it was never separately scheduled, so "AI" survived as a
+synonym for "machine" in comments, docstrings, and one user-visible
+CommandError string. A follow-up PR closes it, and this addendum exists
+so nobody re-derives the gap a third time.
+
+Swept in that follow-up: vote_consensus.py, printing_consensus.py,
+question_feed.py, deductive_backfill.py, local_residual_classify.py,
+management/commands/deductive_backfill_printing_tags.py, plus inline
+comments in tests/test_deductive_backfill.py, tests/test_question_feed.py
+and tests/test_vote_consensus.py. Highest-value item was the CommandError
+in management/commands/deductive_backfill_printing_tags.py ("resolved
+after an AI-only vote" -> "resolved after a machine-only vote"), which
+now matches the wording local_identify_printing_tags.py already used.
+
+DELIBERATELY LEFT AS-IS - these are correct, not misses. Do not "fix"
+them on a third pass:
+  - MPCAutofill/MPCAutofill/settings.py's PRINTING_TAG_AI_WEIGHT: the
+    live backward-compatible env-var fallback name. Renaming it breaks
+    existing deployments' env.
+  - Every VoteSource.AI / "the old single AI value" reference
+    (vote_consensus.py, models.py, tests/test_vote_consensus.py,
+    docs/federation-v1.md, docs/features/printing-tags.md): accurate
+    citations of the pre-2026-07-15 single-enum era.
+  - Migrations 0050/0053/0054/0060's literal ("ai", "AI") choices and
+    _AI_SOURCE: frozen historical schema, must never be edited.
+  - Everything about the "AI-Generated" tag and AI-art detection
+    (local_detect_ai_art.py, sensitive_tags.py, reason_tags.py,
+    default_tags.py, and their tests): genuinely about AI-generated
+    artwork, a different meaning entirely.
+  - docs/upstreaming/conventions.md's AI-disclosure norms: about
+    generative-AI PR authorship, unrelated.
+
+A whole-repo re-grep after the follow-up PR returns only the
+deliberately-preserved categories listed above. No third pass is needed.
 ```

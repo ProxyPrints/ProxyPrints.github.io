@@ -9,7 +9,7 @@ which is a served-question SELECTION change only, never a change to how any of t
 individually rank their own candidates.
 
 Tier 1 (confirm_suggestion) is large relative to the others at current volume (28,112 cards
-- the full AI deductive-vote backfill, confirmed via a live query during design) - a voter
+- the full machine deductive-vote backfill, confirmed via a live query during design) - a voter
 working only this feed will not reach tiers 2-3 until tier 1 is exhausted. Flagged as a known
 v1 property, not silently accepted - see the design doc's "Starvation risk" section for the
 concrete consequence and the planned v2 fix (interleaved/weighted union, out of scope here).
@@ -347,7 +347,7 @@ def _likely_resolve_printing_card(anonymous_id: str, answered_card_ids: Optional
 
 
 def _likely_resolve_item(card: Card) -> QuestionFeedItem:
-    """Serves `card` as a `confirm_suggestion` (it has a live AI-sourced suggestion to confirm -
+    """Serves `card` as a `confirm_suggestion` (it has a live machine-sourced suggestion to confirm -
     the common shape within this pool, the data brief's 45,154-of-46,310 single-candidate split)
     or a bare `identify_printing` question (the multi-candidate remainder) - the same two item
     shapes tiers 1/2 already produce; the likely-resolve pool changes WHICH card gets served
@@ -438,10 +438,10 @@ def _tier_4_fresh(
     # named "tier 4" (not renumbered to 3) even though moderation's former tier 3 was removed
     # (see module docstring) - keeps this name stable against every docstring/test/comment
     # that already refers to "tier 4" rather than triggering a pure-renumbering diff.
-    # A card with one AI-sourced vote plus one *agreeing* human vote (weight 1.5 at default
+    # A card with one machine-sourced vote plus one *agreeing* human vote (weight 1.5 at default
     # settings - still short of PRINTING_TAG_MIN_VOTES=2) is exactly as close to resolving as
     # a card can get without being resolved outright, yet it's excluded from tier 1 (any human
-    # vote moves a card out of tier 1's "AI-only" pool) and isn't contested (agreeing votes,
+    # vote moves a card out of tier 1's "machine-only" pool) and isn't contested (agreeing votes,
     # not conflicting, so tier 2's contested check doesn't catch it either) - it lands here,
     # in tier 4, with zero votes and 28,112 genuinely-untouched cards. `-vote_count` surfaces
     # these "one vote from resolving" cards first within this tier, a small, concrete answer
@@ -616,7 +616,7 @@ def get_remaining_estimate() -> QuestionFeedCounts:
       (`_tier_1_confirm_suggestion`/`_tier_2_contested`/`_tier_4_fresh`), for a more informative
       header than one opaque number - e.g. "N quick confirmations" up front. These are
       independent per-tier metrics, not a partition of `total`: a single card can count toward
-      more than one bucket (e.g. an AI-suggested-but-unconfirmed printing plus a still-fresh
+      more than one bucket (e.g. a machine-suggested-but-unconfirmed printing plus a still-fresh
       artist question), same as it can appear in more than one tier across separate voter
       sessions in the real feed.
 

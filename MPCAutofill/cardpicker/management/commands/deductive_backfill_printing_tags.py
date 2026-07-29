@@ -7,11 +7,11 @@ from cardpicker.deductive_backfill import run_backfill
 
 class Command(BaseCommand):
     help = (
-        "Casts AI-weight (source=ai) CardPrintingTag votes for cards whose printing is "
-        "logically entailed by existing catalog data (see cardpicker/deductive_backfill.py "
+        "Casts machine-weight (source=deduction) CardPrintingTag votes for cards whose printing "
+        "is logically entailed by existing catalog data (see cardpicker/deductive_backfill.py "
         "and docs/features/printing-tags.md). These are suggestions, never resolutions - the "
-        "human-backed gate in vote_consensus.resolve_weighted_consensus means AI-only votes "
-        "can never resolve a card by themselves. Idempotent: a card that already has any "
+        "human-backed gate in vote_consensus.resolve_weighted_consensus means machine-only "
+        "votes can never resolve a card by themselves. Idempotent: a card that already has any "
         "printing_tags vote (from this command or otherwise) is never revisited, so an "
         "interrupted run can simply be re-invoked to resume."
     )
@@ -66,7 +66,7 @@ class Command(BaseCommand):
 
         if result.gate_violations:
             raise CommandError(
-                f"GATE VIOLATION: {len(result.gate_violations)} card(s) resolved after an AI-only "
+                f"GATE VIOLATION: {len(result.gate_violations)} card(s) resolved after a machine-only "
                 f"vote, which should be structurally impossible - STOP and investigate before "
                 f"continuing this backfill. Affected card pks: {result.gate_violations[:50]}"
                 + (" (truncated)" if len(result.gate_violations) > 50 else "")

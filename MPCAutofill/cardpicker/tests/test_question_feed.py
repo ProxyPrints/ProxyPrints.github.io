@@ -152,7 +152,7 @@ class TestGetNextQuestionFeedItem:
     def test_tier_4_prioritizes_a_card_one_vote_from_resolving_over_a_totally_fresh_one(self, db):
         # zero votes at all - the common case, 28k+ of these exist at once
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
-        # one AI vote + one *agreeing* human vote (weight 1.5 < PRINTING_TAG_MIN_VOTES=2, so
+        # one machine vote + one *agreeing* human vote (weight 1.5 < PRINTING_TAG_MIN_VOTES=2, so
         # not yet resolved) - excluded from tier 1 (has a human vote) and not contested
         # (agreeing, not conflicting), so it falls through to tier 4 same as a fresh card,
         # but is one vote closer to actually resolving than one with zero votes.
@@ -298,7 +298,7 @@ class TestGetRemainingEstimate:
     def test_total_counts_fresh_confirmable_and_contested_cards_but_not_resolved_ones(self, db):
         before = get_remaining_estimate().total
 
-        # confirmable: unresolved printing with an AI-sourced vote, no human vote yet
+        # confirmable: unresolved printing with a machine-sourced vote, no human vote yet
         confirmable_card, _ = make_ai_suggested_card(anonymous_id="ai-bot")
         # contested: conflicting human printing votes
         contested_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -321,8 +321,8 @@ class TestGetRemainingEstimate:
     def test_confirmable_excludes_cards_with_a_human_vote_already(self, db):
         card, printing = make_ai_suggested_card(anonymous_id="ai-bot")
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
-        # human vote moves it out of "confirmable" (no longer AI-only), and since it's not
-        # conflicting with the AI vote, it's not contested either - not asserted here, just
+        # human vote moves it out of "confirmable" (no longer machine-only), and since it's not
+        # conflicting with the machine vote, it's not contested either - not asserted here, just
         # confirming it leaves the confirmable bucket
         assert get_remaining_estimate().confirmable == 0
 

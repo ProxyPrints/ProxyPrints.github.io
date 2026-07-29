@@ -88,11 +88,12 @@ def _eligible_base_queryset() -> "QuerySet[Card]":
     Shared base pool for both tiers: unresolved, no confirmed indexing match, no vote of any
     kind yet (not just no *deductive* vote - see docs/features/printing-tags.md's Stage 4
     section for why the exclusion is "any existing vote", not merely this cohort's own
-    anonymous_id: a card with a pre-existing human vote is exactly the case where adding an
-    AI-weight vote for the same outcome could increase an already-human-backed group's weight
-    across the resolution threshold - the hard "AI-only can never resolve" gate protects
-    AI-only cards, not cards where AI top-tops an existing human vote. Excluding them outright
-    removes the scenario rather than relying on the live post-write check to catch it).
+    anonymous_id: a card with a pre-existing human vote is exactly the case where adding a
+    machine-weight vote for the same outcome could increase an already-human-backed group's
+    weight across the resolution threshold - the hard "machine-only can never resolve" gate
+    protects machine-only cards, not cards where a machine vote top-tops an existing human
+    vote. Excluding them outright removes the scenario rather than relying on the live
+    post-write check to catch it).
 
     Also excludes anything that already tells us the PRINCIPLE's precondition (an authentic
     depiction of the named card) doesn't hold: a card with the "Custom" tag already resolved
@@ -164,9 +165,9 @@ def verify_zero_resolutions(card_ids: list[int], batch_size: int = 5000) -> list
     The live gate check: re-fetches each just-voted card fresh from the DB (picking up the
     vote(s) just written) and runs the *pure* `resolve_printing` (never `resolve_and_persist_printing`
     - this must never itself cause a write, including under the failure case this exists to
-    catch) to confirm the new AI-only vote didn't tip any card into a resolved outcome. Returns
+    catch) to confirm the new machine-only vote didn't tip any card into a resolved outcome. Returns
     the card pks that violated the gate - empty on success. Structurally this should always be
-    empty (see module docstring: AI-only groups can never satisfy `resolve_weighted_consensus`'s
+    empty (see module docstring: machine-only groups can never satisfy `resolve_weighted_consensus`'s
     human-backed gate, and `_eligible_base_queryset` excludes every card with a pre-existing
     vote of any kind), but "should structurally never happen" is exactly what an operational
     gate exists to verify against the real data rather than trust.

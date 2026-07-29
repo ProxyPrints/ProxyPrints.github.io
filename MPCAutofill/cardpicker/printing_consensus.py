@@ -456,7 +456,7 @@ def resolve_printing(
     (consensus is that no printing matches), or `None` if there isn't yet enough signal to
     conclude anything. See `cardpicker.vote_consensus.resolve_weighted_consensus` for the shared
     weighting/threshold rules (votes weighted by `source`, `PRINTING_TAG_MIN_VOTES`/
-    `MIN_SHARE` gates, non-AI gate) - this is a thin wrapper translating `CardPrintingTag`
+    `MIN_SHARE` gates, non-machine gate) - this is a thin wrapper translating `CardPrintingTag`
     rows into `VoteTuple`s and the winning outcome key back into a `CanonicalCard`.
 
     The identity group (issue #473) is every card indexing a byte-identical image file: ONE

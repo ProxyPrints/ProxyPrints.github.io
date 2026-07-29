@@ -94,7 +94,7 @@ class TestD1Selection:
 
     def test_card_with_any_existing_vote_is_excluded(self, db):
         # not just an existing deductive-backfill vote - ANY existing vote, since that's
-        # exactly the scenario where an added AI vote could tip an already-human-backed
+        # exactly the scenario where an added machine vote could tip an already-human-backed
         # group over the resolution threshold (see deductive_backfill.py's docstring).
         _unique_printing("Has A Vote Already")
         card = CardFactory(name="Has A Vote Already")
@@ -230,14 +230,14 @@ class TestZeroResolutionsGate:
     def test_verify_zero_resolutions_detects_a_real_violation(self, db):
         # constructs the scenario _eligible_base_queryset is designed to prevent from ever
         # reaching run_backfill - a card with a pre-existing human vote, plus (bypassing
-        # selection entirely) a same-outcome AI vote added directly - to prove the detector
+        # selection entirely) a same-outcome machine vote added directly - to prove the detector
         # itself actually catches a resolved card rather than trivially always passing.
         printing = CanonicalCardFactory()
         card = CardFactory()
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
         # two USER votes alone already clear consensus here - assert the fixture itself
-        # actually resolves before layering the AI vote on top, so the test is meaningful.
+        # actually resolves before layering the machine vote on top, so the test is meaningful.
         assert resolve_printing(card) == printing
 
         violations = verify_zero_resolutions([card.pk])
