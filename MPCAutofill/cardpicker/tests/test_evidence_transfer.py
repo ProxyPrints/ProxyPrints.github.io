@@ -215,6 +215,55 @@ class TestFindTransferSourceContentHashAssertion:
         assert log.skip_reason == EVIDENCE_TRANSFER_CONTENT_HASH_MISMATCH_SKIP_REASON
 
 
+class TestAnomalyRowsCarryTheRunId:
+    """2026-07-29, from the run_id audit the run-scoped-eligibility work required.
+
+    `_record_transfer_anomaly` was the ONE machine writer of `CardScanLog`/`CardPrintingTag` in
+    the whole app that stamped no `run_id` at all - the same defect PR #570 fixed in
+    `deductive_backfill`. Both callers of `find_transfer_source` already had a run_id in hand and
+    the sibling `transfer_evidence` call two lines away already passed it, so this was a threading
+    gap, not a missing concept.
+
+    WHAT IT COST: `image_evidence.build_reconciliation_report` filters `CardScanLog` by `run_id`
+    when given one, so these rows were invisible to every run-scoped reconciliation report and any
+    per-run audit under-counted named skips. It never affected a Stage D calculator's eligibility -
+    `evidence-transfer-v1` is an identity none of their exclusions look at - which is exactly why
+    it could sit there unnoticed."""
+
+    def test_the_sha256_anomaly_row_carries_the_callers_run_id(self, db: Any) -> None:
+        sibling = CardFactory(md5_checksum="abc123", content_phash=111, sha256_checksum="deadbeef")
+        target = CardFactory(md5_checksum="abc123", content_phash=111, sha256_checksum="cafebabe")
+        ImageEvidenceFactory(card=sibling, content_hash=111, md5_checksum="abc123", extractor_versions=FULL_MANIFEST)
+
+        find_transfer_source(target, run_id="a-real-run")
+
+        log = CardScanLog.objects.get(card=target, anonymous_id=EVIDENCE_TRANSFER_ANONYMOUS_ID)
+        assert log.run_id == "a-real-run"
+
+    def test_the_content_hash_anomaly_row_carries_the_callers_run_id(self, db: Any) -> None:
+        sibling = CardFactory(md5_checksum="abc123", content_phash=111)
+        target = CardFactory(md5_checksum="abc123", content_phash=222)
+        ImageEvidenceFactory(card=sibling, content_hash=111, md5_checksum="abc123", extractor_versions=FULL_MANIFEST)
+
+        find_transfer_source(target, run_id="a-real-run")
+
+        log = CardScanLog.objects.get(card=target, anonymous_id=EVIDENCE_TRANSFER_ANONYMOUS_ID)
+        assert log.run_id == "a-real-run"
+
+    def test_a_caller_with_no_run_still_writes_the_row_with_a_null_run_id(self, db: Any) -> None:
+        """The parameter is optional, not required: the anomaly record is more important than the
+        provenance stamp, and a caller that genuinely has no run (a shell, a future one-off) must
+        still get the durable row rather than a TypeError."""
+        sibling = CardFactory(md5_checksum="abc123", content_phash=111)
+        target = CardFactory(md5_checksum="abc123", content_phash=222)
+        ImageEvidenceFactory(card=sibling, content_hash=111, md5_checksum="abc123", extractor_versions=FULL_MANIFEST)
+
+        find_transfer_source(target)
+
+        log = CardScanLog.objects.get(card=target, anonymous_id=EVIDENCE_TRANSFER_ANONYMOUS_ID)
+        assert log.run_id is None
+
+
 class TestFindTransferSourceKillSwitch:
     """Tron §8 gate condition 6 (2026-07-25): settings.STAGE_C_EVIDENCE_TRANSFER_ENABLED."""
 

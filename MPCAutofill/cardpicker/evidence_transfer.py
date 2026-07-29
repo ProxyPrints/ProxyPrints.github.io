@@ -168,15 +168,35 @@ def _current_sibling_evidence_queryset(card: Card) -> "QuerySet[ImageEvidence]":
     )
 
 
-def _record_transfer_anomaly(card: Card, skip_reason: str) -> None:
+def _record_transfer_anomaly(card: Card, skip_reason: str, run_id: Optional[str] = None) -> None:
     """Durable anomaly marker (Tron §8 gate condition, 2026-07-25 - see module docstring's
     "ANOMALY LOGGING" section) - a plain `.create()`, not batched, since `find_transfer_source` is
     called per-card, not per-batch, and an anomaly is rare (the whole point is that it's a real
-    data problem, not routine traffic)."""
-    CardScanLog.objects.create(card_id=card.pk, anonymous_id=EVIDENCE_TRANSFER_ANONYMOUS_ID, skip_reason=skip_reason)
+    data problem, not routine traffic).
+
+    `run_id` (2026-07-29): this was the ONE machine writer of either evidence table in the whole
+    app that stamped no `run_id` at all - the same defect PR #570 fixed in `deductive_backfill`,
+    found by the run_id audit the run-scoped-eligibility work required. Both of
+    `find_transfer_source`'s callers already had a run_id in hand (`stage_e_dispatch._run_stage_c`
+    and `run_image_evidence_cohort._fetch_one_card`) and the sibling `transfer_evidence` call two
+    lines away already passed it, so nothing had to be invented - only threaded.
+
+    WHAT THE GAP COST, CONCRETELY: `image_evidence.build_reconciliation_report` filters
+    `CardScanLog` by `run_id` when given one, so these anomaly rows were invisible to EVERY
+    run-scoped reconciliation report, and any per-run retraction or soak-gate pass silently
+    under-counted named skips. It never affected a Stage D calculator's eligibility - these rows
+    carry `evidence-transfer-v1`, an identity no Stage D calculator's exclusion looks at.
+
+    Historical rows keep `run_id = NULL` and are deliberately NOT backfilled: unlike the
+    deductive-backfill cohort (28,112 rows that migration 0097 had to stamp because a live
+    consensus rule keys on it) nothing keys on these, so a made-up retroactive run stamp would add
+    a fact nobody can verify in exchange for nothing."""
+    CardScanLog.objects.create(
+        card_id=card.pk, anonymous_id=EVIDENCE_TRANSFER_ANONYMOUS_ID, skip_reason=skip_reason, run_id=run_id
+    )
 
 
-def find_transfer_source(card: Card) -> Optional[ImageEvidence]:
+def find_transfer_source(card: Card, run_id: Optional[str] = None) -> Optional[ImageEvidence]:
     """
     Returns the md5-sibling `ImageEvidence` row eligible to be copied onto `card`, or `None`.
     Otherwise a pure lookup (the pairing/content-hash asserts, module docstring) - `transfer_
@@ -226,7 +246,7 @@ def find_transfer_source(card: Card) -> Optional[ImageEvidence]:
             card_sha256,
             sibling_sha256,
         )
-        _record_transfer_anomaly(card, EVIDENCE_TRANSFER_SHA256_MISMATCH_SKIP_REASON)
+        _record_transfer_anomaly(card, EVIDENCE_TRANSFER_SHA256_MISMATCH_SKIP_REASON, run_id=run_id)
         return None
 
     if sibling_evidence.content_hash != card.content_phash:
@@ -240,7 +260,7 @@ def find_transfer_source(card: Card) -> Optional[ImageEvidence]:
             card.content_phash,
             sibling_evidence.content_hash,
         )
-        _record_transfer_anomaly(card, EVIDENCE_TRANSFER_CONTENT_HASH_MISMATCH_SKIP_REASON)
+        _record_transfer_anomaly(card, EVIDENCE_TRANSFER_CONTENT_HASH_MISMATCH_SKIP_REASON, run_id=run_id)
         return None
 
     return sibling_evidence
