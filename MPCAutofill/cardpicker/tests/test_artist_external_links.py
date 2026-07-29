@@ -38,6 +38,7 @@ from cardpicker.tests.mtgac_synthetic_fixtures import (
     EMAIL_IN_TWITTER_RECORD,
     EMAIL_IN_WEBSITE_RECORD,
     FULL_ALLOWLIST_RECORD,
+    HANDLE_URL_RECORD,
     MISSING_NAME_RECORD,
     SCHEME_LESS_RECORD,
     WHITESPACE_RECORD,
@@ -123,6 +124,36 @@ class TestNormaliseArtistRecordEmailHazard:
     def test_record_with_email_in_twitter_still_surfaces_its_clean_website(self):
         result = normalise_artist_record(EMAIL_IN_TWITTER_RECORD)
         assert _link_url(result, "website") == EMAIL_IN_TWITTER_RECORD["website"]
+
+
+class TestNormaliseArtistRecordSchemeCheckedBeforeEmailHeuristic:
+    """
+    Regression coverage for a real bug: `_EMAIL_RE` (`^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$`) matches
+    any single-`@` string whose right-hand side contains a dot - not just emails. A scheme-ful
+    handle-style URL (YouTube/TikTok/Bluesky @handles, e.g.
+    `https://www.example.com/@some.handle` - a real value of exactly this shape was confirmed in
+    the export during this fix's own investigation, not reproduced here per this project's
+    synthetic-fixtures policy) satisfies that same shape and was silently dropped as if it were
+    an email when the email test ran before the scheme check. The fix reorders
+    `_clean_url_value` to check for a URL scheme FIRST - a scheme-ful value is a URL by
+    construction and is never email-tested - and applies the email heuristic ONLY to genuinely
+    scheme-less input, which is the actual failure mode it defends against.
+    """
+
+    def test_scheme_ful_handle_style_url_survives_normalisation(self):
+        from cardpicker.artist_external_links import _clean_url_value
+
+        assert _clean_url_value("https://www.example.com/@some.handle") == "https://www.example.com/@some.handle"
+
+    def test_record_with_a_handle_style_website_surfaces_it_as_a_link(self):
+        result = normalise_artist_record(HANDLE_URL_RECORD)
+        assert _link_url(result, "website") == HANDLE_URL_RECORD["website"]
+
+    def test_bare_scheme_less_email_is_still_dropped(self):
+        # The actual failure mode the email heuristic exists for must still be caught.
+        from cardpicker.artist_external_links import _clean_url_value
+
+        assert _clean_url_value("someone@example.invalid") is None
 
 
 class TestNormaliseArtistRecordSchemeLessUrls:
@@ -219,6 +250,13 @@ class TestGetCachedArtistExternalLinks:
 
 
 class TestFetchBulkExport:
+    """
+    MTGAC's own disclosed limit on this endpoint is 12 requests/hour (2026-07-29). The tests
+    below assert the no-retry guarantee directly at the `requests.get` boundary so a future
+    "helpful" retry loop added to this function would fail these tests immediately, not just
+    the docstring's own warning.
+    """
+
     def test_raises_on_non_list_json(self):
         with patch("cardpicker.artist_external_links.requests.get") as mock_get:
             mock_get.return_value.json.return_value = {"not": "a list"}
@@ -231,6 +269,20 @@ class TestFetchBulkExport:
             mock_get.return_value.raise_for_status.side_effect = OSError("boom")
             with pytest.raises(OSError):
                 fetch_bulk_export()
+
+    def test_successful_fetch_makes_exactly_one_outbound_call(self):
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            mock_get.return_value.json.return_value = [CLEAN_RECORD]
+            mock_get.return_value.raise_for_status.return_value = None
+            fetch_bulk_export()
+            mock_get.assert_called_once()
+
+    def test_failed_fetch_makes_exactly_one_outbound_call_and_does_not_retry(self):
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            mock_get.return_value.raise_for_status.side_effect = OSError("network down")
+            with pytest.raises(OSError):
+                fetch_bulk_export()
+            mock_get.assert_called_once()
 
 
 class TestWarmArtistExternalLinksCache:
@@ -270,6 +322,23 @@ class TestWarmArtistExternalLinksCache:
 
         assert cache.get(CACHE_KEY) == good_cache
 
+    def test_successful_run_makes_exactly_one_outbound_call(self):
+        # Patched at requests.get, not fetch_bulk_export, so this exercises the REAL
+        # fetch_bulk_export end-to-end - MTGAC's disclosed bulk-endpoint limit is 12/hour, and
+        # this is the guarantee that a single warm run never costs more than 1 against it.
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            mock_get.return_value.json.return_value = [CLEAN_RECORD]
+            mock_get.return_value.raise_for_status.return_value = None
+            warm_artist_external_links_cache()
+            mock_get.assert_called_once()
+
+    def test_failed_run_makes_exactly_one_outbound_call_and_does_not_retry(self):
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            mock_get.return_value.raise_for_status.side_effect = OSError("network down")
+            with pytest.raises(OSError):
+                warm_artist_external_links_cache()
+            mock_get.assert_called_once()
+
 
 class TestWarmArtistExternalLinksCommand:
     def test_success_prints_a_summary(self, capsys):
@@ -294,6 +363,20 @@ class TestWarmArtistExternalLinksCommand:
             call_command("warm_artist_external_links")
             call_command("warm_artist_external_links")
         assert CLEAN_RECORD["name"] in cache.get(CACHE_KEY)
+
+    def test_one_command_invocation_makes_exactly_one_outbound_call_on_success(self):
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            mock_get.return_value.json.return_value = [CLEAN_RECORD]
+            mock_get.return_value.raise_for_status.return_value = None
+            call_command("warm_artist_external_links")
+            mock_get.assert_called_once()
+
+    def test_one_command_invocation_makes_exactly_one_outbound_call_on_failure_no_retry(self):
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            mock_get.return_value.raise_for_status.side_effect = OSError("network down")
+            with pytest.raises(CommandError):
+                call_command("warm_artist_external_links")
+            mock_get.assert_called_once()
 
 
 class TestGetArtistExternalLinksView:

@@ -127,13 +127,15 @@ offered and this project already declined, and would turn this site into
 an enumerable mirror of their directory.
 
 **Storage: Django cache ONLY - no model, no migration.** Deliberate, not an
-oversight: this is third-party data whose licence terms are still an
-**open, unanswered question** (MTGAC's export states no data licence), so
-a refreshable cache is the right posture rather than a permanent copy in
-this project's own database. Follows the existing `funnel-counts-v1`
-pattern in `views.py`. The same open-licence question is why no fixture or
-test in this repo contains a real MTGAC record - see
-`cardpicker.tests.mtgac_synthetic_fixtures`'s own docstring.
+oversight. MTGAC has confirmed they're comfortable with this integration
+being open-source AND granted permission to distribute their data (see
+"Licence status" below) - there is no licensing barrier to a permanent
+copy. The cache-only design stands anyway: a daily refresh needs no
+schema/migration, and MTGAC remains the source of truth for this
+upstream-mastered data. Follows the existing `funnel-counts-v1` pattern in
+`views.py`. Test fixtures stay synthetic regardless of the licence
+question - see "Licence status" below for why (it isn't a licensing
+reason) and `cardpicker.tests.mtgac_synthetic_fixtures`'s own docstring.
 
 **The normaliser is the core of this addition**, because the upstream data
 is dirty in specific, measured ways (confirmed against a 2,389-record
@@ -201,6 +203,24 @@ rather than risk poisoning the cache with an empty or partial result -
 today's or yesterday's good data stays in place until a fetch actually
 succeeds.
 
+**MTGAC's disclosed rate limits (as of 2026-07-29, from their reply
+granting permission for this integration to be open-source - they offered
+to adjust these numbers if needed):**
+
+| Endpoint                                           | Limit             | Used by this integration?                                                             |
+| -------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------- |
+| Single-artist lookup (`/api/public/artist/<name>`) | 60 requests/15min | No - this is a bulk consumer, never a per-request proxy (see architecture note above) |
+| Bulk list (`/api/public/artists`)                  | 12 requests/hour  | Yes - the one call `fetch_bulk_export` makes                                          |
+
+A daily-or-weekly cron makes this a non-issue at steady state (1 call/day
+against 12/hour = 288/day is roughly 1/288th of the budget). **The real
+exposure is a failure loop, not steady state**: `fetch_bulk_export` and
+`warm_artist_external_links_cache` contain NO retry logic at all,
+deliberately - see `fetch_bulk_export`'s own docstring. A failed run
+costs exactly one request and is not retried until the next scheduled
+cron invocation; do not add retry/backoff without re-reading that
+docstring first.
+
 **OPEN ITEMS (owner decisions, neither resolved by this change):**
 
 1. **A daily cron must be scheduled** to run
@@ -230,10 +250,30 @@ succeeds.
 
 ### Licence status
 
-Open, unanswered as of this integration's build - tracked separately, not
-resolved here. This is the direct reason storage is cache-only (see
-above) rather than a permanent database copy, and why no fixture in this
-repo contains any value copied verbatim from a real MTGAC record.
+**Resolved, both halves.** MTGAC's operator confirmed by email (owner
+correspondence, 2026-07-29) that they're comfortable with this
+INTEGRATION - the code in this repo that fetches, normalises, and serves
+their data - being open-source, AND that they've granted permission to
+distribute their DATA (that's the entire reason they stood the bulk
+endpoint up for this project in the first place). There is no licensing
+barrier to this integration or to its data.
+
+What's still genuinely open with MTGAC, separately, and unrelated to
+licensing: name aliases/variants, and a per-record last-updated/export-
+version field.
+
+**Test fixtures stay synthetic anyway - not a licensing precaution, a
+personal-data one.** The real export contains personal email addresses
+belonging to real artists, mis-filed into `twitter`/`website` link fields
+(dropped at runtime by the normaliser - see the M1 section above). MTGAC
+can license their own compilation; they cannot consent, on an individual
+artist's behalf, to that artist's personal email address being
+republished, permanently and searchably, in a public repository - that's
+third-party personal data, outside anything MTGAC is in a position to
+license away. See `cardpicker.tests.mtgac_synthetic_fixtures`'s own
+docstring for the full reasoning (including the independent engineering
+case for synthetic fixtures - stable, minimal, each hazard exercised
+deliberately).
 
 ## Credits
 

@@ -7,12 +7,25 @@ and overwrites the cache with a freshly-normalised blob keyed by artist name, ne
 or diffs against the previous run - re-running twice in a row (or ten times) leaves the cache in
 exactly the same state a single run would.
 
+**Makes AT MOST ONE bulk request per invocation - no retry, deliberately.** MTGAC's own disclosed
+limit on the bulk endpoint this command calls is 12 requests/hour (as of 2026-07-29, from their
+reply granting permission for this integration to be open-source - they offered to adjust it if
+needed; see `cardpicker.artist_external_links`'s module docstring for the full numbers, including
+their separate single-artist-lookup limit this command never touches). One daily/weekly cron run
+is negligible against that budget; a RETRY LOOP is not - hammering a partner's infrastructure
+immediately after they granted access would be a genuinely bad outcome. `warm_artist_external_
+links_cache`/`fetch_bulk_export` contain no retry logic at all, and this command adds none of its
+own on top - a failed run is simply not retried until the next scheduled invocation. Do not
+"helpfully" add retry/backoff here without re-reading `fetch_bulk_export`'s own docstring first.
+
 **On fetch failure this command changes NOTHING and exits non-zero.** See
 `warm_artist_external_links_cache`'s own docstring: a refresh that can't complete cleanly - a
 network error, an unexpected response shape, an empty export - must leave whatever cache entry
 was already there (yesterday's good data, or nothing at all on a first run) untouched. Never
 poison the cache with a partial or empty result; a stale-but-correct cache degrading gracefully
 to "no data for this artist" beats a fresh-but-broken one that quietly drops every artist's links.
+A cron that fails today and isn't re-run until tomorrow's scheduled invocation is the desired
+behaviour, not a bug to paper over.
 
 **Shared cache-backend prerequisite (issue #538, not this command's to fix).** This project's
 `CACHES` setting has no override, so Django falls back to its default `LocMemCache` - a cache

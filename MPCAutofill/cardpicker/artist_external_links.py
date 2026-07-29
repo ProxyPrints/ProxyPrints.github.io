@@ -12,9 +12,20 @@ which wraps it) ever calls upstream - a per-request proxy would be functionally 
 embed MTGAC's operator already offered and this project already declined, and would turn this
 site into an enumerable mirror of their directory.
 
-**Storage: Django cache ONLY.** No model, no migration - deliberate, not an oversight. This is
-third-party data whose licence terms are still an open question (tracked separately), so a
-refreshable cache is the right posture rather than a permanent copy in our own database. Follows
+**MTGAC's own disclosed rate limits (as of 2026-07-29, from their reply granting permission for
+this integration to be open-source - they offered to adjust these if needed): 60 requests/15min
+for their single-artist lookup endpoint (`.../api/public/artist/<name>` - not called anywhere in
+this module, see the architecture note above for why), 12 requests/hour for the bulk list
+endpoint `fetch_bulk_export` below actually calls.** See that function's own docstring for the
+headroom math and the no-retry design that keeps a failure from ever threatening this ceiling.
+
+**Storage: Django cache ONLY.** No model, no migration - deliberate, not an oversight. This
+architecture decision predates MTGAC's 2026-07-29 confirmation that they're comfortable with
+this integration being open-source and that they've granted permission to distribute their data
+(owner email correspondence) - there is no outstanding licensing question blocking a permanent
+copy. The cache-only design stands anyway: a daily refresh needs no schema/migration, and MTGAC
+remains the source of truth for this upstream-mastered data (freshness, not licence status, is
+now the standing rationale). Follows
 the `funnel-counts-v1` pattern already established in `views.py` (`get_funnel_counts`), with one
 structural difference: funnel-counts computes AND caches inline, in the same request that serves
 it; this feature's cache is instead populated by a SEPARATE management-command invocation.
@@ -43,13 +54,14 @@ dirty in specific, measured ways (all confirmed against the real bulk export, 2,
   `"false"` on 2,387 of 2,389 records (a flag, not a link - only 2 are URL-shaped). `mountainmage`
   is a URL on 379 records and the literal string `"false"` on 307 (meaning "not offered").
   Rendering either as an href would produce `href="true"`/`href="false"`.
-- Email addresses filed in a link field - real personal addresses seen in both `twitter` and
-  `website` on multiple records (not reproduced here or in this project's committed test
-  fixtures - see `cardpicker.tests.mtgac_synthetic_fixtures`'s own docstring for why: MTGAC's
-  export carries no redistribution licence, so no value copied verbatim from it is ever
-  committed to this public repo, content values included). Dropped unconditionally: publishing
-  an artist's personal contact address on our site because it was filed in the wrong upstream
-  field is not acceptable, no exceptions.
+- Email addresses filed in a link field - real personal addresses belonging to real artists,
+  seen in both `twitter` and `website` on multiple records (not reproduced here or in this
+  project's committed test fixtures, regardless of MTGAC's own permission to distribute their
+  data more broadly - see `cardpicker.tests.mtgac_synthetic_fixtures`'s own docstring: MTGAC can
+  license their compilation, but cannot consent on an individual artist's behalf to that
+  artist's personal email being republished). Dropped unconditionally at runtime, here and
+  everywhere: publishing an artist's personal contact address on our site because it was filed
+  in the wrong upstream field is not acceptable, no exceptions.
 - Scheme-less URLs (a bare `example.com/someartist`-shaped value with no `https://` prefix,
   confirmed on multiple fields in the real export) - `https://` is prefixed.
 - Leading/trailing whitespace (including an embedded newline seen on one real `inprnt` value).
@@ -140,13 +152,26 @@ def _clean_url_value(raw: Any) -> Optional[str]:
     if value.lower() in ("true", "false"):
         return None
 
-    # Email addresses filed in a link field are dropped unconditionally, no exceptions - see
-    # module docstring. Checked before the scheme-less prefixing below so an email never
-    # accidentally gets turned into a "mailto"-shaped or bogus `https://` URL first.
-    if _EMAIL_RE.match(value):
-        return None
-
-    if not _SCHEME_RE.match(value):
+    # A value that already declares a URL scheme is a URL BY CONSTRUCTION - the email heuristic
+    # a few lines down is only ever applied to scheme-LESS input, checked here (scheme first) not
+    # after. Getting this order backwards is a real bug this project shipped and caught by
+    # running the normaliser against the actual export: a scheme-ful handle-style URL - e.g.
+    # `https://www.example.com/@some.handle` (YouTube/TikTok/Bluesky-style @handles are common
+    # and will recur; a real handle of exactly this shape was confirmed in the export during
+    # this fix's own investigation, not reproduced here - see
+    # `cardpicker.tests.mtgac_synthetic_fixtures`'s own docstring for why) - has an "@" and, past
+    # it, a segment containing a "." (`handle`), which is everything `_EMAIL_RE` checks for;
+    # email-testing it BEFORE the scheme check silently drops a perfectly good URL as if it were
+    # an email address. Not live today only by luck of the allowlist (no allowlisted field
+    # currently carries handle-shaped URLs), so this fix is preventative, not an incident.
+    has_scheme = bool(_SCHEME_RE.match(value))
+    if not has_scheme:
+        # Only reached for scheme-less input - which is the actual failure mode this check
+        # defends against (a bare `someone@example.com` typed into a link field). Checked before
+        # the scheme-less prefixing below so a bare email never accidentally gets turned into a
+        # bogus `https://` URL first.
+        if _EMAIL_RE.match(value):
+            return None
         value = f"https://{value}"
 
     parsed = urlparse(value)
@@ -214,9 +239,26 @@ def compute_artist_external_links_blob(records: list[dict[str, Any]]) -> dict[st
 def fetch_bulk_export(timeout: float = 30.0) -> list[dict[str, Any]]:
     """
     The ONE outbound call this feature ever makes on a given day - see module docstring for why
-    this is a bulk fetch, never a per-request proxy. Raises on any transport/shape failure; the
-    caller (`warm_artist_external_links_cache`) is responsible for not letting a failure here
-    touch the existing cache.
+    this is a bulk fetch, never a per-request proxy. Makes exactly ONE `requests.get` call, full
+    stop - no retry loop, no backoff-and-retry, by design (see below), so a single call to this
+    function costs at most 1 of MTGAC's disclosed 12-requests/hour bulk-endpoint budget.
+
+    Headroom: the owner runs `warm_artist_external_links` on a daily-or-weekly cron, so one
+    successful call/day against a 12/hour (288/day) allowance is roughly 1/288th of the budget -
+    steady state is nowhere near the ceiling and isn't the risk.
+
+    **The real exposure is a failure loop, not steady state** - hammering a partner's
+    infrastructure immediately after they granted this project access would be a genuinely bad
+    outcome. This function therefore has NO retry logic at all, deliberately: on any
+    transport/shape failure it raises immediately and returns control to the caller
+    (`warm_artist_external_links_cache`, which is itself responsible for not letting that failure
+    touch the existing cache - see its own docstring). One failed cron run costs exactly 1 request
+    against the budget and is simply not retried until the next scheduled run (tomorrow, or next
+    week) - a cron that fails and stays failed until its next scheduled invocation is the desired
+    behaviour here, not a bug to paper over. **Do not add retry/backoff logic to this function**
+    without re-reading this docstring; if MTGAC's limits ever need more headroom than a single
+    daily/weekly call provides, that's a conversation with MTGAC (who have already offered to
+    adjust their numbers), not a reason to retry silently against a rate limit from our side.
     """
     response = requests.get(MTGAC_BULK_URL, timeout=timeout)
     response.raise_for_status()
@@ -229,11 +271,17 @@ def fetch_bulk_export(timeout: float = 30.0) -> list[dict[str, Any]]:
 def warm_artist_external_links_cache() -> dict[str, dict[str, Any]]:
     """
     Fetch + normalise + write the cache blob in one call - the body of the
-    `warm_artist_external_links` management command. Raises `ValueError` (fetch/shape errors
-    propagate from `fetch_bulk_export` as-is) on ANY failure, WITHOUT writing to the cache first -
-    a refresh that can't complete cleanly must leave the previous good blob in place, never
-    overwrite it with an empty or partial one. Returns the blob it wrote, so the calling command
-    can report a real summary (artist count, link count, etc.) without a second cache read.
+    `warm_artist_external_links` management command. Calls `fetch_bulk_export` AT MOST ONCE per
+    invocation - there is no retry path anywhere in this function, so one call to this function
+    costs at most 1 request against MTGAC's disclosed 12/hour bulk-endpoint budget (see
+    `fetch_bulk_export`'s own docstring for the full rate-limit/no-retry rationale).
+
+    Raises `ValueError` (fetch/shape errors propagate from `fetch_bulk_export` as-is) on ANY
+    failure, WITHOUT writing to the cache first - a refresh that can't complete cleanly must
+    leave the previous good blob in place, never overwrite it with an empty or partial one, and
+    is never itself retried within this call - the next attempt is the next scheduled cron run.
+    Returns the blob it wrote, so the calling command can report a real summary (artist count,
+    link count, etc.) without a second cache read.
     """
     records = fetch_bulk_export()
     if not records:
