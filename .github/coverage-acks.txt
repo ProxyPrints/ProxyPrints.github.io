@@ -89,6 +89,16 @@ coverage-ack: frontend/tests/WhatsThatWordsAnimation.spec.ts::What's That Card? 
 coverage-ack: frontend/tests/NoMatchReasonStrip.spec.ts::NoMatchReasonStrip tests > No match is disabled until a chip is set, then shows the reason strip (not the general attribute panel) — renamed to "No match is disabled until a chip is set, then shows the reason strip split into two labelled groups (not the general attribute panel)" when the strip was split into two axes; test still present and extended with per-group assertions.
 coverage-ack: frontend/tests/NoMatchReasonStrip.spec.ts::NoMatchReasonStrip tests > hides chips for reason tags that don't exist server-side yet — renamed to "hides chips for reason tags that don't exist server-side yet, in both groups" when the strip was split into two axes; test still present and extended to assert the unseeded-tag filter applies inside a still-rendered group, not just across whole groups.
 
+# WTC phase C2 (issue #503, PR #551) - phase C1 was deliberately presentation-only, so this
+# test asserted that tapping any candidate, grouped or ungrouped, submitted the IDENTICAL
+# /2/submitPrintingTag/ payload. C2 intentionally supersedes that contract: a grouped tap now
+# submits ONE illustrationId to the new /2/submitIllustrationVote/ endpoint instead, while an
+# ungrouped tap stays on /2/submitPrintingTag/ unchanged. The old title now asserts the
+# opposite of what's true, so it was renamed (not deleted) and split into two tests - one per
+# branch - describing the new split; see the file's own "question feed - Level 2 illustration
+# grouping" describe block for both replacements.
+coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - Level 2 illustration grouping > selecting a grouped candidate submits the identical payload to the identical endpoint as an ungrouped one — superseded by C2 (#503/PR #551): renamed + split into "selecting a grouped candidate submits its illustrationId to /2/submitIllustrationVote/, not a printing list" and "selecting an ungrouped candidate (distinct or null illustrationId) still submits to /2/submitPrintingTag/, unchanged" - the old title asserted C1's now-superseded sameness contract, not a coverage drop.
+
 # MTGAC artist-links M2 applet round (docs/features/artist-support-links.md) - ArtistSupportLink
 # became a self-contained applet (RTK Query fetch, commerce-link buttons, Mark's Signature
 # Service badge, MTGAC page link, MTGAC credit line) rather than a single caller-styled `<a>`

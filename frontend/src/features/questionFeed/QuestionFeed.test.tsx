@@ -681,4 +681,144 @@ describe("QuestionFeed", () => {
       screen.queryByTestId("attribute-chip-panel")
     ).not.toBeInTheDocument();
   });
+
+  // Issue #503 (WTC phase C2) / #524 - wiring the illustration-grouped grid (C1) to
+  // /2/submitIllustrationVote/.
+  describe("illustration grouping (C2 - vote wiring)", () => {
+    const sharedIllustrationId = "11111111-1111-1111-1111-111111111111";
+    const groupedItem = {
+      ...identifyPrintingItem,
+      candidates: [
+        {
+          ...identifyPrintingItem.candidates[0],
+          identifier: "printing-1",
+          illustrationId: sharedIllustrationId,
+        },
+        {
+          ...identifyPrintingItem.candidates[1],
+          identifier: "printing-2",
+          illustrationId: sharedIllustrationId,
+        },
+        {
+          ...identifyPrintingItem.candidates[0],
+          identifier: "printing-3",
+          expansionCode: "def",
+          collectorNumber: "3",
+          illustrationId: null,
+        },
+      ],
+    };
+
+    function groupedQuestionFeedOnce() {
+      return http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: groupedItem,
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        )
+      );
+    }
+
+    it("selecting a candidate inside an illustration group submits ONE illustrationId to /2/submitIllustrationVote/, never a printing list", async () => {
+      server.use(groupedQuestionFeedOnce());
+      let illustrationVoteBody: Record<string, unknown> | undefined;
+      let printingTagCalled = false;
+      server.use(
+        http.post(
+          buildRoute("2/submitIllustrationVote/"),
+          async ({ request }) => {
+            illustrationVoteBody = (await request.json()) as Record<
+              string,
+              unknown
+            >;
+            return HttpResponse.json(
+              {
+                illustrationId: sharedIllustrationId,
+                isUnknown: false,
+                printingVoteCast: false,
+                artistVoteCast: true,
+              },
+              { status: 200 }
+            );
+          }
+        )
+      );
+      server.use(
+        http.post(buildRoute("2/submitPrintingTag/"), () => {
+          printingTagCalled = true;
+          return HttpResponse.json(
+            { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+            { status: 200 }
+          );
+        })
+      );
+      renderFeed();
+      await revealCard();
+
+      const group = await screen.findByTestId(
+        "question-feed-illustration-group"
+      );
+      const tile = within(group).getByAltText("abc 1");
+      fireEvent.click(tile);
+
+      await waitFor(() => expect(illustrationVoteBody).toBeDefined());
+      expect(illustrationVoteBody).toMatchObject({
+        identifier: groupedItem.card.identifier,
+        illustrationId: sharedIllustrationId,
+        isUnknown: false,
+      });
+      expect(illustrationVoteBody).not.toHaveProperty("printingIdentifier");
+      expect(printingTagCalled).toBe(false);
+    });
+
+    it("selecting an ungrouped candidate (null illustrationId) still submits through /2/submitPrintingTag/ unchanged", async () => {
+      server.use(groupedQuestionFeedOnce());
+      let printingTagBody: Record<string, unknown> | undefined;
+      let illustrationVoteCalled = false;
+      server.use(
+        http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
+          printingTagBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json(
+            { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+            { status: 200 }
+          );
+        })
+      );
+      server.use(
+        http.post(buildRoute("2/submitIllustrationVote/"), () => {
+          illustrationVoteCalled = true;
+          return HttpResponse.json(
+            {
+              illustrationId: null,
+              isUnknown: false,
+              printingVoteCast: false,
+              artistVoteCast: false,
+            },
+            { status: 200 }
+          );
+        })
+      );
+      renderFeed();
+      await revealCard();
+
+      const ungroupedGrid = await screen.findByTestId(
+        "question-feed-candidate-grid-ungrouped"
+      );
+      fireEvent.click(within(ungroupedGrid).getByAltText("def 3"));
+
+      await waitFor(() => expect(printingTagBody).toBeDefined());
+      expect(printingTagBody).toMatchObject({
+        identifier: groupedItem.card.identifier,
+        printingIdentifier: "printing-3",
+      });
+      expect(illustrationVoteCalled).toBe(false);
+    });
+  });
 });

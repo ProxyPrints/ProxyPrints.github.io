@@ -77,6 +77,7 @@ import {
   SaveDeckRequest,
   SaveDeckResponse,
   SourcesResponse,
+  SubmitIllustrationVoteResponse,
   Tag,
   TagConsensusResponse,
   TagsResponse,
@@ -667,6 +668,48 @@ export async function APISubmitPrintingTag(
   return rawResponse.json().then((content) => {
     if (rawResponse.status === 200 && content.voteTally != null) {
       return content as PrintingConsensusResponse;
+    }
+    // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+// Issue #503 (WTC phase C2) / #524. Sends ONE illustrationId (or isUnknown) for a card - NEVER
+// a printing list, since a shared-illustration group's actual printing count can only be known
+// server-side, at write time, against live data (see MPCAutofill/cardpicker/illustration_vote.py
+// for the full rationale). The backend derives up to two further votes (a printing vote at a
+// live 1:1 match, a derived artist vote when absent) in the same transaction as this call.
+export async function APISubmitIllustrationVote(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  illustrationId?: string,
+  isUnknown = false,
+  // See APISubmitPrintingTag's identical param for the full rationale.
+  voteSurface?: string
+): Promise<SubmitIllustrationVoteResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/submitIllustrationVote/"),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        identifier,
+        anonymousId,
+        illustrationId,
+        isUnknown,
+        voteSurface,
+      }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.isUnknown != null) {
+      return content as SubmitIllustrationVoteResponse;
     }
     // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
     throw {
