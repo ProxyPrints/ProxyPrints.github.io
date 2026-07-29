@@ -142,6 +142,18 @@
           "additionalProperties": false
         },
         "distinctHumanVoters": { "type": "integer" },
+        "distinctCardsWithHumanVotes": {
+          "type": "integer",
+          "description": "Distinct card_id across CardPrintingTag/CardArtistVote/CardTagVote filtered to HUMAN_SOURCES, unioned across the three tables so a card voted on in two tables counts once. CARD-denominated (unlike humanVotes, which counts votes) so the page's participation ratio can be cards-over-cards."
+        },
+        "distinctCardsRoutedToReview": {
+          "type": "integer",
+          "description": "Distinct card_id in CardScanLog filtered to the slow-path agent (SLOW_PATH_ANONYMOUS_ID) and skip_reason=SLOW_PATH_TO_REVIEW_REASON - same filter review_clusters.py's _review_queue_card_ids() uses. A distinct-card count, not a row count: CardScanLog is an append-only audit trail, so a card can carry more than one row for the same (card, anonymous_id) pair. Only ever grows (nothing clears the routing marker when a card later gets a human vote) - a denominator, not a progress measure on its own."
+        },
+        "distinctCardsRoutedToReviewWithHumanVotes": {
+          "type": "integer",
+          "description": "The intersection of distinctCardsRoutedToReview and distinctCardsWithHumanVotes: cards that are both routed to review AND carry a human vote. This, not distinctCardsWithHumanVotes over distinctCardsRoutedToReview, is the pair that forms a valid progress ratio - distinctCardsWithHumanVotes is not a subset of distinctCardsRoutedToReview (a person can vote on a card the machine never routed), so dividing them directly is not coherent."
+        },
         "md5Groups": {
           "type": "object",
           "properties": {
@@ -164,6 +176,9 @@
         "fresh",
         "humanVotes",
         "distinctHumanVoters",
+        "distinctCardsWithHumanVotes",
+        "distinctCardsRoutedToReview",
+        "distinctCardsRoutedToReviewWithHumanVotes",
         "md5Groups"
       ],
       "additionalProperties": false

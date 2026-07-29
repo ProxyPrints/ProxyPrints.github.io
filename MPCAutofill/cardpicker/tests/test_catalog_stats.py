@@ -33,6 +33,10 @@ from cardpicker.catalog_stats import (
     warm_catalog_stats_cache,
     zeroed_catalog_stats,
 )
+from cardpicker.local_calculate_verdicts import (
+    SLOW_PATH_ANONYMOUS_ID,
+    SLOW_PATH_TO_REVIEW_REASON,
+)
 from cardpicker.models import CardScanLog, CardTypes, PilotRunLedger, VoteSource
 from cardpicker.schema_types import CatalogStatsResponse
 from cardpicker.tests.factories import (
@@ -328,6 +332,131 @@ class TestComputeParticipation:
         result = compute_participation()
         assert result["distinctHumanVoters"] == 2
 
+    def test_card_with_votes_in_two_vote_models_counts_once_in_distinct_cards_with_human_votes(
+        self, db, source, canonical_printing
+    ):
+        card = CardFactory(source=source)
+        tag = TagFactory()
+        CardPrintingTagFactory(card=card, printing=canonical_printing, source=VoteSource.USER)
+        CardTagVoteFactory(card=card, tag=tag, source=VoteSource.USER)
+
+        result = compute_participation()
+        assert result["distinctCardsWithHumanVotes"] == 1
+
+    def test_machine_sourced_votes_never_contribute_to_distinct_cards_with_human_votes(
+        self, db, source, canonical_printing
+    ):
+        CardPrintingTagFactory(card=CardFactory(source=source), printing=canonical_printing, source=VoteSource.OCR)
+        CardPrintingTagFactory(
+            card=CardFactory(source=source), printing=canonical_printing, source=VoteSource.DEDUCTION
+        )
+        CardPrintingTagFactory(card=CardFactory(source=source), printing=canonical_printing, source=VoteSource.IMPLICIT)
+
+        result = compute_participation()
+        assert result["distinctCardsWithHumanVotes"] == 0
+
+    def test_card_with_multiple_scan_log_rows_for_same_slow_path_agent_counts_once_in_distinct_cards_routed_to_review(
+        self, db, source
+    ):
+        # Regression guard for CardScanLog's append-only behaviour (see that model's own
+        # docstring): multiple runs can each abstain on the same card over time, leaving several
+        # rows for the same (card, anonymous_id) pair - a raw row count would overstate cards.
+        card = CardFactory(source=source)
+        CardScanLog.objects.create(
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        )
+        CardScanLog.objects.create(
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        )
+        CardScanLog.objects.create(
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        )
+
+        result = compute_participation()
+        assert result["distinctCardsRoutedToReview"] == 1
+
+    def test_scan_log_rows_with_a_different_skip_reason_are_excluded_from_distinct_cards_routed_to_review(
+        self, db, source
+    ):
+        CardScanLog.objects.create(
+            card=CardFactory(source=source), anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason="no-text"
+        )
+
+        result = compute_participation()
+        assert result["distinctCardsRoutedToReview"] == 0
+
+    def test_scan_log_rows_with_a_different_anonymous_id_are_excluded_from_distinct_cards_routed_to_review(
+        self, db, source
+    ):
+        CardScanLog.objects.create(
+            card=CardFactory(source=source), anonymous_id="local-ocr-v1", skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        )
+
+        result = compute_participation()
+        assert result["distinctCardsRoutedToReview"] == 0
+
+    def test_card_routed_and_human_voted_counts_in_all_three_card_denominated_fields(
+        self, db, source, canonical_printing
+    ):
+        card = CardFactory(source=source)
+        CardScanLog.objects.create(
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        )
+        CardPrintingTagFactory(card=card, printing=canonical_printing, source=VoteSource.USER)
+
+        result = compute_participation()
+        assert result["distinctCardsWithHumanVotes"] == 1
+        assert result["distinctCardsRoutedToReview"] == 1
+        assert result["distinctCardsRoutedToReviewWithHumanVotes"] == 1
+
+    def test_human_voted_but_never_routed_card_is_excluded_from_the_routed_intersection(
+        self, db, source, canonical_printing
+    ):
+        # Guard for the subset property: distinctCardsWithHumanVotes is NOT a subset of
+        # distinctCardsRoutedToReview (a person can vote on a card the machine never routed), so
+        # a card like this one must count toward distinctCardsWithHumanVotes but never toward the
+        # intersection.
+        card = CardFactory(source=source)
+        CardPrintingTagFactory(card=card, printing=canonical_printing, source=VoteSource.USER)
+
+        result = compute_participation()
+        assert result["distinctCardsWithHumanVotes"] == 1
+        assert result["distinctCardsRoutedToReview"] == 0
+        assert result["distinctCardsRoutedToReviewWithHumanVotes"] == 0
+
+    def test_routed_but_never_human_voted_card_counts_in_routed_only(self, db, source):
+        card = CardFactory(source=source)
+        CardScanLog.objects.create(
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        )
+
+        result = compute_participation()
+        assert result["distinctCardsWithHumanVotes"] == 0
+        assert result["distinctCardsRoutedToReview"] == 1
+        assert result["distinctCardsRoutedToReviewWithHumanVotes"] == 0
+
+    def test_routed_with_human_votes_intersection_is_never_greater_than_the_routed_count(
+        self, db, source, canonical_printing
+    ):
+        routed_and_voted = CardFactory(source=source)
+        CardScanLog.objects.create(
+            card=routed_and_voted, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        )
+        CardPrintingTagFactory(card=routed_and_voted, printing=canonical_printing, source=VoteSource.USER)
+
+        routed_only = CardFactory(source=source)
+        CardScanLog.objects.create(
+            card=routed_only, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+        )
+
+        voted_only = CardFactory(source=source)
+        CardPrintingTagFactory(card=voted_only, printing=canonical_printing, source=VoteSource.USER)
+
+        result = compute_participation()
+        assert result["distinctCardsRoutedToReviewWithHumanVotes"] <= result["distinctCardsRoutedToReview"]
+        assert result["distinctCardsRoutedToReview"] == 2
+        assert result["distinctCardsRoutedToReviewWithHumanVotes"] == 1
+
     def test_md5_groups_with_multiple_cards_are_counted(self, db, source):
         CardFactory(source=source, md5_checksum="abc123")
         CardFactory(source=source, md5_checksum="abc123")
@@ -371,9 +500,18 @@ class TestZeroedCatalogStats:
         assert response.generatedAt is None
         assert response.contributionsOverTime.series == []
         assert response.participation.humanVotes.total == 0
+        assert response.participation.distinctCardsWithHumanVotes == 0
+        assert response.participation.distinctCardsRoutedToReview == 0
+        assert response.participation.distinctCardsRoutedToReviewWithHumanVotes == 0
 
     def test_generated_at_is_none(self):
         assert zeroed_catalog_stats()["generatedAt"] is None
+
+    def test_includes_all_three_distinct_card_count_keys(self):
+        participation = zeroed_catalog_stats()["participation"]
+        assert participation["distinctCardsWithHumanVotes"] == 0
+        assert participation["distinctCardsRoutedToReview"] == 0
+        assert participation["distinctCardsRoutedToReviewWithHumanVotes"] == 0
 
 
 class TestComputeCatalogStats:

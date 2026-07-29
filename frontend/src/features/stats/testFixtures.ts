@@ -16,6 +16,15 @@
  */
 import { Participation } from "@/common/schema_types";
 
+// distinctCardsWithHumanVotes/distinctCardsRoutedToReview/distinctCardsRoutedToReviewWithHumanVotes
+// (added by the catalog-stats-distinct-cards PR, not independently measured against production
+// like the fields above) - illustrative placeholder figures only, chosen to satisfy the
+// Participation shape while respecting its real invariants: distinctCardsWithHumanVotes <=
+// humanVotes.total (votes can stack on one card), and
+// distinctCardsRoutedToReviewWithHumanVotes <= min(distinctCardsWithHumanVotes,
+// distinctCardsRoutedToReview) (it is that pair's intersection). Held flat across both fixtures,
+// same as humanVotes/distinctHumanVoters above - this task does not model how a full machine
+// sweep would move the review-routing counts, so it is deliberately not asserted here.
 export const participationCurrentRatio: Participation = {
   total: 230_770,
   confirmable: 103_687,
@@ -23,6 +32,9 @@ export const participationCurrentRatio: Participation = {
   fresh: 120_776,
   humanVotes: { printingTag: 125, artist: 6, tag: 106, total: 237 },
   distinctHumanVoters: 11,
+  distinctCardsWithHumanVotes: 218,
+  distinctCardsRoutedToReview: 42_000,
+  distinctCardsRoutedToReviewWithHumanVotes: 9,
   md5Groups: {
     groupsWithMultipleCards: 16_957,
     cardsInMultiCardGroups: 34_095,
@@ -37,6 +49,9 @@ export const participationPostSweep: Participation = {
   fresh: 22_770,
   humanVotes: { printingTag: 125, artist: 6, tag: 106, total: 237 },
   distinctHumanVoters: 11,
+  distinctCardsWithHumanVotes: 218,
+  distinctCardsRoutedToReview: 42_000,
+  distinctCardsRoutedToReviewWithHumanVotes: 9,
   md5Groups: {
     groupsWithMultipleCards: 16_957,
     cardsInMultiCardGroups: 34_095,
