@@ -23,6 +23,7 @@ import {
   CardsRequest,
   CardsResponse,
   CastImplicitVoteRequest,
+  CatalogStatsResponse,
   ContributionsResponse,
   CreateDeckShareRequest,
   CreateDeckShareResponse,
@@ -169,6 +170,15 @@ export const api = createApi({
     }),
     getContributions: builder.query<ContributionsResponse, void>({
       query: () => ({ url: `2/contributions/`, method: "GET" }),
+      providesTags: [QueryTags.BackendSpecific],
+    }),
+    // Proposal F (docs/features/catalog-stats.md) - cache-only on the backend, never a live
+    // aggregate query (a cache miss returns a fully-shaped, all-zero blob with
+    // `generatedAt: null`, never a 500 - see catalog_stats.py's own module docstring). The /stats
+    // page (features/stats/) is the sole consumer and is responsible for rendering the
+    // `generatedAt === null` case as "not computed yet", not as zeroed real data.
+    getCatalogStats: builder.query<CatalogStatsResponse, void>({
+      query: () => ({ url: `1/catalogStats/`, method: "GET" }),
       providesTags: [QueryTags.BackendSpecific],
     }),
     getBackendInfo: builder.query<Info, void>({
@@ -384,6 +394,7 @@ const {
   useGetTagsQuery: useRawGetTagsQuery,
   useGetSampleCardsQuery: useRawGetSampleCardsQuery,
   useGetContributionsQuery: useRawGetContributionsQuery,
+  useGetCatalogStatsQuery: useRawGetCatalogStatsQuery,
   useGetBackendInfoQuery: useRawGetBackendInfoQuery,
   useGetPatreonQuery: useRawGetPatreonQuery,
   useGetArtistExternalLinksQuery: useRawGetArtistExternalLinksQuery,
@@ -448,6 +459,13 @@ export function useGetSampleCardsQuery() {
 export function useGetContributionsQuery() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   return useRawGetContributionsQuery(undefined, {
+    skip: !remoteBackendConfigured,
+  });
+}
+
+export function useGetCatalogStatsQuery() {
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  return useRawGetCatalogStatsQuery(undefined, {
     skip: !remoteBackendConfigured,
   });
 }

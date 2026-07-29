@@ -52,6 +52,10 @@ const BrandWordmark = styled.b`
 // to breathe: a generous ~1.75rem gap reads better with only 2-3 links left. Only applied at
 // >= the `lg` breakpoint where the links sit inline - the collapsed mobile panel keeps its
 // normal stacked block spacing.
+//
+// 2026-07-29 - Contributions is back (transformed into /stats, see that link's own comment
+// below) - N7's gap value is left untouched since the left cluster still only carries 3-4
+// links, not re-measured against the original crowded pre-redesign row this cut was solving.
 const LeftNav = styled(Nav)`
   @media (min-width: 992px) {
     gap: 1.75rem;
@@ -137,6 +141,26 @@ export default function ProjectNavbar() {
                 >
                   What&apos;s That Card?
                 </NoWrapNavLink>
+              )}
+              {/* Nav+footer redesign reversal (2026-07-29, Proposal F / issue #233) - the owner
+                  reinstated Contributions to the top nav, transformed into /stats (the public
+                  catalog/moderation transparency page, docs/features/catalog-stats.md), rather
+                  than leaving it footer-only forever per N7/N8's original cut (2026-07-22, see
+                  those comments above and in Footer.tsx). This is a deliberate, owner-directed
+                  reversal of that earlier decision, not a silent re-add - see
+                  Navbar.test.tsx's own comment on the assertion this flips. Gated on
+                  remoteBackendConfigured, same condition as What's That Card? above - /stats
+                  reads a live (cache-only) backend endpoint and has nothing useful to show
+                  without one. */}
+              {remoteBackendConfigured && (
+                <Nav.Link
+                  as={Link}
+                  href="/stats"
+                  active={router.route === "/stats"}
+                  eventKey="/stats"
+                >
+                  Stats
+                </Nav.Link>
               )}
               {/* N4 - "Wiki" replaces "Guide" (same on-site /guide target, renamed label only).
                   Not gated on anyBackendConfigured/remoteBackendConfigured (unlike Editor/What's

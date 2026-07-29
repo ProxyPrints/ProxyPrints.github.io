@@ -77,6 +77,17 @@ describe("Navbar - nav+footer redesign (N1-N7)", () => {
     );
     expect(screen.getByRole("button", { name: /Sources/ })).toBeInTheDocument();
 
+    // 2026-07-29 (Proposal F / issue #233) - the owner deliberately REINSTATED Contributions to
+    // the top nav, transformed into /stats (docs/features/catalog-stats.md) - this is a
+    // conscious reversal of N7/N8's original nav cut below, not a silent re-add: this test used
+    // to assert `queryByRole("link", { name: "Contributions" })` was ABSENT here (N7's "five
+    // surfaces" claim in this describe title is now stale for the same reason - Stats is a sixth
+    // - left as-is rather than renumbering a historical redesign's own name).
+    expect(await screen.findByRole("link", { name: "Stats" })).toHaveAttribute(
+      "href",
+      "/stats"
+    );
+
     // N5 - cut entirely, no new home in the nav itself.
     expect(
       screen.queryByRole("link", { name: "What's New?" })
@@ -86,9 +97,6 @@ describe("Navbar - nav+footer redesign (N1-N7)", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "My Decks" })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("link", { name: "Contributions" })
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: "Guide" })

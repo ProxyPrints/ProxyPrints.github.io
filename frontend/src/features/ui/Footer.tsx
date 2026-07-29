@@ -8,6 +8,11 @@
  * Footer's own "Sources" link opens the same BackendConfig offcanvas the navbar's Sources
  * button does, via a small local (per-mount) show/hide state - Footer has no dedicated route
  * to link "Sources" to, and a plain dead link would be worse than the trivial duplicated state.
+ *
+ * 2026-07-29 (Proposal F / issue #233) - Contributions was reinstated to the top nav (N7/N8
+ * reversal, see Navbar.tsx's own comment), transformed into /stats - this footer's own
+ * "Contributions" link/label above is stale history now; the live link below reads "Stats" and
+ * points at /stats directly.
  */
 import styled from "@emotion/styled";
 import Link from "next/link";
@@ -123,7 +128,11 @@ export default function Footer() {
         <Tier1>
           <FooterColumn>
             <ColumnHeading>ProxyPrints</ColumnHeading>
-            <FooterLink href="/contributions">Contributions</FooterLink>
+            {/* 2026-07-29 (Proposal F / issue #233) - Contributions is now /stats, also
+                reinstated to the top nav (see Navbar.tsx's own comment) - this footer link now
+                points straight at the real route/label instead of relying on the
+                /contributions redirect shell (pages/contributions.tsx) to bounce it. */}
+            <FooterLink href="/stats">Stats</FooterLink>
             <FooterLink href="/guide">Wiki</FooterLink>
             <FooterLinkButton
               type="button"

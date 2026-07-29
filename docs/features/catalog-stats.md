@@ -7,10 +7,18 @@ The backend for Proposal F's public `/stats` transparency page
 aggregate of catalog/moderation state, served from `GET 1/catalogStats/`.
 Issue #233's owner ruling (2026-07-29) lifted the proposal's HOLD; this is
 **backend pass 1** - the aggregate generator, the warm command, its hourly
-schedule, and the cache-only endpoint. **The frontend `/stats` page itself is
-a separate, not-yet-dispatched piece of work** - nothing renders anywhere
-until that page is built, and nothing in this change does anything in
-production until it's deployed.
+schedule, and the cache-only endpoint.
+
+**Frontend status (2026-07-29, branch `feat/stats-page-frontend`): built.**
+The `/stats` page (`frontend/src/pages/stats.tsx`, panels under
+`frontend/src/features/stats/`) consumes this endpoint and renders all five
+shipped panels, transformed from the old `/contributions` page (which now
+redirects to `/stats` - see `frontend/src/pages/contributions.tsx`'s own
+comment) and restored to the top nav. It renders a "not computed yet" state
+on a cache miss (`generatedAt: null`) rather than presenting the zeroed
+skeleton as real data - see `pages/stats.tsx`'s own module comment. A
+homepage call-to-action graph (`features/stats/ParticipationGraph.tsx`)
+draws on this endpoint's `participation` panel only.
 
 **Status: five of Proposal F's seven charts, plus the call-to-action
 panel.** Charts 2, 4, 6, 7 ship this pass; charts 1 (catalog resolution
@@ -191,3 +199,17 @@ if called); the `"shared"`-not-configured graceful-degradation suite
 idempotency and cache-preservation-on-failure behaviour; and the
 migration (schedule row created once, `HOURLY`, reverses/reapplies
 cleanly).
+
+**Frontend** (branch `feat/stats-page-frontend`, 2026-07-29):
+`frontend/src/features/stats/StatsPage.test.tsx` (no-backend/cache-miss/
+populated state machine - deliberately NOT under `src/pages/`, since
+Next.js compiles every file there into the client bundle and this test
+imports the msw node server; see that file's own header comment and
+`pages/stats.tsx`'s `CatalogStatsBody` export comment),
+`frontend/src/features/stats/RunHistoryPanel.test.tsx` (null
+`votesWritten`/`durationSeconds` render as "—", never "0"), and
+`frontend/src/features/stats/ParticipationGraph.test.tsx` (the homepage
+graph reads correctly under both today's real vote ratio and the
+post-machine-sweep ratio, with no percentage ever computed against
+`total` - see that file's own module comment). Playwright:
+`frontend/tests/Stats.spec.ts` and `frontend/tests/ParticipationGraph.spec.ts`.

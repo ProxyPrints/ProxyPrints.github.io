@@ -38,6 +38,10 @@ import {
   sourceDocument2,
   sourceDocument3,
 } from "@/common/test-constants";
+import {
+  participationCurrentRatio,
+  participationPostSweep,
+} from "@/features/stats/testFixtures";
 
 const createError = (name: string) => ({
   name,
@@ -905,6 +909,174 @@ export const contributionsOneSource = http.get(
           },
         ],
         totalDatabaseSize: 1_000_000_000,
+      },
+      { status: 200 }
+    )
+);
+
+//# endregion
+
+//# region catalog stats
+
+// Proposal F /stats page (docs/features/catalog-stats.md, GET 1/catalogStats/). Two "populated"
+// fixtures on purpose, not one - `participationCurrentRatio` matches this task's own directive's
+// real, measured 2026-07-29 production numbers (0.05% human/machine vote ratio);
+// `participationPostSweep` models the world after the pending full machine sweep the 2026-07-29
+// coordinator amendment describes (confirmable/contested grow as more machine work becomes
+// human-actionable, humanVotes/distinctHumanVoters held FLAT - the amendment's own instruction,
+// "human votes unchanged at ~237"). Both come from features/stats/testFixtures.ts, shared with
+// that feature's own Jest unit tests so the two never drift apart.
+const catalogStatsContributionsOverTime = {
+  bucketDays: 7,
+  series: [
+    { weekStart: "2026-07-07", bySurface: { "question-feed": 40 } },
+    {
+      weekStart: "2026-07-14",
+      bySurface: { "question-feed": 85, "review-cluster-confirm": 12 },
+    },
+    { weekStart: "2026-07-21", bySurface: { "question-feed": 100 } },
+  ],
+};
+
+const catalogStatsSkipBreakdown = {
+  byReason: [
+    { reason: "no-clear-winner", count: 812 },
+    { reason: "too-many-candidates", count: 430 },
+    { reason: "no-text", count: 210 },
+  ],
+  byReasonAndEngine: [
+    { reason: "no-clear-winner", engine: "local-ocr-v1", count: 500 },
+    { reason: "no-clear-winner", engine: "local-phash-v1", count: 312 },
+    { reason: "too-many-candidates", engine: "local-fallback-v1", count: 430 },
+    { reason: "no-text", engine: "local-ocr-v1", count: 210 },
+  ],
+};
+
+const catalogStatsRunHistory = {
+  recent: [
+    {
+      runId: "run-4",
+      command: "local_identify_printing_tags",
+      status: "running",
+      startedAt: "2026-07-29T00:00:00Z",
+      finishedAt: null,
+      durationSeconds: null,
+      votesWritten: null,
+    },
+    {
+      runId: "run-3",
+      command: "local_name_frequency_elimination",
+      status: "failed",
+      startedAt: "2026-07-27T10:00:00Z",
+      finishedAt: "2026-07-27T10:05:00Z",
+      durationSeconds: 300,
+      votesWritten: 0,
+    },
+    {
+      runId: "run-2",
+      // votesWritten is null here on purpose - stage_e_streaming_dispatch rows never populate
+      // the top-level column (see catalog_stats.py's compute_run_history docstring) - the
+      // fixture exists specifically so a test can assert this renders as "—", never "0".
+      command: "stage_e_streaming_dispatch",
+      status: "completed",
+      startedAt: "2026-07-28T02:00:00Z",
+      finishedAt: "2026-07-28T02:55:00Z",
+      durationSeconds: 3300,
+      votesWritten: null,
+    },
+    {
+      runId: "run-1",
+      command: "local_identify_printing_tags",
+      status: "completed",
+      startedAt: "2026-07-28T01:00:00Z",
+      finishedAt: "2026-07-28T01:42:00Z",
+      durationSeconds: 2520,
+      votesWritten: 1840,
+    },
+  ],
+};
+
+const catalogStatsCatalogComposition = {
+  sources: [
+    {
+      name: "Test Source",
+      sourceType: "AWS S3",
+      externalLink: "",
+      description: "A test source",
+      qtyCards: "210000",
+      qtyCardbacks: "15000",
+      qtyTokens: "5770",
+      avgdpi: "300",
+      size: "512 GB",
+    },
+  ],
+  cardCountByType: { CARD: 210000, CARDBACK: 15000, TOKEN: 5770 },
+  totalDatabaseSize: 512_000_000_000,
+};
+
+export const catalogStatsCurrentRatio = http.get(
+  buildRoute("1/catalogStats/"),
+  () =>
+    HttpResponse.json(
+      {
+        generatedAt: "2026-07-29T06:00:00Z",
+        contributionsOverTime: catalogStatsContributionsOverTime,
+        skipBreakdown: catalogStatsSkipBreakdown,
+        runHistory: catalogStatsRunHistory,
+        catalogComposition: catalogStatsCatalogComposition,
+        participation: participationCurrentRatio,
+      },
+      { status: 200 }
+    )
+);
+
+export const catalogStatsPostSweep = http.get(
+  buildRoute("1/catalogStats/"),
+  () =>
+    HttpResponse.json(
+      {
+        generatedAt: "2026-08-05T06:00:00Z",
+        contributionsOverTime: catalogStatsContributionsOverTime,
+        skipBreakdown: catalogStatsSkipBreakdown,
+        runHistory: catalogStatsRunHistory,
+        catalogComposition: catalogStatsCatalogComposition,
+        participation: participationPostSweep,
+      },
+      { status: 200 }
+    )
+);
+
+// The cache-miss shape (`zeroed_catalog_stats()`, catalog_stats.py) - cold cache, or the
+// "shared" cache backend not configured yet. `generatedAt: null`, every other field at its
+// zero/empty value - pages/stats.tsx and the homepage's HomepageParticipationGraph must both
+// render their "not computed yet" state here, never the zeroed panels as if they were real.
+export const catalogStatsNotComputedYet = http.get(
+  buildRoute("1/catalogStats/"),
+  () =>
+    HttpResponse.json(
+      {
+        generatedAt: null,
+        contributionsOverTime: { bucketDays: 7, series: [] },
+        skipBreakdown: { byReason: [], byReasonAndEngine: [] },
+        runHistory: { recent: [] },
+        catalogComposition: {
+          sources: [],
+          cardCountByType: {},
+          totalDatabaseSize: 0,
+        },
+        participation: {
+          total: 0,
+          confirmable: 0,
+          contested: 0,
+          fresh: 0,
+          humanVotes: { printingTag: 0, artist: 0, tag: 0, total: 0 },
+          distinctHumanVoters: 0,
+          md5Groups: {
+            groupsWithMultipleCards: 0,
+            cardsInMultiCardGroups: 0,
+            largestGroupSize: 0,
+          },
+        },
       },
       { status: 200 }
     )

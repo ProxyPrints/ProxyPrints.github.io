@@ -24,10 +24,10 @@ DEFERRED**, not merely unbuilt: measured 2026-07-29, resolved printings sit at 3
 today's real values, in opposite directions. A future pass revisits both once the underlying
 numbers move enough to be informative.
 
-**The frontend `/stats` page itself is a separate, not-yet-dispatched piece of work.** Nothing in
-this backend pass renders anywhere — the endpoint (`GET 1/catalogStats/`) exists and is
-cache-only, but nothing in prod calls it until (a) the frontend page is built and (b) this change
-is deployed. The vote-category-stats snapshot mentioned in issue #233's ruling comment (an
+**Frontend built (2026-07-29, branch `feat/stats-page-frontend`)** - see
+`docs/features/catalog-stats.md`'s "Frontend status" note for what shipped
+(`/stats` page, homepage call-to-action graph, nav restoration, `/contributions`
+redirect). The vote-category-stats snapshot mentioned in issue #233's ruling comment (an
 off-repo `vote_stats.py`/`warm_vote_stats`/`1/voteStats/` draft that predates the HOLD lift) was
 **not** revived or ported — this pass's `cardpicker.catalog_stats` module, `warm_catalog_stats`
 command, and `GET 1/catalogStats/` endpoint are written fresh, on the named `caches["shared"]`

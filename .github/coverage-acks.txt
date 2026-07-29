@@ -120,3 +120,10 @@ coverage-ack: frontend/tests/DisplayPage.spec.ts::DisplayPage (Proposal H, Step 
 # (marginProfiles.test.ts's maxBleedForFourColumns is unchanged by #301 - only what exceeding
 # it DOES changed), test still present and extended with a disclaimer-text assertion.
 coverage-ack: frontend/tests/DisplayPage.spec.ts::DisplayPage (Proposal H, Step 1) > the margin-profile control defaults to Borderless (no warning) and switching to Bordered shrinks the sheet from 4x2 to 3x2, with a cap warning shown — renamed to "the margin-profile control defaults to Borderless (no warning) and switching to Bordered crops bleed rather than dropping to 3x2, with a cap warning shown (#301)" when #301 replaced the old "drop a column" behavior with per-edge bleed cropping; the sheet no longer shrinks to 3x2 at all under the new fit math, which is the fix this issue shipped, not a regression.
+
+# Proposal F /stats transform (PR #558, 2026-07-29) - /contributions became a plain client-side
+# redirect shell to /stats; the Contribution Guidelines accordion these two tests audit still
+# exists verbatim (features/stats/ContributionGuidelines.tsx), it just renders on /stats now.
+# Same surface, same assertions, only the URL (and the describe/test title naming it) changed.
+coverage-ack: frontend/tests/ContrastAudit.spec.ts::Contrast audit - /contributions (owner defect 1+2: accordion header + body) > Contribution Guidelines accordion - collapsed and expanded — route moved /contributions -> /stats in PR #558; same surface, same assertions
+coverage-ack: frontend/tests/ContrastAudit.spec.ts::Link colour audit (owner-approved open item 2 - $link-color -> $theme-info) > a real production link (contributions guidelines' ISO-639-1 reference, inside the accordion body's panel-bg) clears strict-AAA-normal — route moved /contributions -> /stats in PR #558; same surface, same assertions

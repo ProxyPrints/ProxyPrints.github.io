@@ -2,7 +2,7 @@ import { expect } from "@playwright/test";
 
 import {
   cardDocumentsOneResult,
-  contributionsOneSource,
+  catalogStatsCurrentRatio,
   defaultHandlers,
   searchResultsOneResult,
   sourceDocumentsOneResult,
@@ -62,14 +62,21 @@ function assertNoNewFailures(
   expect(newFailures, formatFailureTable(newFailures)).toEqual([]);
 }
 
-test.describe("Contrast audit - /contributions (owner defect 1+2: accordion header + body)", () => {
+// Route moved 2026-07-29 (Proposal F /stats transform, PR #558): /contributions is now a plain
+// client-side redirect shell to /stats (pages/contributions.tsx) - the Contribution Guidelines
+// accordion this describe block audits still exists verbatim
+// (features/stats/ContributionGuidelines.tsx), it just renders on /stats now. Same surface, same
+// assertions, new URL - see .github/coverage-acks.txt for the old-title acks this rename needed.
+test.describe("Contrast audit - /stats (owner defect 1+2: accordion header + body)", () => {
   test("Contribution Guidelines accordion - collapsed and expanded", async ({
     page,
     network,
   }) => {
-    network.use(contributionsOneSource, ...defaultHandlers);
+    // generatedAt must be non-null here - a cache-miss fixture would render /stats's "not
+    // computed yet" state instead of the panels/accordion this test audits.
+    network.use(catalogStatsCurrentRatio, ...defaultHandlers);
     await page.setViewportSize({ width: 390, height: 844 });
-    await loadPageWithDefaultBackend(page, "contributions");
+    await loadPageWithDefaultBackend(page, "stats");
 
     const header = page.getByRole("button", {
       name: "Contribution Guidelines",
@@ -78,14 +85,14 @@ test.describe("Contrast audit - /contributions (owner defect 1+2: accordion head
 
     const collapsed = await auditContrast(page);
     await page.screenshot({
-      path: "test-results/contrast-audit-contributions-collapsed-390.png",
+      path: "test-results/contrast-audit-stats-collapsed-390.png",
     });
 
     await header.click();
     await expect(page.getByText("File Format")).toBeVisible();
     const expanded = await auditContrast(page);
     await page.screenshot({
-      path: "test-results/contrast-audit-contributions-expanded-390.png",
+      path: "test-results/contrast-audit-stats-expanded-390.png",
       fullPage: true,
     });
 
@@ -108,8 +115,8 @@ test.describe("Contrast audit - /contributions (owner defect 1+2: accordion head
         formatFailureTable(expanded.paletteFailures)
     );
 
-    assertNoNewFailures(collapsed.contrastFailures, "contributions collapsed");
-    assertNoNewFailures(expanded.contrastFailures, "contributions expanded");
+    assertNoNewFailures(collapsed.contrastFailures, "stats collapsed");
+    assertNoNewFailures(expanded.contrastFailures, "stats expanded");
   });
 });
 
@@ -330,12 +337,16 @@ test.describe("Link colour audit (owner-approved open item 2 - $link-color -> $t
     expect(failures, failures.join("\n")).toEqual([]);
   });
 
-  test("a real production link (contributions guidelines' ISO-639-1 reference, inside the accordion body's panel-bg) clears strict-AAA-normal", async ({
+  // Route moved 2026-07-29 (Proposal F /stats transform, PR #558) - see the "owner defect 1+2"
+  // describe block above for the full note; same accordion, same link, now on /stats.
+  test("a real production link (the /stats page's contribution guidelines' ISO-639-1 reference, inside the accordion body's panel-bg) clears strict-AAA-normal", async ({
     page,
     network,
   }) => {
-    network.use(contributionsOneSource, ...defaultHandlers);
-    await loadPageWithDefaultBackend(page, "contributions");
+    // generatedAt must be non-null here too - see the note on the first catalogStatsCurrentRatio
+    // call site above.
+    network.use(catalogStatsCurrentRatio, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "stats");
 
     const header = page.getByRole("button", {
       name: "Contribution Guidelines",
