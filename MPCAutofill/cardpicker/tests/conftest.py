@@ -1,7 +1,7 @@
 import datetime as dt
 import os
 import uuid
-from typing import Type
+from typing import Optional, Type
 
 import pytest
 from pytest_elasticsearch import factories
@@ -24,34 +24,66 @@ from cardpicker.tests.factories import (
     TagFactory,
 )
 
-# Host ports the session-scoped testcontainers bind to. Overridable from the environment so that
-# two suites can run CONCURRENTLY on one host (2026-07-28: several agents share this box; a second
-# run against the same fixed ports dies at container start with "port is already allocated", which
-# surfaces as mass collection errors that look like catastrophic breakage rather than a port
-# clash). The defaults are the historical fixed values, so CI and a single local run are unchanged.
+# Host ports the session-scoped testcontainers bind to.
 #
-#   TEST_POSTGRES_PORT=47001 TEST_ELASTICSEARCH_PORT=9301 pytest ...
+# DEFAULT: none. Each container is started with only `with_exposed_ports` (which both
+# `PostgresContainer` and `ElasticSearchContainer` already do in their constructors), so Docker
+# picks a FREE ephemeral host port per container and we read back whatever it assigned via
+# `get_exposed_port()`. That is what makes two full suites on one box safe: there is no host port
+# either run can "want", so there is nothing to collide over. Picking a random-but-fixed number
+# instead would only narrow the collision window, not close it, and it would still lose the race
+# between "we chose a port" and "we bound it".
 #
-# NOTE both must be moved together with the same offset if you want two full suites side by side -
-# the two containers are independent, so a collision on either one fails the whole session.
-POSTGRES_PORT = int(os.environ.get("TEST_POSTGRES_PORT", 47000))
-ELASTICSEARCH_PORT = int(os.environ.get("TEST_ELASTICSEARCH_PORT", 9300))  # `elasticsearch_nooproc`'s own default
+# History (2026-07-28 -> 2026-07-29): these used to be FIXED constants (47000 / 9300). A second
+# concurrent suite died at container start with `Bind for 0.0.0.0:9300 failed: port is already
+# allocated`, which surfaces as thousands of collection ERRORs that look like catastrophic breakage
+# rather than a port clash - three separate sessions burned real time on it in one day. PR #537 then
+# made the ports env-overridable, but nothing ASSIGNED distinct values, so the default still
+# collided: overridability without allocation does not solve concurrency.
+#
+# OVERRIDE: set either variable to pin a deterministic host port (CI, debugging, attaching psql or
+# an Elasticsearch client to a live test container). An override re-introduces the collision risk
+# for whoever sets it, by design - it is opt-in.
+#
+#   TEST_POSTGRES_PORT=47000 TEST_ELASTICSEARCH_PORT=9300 pytest ...
+#
+# The two containers are independent, so each variable can be set on its own; unset means ephemeral
+# for that container only.
+
+
+def _host_port_override(variable: str) -> Optional[int]:
+    """The pinned host port for a container, or `None` to let Docker assign an ephemeral one."""
+    raw = os.environ.get(variable, "").strip()
+    return int(raw) if raw else None
+
+
+POSTGRES_PORT_OVERRIDE = _host_port_override("TEST_POSTGRES_PORT")
+ELASTICSEARCH_PORT_OVERRIDE = _host_port_override("TEST_ELASTICSEARCH_PORT")
+
+
+def _thread_elasticsearch_port_into_plugin_config(config, port: int) -> None:
+    """
+    Thread the Elasticsearch host port through to pytest-elasticsearch's own config, which is where
+    `elasticsearch_nooproc` reads its port from (`pytest_elasticsearch.config.get_config` ->
+    `config.getoption("elasticsearch_port") or config.getini("elasticsearch_port")`, falling back to
+    a hardcoded 9300 - the default the old fixed constant silently relied on). Nothing in this suite
+    currently RESOLVES that fixture (the `elasticsearch` fixture below shadows the plugin's and never
+    requests the noproc process), so this is belt-and-braces: without it, an ephemeral (or overridden)
+    port would leave a latent 9300 behind for any future test that does request
+    `elasticsearch_nooproc`, pointing it at nothing at all.
+    """
+    if hasattr(config.option, "elasticsearch_port"):
+        config.option.elasticsearch_port = str(port)
 
 
 def pytest_configure(config):
     """
-    Thread `ELASTICSEARCH_PORT` through to pytest-elasticsearch's own config, which is where
-    `elasticsearch_nooproc` reads its port from (`pytest_elasticsearch.config.get_config` ->
-    `config.getoption("elasticsearch_port") or config.getini("elasticsearch_port")`, falling back
-    to a hardcoded 9300 - the "default expected by `elasticsearch_nooproc`" the constant above used
-    to silently rely on). Nothing in this suite currently RESOLVES that fixture (the `elasticsearch`
-    fixture below shadows the plugin's and never requests the noproc process), so this is belt-and-
-    braces: without it, overriding `TEST_ELASTICSEARCH_PORT` would leave a latent 9300 behind for
-    any future test that does request `elasticsearch_nooproc`. Setting it to 9300 when the
-    environment variable is unset is a no-op against the plugin's own fallback.
+    With an explicit override we know the port before anything starts, so thread it immediately.
+    Without one the port does not exist until the container is up, so the `elasticsearch` fixture
+    below does the same job once Docker has assigned it.
     """
-    if hasattr(config.option, "elasticsearch_port") and not config.option.elasticsearch_port:
-        config.option.elasticsearch_port = str(ELASTICSEARCH_PORT)
+    if ELASTICSEARCH_PORT_OVERRIDE is not None:
+        _thread_elasticsearch_port_into_plugin_config(config, ELASTICSEARCH_PORT_OVERRIDE)
 
 
 # The host load average every test sees, unless it opts out with `@pytest.mark.real_host_load`.
@@ -186,29 +218,50 @@ def google_drive_credentials_available() -> bool:
     return True
 
 
+POSTGRES_CONTAINER_PORT = 5432
+ELASTICSEARCH_CONTAINER_PORT = 9200
+
+
 @pytest.fixture(scope="session")
 def postgres_container():
-    postgres = PostgresContainer("postgres:16.0-alpine").with_bind_ports(5432, POSTGRES_PORT)
+    postgres = PostgresContainer("postgres:16.0-alpine")
+    if POSTGRES_PORT_OVERRIDE is not None:
+        postgres.with_bind_ports(POSTGRES_CONTAINER_PORT, POSTGRES_PORT_OVERRIDE)
     postgres.start()
     yield postgres
     postgres.stop()
 
 
 @pytest.fixture(scope="session")
+def postgres_port(postgres_container) -> int:
+    """
+    The host port this session's Postgres container is ACTUALLY reachable on - read back from
+    Docker rather than assumed, which is the whole point: with no override Docker picked it.
+    """
+    return int(postgres_container.get_exposed_port(POSTGRES_CONTAINER_PORT))
+
+
+@pytest.fixture(scope="session")
 def elasticsearch_container():
-    elasticsearch = ElasticSearchContainer("elasticsearch:7.17.23", mem_limit="1G").with_bind_ports(
-        9200, ELASTICSEARCH_PORT
-    )
+    elasticsearch = ElasticSearchContainer("elasticsearch:7.17.23", mem_limit="1G")
+    if ELASTICSEARCH_PORT_OVERRIDE is not None:
+        elasticsearch.with_bind_ports(ELASTICSEARCH_CONTAINER_PORT, ELASTICSEARCH_PORT_OVERRIDE)
     elasticsearch.start()
     yield elasticsearch
     elasticsearch.stop()
 
 
 @pytest.fixture(scope="session")
-def django_db_modify_db_settings(postgres_container):
+def elasticsearch_port(elasticsearch_container) -> int:
+    """The host port this session's Elasticsearch container is ACTUALLY reachable on."""
+    return int(elasticsearch_container.get_exposed_port(ELASTICSEARCH_CONTAINER_PORT))
+
+
+@pytest.fixture(scope="session")
+def django_db_modify_db_settings(postgres_container, postgres_port):
     # customise settings to point to testcontainers db
     conf_settings.DATABASES["default"]["HOST"] = postgres_container.get_container_host_ip()
-    conf_settings.DATABASES["default"]["PORT"] = POSTGRES_PORT
+    conf_settings.DATABASES["default"]["PORT"] = postgres_port
     conf_settings.DATABASES["default"]["NAME"] = postgres_container.dbname
     conf_settings.DATABASES["default"]["USER"] = postgres_container.username
     conf_settings.DATABASES["default"]["PASSWORD"] = postgres_container.password
@@ -240,11 +293,15 @@ def dummy_integration(integration_setter) -> Type[GameIntegration]:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def elasticsearch(elasticsearch_container):
+def elasticsearch(request, elasticsearch_container, elasticsearch_port):
     conf_settings.ELASTICSEARCH_DSL["default"][
         "hosts"
-    ] = f"{elasticsearch_container.get_container_host_ip()}:{ELASTICSEARCH_PORT}"
-    conf_settings.ELASTICSEARCH_PORT = ELASTICSEARCH_PORT
+    ] = f"{elasticsearch_container.get_container_host_ip()}:{elasticsearch_port}"
+    conf_settings.ELASTICSEARCH_PORT = elasticsearch_port
+    # The ephemeral port only exists once the container is up, so the plugin-config threading that
+    # `pytest_configure` does for an explicit override has to happen here for the default path.
+    # Autouse + session scope means this lands before anything could resolve `elasticsearch_nooproc`.
+    _thread_elasticsearch_port_into_plugin_config(request.config, elasticsearch_port)
     return factories.elasticsearch("elasticsearch_nooproc")
 
 

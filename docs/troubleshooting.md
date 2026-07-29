@@ -1157,62 +1157,77 @@ Verified 2026-07-21 running `cardpicker/tests/test_local_ocr.py`,
 `test_reparse_collector_evidence.py` together (370 passed) this way
 against the live prod containers with no observed impact.
 
-## Running the full `pytest cardpicker` suite gets mass `docker.errors.APIError`/`OperationalError: connection to server` failures across unrelated files
+## Test containers no longer take fixed host ports — `Bind for 0.0.0.0:9300 failed: port is already allocated` is FIXED (2026-07-29)
 
-**Symptom**: a full `pytest cardpicker -q` run (not a targeted file/module)
-produces hundreds of `ERROR`s spread across many files that have nothing to
-do with your change (`test_views.py`, `test_vote_consensus.py`,
-`test_sources.py`, etc.) — either `django.db.utils.OperationalError: connection to server at "localhost"`, or, on a worse collision,
+**Status**: FIXED. Concurrent `pytest cardpicker/tests/` runs on one box no
+longer collide over host ports, and there is no workaround left to apply.
+This entry is kept because the failure it describes was mistaken for a
+code regression three separate times in one day, so the symptom needs to
+stay searchable — and because a run against an OLD branch (anything based
+before this fix) still behaves the old way.
+
+**Symptom (historical, pre-fix)**: a full `pytest cardpicker -q` run (not a
+targeted file/module) produced hundreds of `ERROR`s spread across many
+files that had nothing to do with your change (`test_views.py`,
+`test_vote_consensus.py`, `test_sources.py`, etc.) —
 `docker.errors.APIError: 500 Server Error for http+docker://localhost/...`
-(e.g. `Bind for 0.0.0.0:9300 failed: port is already allocated`, or the
-same for `:47000`). Individually running the files your change actually
-touches passes cleanly (100%), which is the tell that this isn't a
-regression in your code. Every test in an affected run shows as `ERROR`,
-not `FAILED`, and the traceback bottoms out in `cardpicker/tests/conftest.py`'s
-`postgres_container`/`elasticsearch_container` fixtures, not in your own
-code.
+(`Bind for 0.0.0.0:9300 failed: port is already allocated`, or the same
+for `:47000`). Every test in an affected run showed as `ERROR`, not
+`FAILED`, and the traceback bottomed out in
+`cardpicker/tests/conftest.py`'s
+`postgres_container`/`elasticsearch_container` fixtures rather than in
+your own code; running the files your change actually touched passed
+cleanly, which was the tell.
 
-**Cause**: this repo's `db`/`transactional_db` pytest fixtures spin up
-throwaway `testcontainers` Postgres/Elasticsearch containers per test run
-(`cardpicker/tests/conftest.py`) on **fixed** host ports (`POSTGRES_PORT = 47000`, `ELASTICSEARCH_PORT = 9300` - the latter is also
-`pytest_elasticsearch`'s own hardcoded default) - a full-suite run
-launches (and tears down) a lot of them in a short window. This machine
-runs more than one Claude Code worktree session at a time (see
-`WORKERS.md` at the repo root, machine-local); every worktree shares the
-same Docker daemon, so two sessions running `pytest` at the same moment
-compete for the same Postgres connection ceiling and/or try to bind the
-same two fixed host ports - only one port-bind wins, and testcontainers
-surfaces the loser's failure as a raw Docker API error rather than a
-friendly retry/backoff message. `docker ps`/`ps aux | grep pytest` will
-show another session's containers/process still running if this is the
-cause. A related, quieter form of the same root cause needs no other
-session at all: if a PRIOR run of yours was interrupted (or one of its
-fixtures failed) before its own `postgres_container`/
-`elasticsearch_container.stop()` teardown ran, the now-orphaned container
-keeps holding the port for every subsequent run of yours too - `docker ps -a` showing a `romantic_elion`/`relaxed_mccarthy`-style random-named
-container still `Up` on `:47000`/`:9300` from an earlier failed session
-is the tell.
+**Cause (historical)**: the session-scoped `testcontainers` Postgres and
+Elasticsearch containers in `cardpicker/tests/conftest.py` were pinned to
+**fixed** host ports (`POSTGRES_PORT = 47000`, `ELASTICSEARCH_PORT = 9300`)
+via `with_bind_ports`. This machine runs more than one worktree session at
+a time (see `WORKERS.md` at the repo root, machine-local) sharing one
+Docker daemon, so the second session to start lost the bind. An
+intermediate fix made those ports env-overridable
+(`TEST_POSTGRES_PORT`/`TEST_ELASTICSEARCH_PORT`) but nothing ASSIGNED
+distinct values, so the DEFAULT still collided — overridability without
+allocation does not solve concurrency, and every session still had to
+hand-pick an offset it hoped nobody else had taken.
 
-**Fix**: this is infrastructure contention, not a code bug - don't debug
-your own change against it. Before trusting a full-suite failure list,
-check for a concurrent `pytest` process (`ps aux | grep pytest`) and
-concurrent testcontainers (`docker ps`) from another session. If found,
-wait for it to finish (or coordinate via `WORKERS.md`) and re-run - don't
-debug your own code against a result contaminated by another session's
-resource contention; trust your own affected-files-only run
-(individually and together) as the primary verification signal in the
-meantime, with a full-suite run as a nice-to-have confirmation, not the
-only valid one, when this box is shared. If instead the container
-holding the port is an ORPHAN of your own prior failed run (you recognize
-the run as yours and it's been sitting idle, not freshly created) rather
-than a live concurrent session's, it's safe to `docker rm -f <name>` it
-and retry immediately - but never remove a container you don't recognize
-as your own leftover, since a live session's containers still mid-test
-are exactly the "port is already allocated" collision this entry
-describes, not a target for cleanup. Confirmed one 2026-07-23 session
-hitting this twice in the same task (once from a genuine concurrent
-session, once from its own prior run's orphaned containers) - `docker rm -f` on the confirmed-orphan case, then a plain retry once ports read
-free resolved both.
+**How the ports are allocated now**: `conftest.py` starts both containers
+with **no host binding at all** — only the `with_exposed_ports` their
+testcontainers constructors already set — so Docker assigns a free
+**ephemeral** host port per container, and the fixtures read back what it
+actually assigned with `get_exposed_port()`. Two session fixtures,
+`postgres_port` and `elasticsearch_port`, publish those values;
+`django_db_modify_db_settings` and the `elasticsearch` fixture point
+Django's `DATABASES["default"]["PORT"]` and `ELASTICSEARCH_DSL` at them,
+and the pytest-elasticsearch plugin's own `elasticsearch_port` option is
+threaded to the same value so `elasticsearch_nooproc` cannot fall back to
+a stale hardcoded 9300. Nothing wants a specific port, so nothing can
+collide — this is a closed race, not a narrowed window (picking a random
+constant at import time would only be the latter). Isolation is unchanged:
+each run still gets its own containers, its own `test_*` database and its
+own index.
+
+`TEST_POSTGRES_PORT` / `TEST_ELASTICSEARCH_PORT` still work and still pin a
+deterministic host port — use them when you need to attach `psql` or an
+Elasticsearch client to a live test container, or want a reproducible port
+in a debugging session. Setting one re-introduces the collision risk for
+that run by design; it is opt-in, and each variable is independent (unset
+means ephemeral for that container only). `test_harness_isolation.py`
+pins all of this — including that the DEFAULT requests no host binding —
+so the fix cannot rot back into a fixed port silently.
+
+**What is NOT fixed by this**: general resource contention on a shared
+box. Several full suites at once still compete for CPU, memory and the
+Docker daemon, and can still produce
+`django.db.utils.OperationalError: connection to server at "localhost"`
+from Postgres connection pressure rather than a port bind. If you see mass
+`ERROR`s with that message (and no `port is already allocated`), check for
+concurrent `pytest` processes (`ps aux | grep pytest`) and containers
+(`docker ps`) before debugging your own change. Orphaned containers from
+an interrupted prior run no longer block anything — they hold only a port
+nobody wants — but they do still consume memory, so `docker rm -f` is
+worth doing on containers you recognise as your own leftovers. Never
+remove one you don't recognise: it may belong to a live session mid-test.
 
 ## A per-instance `viewBox` crop on an inlined SVG shows the _entire_ source art instead of just its own band
 

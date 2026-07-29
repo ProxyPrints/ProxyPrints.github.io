@@ -407,11 +407,13 @@ task's intent is not, even when nothing in it is secret.
 **Scope, made explicit (2026-07-15)**: the rule guards paths to
 **production** data specifically, not "any DB access from a host venv."
 `pytest`'s own `testcontainers` fixtures (`cardpicker/tests/conftest.py`)
-spin up throwaway, isolated Postgres/ES on different ports
-(`47000`/`9300`, not `5432`/`9200`) for the lifetime of one test session
-and destroy them after — no path to the real service ever exists in that
-flow, so running the test suite from a host venv is not an exception to
-this rule, it's simply outside its scope. The venv still never gets
+spin up throwaway, isolated Postgres/ES on different ports for the
+lifetime of one test session and destroy them after — since 2026-07-29
+those are **ephemeral** ports Docker assigns per container (they were the
+fixed `47000`/`9300` before that; either way, never `5432`/`9200`) — so no
+path to the real service ever exists in that flow, and running the test
+suite from a host venv is not an exception to this rule, it's simply
+outside its scope. The venv still never gets
 settings/scripts pointing at the real `127.0.0.1:5432`/`9200` ports -
 that boundary is unchanged. If a test or fixture is ever found reaching
 the real ports instead of its testcontainer, that's a stop-and-report,
