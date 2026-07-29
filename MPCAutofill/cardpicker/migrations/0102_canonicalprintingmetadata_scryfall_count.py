@@ -6,7 +6,7 @@ WHY THIS MIGRATION EXISTS
 `deductive_backfill`'s D1 tier advertised, and cast votes at `confidence=0.95` on, a guarantee it
 did not implement: that a name matching exactly one `CanonicalCard` row was "cross-verified
 against Scryfall's own printings_count (not just 'our table happens to have one row')". The
-column it read is a count of OUR OWN rows (renamed `catalogued_printings_count` in 0098), so the
+column it read is a count of OUR OWN rows (renamed `catalogued_printings_count` in 0099), so the
 check restated the name-uniqueness test above it and excluded nothing - 137 D1 candidates before
 it and 137 after, measured against the live catalogue on 2026-07-29 (issue #600).
 
@@ -33,18 +33,39 @@ fabricated 1. This is also why no data migration backfills the column: a value i
 outside the import pass that reads the bulk file, would be exactly such a fabrication. Until
 the importer next runs, every row reads NULL and D1 correctly declines to vote.
 
-MIGRATION-GRAPH NOTE
---------------------
+MIGRATION-GRAPH NOTE - THE FILE NUMBER AND THE DEPENDENCY DO NOT MATCH, DELIBERATELY
+------------------------------------------------------------------------------------
 Depends on `0099_rename_printings_count_catalogued` (PR #601), which renames the column this one
-is designed to be compared against. #601 is not merged yet, so this migration is NOT reachable
-from master on its own - it is stacked on that branch deliberately, because gating D1 on
-`catalogued_printings_count` requires the renamed column to exist.
+is designed to be compared against: gating D1 on `catalogued_printings_count` requires the renamed
+column to exist. #601 HAS MERGED (master commit 7afff071) and `0099` is `cardpicker`'s single leaf
+on `master`, so this dependency is REAL, resolvable today, and leaves the app single-leaf when
+this branch is merged with `master`.
 
-The numbering has already moved once: #601 originally added the rename as `0098`, was renumbered
-to `0099` when PR #573's `0098_card_illustration_consensus_fields` merged to master first, and
-this file was renumbered `0099` -> `0100` to follow. If #601 moves again, move this with it. It
-is a pure additive column with no other ordering constraint, so renumbering costs nothing beyond
-this docstring and the dependency tuple below.
+The FILE is numbered `0102` because the orchestrator has allocated the intervening numbers to two
+still-open PRs: `0100_superseded_card_printing_tag_archive` (PR #604) and
+`0101_delete_printingtagvote` (PR #615). NEITHER OF THOSE EXISTS ON `master`. The number is
+reserved to avoid a filename-prefix collision; the dependency edge is deliberately NOT pointed at
+them, because a dependency on a node that does not exist is not a "temporary" cost - it is a hard
+`NodeNotFoundError` at `migrate` time, which means `pytest-django` cannot build a test database
+and EVERY test on this branch fails at setup. It is also an explicit finding in
+`.github/scripts/check_migration_leaves.py` ("depends on cardpicker.X, which does not exist"), so
+PR #611's merge-result leaf guard would fail as well. Forward-declaring here would trade a
+certain, total CI outage for the avoidance of a merge-order collision that is loud, cheap, and
+caught automatically.
+
+This follows PR #615's convention (file numbered at its allocated slot, `dependencies` pointed at
+the real leaf on `master`) rather than PR #604's forward declaration. The two authors reached
+opposite conclusions and both gave reasons; the difference now is that #611's guard exists and
+turns the collision #604 was insuring against into an automatic, blocking signal, which removes
+the only argument for paying for it up front.
+
+    => WHICHEVER OF #604 / #615 MERGES BEFORE THIS ONE, THIS MIGRATION'S `dependencies` MUST BE
+       REPOINTED AT THE NEW LEAF ON REBASE. Leaving it on `0099` after `0100`/`0101` land gives
+       `cardpicker` two leaf nodes, which takes test-database setup down on EVERY branch in the
+       repo, not just this one. PR #611's `migration-graph` job evaluates the graph AS MERGED with
+       the base at run time, so it catches this the moment it becomes true - that is what it is
+       for. Repointing costs one dependency tuple and this paragraph; this is a pure additive
+       column with no ordering constraint in substance against either of those migrations.
 """
 
 from django.db import migrations, models
