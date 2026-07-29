@@ -1841,7 +1841,24 @@ class CardScanLog(models.Model):
     survivor_pks = models.JSONField(null=True, blank=True)
 
     class Meta:
-        indexes = [models.Index(fields=["card", "anonymous_id"])]
+        indexes = [
+            models.Index(fields=["card", "anonymous_id"]),
+            # Serves cardpicker.catalog_stats's skip-breakdown-by-engine aggregate
+            # (compute_skip_breakdown's byReasonAndEngine, and any future query shaped the same
+            # way - e.g. a distinct-cards-routed-to-review count) which filters/groups on
+            # anonymous_id + skip_reason with no `card` in the predicate at all. The (card,
+            # anonymous_id) index above is useless for that query - `card` is its LEADING column,
+            # and Postgres can only use a leading prefix of a composite btree index, so a query
+            # that never mentions `card` gets no help from it and falls back to a sequential scan.
+            # Added by migration 0096 (see that migration's own docstring for the full reasoning,
+            # including why anonymous_id leads) because `warm_catalog_stats` runs this query
+            # HOURLY - a sequential scan here is a recurring, scheduled cost, not a one-off.
+            # Explicit name (rather than Django's default hash-derived one), same convention
+            # QuestionFeedServedLog.Meta uses further down this file for its own index, so
+            # migration 0096 can be hand-written and verified against this file without a live
+            # `makemigrations` run.
+            models.Index(fields=["anonymous_id", "skip_reason"], name="card_scan_log_anon_skip_idx"),
+        ]
 
     def __str__(self) -> str:
         return f"card={self.card_id} anonymous_id={self.anonymous_id} skip_reason={self.skip_reason}"

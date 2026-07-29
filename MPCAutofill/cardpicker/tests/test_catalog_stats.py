@@ -13,8 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
+from django.conf import settings
 from django.core.cache import caches
 from django.core.management import CommandError, call_command
+from django.db import connection
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -581,3 +583,145 @@ class TestMigration0094:
             executor = MigrationExecutor(connection)
             executor.loader.build_graph()
             executor.migrate(forwards)
+
+
+class TestWarmCatalogStatsSweepGate:
+    """
+    Tests for `warm_catalog_stats`'s sweep gate (owner ruling 2026-07-29 - see that command's own
+    module docstring, and `docs/features/catalog-stats.md`'s "Sweep gate" section, for the full
+    skip/staleness mechanism and the accepted up-to-~7h staleness trade it creates).
+
+    Every scenario here calls the real management command end-to-end (`call_command`, not the
+    gate helper directly) so a regression in either the gate check itself OR its wiring into
+    `handle()` would be caught the same way a genuine skip/no-skip in production would surface.
+    """
+
+    def test_running_sweep_within_staleness_bound_skips_and_leaves_cache_untouched(self, db, capsys):
+        """The core skip guarantee: exit 0 (no exception), a clear message naming the blocking
+        run, and the cache left byte-for-byte as it was - not merely "the command returned", the
+        cache must still hold exactly the PRIOR blob, proving no recompute happened at all."""
+        call_command("warm_catalog_stats")
+        good_cache = caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
+        assert good_cache is not None
+
+        run = _create_run(
+            run_id="sweep-in-flight-abc123",
+            command="local_identify_printing_tags",
+            status=PilotRunLedger.Status.RUNNING,
+        )
+
+        call_command("warm_catalog_stats")  # must not raise - a skip is exit 0, never an error
+        output = capsys.readouterr().out
+
+        assert "sweep-in-flight-abc123" in output
+        assert run.started_at.isoformat() in output
+        assert "skip" in output.lower()
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) == good_cache
+
+    def test_running_sweep_older_than_staleness_bound_does_not_block_crashed_sweep_cannot_freeze_the_page(self, db):
+        """The guard this gate exists to protect: a sweep that crashed without ever reaching
+        COMPLETED/FAILED leaves a RUNNING row behind forever. Without this staleness bound that
+        row would disable the warm - and therefore freeze the stats page - permanently, with
+        nothing reporting why. A RUNNING row older than the bound must be ignored entirely."""
+        stale_started_at = timezone.now() - dt.timedelta(hours=settings.WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS + 1)
+        _create_run(
+            run_id="crashed-sweep-never-finished",
+            command="local_identify_printing_tags",
+            status=PilotRunLedger.Status.RUNNING,
+            started_at=stale_started_at,
+        )
+
+        call_command("warm_catalog_stats")
+
+        cached = caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
+        assert cached is not None
+        assert cached["generatedAt"] is not None
+
+    def test_completed_run_never_blocks(self, db):
+        _create_run(run_id="finished-ok", status=PilotRunLedger.Status.COMPLETED)
+        call_command("warm_catalog_stats")
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) is not None
+
+    def test_failed_run_never_blocks(self, db):
+        _create_run(run_id="finished-badly", status=PilotRunLedger.Status.FAILED)
+        call_command("warm_catalog_stats")
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) is not None
+
+    def test_no_ledger_rows_at_all_never_blocks(self, db):
+        assert not PilotRunLedger.objects.exists()
+        call_command("warm_catalog_stats")
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) is not None
+
+    def test_gate_disabled_by_setting_a_running_row_does_not_block(self, db):
+        _create_run(
+            run_id="sweep-in-flight-but-gate-off",
+            command="local_identify_printing_tags",
+            status=PilotRunLedger.Status.RUNNING,
+        )
+
+        with override_settings(WARM_CATALOG_STATS_SWEEP_GATE_ENABLED=False):
+            call_command("warm_catalog_stats")
+
+        cached = caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
+        assert cached is not None
+        assert cached["generatedAt"] is not None
+
+
+class TestMigration0096CardScanLogAnonSkipIndex:
+    """
+    Tests for migration `0096_card_scan_log_anon_skip_idx` (see that migration's own docstring
+    for the full reasoning) - the `CardScanLog(anonymous_id, skip_reason)` composite index
+    `compute_skip_breakdown`'s per-engine panel (and any future query shaped the same way) needs,
+    since the model's pre-existing `(card, anonymous_id)` index cannot serve a query that never
+    filters on `card` at all.
+
+    No pre-existing convention in this repo tests a migration-added COLUMN index specifically
+    (`TestMigration0094` above and `test_warm_artist_external_links_schedule.py` both cover a
+    `django_q.Schedule` ROW; `test_shared_cache.py` checks a whole cache TABLE's existence, not
+    one index on an existing table) - this class follows the closest available precedent
+    (`test_shared_cache.py`'s own `connection.introspection` usage) rather than inventing an
+    unrelated pattern.
+    """
+
+    MIGRATION_NAME = "0096_card_scan_log_anon_skip_idx"
+    INDEX_NAME = "card_scan_log_anon_skip_idx"
+
+    def _index_present(self) -> bool:
+        with connection.cursor() as cursor:
+            constraints = connection.introspection.get_constraints(cursor, CardScanLog._meta.db_table)
+        return self.INDEX_NAME in constraints
+
+    def test_index_exists_on_the_live_migrated_schema(self, db):
+        with connection.cursor() as cursor:
+            constraints = connection.introspection.get_constraints(cursor, CardScanLog._meta.db_table)
+
+        assert self.INDEX_NAME in constraints
+        assert constraints[self.INDEX_NAME]["columns"] == ["anonymous_id", "skip_reason"]
+
+    def test_pre_existing_card_anonymous_id_index_is_untouched(self, db):
+        """This migration ADDS an index, it must not replace or disturb the model's original
+        (card, anonymous_id) index that other queries still rely on."""
+        with connection.cursor() as cursor:
+            constraints = connection.introspection.get_constraints(cursor, CardScanLog._meta.db_table)
+
+        matching = [c for c in constraints.values() if c["columns"] == ["card_id", "anonymous_id"]]
+        assert len(matching) == 1
+
+    def test_migration_reverses_and_reapplies_cleanly(self, db):
+        from django.db.migrations.executor import MigrationExecutor
+
+        forwards = [("cardpicker", self.MIGRATION_NAME)]
+        backwards = [("cardpicker", "0095_canonicalprintingmetadata_face_illustrations")]
+
+        assert self._index_present()
+        try:
+            MigrationExecutor(connection).migrate(backwards)
+            assert not self._index_present()
+
+            MigrationExecutor(connection).migrate(forwards)
+            assert self._index_present()
+        finally:
+            executor = MigrationExecutor(connection)
+            executor.loader.build_graph()
+            executor.migrate(forwards)
+        assert self._index_present()

@@ -269,3 +269,54 @@ one card" CTA gating and the gated human-progress series, third fixture
 threshold's own hysteresis band, pure-function level - see "The gated
 human-progress series" above). Playwright: `frontend/tests/Stats.spec.ts`
 and `frontend/tests/ParticipationGraph.spec.ts`.
+
+## Sweep gate (`warm_catalog_stats`, 2026-07-29 owner ruling)
+
+**New section - added standalone at the end of this file so it merges
+cleanly alongside PR #566's own edits elsewhere in this document; not
+interleaved into any paragraph above.**
+
+`warm_catalog_stats` now skips its entire run, cleanly (exit 0, cache left
+completely untouched), while a catalog sweep is in flight - defined as any
+`PilotRunLedger` row with `status=RUNNING` (see that model's own
+docstring: created `RUNNING` at start, updated `COMPLETED`/`FAILED` at
+end). A sweep genuinely contends for the same database this command's
+five aggregates query, so the warm command checks for one BEFORE
+computing anything, the same way it already leaves the cache untouched on
+any other failure.
+
+**Guard against a crashed sweep**: a `RUNNING` row does not block forever
+
+- one older than `settings.WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS`
+  (default comfortably above a full sweep's measured ~7.0h floor; see that
+  setting's own comment in `MPCAutofill/MPCAutofill/settings.py` for the exact number
+  and its reasoning) is ignored, so a crashed sweep that never updated its
+  ledger row to `COMPLETED`/`FAILED` cannot permanently freeze the stats
+  page. The skip log line names the specific blocking run (`run_id`,
+  `started_at`, and how long it has been running) so a frozen page is
+  diagnosable from the command's own output in one command.
+
+**Both the gate and the staleness bound are settings-driven**
+(`WARM_CATALOG_STATS_SWEEP_GATE_ENABLED`,
+`WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS` - see
+`MPCAutofill/MPCAutofill/settings.py`), tunable without a migration or a
+code change.
+
+**Consequence, stated plainly (accepted trade, not an oversight)**:
+because the gate skips the ENTIRE warm run rather than any individual
+panel, the stats page can go up to ~7h stale during a full sweep -
+noticeably worse than the hourly schedule's cadence alone implies. A
+fast/slow split (skip only the panels that read tables a sweep actually
+mutates, keep warming the rest on schedule) would avoid this staleness
+and is a known follow-up - deliberately deferred, not designed here. This
+document intentionally does not restate that design; see the command's
+own module docstring for the up-to-date statement of the trade if this
+section and the code ever drift.
+
+**Index**: `CardScanLog(anonymous_id, skip_reason)` (migration `0096`) -
+added because `compute_skip_breakdown`'s per-engine panel (and any future
+query shaped the same way) filters/groups `CardScanLog` on those two
+columns with no `card` in the predicate, which the model's pre-existing
+`(card, anonymous_id)` index cannot serve (leading-column mismatch). See
+migration `0096`'s own docstring for the full reasoning, including why
+`anonymous_id` leads the composite index.

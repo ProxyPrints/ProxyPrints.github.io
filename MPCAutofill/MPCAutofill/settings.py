@@ -613,3 +613,30 @@ STAGE_E_SELECTION_CHUNK_SIZE = 250
 # eligible cards) - the bound that keeps one dispatch's own selection cost flat regardless of how
 # sparse the remaining backlog is.
 STAGE_E_SELECTION_SCAN_CAP = 1000
+
+# warm_catalog_stats sweep gate (owner ruling 2026-07-29 - see that command's own module
+# docstring for the full skip/staleness mechanism, and docs/features/catalog-stats.md's "Sweep
+# gate" section for the accepted up-to-~7h-stale trade this creates).
+#
+# WARM_CATALOG_STATS_SWEEP_GATE_ENABLED - master switch. Default True: a catalog sweep
+# (PilotRunLedger status=RUNNING) genuinely does contend for the same database this warm run's
+# five aggregates query, so gating is the safe default everywhere. Settings-driven (not a plain
+# constant), same convention as STAGE_E_STREAMING_ENABLED above, so a self-hoster who doesn't run
+# sweeps at all - and therefore never wants the warm skipped over a ledger row it doesn't
+# understand - can turn the gate off with one env var and no code change or redeploy.
+WARM_CATALOG_STATS_SWEEP_GATE_ENABLED = env.bool("WARM_CATALOG_STATS_SWEEP_GATE_ENABLED", default=True)
+
+# WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS - how old a RUNNING PilotRunLedger row has to be
+# before the gate stops trusting it and lets the warm run anyway (the guard against a crashed
+# sweep that never reached COMPLETED/FAILED permanently freezing the stats page). A full-catalog
+# pass measures at ~7.0h as a FLOOR (harvest_fetch_limiter.GOOGLE_IMAGE's own max_concurrency=6 is
+# the binding limiter - see docs/features/catalog-completion-plan.md's concurrency-probe section
+# for the underlying measurement), so this default is set comfortably above that floor - not a
+# tuned-to-the-edge number, deliberately: too tight risks treating a slow-but-live sweep as stale
+# and warming stats out from under it; too loose just delays the crash-recovery this guard exists
+# for, which is the lesser failure mode of the two (a stale row still self-heals, at worst, at the
+# next scheduled sweep). 12h is a little under 2x the measured 7.0h floor - real margin against a
+# sweep simply running slower than measured, without leaving a crashed row live for anywhere near
+# as long as the next sweep's own cadence would take to overwrite it. Settings-driven for the same
+# reason as the gate itself above: tunable without a migration or a code change.
+WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS = env.float("WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS", default=12.0)
