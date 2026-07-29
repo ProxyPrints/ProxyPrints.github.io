@@ -1792,6 +1792,52 @@ class FallbackCalculatorResult:
     audit: list[dict[str, object]] = field(default_factory=list)
 
 
+def _join_key_no_hit_subqueries(
+    card_ids: Optional[Iterable[int]] = None,
+) -> tuple["QuerySet[CardPrintingTag]", "QuerySet[CardScanLog]"]:
+    """
+    The join-key calculator's own no-hit population, as the pair of LAZY `card_id` subqueries every
+    downstream Stage D calculator filters by: cards it cast a real `is_no_match` vote on, and cards
+    it skipped for a reason in `JOIN_KEY_NO_HIT_SKIP_REASONS`. Returns the ROW querysets, exactly as
+    `local_residual_classify._frame_mismatch_scan_log_queryset` (PR #541) does; each caller applies
+    its own `.values_list("card_id", flat=True)`. Returned lazy (never materialised) so Django
+    compiles them into the one eligibility statement rather than pulling both populations into this
+    process's memory - see `local_illustration`'s own call site comment for the regression that
+    cost.
+
+    `card_ids` (2026-07-29, issue #533 / PRs #469/#541's defect class): pushes the SAME narrowing
+    the caller applies to the outer `Card` query INTO both subqueries. Django compiles
+    `.filter(pk__in=<values_list qs>)` as an UNCORRELATED `IN (SELECT ...)`, so an unscoped
+    subquery is a full pass over `CardPrintingTag` (167,229 rows live) or `CardScanLog` (2,617,333
+    rows live, append-only, still growing) on EVERY 25-card micro-batch, no matter how narrow the
+    outer scope is: the outer filter bounds the ROWS RETURNED, not the WORK DONE. Measured against
+    the live catalogue, eligibility query alone, median of 12 reps at batch 25:
+
+        `_fallback_eligible_cards_queryset`      1113.3 ms  ->   2.6 ms
+        `_slow_path_eligible_cards_queryset`      959.5 ms  ->   2.2 ms
+        `local_illustration`'s own eligibility   1117.2 ms  ->   2.9 ms
+
+    This is the identical defect PR #541 eliminated for five calculators OUTSIDE the dispatch loop
+    and explicitly did not touch here, which is why it survived in three of the four calculators
+    already in Stage E's hot path. Building the pair HERE, in one place, is what stops a fifth
+    calculator repeating it.
+
+    Purely a cost narrowing, never a behaviour change: a row either subquery would find OUTSIDE
+    `card_ids` could never survive the outer queryset's own `.filter(pk__in=card_ids)` regardless,
+    so the surviving `Card` set is identical either way. `card_ids is None` (BULK mode - every
+    management-command caller) returns exactly the pair this codebase built before this parameter
+    existed, byte-identical in compiled SQL.
+    """
+    join_key_no_match = CardPrintingTag.objects.filter(anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True)
+    join_key_no_hit_scanned = CardScanLog.objects.filter(
+        anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
+    )
+    if card_ids is not None:
+        join_key_no_match = join_key_no_match.filter(card_id__in=card_ids)
+        join_key_no_hit_scanned = join_key_no_hit_scanned.filter(card_id__in=card_ids)
+    return join_key_no_match, join_key_no_hit_scanned
+
+
 def _fallback_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
     """
     Cards the join-key calculator already concluded have no confident hit - the SAME population
@@ -1802,14 +1848,14 @@ def _fallback_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) 
     docstring for why a deduction-vote exclusion was considered and deliberately not added).
 
     `card_ids` (2026-07-24, Stage E Phase 2): forwarded straight through to
-    `_eligible_cards_queryset` - see that function's own docstring for the full rationale.
+    `_eligible_cards_queryset` - see that function's own docstring for the full rationale - AND
+    (2026-07-29) into the two join-key no-hit DEPENDENCY SUBQUERIES via
+    `_join_key_no_hit_subqueries`, which is where the per-batch cost of this function actually
+    lived. See that helper's own docstring.
     """
-    join_key_no_match_card_ids = CardPrintingTag.objects.filter(
-        anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
-    ).values_list("card_id", flat=True)
-    join_key_no_hit_scanned_card_ids = CardScanLog.objects.filter(
-        anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
-    ).values_list("card_id", flat=True)
+    join_key_no_match, join_key_no_hit_scanned = _join_key_no_hit_subqueries(card_ids)
+    join_key_no_match_card_ids = join_key_no_match.values_list("card_id", flat=True)
+    join_key_no_hit_scanned_card_ids = join_key_no_hit_scanned.values_list("card_id", flat=True)
     return _eligible_cards_queryset(
         STAGE_D_FALLBACK_ANONYMOUS_ID, rescannable_skip_reasons=FALLBACK_RESCANNABLE_SKIP_REASONS, card_ids=card_ids
     ).filter(Q(pk__in=join_key_no_match_card_ids) | Q(pk__in=join_key_no_hit_scanned_card_ids))
@@ -2083,19 +2129,22 @@ def _slow_path_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None)
 
     `card_ids` (2026-07-24, Stage E Phase 2): a pure scope narrowing, same convention as
     `_eligible_cards_queryset`'s own `card_ids` parameter - see that function's own docstring.
+    Since 2026-07-29 it is ALSO pushed into all FOUR dependency subqueries below (the two join-key
+    no-hit ones via `_join_key_no_hit_subqueries`, plus this calculator's own already-routed and
+    fallback-voted exclusions), not only the outer `Card` query - see `_join_key_no_hit_subqueries`'
+    own docstring for the uncorrelated-`IN (SELECT ...)` cost this removes. `card_ids=None` (BULK
+    mode) compiles to byte-identical SQL to before that change.
     """
-    join_key_no_match_card_ids = CardPrintingTag.objects.filter(
-        anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
-    ).values_list("card_id", flat=True)
-    join_key_no_hit_scanned_card_ids = CardScanLog.objects.filter(
-        anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
-    ).values_list("card_id", flat=True)
-    already_routed_card_ids = CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID).values_list(
-        "card_id", flat=True
-    )
-    fallback_voted_card_ids = CardPrintingTag.objects.filter(
-        anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, is_no_match=False
-    ).values_list("card_id", flat=True)
+    join_key_no_match, join_key_no_hit_scanned = _join_key_no_hit_subqueries(card_ids)
+    join_key_no_match_card_ids = join_key_no_match.values_list("card_id", flat=True)
+    join_key_no_hit_scanned_card_ids = join_key_no_hit_scanned.values_list("card_id", flat=True)
+    already_routed = CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID)
+    fallback_voted = CardPrintingTag.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, is_no_match=False)
+    if card_ids is not None:
+        already_routed = already_routed.filter(card_id__in=card_ids)
+        fallback_voted = fallback_voted.filter(card_id__in=card_ids)
+    already_routed_card_ids = already_routed.values_list("card_id", flat=True)
+    fallback_voted_card_ids = fallback_voted.values_list("card_id", flat=True)
     queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
