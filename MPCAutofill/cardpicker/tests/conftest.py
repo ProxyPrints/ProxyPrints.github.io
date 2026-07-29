@@ -101,8 +101,10 @@ def deterministic_host_load(request, monkeypatch):
 # pinned above; this is the other. `stage_e_dispatch._sample_envelope_signals` reads this process's
 # REAL resident set size before every dispatch decision, exactly as it should in production, which
 # left every Stage E dispatch test a function of how much memory the pytest process happened to be
-# holding (37 tests are RSS-sensitive: 25 in test_stage_e_dispatch, 6 in test_stage_e_shakedown, 6
-# in test_stream_full_catalog - the same split as the load-sensitive set, for the same reason). The
+# holding (38 tests are RSS-sensitive as of this commit: 25 in test_stage_e_dispatch, 6 in
+# test_stage_e_shakedown, 7 in test_stream_full_catalog - the same split as the load-sensitive set,
+# because it is one gate with two sensors. Re-measure with the override below rather than trusting
+# that count; it was 37 a few PRs ago and #545 added one). The
 # measured margin is comfortable today (the suite peaks around 348MB VmHWM against the 768MB bar,
 # ~2.2x) but it is a margin, not a guarantee: it moves with fixture growth, with a bigger
 # testcontainers footprint, and with whatever else the three agents commonly sharing this box are

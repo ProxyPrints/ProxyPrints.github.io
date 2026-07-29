@@ -10,8 +10,8 @@ corrupting each other's results:
      against the ratified `HOST_LOAD_CEILING = 7.0`; at load 3.4 they pass. Now pinned by
      conftest's autouse `deterministic_host_load` fixture.
   3. The same sampler reads this process's real RSS, the envelope's OTHER ambient sensor (one gate,
-     two sensors), leaving the same 37 tests a function of the pytest process's own memory against
-     the ratified `RSS_MB_PER_WORKER_CEILING = 768.0`. Now pinned by conftest's autouse
+     two sensors), leaving the same set of tests a function of the pytest process's own memory
+     against the ratified `RSS_MB_PER_WORKER_CEILING = 768.0`. Now pinned by conftest's autouse
      `deterministic_process_rss` fixture (2026-07-29).
 
 These tests exist so that none of these fixes can rot into a no-op silently. A harness fix that has
