@@ -1176,13 +1176,23 @@ class TestPrintingsForIllustration:
 
     def test_the_scope_reaches_the_compiled_sql(self, db):
         """Batch-scale cost, asserted on the compiled SQL rather than only on the result set -
-        the same evidence standard `TestEligibleIllustrationCardsQuerysetCardIdScoping` uses."""
+        the same evidence standard `TestEligibleIllustrationCardsQuerysetCardIdScoping` uses.
+
+        ASSERTED ON THE PREDICATE, NOT ON A BARE PK SUBSTRING (fixed 2026-07-29). This test used
+        to assert `str(pk) not in unscoped_sql`, which is only true while the pk happens to be a
+        digit string that appears nowhere else in the query. It is not: the query embeds
+        `illustration_id` UUIDs verbatim, and a single-digit pk ("1", "2", ...) is a substring of
+        almost any UUID, so the assertion passed or failed purely on where Postgres' sequence
+        happened to be when the test ran - i.e. on which OTHER test files ran first. Adding one
+        row-creating test anywhere earlier in the suite was enough to flip it. The predicate
+        itself is what the test means, so that is what it now checks."""
         shared, _other, shared_ccs, _odd = self._catalog()
         scoped_sql = str(printings_for_illustration(shared, candidate_printing_pks=[shared_ccs[0].pk]).query)
         unscoped_sql = str(printings_for_illustration(shared).query)
-        assert str(shared_ccs[0].pk) in scoped_sql
-        assert "IN (" in scoped_sql
-        assert str(shared_ccs[0].pk) not in unscoped_sql
+        scoping_predicate = f'"cardpicker_canonicalcard"."id" IN ({shared_ccs[0].pk})'
+        assert scoping_predicate in scoped_sql
+        assert scoping_predicate not in unscoped_sql
+        assert '"cardpicker_canonicalcard"."id" IN (' not in unscoped_sql
 
     def test_an_unknown_illustration_narrows_to_nothing(self, db):
         self._catalog()

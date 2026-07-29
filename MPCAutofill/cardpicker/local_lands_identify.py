@@ -280,9 +280,27 @@ class LandsIdentifyResult:
 
 
 def _land_pool_selected_cards(
-    index: CandidateNameIndex, sample_size: Optional[int], card_ids: Optional[Iterable[int]] = None
+    index: CandidateNameIndex,
+    sample_size: Optional[int],
+    card_ids: Optional[Iterable[int]] = None,
+    run_id: Optional[str] = None,
 ) -> list[SelectedCard]:
-    """Mirrors select_candidates' own base-queryset + candidate-lookup shape, but against
+    """RUN-SCOPED SELF-SUPPRESSION (`run_id`, 2026-07-29 owner directive): forwarded straight to
+    `_eligible_base_queryset`, so a vote or non-rescannable abstention THIS calculator recorded
+    under an EARLIER run no longer removes the card from a new run's land pool, while one recorded
+    under the CURRENT run still does. See that function's docstring for the full reasoning and for
+    why it stays opt-in there.
+
+    A CAVEAT SPECIFIC TO THIS CALCULATOR, AND IT IS PRE-EXISTING RATHER THAN INTRODUCED HERE: the
+    pool is keyed on `LANDS_ANONYMOUS_ID`, but `_process_land_card`'s OCR branch also writes votes
+    under `OCR_ANONYMOUS_ID`, an identity this query has never checked (see this function's own
+    "never OCR_ANONYMOUS_ID/PHASH_ANONYMOUS_ID's" note below). Run-scoping narrows the lands
+    exclusion only; the OCR-identity votes were already unsuppressed at eligibility and their sole
+    guard remains `_split_new_votes`, which compares the full (card, printing, anonymous_id) triple
+    and therefore already lets a CHANGED answer through to the purge - the property this work had
+    to add to `local_calculate_verdicts._split_new_printing_tag_votes` was already true here.
+
+    Mirrors select_candidates' own base-queryset + candidate-lookup shape, but against
     LANDS_ANONYMOUS_ID's own idempotence/exclusion state (never OCR_ANONYMOUS_ID/PHASH_
     ANONYMOUS_ID's) and filtered to is_lands_target rather than select_candidates' engine-
     specific dpi-floor-only filter. Deterministic pk order so sample_size is reproducible.
@@ -297,7 +315,7 @@ def _land_pool_selected_cards(
     `card_ids=None` (the management command's only calling shape) is byte-identical to before."""
     selected: list[SelectedCard] = []
     queryset = (
-        _eligible_base_queryset(LANDS_ANONYMOUS_ID, card_ids=card_ids)
+        _eligible_base_queryset(LANDS_ANONYMOUS_ID, card_ids=card_ids, run_id=run_id)
         .only("pk", "name", "identifier", "source_id", "content_phash")
         .order_by("pk")
     )
@@ -659,7 +677,10 @@ def run_lands_identify(
 
     # land_pool_size + per_name_candidate_counts: full pool, no sampling, no fetches - always
     # computed regardless of sample_size/fetch_budget (see module docstring).
-    full_selected = _land_pool_selected_cards(index, sample_size=None, card_ids=card_ids)
+    # `run_id=run_id`: run-scoped self-suppression (2026-07-29 owner directive) - a prior run's
+    # lands votes/abstentions no longer hide a card from this run; this run's own do, so a killed
+    # run resumes. See `_land_pool_selected_cards`' own docstring.
+    full_selected = _land_pool_selected_cards(index, sample_size=None, card_ids=card_ids, run_id=run_id)
     result.land_pool_size = len(full_selected)
     for selected in full_selected:
         result.per_name_candidate_counts[selected.card.name] = len(selected.candidates)

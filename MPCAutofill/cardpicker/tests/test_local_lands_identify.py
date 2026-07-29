@@ -426,14 +426,35 @@ class TestRunLandsIdentify:
         assert result.votes_written == 0
         assert CardPrintingTag.objects.count() == 0
 
-    def test_idempotent_via_scan_log_row(self, db, monkeypatch):
+    def test_idempotent_via_scan_log_row_WITHIN_THE_SAME_RUN(self, db, monkeypatch):
+        """RUN-SCOPED as of 2026-07-29 (owner directive: "prior runs must not suppress work in a
+        new run; the CURRENT run's own output must, so a killed run resumes"). The abstention this
+        test writes now has to carry the run_id of the run it is meant to suppress; a bare
+        `run_id=NULL` row (which is what this test used to create) no longer suppresses anything,
+        which is the whole point of the change and is asserted separately below."""
         CanonicalCardFactory(name="Plains")
         card = CardFactory(name="Plains")
-        CardScanLog.objects.create(card=card, anonymous_id=LANDS_ANONYMOUS_ID, skip_reason="artist-no-match")
+        CardScanLog.objects.create(
+            card=card, anonymous_id=LANDS_ANONYMOUS_ID, skip_reason="artist-no-match", run_id="run-a"
+        )
 
-        result = run_lands_identify(dry_run=True, sample_size=300, fetch_budget=0)
+        result = run_lands_identify(run_id="run-a", dry_run=True, sample_size=300, fetch_budget=0)
 
         assert result.land_pool_size == 0
+
+    def test_a_PRIOR_run_s_scan_log_row_does_not_suppress_a_new_run(self, db, monkeypatch):
+        """The other half of the same directive: the identical abstention, stamped with a
+        DIFFERENT run, leaves the card in the new run's land pool. Before run-scoping this card
+        was permanently out of reach of every future lands pass."""
+        CanonicalCardFactory(name="Plains")
+        card = CardFactory(name="Plains")
+        CardScanLog.objects.create(
+            card=card, anonymous_id=LANDS_ANONYMOUS_ID, skip_reason="artist-no-match", run_id="run-a"
+        )
+
+        result = run_lands_identify(run_id="run-b", dry_run=True, sample_size=300, fetch_budget=0)
+
+        assert result.land_pool_size == 1
 
 
 def _evidence(card, **overrides):

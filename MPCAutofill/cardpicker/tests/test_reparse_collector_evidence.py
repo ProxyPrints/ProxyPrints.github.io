@@ -248,13 +248,21 @@ class TestReparseAndRetract:
 
         # before retraction: local_calculate_verdicts' own eligibility query excludes this card
         # (a non-rescannable scan-log row already exists for it).
-        before = run_join_key_calculator(dry_run=False)
+        # RUN-SCOPED ELIGIBILITY (2026-07-29) changed what this precondition means, and the test
+        # says so rather than quietly pinning the weaker version. The stale scan-log row no longer
+        # excludes the card from a NEW run at all - prior runs do not suppress work - so the
+        # exclusion is asserted under the row's OWN run_id, which is where it still holds and
+        # which is what makes a killed run resume. The retraction runbook is NOT obsoleted by
+        # that: its job was always to remove the stale RECORD (and, in the vote case, to stop a
+        # stale row being counted by consensus), and un-suppressing eligibility does neither.
+        before = run_join_key_calculator(run_id="old-run", dry_run=False)
         assert before.cards_considered == 0
         assert CardPrintingTag.objects.filter(card=card).count() == 0
 
         reparse_and_retract([card.pk], run_id="reparse-1", dry_run=False)
+        assert not CardScanLog.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
 
-        after = run_join_key_calculator(dry_run=False)
+        after = run_join_key_calculator(run_id="a-fresh-run", dry_run=False)
         assert after.cards_considered == 1
         assert after.votes_written == 1
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
@@ -375,12 +383,16 @@ class TestReparseAndRetract:
             card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id="stage-d-run-y"
         )
 
-        before = run_join_key_calculator(dry_run=False)
-        assert before.cards_considered == 0  # excluded: a non-rescannable scan-log row exists
+        # Run-scoped eligibility (2026-07-29): the exclusion is asserted under the recorded row's
+        # OWN run_id, which is where it still holds. A NEW run reconsiders the card regardless -
+        # prior runs no longer suppress - so what the retraction still buys is removal of the
+        # stale RECORD, which is what the assertions after it check.
+        before = run_join_key_calculator(run_id="stage-d-run-y", dry_run=False)
+        assert before.cards_considered == 0  # excluded: THIS run's own non-rescannable row exists
 
         reparse_and_retract(select_card_ids_proxy_marker_veto("stage-d-run-y"), run_id="reparse-4", dry_run=False)
 
-        after = run_join_key_calculator(dry_run=False)
+        after = run_join_key_calculator(run_id="a-fresh-run", dry_run=False)
         assert after.cards_considered == 1
         assert after.votes_written == 1
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
@@ -445,12 +457,16 @@ class TestReparseAndRetract:
             run_id="stage-d-run-z3",
         )
 
-        before = run_join_key_calculator(dry_run=False)
-        assert before.cards_considered == 0  # excluded: an is_no_match vote already exists
+        # Run-scoped eligibility (2026-07-29): the exclusion is asserted under the recorded row's
+        # OWN run_id, which is where it still holds. A NEW run reconsiders the card regardless -
+        # prior runs no longer suppress - so what the retraction still buys is removal of the
+        # stale RECORD, which is what the assertions after it check.
+        before = run_join_key_calculator(run_id="stage-d-run-z3", dry_run=False)
+        assert before.cards_considered == 0  # excluded: THIS run's own is_no_match vote exists
 
         reparse_and_retract(select_card_ids_set_code_lexicon_gate("stage-d-run-z3"), run_id="reparse-7", dry_run=False)
 
-        after = run_join_key_calculator(dry_run=False)
+        after = run_join_key_calculator(run_id="a-fresh-run", dry_run=False)
         assert after.cards_considered == 1
         assert after.skip_counts.get("unknown-set-code") == 1
         assert not CardPrintingTag.objects.filter(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()

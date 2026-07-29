@@ -76,6 +76,7 @@ from cardpicker.local_identify_printing_tags import (
     CandidatePrinting,
 )
 from cardpicker.models import (
+    ArchivedCardPrintingTag,
     CanonicalPrintingMetadata,
     Card,
     CardPrintingTag,
@@ -529,11 +530,22 @@ class TestSplitNewPrintingTagVotes:
         assert new_votes == []
         assert already_voted == 1
 
-    def test_an_existing_match_vote_for_the_same_identity_is_skipped_even_with_a_different_printing(self, db):
-        """The invariant this guard enforces is 'at most one vote per (card, anonymous_id)',
-        matching _eligible_cards_queryset's own exclude - not 'at most one vote per (card,
-        printing, anonymous_id)', which is all the DB's own cardprintingtag_unique_printing_vote
-        constraint alone would check."""
+    def test_an_existing_match_vote_for_a_DIFFERENT_printing_is_a_changed_answer_and_is_kept(self, db):
+        """INVERTED 2026-07-29 (the run-scoped-eligibility work). This test previously asserted the
+        opposite - that a stored vote for printing A made a fresh verdict of printing B "already
+        voted" and dropped it - on the reasoning that `_eligible_cards_queryset`'s own exclude
+        enforced 'at most one vote per (card, anonymous_id)' anyway, so the value could never
+        differ in practice.
+
+        That premise is exactly what run-scoped eligibility removes: a card this calculator voted
+        on in a PRIOR run now reaches it again and gets a fresh verdict, which may genuinely
+        differ. Under the old key-only comparison that changed verdict was dropped before the
+        write, and because `_purge_and_write_printing_tag_votes` scopes its purge to the rows being
+        written, dropping it also meant purging nothing - so the stale vote survived verbatim with
+        no error and no counter moving. Bypassing eligibility alone would have bought nothing.
+
+        This is the same value-comparison contract `local_illustration._split_new_illustration_votes`
+        has always had ("THE ONE DIFFERENCE, AND IT IS LOAD-BEARING")."""
         card = CardFactory(name="Some Card")
         printing_a = CanonicalCardFactory(name="Some Card")
         printing_b = CanonicalCardFactory(name="Some Card")
@@ -546,8 +558,80 @@ class TestSplitNewPrintingTagVotes:
 
         new_votes, already_voted = _split_new_printing_tag_votes([vote])
 
+        assert new_votes == [vote]
+        assert already_voted == 0
+
+    def test_an_existing_match_vote_for_the_SAME_printing_is_still_skipped(self, db):
+        """The other half of the value comparison, and the half that keeps re-running a converged
+        calculator a no-op rather than an overwrite-everything churn machine."""
+        card = CardFactory(name="Some Card")
+        printing = CanonicalCardFactory(name="Some Card")
+        CardPrintingTag.objects.create(
+            card=card, printing=printing, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        vote = CardPrintingTag(
+            card_id=card.pk, printing_id=printing.pk, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+        )
+
+        new_votes, already_voted = _split_new_printing_tag_votes([vote])
+
         assert new_votes == []
         assert already_voted == 1
+
+    def test_a_flip_between_no_match_and_a_real_printing_is_a_changed_answer(self, db):
+        """`is_no_match` is part of the compared value, not just `printing_id`, so a calculator
+        that used to say "no known printing" and now says "this one" (or vice versa) overwrites."""
+        card = CardFactory(name="Some Card")
+        printing = CanonicalCardFactory(name="Some Card")
+        CardPrintingTag.objects.create(
+            card=card, printing=None, is_no_match=True, anonymous_id=JOIN_KEY_ANONYMOUS_ID, source=VoteSource.OCR
+        )
+        vote = CardPrintingTag(
+            card_id=card.pk, printing_id=printing.pk, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+        )
+
+        new_votes, already_voted = _split_new_printing_tag_votes([vote])
+
+        assert new_votes == [vote]
+        assert already_voted == 0
+
+    def test_a_multi_printing_group_is_compared_as_a_SET_and_kept_or_dropped_whole(self, db):
+        """One identity can hold several rows for a card (`cardprintingtag_unique_printing_vote`
+        constrains the triple, not the pair), so the comparison unit is the whole set. Dropping
+        only PART of a group would be a data-destruction bug: the purge is family-keyed on
+        `card_id` and deletes all of them, so any member left out of `new_votes` would be deleted
+        and never re-inserted."""
+        card = CardFactory(name="Some Card")
+        printing_a = CanonicalCardFactory(name="Some Card")
+        printing_b = CanonicalCardFactory(name="Some Card")
+        printing_c = CanonicalCardFactory(name="Some Card")
+        for printing in (printing_a, printing_b):
+            CardPrintingTag.objects.create(
+                card=card,
+                printing=printing,
+                is_no_match=False,
+                anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+                source=VoteSource.OCR,
+            )
+
+        identical = [
+            CardPrintingTag(
+                card_id=card.pk, printing_id=printing.pk, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+            )
+            for printing in (printing_a, printing_b)
+        ]
+        assert _split_new_printing_tag_votes(identical) == ([], 2)
+
+        # One member changed -> the WHOLE group is kept, so the purge can replace it wholesale.
+        changed = [
+            CardPrintingTag(
+                card_id=card.pk, printing_id=printing.pk, is_no_match=False, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+            )
+            for printing in (printing_a, printing_c)
+        ]
+        new_votes, already_voted = _split_new_printing_tag_votes(changed)
+        assert new_votes == changed
+        assert already_voted == 0
 
     def test_an_existing_vote_under_a_different_identity_is_not_a_collision(self, db):
         card = CardFactory(name="Some Card")
@@ -707,12 +791,29 @@ class TestRunJoinKeyCalculator:
         CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
         _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
 
-        first = run_join_key_calculator(dry_run=False)
+        first = run_join_key_calculator(run_id="run-a", dry_run=False)
         assert first.votes_written == 1
 
-        second = run_join_key_calculator(dry_run=False)
-        assert second.cards_considered == 0
+        # A NEW RUN RECONSIDERS THE CARD AND CONVERGES (2026-07-29 owner directive: "prior runs
+        # must not suppress work in a new run"). Before run-scoping, `cards_considered` here was
+        # 0 - the calculator's own history permanently narrowed every future run, so a fixed
+        # engine could never re-examine anything it had already answered. Now the card is
+        # reconsidered, the SAME verdict is recomputed, and `_split_new_printing_tag_votes`'
+        # value comparison recognises it as unchanged: nothing is written, nothing is purged,
+        # nothing is archived, and the stored row is byte-for-byte the one run-a wrote. That is
+        # convergence, which is what idempotence has to mean once prior runs stop suppressing.
+        second = run_join_key_calculator(run_id="run-b", dry_run=False)
+        assert second.cards_considered == 1
+        assert second.votes_written == 0
+        assert second.already_voted == 1
         assert CardPrintingTag.objects.filter(card=card).count() == 1
+        assert CardPrintingTag.objects.get(card=card).run_id == "run-a"
+        assert ArchivedCardPrintingTag.objects.count() == 0
+
+        # THE CURRENT RUN'S OWN OUTPUT STILL SUPPRESSES - this is what makes a killed run resume
+        # rather than redo completed batches. Same run_id as the pass that wrote the vote.
+        resumed = run_join_key_calculator(run_id="run-a", dry_run=False)
+        assert resumed.cards_considered == 0
 
     def test_card_without_evidence_is_a_rescannable_no_evidence_skip(self, db):
         CardFactory(name="Some Card", content_phash=42)
@@ -1625,9 +1726,18 @@ class TestAgreementChecks:
         log = CardScanLog.objects.get(card=card)
         assert log.skip_reason == "border-mismatch"
 
-        # non-rescannable: re-running does NOT re-select this card.
-        second = run_join_key_calculator(dry_run=False)
-        assert second.cards_considered == 0
+        # Non-rescannable WITHIN A RUN (2026-07-29 run-scoping): re-running under the SAME run_id
+        # does not re-select the card, which is what makes a killed run resume. A NEW run DOES
+        # re-select it - a prior run's abstention is history, not a permanent verdict - and
+        # reaches the same conclusion again, which is the point: a repaired engine can now
+        # revisit what a broken one skipped, without the version bump `stage-d-illustration-v2`
+        # needed for exactly this reason.
+        same_run = run_join_key_calculator(run_id=result.run_id, dry_run=False)
+        assert same_run.cards_considered == 0
+
+        second = run_join_key_calculator(run_id="a-later-run", dry_run=False)
+        assert second.cards_considered == 1
+        assert second.skip_counts.get("border-mismatch") == 1
 
 
 class TestCopyrightYearEraCheck:
@@ -1827,9 +1937,18 @@ class TestCopyrightYearEraCheck:
         log = CardScanLog.objects.get(card=card)
         assert log.skip_reason == "copyright-year-mismatch"
 
-        # non-rescannable: re-running does NOT re-select this card.
-        second = run_join_key_calculator(dry_run=False)
-        assert second.cards_considered == 0
+        # Non-rescannable WITHIN A RUN (2026-07-29 run-scoping): re-running under the SAME run_id
+        # does not re-select the card, which is what makes a killed run resume. A NEW run DOES
+        # re-select it - a prior run's abstention is history, not a permanent verdict - and
+        # reaches the same conclusion again, which is the point: a repaired engine can now
+        # revisit what a broken one skipped, without the version bump `stage-d-illustration-v2`
+        # needed for exactly this reason.
+        same_run = run_join_key_calculator(run_id=result.run_id, dry_run=False)
+        assert same_run.cards_considered == 0
+
+        second = run_join_key_calculator(run_id="a-later-run", dry_run=False)
+        assert second.cards_considered == 1
+        assert second.skip_counts.get("copyright-year-mismatch") == 1
 
 
 class TestCollectorNumberOnlyStaysNameScoped:
@@ -1992,12 +2111,24 @@ class TestRunSlowPathCalculator:
     def test_idempotent_against_its_own_anonymous_id(self, db):
         self._no_hit_card(skip_reason="no-text")
 
-        first = run_slow_path_calculator(dry_run=False)
+        first = run_slow_path_calculator(run_id="run-a", dry_run=False)
         assert first.routed_written == 1
 
-        second = run_slow_path_calculator(dry_run=False)
-        assert second.cards_considered == 0
+        # Same run_id: this run's own routing suppresses, so a killed run resumes (2026-07-29).
+        resumed = run_slow_path_calculator(run_id="run-a", dry_run=False)
+        assert resumed.cards_considered == 0
         assert CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID).count() == 1
+
+        # A NEW run reconsiders the card. Slow-path has no vote grain and therefore no
+        # value-comparing split to absorb the repeat, so it routes the card again - a second
+        # append-only audit row for the same card, which `CardScanLog`'s own model docstring
+        # already declares normal ("multiple runs can each abstain on the same card... not
+        # deduplicated away"). Bounding that growth is issue #575's retention janitor's job,
+        # deliberately not solved here by re-suppressing the card forever.
+        second = run_slow_path_calculator(run_id="run-b", dry_run=False)
+        assert second.cards_considered == 1
+        assert second.routed_written == 1
+        assert CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID).count() == 2
 
     def test_stale_evidence_since_the_join_key_pass_is_not_routed(self, db):
         """The card's image changed since the join-key calculator looked at it - the ImageEvidence
@@ -2232,11 +2363,18 @@ class TestRunFallbackCalculator:
         CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
         card, _ = self._no_hit_card(layout_class="black")
 
-        first = run_fallback_calculator(dry_run=False)
+        first = run_fallback_calculator(run_id="run-a", dry_run=False)
         assert first.votes_written == 1
 
-        second = run_fallback_calculator(dry_run=False)
-        assert second.cards_considered == 0
+        # Same run_id -> resumption (this run's own vote suppresses).
+        resumed = run_fallback_calculator(run_id="run-a", dry_run=False)
+        assert resumed.cards_considered == 0
+
+        # New run -> reconsidered, recomputed, recognised as unchanged, nothing written.
+        second = run_fallback_calculator(run_id="run-b", dry_run=False)
+        assert second.cards_considered == 1
+        assert second.votes_written == 0
+        assert second.already_voted == 1
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 1
 
     def test_card_without_evidence_is_a_rescannable_no_evidence_skip(self, db):
@@ -2377,7 +2515,11 @@ class TestCandidateNameIndexLazyProcessCache:
         CanonicalCardFactory(name="Card A", expansion__code="mom", collector_number="1")
         _evidence(card_a, collector_line_set_code="mom", collector_line_collector_number="1")
 
-        first = run_join_key_calculator(dry_run=False)
+        # Both calls share ONE run_id, so card_a's own vote from the first call still excludes it
+        # from the second (run-scoped eligibility, 2026-07-29 - a fresh run_id would reconsider
+        # card_a and `cards_considered` would stop isolating card_b). The subject of this test is
+        # the index cache, not eligibility.
+        first = run_join_key_calculator(run_id="one-run", dry_run=False)
         assert first.votes_written == 1
         assert count[0] == 1
 
@@ -2387,8 +2529,8 @@ class TestCandidateNameIndexLazyProcessCache:
         card_b = CardFactory(name="Card A", content_phash=2)
         _evidence(card_b, collector_line_set_code="mom", collector_line_collector_number="1")
 
-        second = run_join_key_calculator(dry_run=False)
-        assert second.cards_considered == 1  # card_a is now excluded - already voted on
+        second = run_join_key_calculator(run_id="one-run", dry_run=False)
+        assert second.cards_considered == 1  # card_a is now excluded - already voted on IN THIS RUN
         assert second.votes_written == 1
         # still 1 - the second call hit the cache rather than rebuilding.
         assert count[0] == 1
@@ -2422,7 +2564,8 @@ class TestCandidateNameIndexLazyProcessCache:
         CanonicalCardFactory(name="Card A", expansion__code="mom", collector_number="1")
         _evidence(card_a, collector_line_set_code="mom", collector_line_collector_number="1")
 
-        first = run_join_key_calculator(dry_run=False)
+        # One shared run_id across both calls - see the sibling test above for why.
+        first = run_join_key_calculator(run_id="one-run", dry_run=False)
         assert first.votes_written == 1
         assert count[0] == 1
 
@@ -2431,8 +2574,8 @@ class TestCandidateNameIndexLazyProcessCache:
         card_b = CardFactory(name="Card B", content_phash=2)
         _evidence(card_b, collector_line_set_code="won", collector_line_collector_number="2")
 
-        second = run_join_key_calculator(dry_run=False)
-        assert second.cards_considered == 1  # card_a already voted on, only card_b is eligible
+        second = run_join_key_calculator(run_id="one-run", dry_run=False)
+        assert second.cards_considered == 1  # card_a already voted on IN THIS RUN, only card_b is eligible
         assert second.votes_written == 1  # proves the REBUILT index actually sees "Card B"
         assert count[0] == 2
 
@@ -2808,6 +2951,104 @@ class TestCommandCountersAndDiffReport:
         call_command("local_calculate_verdicts", "--allow-missing-scryfall-cache", "--diff-report", str(report_path))
 
         assert report_path.read_text() == ""
+
+
+class TestGenerationDiffFlag:
+    """`--generation-diff` (2026-07-29): the OPT-IN debug READ of `ArchivedCardPrintingTag`.
+
+    The owner's ruling separates two things that are easy to collapse into one. The archive WRITE
+    is unconditional - `purge_stale_machine_votes` moves a superseded row rather than deleting it
+    on every run, with no flag, because a paper trail that only exists when somebody remembered to
+    ask for it is not a paper trail. Generation DIFFING is the opt-in part, and it is a read: this
+    flag adds no write path of any kind."""
+
+    def _card_whose_verdict_changed(self):
+        """A card carrying a stale join-key vote for the WRONG printing, whose evidence resolves to
+        a different one - so this run genuinely changes its mind and supersedes a row."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        correct = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        stale_printing = CanonicalCardFactory(name="Some Card", expansion__code="won", collector_number="1")
+        _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+        stale = CardPrintingTag.objects.create(
+            card=card,
+            printing=stale_printing,
+            is_no_match=False,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            run_id="an-older-run",
+        )
+        return card, correct, stale
+
+    def test_it_reports_the_superseded_generation_beside_the_live_one(self, db, tmp_path):
+        from django.core.management import call_command
+
+        card, correct, stale = self._card_whose_verdict_changed()
+        report_path = tmp_path / "generations.jsonl"
+
+        call_command(
+            "local_calculate_verdicts",
+            "--write",
+            "--skip-dryrun-check",
+            "--allow-missing-scryfall-cache",
+            "--run-id",
+            "the-new-run",
+            "--generation-diff",
+            str(report_path),
+        )
+
+        lines = report_path.read_text().splitlines()
+        assert len(lines) == 1
+        row = json.loads(lines[0])
+        assert row["card_id"] == card.pk
+        assert row["anonymous_id"] == JOIN_KEY_ANONYMOUS_ID
+        assert row["superseded_by_run_id"] == "the-new-run"
+        assert row["archived"]["printing_id"] == stale.printing_id
+        assert row["archived"]["run_id"] == "an-older-run"
+        assert row["archived"]["original_id"] == stale.pk
+        assert row["live"] == [
+            {
+                "printing_id": correct.pk,
+                "is_no_match": False,
+                "confidence": row["live"][0]["confidence"],
+                "run_id": "the-new-run",
+            }
+        ]
+
+    def test_a_run_that_changed_nothing_writes_an_empty_report(self, db, tmp_path):
+        """A converged catalogue supersedes nothing, so the report is empty rather than a dump of
+        every vote. That is the property that makes it readable at all."""
+        from django.core.management import call_command
+
+        card = CardFactory(name="Some Card", content_phash=42)
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+        report_path = tmp_path / "generations.jsonl"
+
+        call_command(
+            "local_calculate_verdicts",
+            "--write",
+            "--skip-dryrun-check",
+            "--allow-missing-scryfall-cache",
+            "--generation-diff",
+            str(report_path),
+        )
+
+        assert report_path.read_text() == ""
+
+    def test_a_dry_run_writes_no_report_at_all(self, db, tmp_path):
+        """A dry run supersedes nothing by construction, so there is nothing to diff. Producing an
+        empty file would imply the question had been asked and answered."""
+        from django.core.management import call_command
+
+        self._card_whose_verdict_changed()
+        report_path = tmp_path / "generations.jsonl"
+
+        call_command(
+            "local_calculate_verdicts", "--allow-missing-scryfall-cache", "--generation-diff", str(report_path)
+        )
+
+        assert not report_path.exists()
+        assert ArchivedCardPrintingTag.objects.count() == 0
 
 
 class TestScryfallCacheGuard:
