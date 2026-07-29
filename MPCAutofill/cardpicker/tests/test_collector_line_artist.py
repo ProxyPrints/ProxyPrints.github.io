@@ -20,6 +20,8 @@ from cardpicker.collector_line_artist import (
     MIN_TRUNCATED_LETTERS,
     PrintingArtistLookup,
     build_artist_lexicon,
+    build_name_artist_lookup,
+    recover_artist_from_card_text,
     recover_artist_from_collector_line,
 )
 from cardpicker.tests.factories import CanonicalCardFactory, CanonicalExpansionFactory
@@ -294,3 +296,188 @@ class TestPrintingArtistLookup:
             assert lookup("mom", "160") is None
 
         assert len(captured) == 1
+
+
+class TestWideningTheRead:
+    """`recover_artist_from_card_text` (2026-07-29) - reading the artist out of BOTH stored reads
+    of the card's own bottom print row, not just the clipped one.
+
+    `legal_line_raw_text` crops the IDENTICAL y band as `collector_line_raw_text`
+    (`local_ocr.LEGAL_LINE_CROP_BOX` (0.0, 0.90, 1.0, 0.965) vs `DEFAULT_CROP_BOX`
+    (0.06, 0.90, 0.35, 0.965)) at the FULL card width, so it carries the artist credit whole where
+    the collector crop clips it. Every pair below is VERBATIM production text pulled read-only on
+    2026-07-29 - the same row's two stored strings, not two hand-written variants of one."""
+
+    def test_the_untruncated_legal_line_read_wins_over_the_clipped_collector_read(self):
+        # 'LINDSEY L' truncates; the full-width read of the same print row does not. Both score
+        # ratio 1.0, and the shared `(ratio, normalized length)` key is what makes the longer,
+        # unclipped read win - no new precedence rule was needed.
+        result = recover_artist_from_card_text(
+            "204/361R\nCLB ¢ EN LINDSEY L", "204/361R\nCLB ¢ EN LINDSEY LOOK\n", LEXICON
+        )
+        assert result is not None
+        assert result.candidate == "LINDSEY LOOK"
+        assert result.canonical_name == "Lindsey Look"
+
+    def test_a_read_ambiguous_when_clipped_becomes_decisive_when_whole(self):
+        """The flagship case. 'RON SPEA' is irreducibly compatible with two real artists; the
+        full-width read of the SAME print row is compatible with exactly one, so it becomes
+        storable - with no threshold moved and no lexicon change."""
+        clipped = recover_artist_from_collector_line("059/274R\nDMR ¢ EN RON SPEA", LEXICON)
+        assert clipped is not None
+        assert clipped.compatible_names == ("Ron Spears", "Ron Spencer")
+        assert clipped.canonical_name is None  # ambiguous - deliberately unstorable
+
+        whole = recover_artist_from_card_text("059/274R\nDMR ¢ EN RON SPEA", "059/274R\nDMR ¢ EN RON SPEARS\n", LEXICON)
+        assert whole is not None
+        assert whole.canonical_name == "Ron Spears"
+
+    def test_truncated_matching_is_disabled_for_the_legal_line_text(self):
+        """A prefix match is only ever legitimate against a crop that CLIPS the name's right edge,
+        and the legal-line crop runs to the full card width. So a legal-line-only prefix read must
+        produce NOTHING, even though the identical string in the collector line reads fine."""
+        clipped_text = "124/281R\nAFR « EN %®ALESSAND"
+        assert recover_artist_from_collector_line(clipped_text, LEXICON) is not None
+        assert recover_artist_from_card_text("", clipped_text, LEXICON) is None
+
+    def test_either_text_may_be_empty(self):
+        """A fetch failure or a legal-line extractor that found nothing leaves one side blank -
+        the other decides alone, and two blanks are simply no reading."""
+        assert recover_artist_from_card_text("", "", LEXICON) is None
+        collector_only = recover_artist_from_card_text("124/281R\nAFR « EN %®ALESSAND", "", LEXICON)
+        assert collector_only is not None and collector_only.canonical_name == "Alessandra Pisano"
+        legal_only = recover_artist_from_card_text("", "2022 Custom Proxy\nMMQ: EN > MARK TEDIN\n", LEXICON)
+        assert legal_only is not None and legal_only.canonical_name == "Mark Tedin"
+
+    def test_the_legal_lines_watermark_tail_does_not_derail_the_read(self):
+        """Verbatim production legal line. The full-width crop picks up the proxy/watermark prose
+        the narrow collector crop never reached - `CANDIDATE_STOPWORDS` already covers it, which is
+        why widening the read costs no new vocabulary."""
+        result = recover_artist_from_card_text(
+            "003/030 M\nZNE «FR % DAARKEN", "003/030 M\nZNE «FR > DAARKEN PROXY CARD - NOT FOR SALE\n", LEXICON
+        )
+        assert result is not None
+        assert "Daarken" in result.compatible_names
+
+
+class TestCardNameNarrowing:
+    """`allowed_artist_names` (2026-07-29) - narrowing the compatible set to the artists who
+    actually illustrated a printing of this card's own name.
+
+    Applied as a strict INTERSECTION of the already-computed compatible set, and only when that
+    intersection is non-empty. The tests below pin all three consequences of that shape."""
+
+    def test_narrowing_collapses_an_ambiguous_read_to_one_storable_name(self):
+        """'RON SPEA' against the full lexicon fits both "Ron Spears" and "Ron Spencer"; against
+        the one artist who illustrated this card's name it is decisive."""
+        result = recover_artist_from_collector_line(
+            "059/274R\nDMR ¢ EN RON SPEA", LEXICON, allowed_artist_names=["Ron Spears"]
+        )
+        assert result is not None
+        assert result.compatible_names == ("Ron Spears",)
+        assert result.canonical_name == "Ron Spears"
+
+    def test_narrowing_can_only_shrink_the_set_never_change_which_read_won(self):
+        unnarrowed = recover_artist_from_collector_line("059/274R\nDMR ¢ EN RON SPEA", LEXICON)
+        narrowed = recover_artist_from_collector_line(
+            "059/274R\nDMR ¢ EN RON SPEA", LEXICON, allowed_artist_names=["Ron Spencer"]
+        )
+        assert unnarrowed is not None and narrowed is not None
+        assert narrowed.candidate == unnarrowed.candidate
+        assert narrowed.ratio == unnarrowed.ratio
+        assert set(narrowed.compatible_names) < set(unnarrowed.compatible_names)
+
+    def test_an_empty_intersection_falls_back_to_the_unnarrowed_set(self):
+        """A decorated or genuinely custom card name resolves to artists that have nothing to do
+        with the read (only 48% of uploaded names match a canonical name exactly). That must never
+        cost the recovery - it falls back, it does not abstain and it does not force a wrong name."""
+        unnarrowed = recover_artist_from_collector_line("059/274R\nDMR ¢ EN RON SPEA", LEXICON)
+        fallen_back = recover_artist_from_collector_line(
+            "059/274R\nDMR ¢ EN RON SPEA", LEXICON, allowed_artist_names=["Rebecca Guay"]
+        )
+        assert unnarrowed is not None and fallen_back is not None
+        assert fallen_back.compatible_names == unnarrowed.compatible_names
+        assert fallen_back.canonical_name is None
+
+    def test_no_allowed_names_at_all_is_byte_identical_to_not_narrowing(self):
+        baseline = recover_artist_from_collector_line("059/274R\nDMR ¢ EN RON SPEA", LEXICON)
+        for empty in (None, (), [], ["", "   "]):
+            assert recover_artist_from_collector_line("059/274R\nDMR ¢ EN RON SPEA", LEXICON, empty) == baseline
+
+    def test_narrowing_rescues_a_read_that_fits_too_many_artists_to_mean_anything(self):
+        """A bare 'RICHARD' fits eight real artists, so the unnarrowed module abstains entirely
+        (`MAX_COMPATIBLE`). Scoped to the one Richard who illustrated this card's name, the same
+        read is decisive - which is why the narrowing is applied BEFORE that cap, not after."""
+        raw = "> RICHARD"
+        assert recover_artist_from_collector_line(raw, LEXICON) is None
+        result = recover_artist_from_collector_line(raw, LEXICON, allowed_artist_names=["Richard Luong"])
+        assert result is not None
+        assert result.canonical_name == "Richard Luong"
+
+    def test_narrowing_never_makes_a_compatible_artist_incompatible_if_it_is_allowed(self):
+        """THE STAGE D SAFETY INVARIANT. `_apply_agreement_checks` compares the reading against the
+        artist of the MATCHED candidate, and that candidate came out of the very list the allowed
+        set is derived from - so the printing's artist is always IN the allowed set, and narrowing
+        (a pure intersection) can therefore never turn a non-contradiction into a contradiction
+        there. Measured confirmation, read-only production 2026-07-29: the false-contradiction rate
+        on independently-corroborated rows is byte-identical with and without narrowing (2.83%)."""
+        unnarrowed = recover_artist_from_collector_line("059/274R\nDMR ¢ EN RON SPEA", LEXICON)
+        assert unnarrowed is not None
+        for allowed_member in unnarrowed.compatible_names:
+            narrowed = recover_artist_from_collector_line(
+                "059/274R\nDMR ¢ EN RON SPEA", LEXICON, allowed_artist_names=[allowed_member]
+            )
+            assert narrowed is not None
+            assert narrowed.is_compatible_with(allowed_member)
+
+    def test_narrowing_is_compared_on_the_normalized_form(self):
+        """Same normalisation both sides, so a lexicon that ever drifts in casing/punctuation
+        can't silently switch the narrowing off - the identical rule `is_compatible_with` uses."""
+        result = recover_artist_from_collector_line(
+            "059/274R\nDMR ¢ EN RON SPEA", LEXICON, allowed_artist_names=["  ron   spears!  "]
+        )
+        assert result is not None
+        assert result.canonical_name == "Ron Spears"
+
+    def test_narrowing_composes_with_the_widened_read(self):
+        result = recover_artist_from_card_text(
+            "204/361R\nCLB ¢ EN LINDSEY L",
+            "204/361R\nCLB ¢ EN LINDSEY LOOK\n",
+            LEXICON,
+            allowed_artist_names=["Lindsey Look", "Mark Tedin"],
+        )
+        assert result is not None
+        assert result.canonical_name == "Lindsey Look"
+
+
+class TestNameArtistLookup:
+    """The Stage C resolver for the narrowing (real ORM). Owns NO name normaliser of its own - it
+    delegates entirely to `local_identify_printing_tags.CandidateNameIndex.candidates_for`, which
+    is what keeps both halves of the predicate in one name space."""
+
+    def test_resolves_a_card_name_to_the_artists_who_illustrated_it(self, db):
+        CanonicalCardFactory(name="Mystic Remora", artist__name="Ron Spears")
+        CanonicalCardFactory(name="Mystic Remora", artist__name="Ron Spencer")
+        CanonicalCardFactory(name="Counterspell", artist__name="Mark Tedin")
+
+        lookup = build_name_artist_lookup()
+        assert lookup("Mystic Remora") == ("Ron Spears", "Ron Spencer")
+        assert lookup("Counterspell") == ("Mark Tedin",)
+
+    def test_it_uses_the_shared_normaliser_rather_than_the_raw_name(self, db):
+        """`to_searchable` (via `candidates_for`) is what makes punctuation/case/bracket
+        differences between an uploaded filename and the catalog name a non-event."""
+        CanonicalCardFactory(name="Vazal, the Compleat", artist__name="Mark Tedin")
+
+        lookup = build_name_artist_lookup()
+        assert lookup("vazal the compleat") == ("Mark Tedin",)
+        assert lookup("Vazal, the Compleat (1)") == ("Mark Tedin",)
+
+    def test_an_unresolvable_name_reports_an_honest_empty_tuple(self, db):
+        """A genuinely custom upload has no canonical printing, which every consumer reads as
+        "don't narrow" - never as "no artist is allowed"."""
+        CanonicalCardFactory(name="Counterspell", artist__name="Mark Tedin")
+
+        lookup = build_name_artist_lookup()
+        assert lookup("TreacheryGame_04") == ()
+        assert lookup("") == ()

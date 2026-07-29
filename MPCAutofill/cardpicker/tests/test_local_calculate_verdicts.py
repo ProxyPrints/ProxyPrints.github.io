@@ -1359,6 +1359,192 @@ class TestAgreementChecks:
 
         assert verdict.printing_pk == printing.pk
 
+    # --- WIDENING THE READ + CARD-NAME NARROWING (2026-07-29) -------------------------------
+    # Two precision fixes to the SAME check, both of which sharpen it using data this row and this
+    # call already hold: `ImageEvidence.legal_line_raw_text` (the full-width read of the very print
+    # row the collector crop clips at 35%) and `CandidatePrinting.artist_name` off the
+    # already-name-scoped `candidates` list. See `collector_line_artist`'s own docstring sections.
+
+    def test_the_veto_reads_the_full_width_legal_line_not_only_the_clipped_collector_line(self, db):
+        """The collector crop clipped the credit to `RON SPEA`, which is compatible with BOTH real
+        "Ron ..." artists - including this printing's own "Ron Spears" - so it contradicts nothing
+        and the parse is trusted. The legal line is the SAME print row at the full card width and
+        reads `RON SPENCER` whole, which does contradict "Ron Spears": the collector number was
+        misread. Without the widened read there is no abstention to make."""
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Ron Spears"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN RON SPEA",
+            legal_line_raw_text="158/281R\nMOM ¢ EN RON SPENCER\n",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, artist_lexicon=self.ARTIST_GATE_LEXICON)
+
+        assert verdict.skip_reason == JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON
+
+    def test_the_same_row_votes_when_only_the_clipped_collector_line_is_available(self, db):
+        """The control for the test above: byte-identical inputs minus `legal_line_raw_text`, so
+        the pre-2026-07-29 reading (`RON SPEA`, ambiguous, compatible with this printing's own
+        artist) is reproduced and the vote is cast. Proves the abstention above comes from the
+        widened read specifically, not from anything incidental about the fixture."""
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Ron Spears"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN RON SPEA",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, artist_lexicon=self.ARTIST_GATE_LEXICON)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.skip_reason == ""
+
+    def test_narrowing_never_manufactures_a_contradiction_against_the_matched_printing(self, db):
+        """THE STAGE D SAFETY INVARIANT, wired end to end. The narrowing set is derived from
+        `candidates`, and the artist compared against is the artist of a printing FROM that same
+        list - so the matched printing's artist is always inside the allowed set, and a pure
+        intersection can never remove it. A truncated read compatible with the matched printing
+        therefore still votes, no matter what other artists the card's name pulls in."""
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Ron Spears"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158", artist_name="Ron Spears"),
+            CandidatePrinting(
+                pk=printing.pk + 1, expansion_code="vow", collector_number="12", artist_name="Ron Spencer"
+            ),
+        ]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN RON SPEA",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, artist_lexicon=self.ARTIST_GATE_LEXICON)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.skip_reason == ""
+
+    def test_narrowing_sharpens_the_veto_when_the_read_fits_no_artist_of_this_card(self, db):
+        """The other direction: the card's name was illustrated only by Lindsey Look, the printing
+        the parse resolved to claims Rebecca Guay, and the card's own pixels read `LINDSEY L`. The
+        parse contradicts its own source and is abstained on - with the narrowed set proving the
+        reading is not merely a fuzzy near-miss on some unrelated lexicon entry."""
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158", artist_name="Rebecca Guay"),
+            CandidatePrinting(
+                pk=printing.pk + 1, expansion_code="vow", collector_number="7", artist_name="Lindsey Look"
+            ),
+        ]
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN LINDSEY L",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, artist_lexicon=self.ARTIST_GATE_LEXICON)
+
+        assert verdict.skip_reason == JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON
+
+    def test_narrowing_rescues_a_veto_the_unnarrowed_read_was_too_ambiguous_to_cast(self, db):
+        """WHERE THE NARROWING ACTUALLY CHANGES A STAGE D OUTCOME, and the only place it can.
+
+        A bare `RICHARD` fits eight real artists, so the unnarrowed module abstains from reading
+        anything at all (`MAX_COMPATIBLE`) and the contradicted parse is voted on. Scoped to the
+        artists who illustrated a printing of THIS card's name, the same read resolves to one
+        Richard - who is not the artist of the printing the parse claims - so the parse is caught
+        contradicting its own source and abstained on instead.
+
+        Note what this can NOT do, which is the safety half of the same argument: the artist
+        compared against belongs to a printing FROM `candidates`, and the allowed set is derived
+        from `candidates`, so the matched printing's own artist is always inside it and a pure
+        intersection can never remove it. Narrowing sharpens the veto in one direction only."""
+        richards = [
+            "Richard Kane Ferguson",
+            "Richard Luong",
+            "Richard Sardinha",
+            "Richard Suwono",
+            "Richard Thomas",
+            "Richard Whitters",
+            "Richard Wright",
+            "Richard Garfield",
+        ]
+        lexicon = build_artist_lexicon([*richards, "Rebecca Guay"])
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        card = CardFactory(name="Test Card")
+        matched = CandidatePrinting(
+            pk=printing.pk, expansion_code="mom", collector_number="158", artist_name="Rebecca Guay"
+        )
+        evidence = _evidence(
+            card,
+            collector_line_raw_text="158/281R\nMOM ¢ EN RICHARD",
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        # Unnarrowed (no `artist_name` on any candidate): eight Richards fit, so there is no
+        # reading and therefore nothing to contradict - the parse is voted on.
+        unnarrowed = calculate_join_key_verdict(
+            card.pk,
+            evidence,
+            [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")],
+            artist_lexicon=lexicon,
+        )
+        assert unnarrowed.printing_pk == printing.pk
+        assert unnarrowed.skip_reason == ""
+
+        # Narrowed by this card's own name: exactly one Richard illustrated it, and he is not the
+        # artist of the printing the collector number resolved to.
+        narrowed = calculate_join_key_verdict(
+            card.pk,
+            evidence,
+            [
+                matched,
+                CandidatePrinting(
+                    pk=printing.pk + 1, expansion_code="vow", collector_number="9", artist_name="Richard Luong"
+                ),
+            ],
+            artist_lexicon=lexicon,
+        )
+        assert narrowed.skip_reason == JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON
+
+    def test_candidate_name_index_carries_each_printings_artist(self, db):
+        """The narrowing's source of truth. `CandidateNameIndex` already scans `CanonicalCard`
+        once for the whole batch; `artist_name` rides along on that same scan, which is why the
+        narrowing costs no query at all."""
+        from cardpicker.local_identify_printing_tags import CandidateNameIndex
+
+        CanonicalCardFactory(
+            name="Mystic Remora", expansion__code="mom", collector_number="1", artist__name="Ron Spears"
+        )
+        CanonicalCardFactory(
+            name="Mystic Remora", expansion__code="vow", collector_number="2", artist__name="Ron Spencer"
+        )
+
+        candidates = CandidateNameIndex().candidates_for("Mystic Remora")
+
+        assert sorted(c.artist_name for c in candidates) == ["Ron Spears", "Ron Spencer"]
+
     def test_artist_mismatch_still_routes_to_human_review(self, db):
         """An abstention that doesn't route is a review-queue gap - `artist-mismatch` is exactly
         the cohort a reviewer should see, so it must be a `JOIN_KEY_NO_HIT_SKIP_REASONS` member."""

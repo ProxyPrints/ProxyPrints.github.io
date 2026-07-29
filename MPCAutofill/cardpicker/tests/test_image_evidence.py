@@ -1641,6 +1641,148 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
         assert result.fields["artist_ocr_name"] == ""  # ambiguous - nothing storable
 
 
+class TestExtractCardEvidenceWidenedArtistRead:
+    """2026-07-29, WIDENING THE READ + CARD-NAME NARROWING (see `compute_card_evidence`'s own
+    `artist_lexicon` docstring paragraph, and `collector_line_artist`'s two docstring sections).
+
+    `legal_line_crop_px` covers the IDENTICAL y band as `collector_line_crop_px`
+    (`LEGAL_LINE_CROP_BOX` (0.0, 0.90, 1.0, 0.965) vs `DEFAULT_CROP_BOX` (0.06, 0.90, 0.35,
+    0.965)) at the FULL card width, so it has been storing the untruncated artist credit since
+    issue #151 - which is why the "widen the collector crop" fix needs no geometry change, no new
+    tesseract call, and no extractor version bump. These tests pin that the artist recovery
+    actually consumes it, and that the compute hoist (`_extract_legal_line`) left the legal_line
+    extractor's own stored output alone.
+
+    `run_tesseract_text_and_words` supplies the collector-line attempts, `run_tesseract` the
+    legal-line ones - the same monkeypatch split the classes above already use."""
+
+    LEXICON = build_artist_lexicon(["Ron Spears", "Ron Spencer", "Lindsey Look"])
+
+    @staticmethod
+    def _lookup(set_code, collector_number):
+        return None  # no printing resolution - these tests are about the READING, not the gate
+
+    def test_the_untruncated_legal_line_read_is_what_gets_stored(self, db, monkeypatch):
+        """`RON SPEA` alone is compatible with two real artists and is therefore deliberately
+        unstorable. The full-width read of the SAME print row says `RON SPEARS`, which is
+        decisive - and it was already in hand, extracted by a different extractor on this same
+        pass."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(
+            module, "run_tesseract_text_and_words", lambda image_arg, config: ("059/274R\nDMR ¢ EN RON SPEA", [])
+        )
+        monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "059/274R\nDMR ¢ EN RON SPEARS")
+
+        result = extract_card_evidence(card, artist_lexicon=self.LEXICON, printing_artist_lookup=self._lookup)
+
+        assert result.fields["artist_ocr_name"] == "Ron Spears"
+        assert result.fields["illus_anchor_fired"] is False  # the anchor genuinely never fired
+
+    def test_the_same_row_stores_nothing_when_the_legal_line_is_blank(self, db, monkeypatch):
+        """The control: byte-identical inputs with an empty legal-line read, reproducing the
+        pre-2026-07-29 collector-line-only behaviour - `RON SPEA` stays ambiguous and unstorable.
+        Proves the storage above comes from the widened read, not from the fixture."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(
+            module, "run_tesseract_text_and_words", lambda image_arg, config: ("059/274R\nDMR ¢ EN RON SPEA", [])
+        )
+        monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "")
+
+        result = extract_card_evidence(card, artist_lexicon=self.LEXICON, printing_artist_lookup=self._lookup)
+
+        assert result.fields["artist_ocr_name"] == ""
+
+    def test_card_name_narrowing_makes_an_otherwise_ambiguous_read_storable(self, db, monkeypatch):
+        """The second lever, on the same ambiguous `RON SPEA` read and with NO legal line at all:
+        scoped to the artists who illustrated a printing of this card's own name, the reading is
+        decisive. `name_artist_lookup` is resolved by `extract_card_evidence` against `card.name`
+        (a plain callable here - its real `CandidateNameIndex` backing is covered in
+        `test_collector_line_artist.py`)."""
+        card = CardFactory(name="Mystic Remora", content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(
+            module, "run_tesseract_text_and_words", lambda image_arg, config: ("059/274R\nDMR ¢ EN RON SPEA", [])
+        )
+        monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "")
+
+        seen: list[str] = []
+
+        def _name_artists(name):
+            seen.append(name)
+            return ("Ron Spears",)
+
+        result = extract_card_evidence(
+            card,
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+            name_artist_lookup=_name_artists,
+        )
+
+        assert seen == ["Mystic Remora"]  # resolved against the card's OWN name, once
+        assert result.fields["artist_ocr_name"] == "Ron Spears"
+
+    def test_an_unresolvable_card_name_falls_back_rather_than_losing_the_recovery(self, db, monkeypatch):
+        """A decorated or genuinely custom name resolves to no printing at all. That must cost
+        nothing: the reading falls back to the full lexicon and behaves exactly as if no lookup
+        had been threaded."""
+        card = CardFactory(name="TreacheryGame_04", content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(
+            module, "run_tesseract_text_and_words", lambda image_arg, config: ("204/361R\nCLB ¢ EN LINDSEY L", [])
+        )
+        monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "")
+
+        result = extract_card_evidence(
+            card,
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+            name_artist_lookup=lambda name: (),
+        )
+
+        assert result.fields["artist_ocr_name"] == "Lindsey Look"
+
+    def test_hoisting_the_legal_line_compute_left_its_stored_output_untouched(self, db, monkeypatch):
+        """`_extract_legal_line` now runs BEFORE the OCR group so its text is available to the
+        artist recovery, but its results are still written at this extractor's own original
+        position. Every legal_line field, its skip reason, and its extractor version must be
+        exactly what they were - this is precisely why no version needed bumping."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda image_arg, config: ("", []))
+        monkeypatch.setattr(
+            module, "run_tesseract", lambda variant, **kwargs: "\u00a9 2022 Wizards of the Coast NOT FOR SALE"
+        )
+
+        result = extract_card_evidence(card)
+
+        assert result.fields["legal_line_raw_text"] == "\u00a9 2022 Wizards of the Coast NOT FOR SALE"
+        assert result.fields["legal_line_copyright_year"] == "2022"
+        assert result.fields["legal_line_proxy_marker_detected"] is True
+        assert result.fields["legal_line_crop_px"] == module._crop_box_to_pixels(
+            module.LEGAL_LINE_CROP_BOX, result.fields["bleed_class"], result.fields["width"], result.fields["height"]
+        )
+        assert "legal_line" not in result.skip_reasons
+        assert result.extractor_versions["legal_line"] == module.LEGAL_LINE_EXTRACTOR_VERSION
+
+    def test_a_failed_fetch_still_reports_the_legal_line_as_skipped(self, db, monkeypatch):
+        """The hoist must not turn a fetch failure into a crash or a silently-absent skip reason -
+        `None` in, `fetch_failed` out, exactly as before."""
+        card = CardFactory(content_phash=1)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = extract_card_evidence(card)
+
+        assert result.skip_reasons["legal_line"] == "fetch_failed"
+        assert "legal_line_raw_text" not in result.fields
+
+
 class TestCollectorLineOcrAttempts:
     """Direct tests of `_collector_line_ocr_attempts` (issue #259) - the lazy, ordered
     (image, tesseract_config, tier) generator `collector_line_ocr`'s own loop consumes. The `tier`
