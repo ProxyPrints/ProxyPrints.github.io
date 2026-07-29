@@ -105,7 +105,13 @@ class CanonicalPrintingMetadataFactory(factory.django.DjangoModelFactory):
     frame_effects = factory.LazyFunction(list)
     promo_types = factory.LazyFunction(list)
     edhrec_rank = None
+    # The two counts default to AGREEING (1 == 1): "we hold the only printing Scryfall lists",
+    # the ordinary case, so a test that doesn't care about printing completeness gets a
+    # D1-eligible printing without saying so. A test that DOES care overrides one of them - see
+    # `TestD1ScryfallPrintingCountGate` in test_deductive_backfill.py. Note the model's own
+    # default for the Scryfall side is NULL, not 1: an un-imported row asserts nothing.
     catalogued_printings_count = 1
+    scryfall_default_cards_printings_count = 1
     released_at = None
     lang = "en"
 

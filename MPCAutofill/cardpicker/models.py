@@ -185,7 +185,15 @@ class CanonicalPrintingMetadata(models.Model):
 
     NOT EVERY FIELD HERE IS SCRYFALL DATA. `catalogued_printings_count` is computed by us,
     over our own rows - see its own comment. Every other field on this model is copied
-    verbatim from a bulk-data row.
+    verbatim from a bulk-data row, or (for `scryfall_default_cards_printings_count`)
+    aggregated from the bulk-data rows themselves rather than from our table.
+
+    THE TWO `*_printings_count` COLUMNS ARE DELIBERATELY BOTH HERE AND DELIBERATELY NOT
+    INTERCHANGEABLE. `catalogued_printings_count` is how many printings of this oracle card
+    WE hold; `scryfall_default_cards_printings_count` is how many Scryfall's `default_cards`
+    export lists. Their DIFFERENCE is the only thing in this schema that can say "our
+    catalogue is missing printings of this card", which is what `deductive_backfill`'s D1
+    tier gates on. Do not collapse them, and do not read either one as the other.
     """
 
     canonical_card = models.OneToOneField(
@@ -210,6 +218,38 @@ class CanonicalPrintingMetadata(models.Model):
     # from what our catalogue holds. Anything that wants "how many printings exist in reality"
     # must count rows in the bulk-data file, not read this column.
     catalogued_printings_count = models.IntegerField(default=0)
+    # HOW MANY PRINTINGS OF THIS ORACLE CARD SCRYFALL'S `default_cards` EXPORT LISTS - the
+    # external counterpart to `catalogued_printings_count` above, and the only column here that
+    # can detect our catalogue is missing printings. `import_scryfall_printing_metadata` builds
+    # it as a second `Counter`, over the `oracle_id` of the bulk-data rows it is ALREADY parsing
+    # (no extra Scryfall requests: per-card API calls for this would be ~113k of them, and the
+    # standing instruction is not to hammer Scryfall), then looks it up by this row's
+    # `CanonicalCard.canonical_id` so both counts are indexed by the SAME oracle id.
+    #
+    # WHAT THE NUMBER COUNTS, precisely - the name says `default_cards` because that is the only
+    # claim it can support. `default_cards` is ~one row per PRINTING, in English where an English
+    # printing exists and in the printing's own language where it does not. So this count:
+    #   * INCLUDES every distinct printing/variant Scryfall knows of - reprints, promos, showcase
+    #     and borderless variants with their own collector numbers, tokens, and DIGITAL-ONLY
+    #     (Arena/MTGO) printings (9,354 digital rows of 116,254 total, measured 2026-07-29);
+    #   * EXCLUDES the per-language duplicates of a printing that also exists in English - those
+    #     rows live only in the `all_cards` export, which this codebase does not download. A card
+    #     printed in ten languages counts ONCE here, not ten times. (`default_cards` is not
+    #     English-only: 113,610 of its 116,254 rows are `en` and the remaining 2,644 are
+    #     single-language-only printings.)
+    # It is therefore NOT "how many physical paper printings exist" and must not be documented as
+    # such. If a caller ever needs the paper-only or all-languages figure, that is a different
+    # export and a different column - do not widen this one's meaning in place.
+    #
+    # NULL MEANS "SCRYFALL PUBLISHES NO COUNT FOR THIS ROW", never zero and never one. Two
+    # reachable causes, both left NULL deliberately rather than papered over with a fabricated
+    # number: (a) `CanonicalCard.canonical_id` is NULL, so there is no oracle id to look up - 81
+    # rows in production on 2026-07-29, which are EXACTLY the 81 bulk-data rows Scryfall itself
+    # publishes with no `oracle_id` (Secret Lair `reversible_card` printings); (b) the oracle id
+    # is absent from the bulk file we last parsed (0 in production on 2026-07-29, but that is a
+    # property of today's import filter, not a guarantee). Consumers must treat NULL as
+    # "unverifiable" - see `deductive_backfill.select_d1_candidates`, which excludes it.
+    scryfall_default_cards_printings_count = models.IntegerField(null=True, blank=True, default=None)
     released_at = models.DateField(null=True, blank=True)
     lang = models.CharField(max_length=5, default="en")
     # Scryfall's own art-crop image URL, straight from the same bulk-data dump this whole model
