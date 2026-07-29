@@ -575,6 +575,15 @@ def _eligible_illustration_cards_queryset(
     narrowing, applied to BOTH the outer ``Card`` queryset and the ``CardScanLog`` subquery below.
     ``None`` (BULK mode) leaves both unscoped, byte-identical to this function's pre-``card_ids``
     behaviour.
+
+    CALLER CONTRACT (2026-07-29) — ``join_key_voted_card_ids``/``join_key_scanned_card_ids`` are
+    supplied by the caller, and this function CANNOT scope them: a lazy queryset arriving here
+    unscoped compiles into an uncorrelated ``IN (SELECT ...)`` over the whole
+    ``CardPrintingTag``/``CardScanLog`` table no matter how narrow ``card_ids`` is, because the
+    outer filter bounds the rows returned rather than the work done. A per-batch caller must build
+    that pair with ``local_calculate_verdicts._join_key_no_hit_subqueries(card_ids)``, passing the
+    SAME ``card_ids`` it passes here — ``run_illustration_calculator`` does, and that helper's own
+    docstring carries the measurements.
     """
     # Start with the same base query every Stage D calculator uses: unresolved, no
     # confirmed match, card_type=CARD, no own-vote, no non-rescannable scan-log,
@@ -1008,24 +1017,27 @@ def run_illustration_calculator(
 
     # Pre-compute join-key no-hit populations for eligibility filtering.
     from cardpicker.local_calculate_verdicts import (
-        JOIN_KEY_ANONYMOUS_ID,
-        JOIN_KEY_NO_HIT_SKIP_REASONS,
         _get_cached_candidate_name_index,
+        _join_key_no_hit_subqueries,
     )
 
     # Deliberately NOT wrapped in `list(...)`: these stay lazy querysets so Django compiles them
     # into SQL subqueries of the `Q(pk__in=...) | Q(pk__in=...)` filter below, evaluated inside the
-    # one eligibility query and narrowed by its own `card_ids` scope. Materializing them instead
-    # pulled every join-key no-match vote and every join-key no-hit CardScanLog row (2,093,147 rows
-    # live, append-only) into this process's memory on EVERY micro-batch, before any card_ids
-    # scoping applied. Matches `local_calculate_verdicts._fallback_eligible_cards_queryset`, which
-    # has always kept the identical pair lazy.
-    join_key_no_match_card_ids = CardPrintingTag.objects.filter(
-        anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
-    ).values_list("card_id", flat=True)
-    join_key_no_hit_scanned_card_ids = CardScanLog.objects.filter(
-        anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS
-    ).values_list("card_id", flat=True)
+    # one eligibility query. Materializing them instead pulled every join-key no-match vote and
+    # every join-key no-hit CardScanLog row (2,617,333 rows live, append-only) into this process's
+    # memory on EVERY micro-batch.
+    #
+    # `card_ids` is passed to the BUILDER too (2026-07-29), not only to the eligibility queryset
+    # below: lazy alone is not enough. Django compiles `.filter(pk__in=<values_list qs>)` as an
+    # UNCORRELATED `IN (SELECT ...)`, so an unscoped-but-lazy pair still made the database scan
+    # both whole tables per micro-batch; the outer `card_ids` filter bounded the ROWS RETURNED, not
+    # the work done. Same defect, same fix, as `local_calculate_verdicts.
+    # _fallback_eligible_cards_queryset` / `_slow_path_eligible_cards_queryset` - see
+    # `_join_key_no_hit_subqueries`' own docstring, which is now the single place this pair is
+    # built for all three calculators so a fourth cannot repeat it.
+    join_key_no_match, join_key_no_hit_scanned = _join_key_no_hit_subqueries(card_ids)
+    join_key_no_match_card_ids = join_key_no_match.values_list("card_id", flat=True)
+    join_key_no_hit_scanned_card_ids = join_key_no_hit_scanned.values_list("card_id", flat=True)
 
     queryset = _eligible_illustration_cards_queryset(
         join_key_voted_card_ids=join_key_no_match_card_ids,

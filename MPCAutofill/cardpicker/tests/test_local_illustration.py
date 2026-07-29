@@ -718,6 +718,58 @@ class TestJoinKeyPopulationsStayLazy:
         # and `card_ids` reached the function rather than being applied afterwards.
         assert captured["card_ids"] == [card.pk]
 
+    def test_the_join_key_populations_are_scoped_to_card_ids_in_the_compiled_sql(self, db, monkeypatch):
+        """LAZY IS NOT ENOUGH (2026-07-29). `_eligible_illustration_cards_queryset` cannot scope
+        these two - they arrive as caller-built arguments - and Django compiles
+        `.filter(pk__in=<values_list qs>)` as an UNCORRELATED `IN (SELECT ...)`. An
+        unscoped-but-lazy pair therefore still made the database scan `CardPrintingTag` (167,229
+        rows live) and `CardScanLog` (2,617,333 rows live, append-only) in full on EVERY
+        micro-batch: the
+        outer `card_ids` filter bounded the ROWS RETURNED, not the WORK DONE, so a result-set
+        assertion is green either way. This asserts on the COMPILED SQL of the querysets the
+        runner actually handed over."""
+        import cardpicker.local_illustration as module
+
+        card = _eligible_card(name="Lightning Bolt")
+        _join_key_no_hit_card(card)
+
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return module.Card.objects.none()
+
+        monkeypatch.setattr(module, "_eligible_illustration_cards_queryset", _capture)
+
+        run_illustration_calculator(dry_run=True, card_ids=[card.pk])
+
+        for key in ("join_key_voted_card_ids", "join_key_scanned_card_ids"):
+            assert f'"card_id" IN ({card.pk})' in str(captured[key].query), (
+                f"{key} reached the eligibility query unscoped - it compiles into an uncorrelated "
+                "IN (SELECT ...) over the whole table"
+            )
+
+    def test_bulk_mode_leaves_the_join_key_populations_unscoped(self, db, monkeypatch):
+        """`card_ids=None` (the management command's only calling shape) must take no scoping
+        branch at all - byte-identical to this runner's pre-2026-07-29 behaviour."""
+        import cardpicker.local_illustration as module
+
+        card = _eligible_card(name="Lightning Bolt")
+        _join_key_no_hit_card(card)
+
+        captured = {}
+
+        def _capture(**kwargs):
+            captured.update(kwargs)
+            return module.Card.objects.none()
+
+        monkeypatch.setattr(module, "_eligible_illustration_cards_queryset", _capture)
+
+        run_illustration_calculator(dry_run=True)
+
+        for key in ("join_key_voted_card_ids", "join_key_scanned_card_ids"):
+            assert '"card_id" IN (' not in str(captured[key].query)
+
 
 class TestIllustrationIndexProcessCache:
     """`IllustrationIndex.__init__` issues TWO catalog-wide `CanonicalCard` queries (113,224 rows

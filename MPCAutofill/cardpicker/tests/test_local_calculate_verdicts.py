@@ -26,6 +26,7 @@ import pytest
 
 from django.core.management import CommandError
 from django.db import connection
+from django.db.models import Q
 
 from cardpicker.collector_line_artist import build_artist_lexicon, load_artist_lexicon
 from cardpicker.local_calculate_verdicts import (
@@ -33,6 +34,7 @@ from cardpicker.local_calculate_verdicts import (
     EXCLUDED_RESOLVED_TAGS,
     FALLBACK_NO_EVIDENCE_SKIP_REASON,
     FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
+    FALLBACK_RESCANNABLE_SKIP_REASONS,
     JOIN_KEY_ANONYMOUS_ID,
     JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON,
     JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT,
@@ -48,9 +50,12 @@ from cardpicker.local_calculate_verdicts import (
     STAGE_D_FALLBACK_ANONYMOUS_ID,
     TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
     _eligible_cards_queryset,
+    _fallback_eligible_cards_queryset,
     _filter_by_symbol_phash,
+    _join_key_no_hit_subqueries,
     _purge_and_write_printing_tag_votes,
     _resolve_candidates_for_card,
+    _slow_path_eligible_cards_queryset,
     _split_new_printing_tag_votes,
     _symbol_phash_tiebreak,
     calculate_fallback_verdict,
@@ -2857,3 +2862,235 @@ class TestScryfallCacheGuard:
 
         ledger = PilotRunLedger.objects.get(command="local_calculate_verdicts")
         assert ledger.status == PilotRunLedger.Status.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# Per-batch hot-path contract (issues #458/#460, #533): every DEPENDENCY
+# SUBQUERY a `card_ids`-scoped Stage D eligibility query compiles must be
+# narrowed too, not only the outer `Card` query.
+# ---------------------------------------------------------------------------
+
+
+class TestStageDDependencySubqueryScoping:
+    """PR #541 eliminated the uncorrelated-`IN (SELECT ...)` defect for five calculators OUTSIDE
+    the dispatch loop and explicitly did not touch these two, so it survived in the ones actually
+    in Stage E's hot path. `_fallback_eligible_cards_queryset` forwarded `card_ids` to
+    `_eligible_cards_queryset` (the outer query plus its own-exclusion) but built its two join-key
+    no-hit subqueries unscoped; `_slow_path_eligible_cards_queryset` built four unscoped.
+
+    Django compiles `.filter(pk__in=<values_list qs>)` as an UNCORRELATED `IN (SELECT ...)`, so an
+    unscoped subquery is a full pass over `CardPrintingTag` (167,229 rows live) or `CardScanLog`
+    (2,617,333 rows live) on EVERY micro-batch, regardless of how narrow the outer scope is -
+    measured against the live catalogue at batch 25: 1113.3 ms -> 2.6 ms (fallback), 959.5 ms ->
+    2.2 ms (slow path).
+
+    THESE ASSERTIONS ARE ON THE COMPILED SQL, NOT THE RESULT SET, and that is the whole point: the
+    outer `.filter(pk__in=card_ids)` produces the same rows whether or not the push-down happened,
+    so a result-set test is green either way and proves nothing. The result-set tests below are
+    the SECOND half of the contract (pure cost narrowing, no behaviour change), never the first."""
+
+    SUBQUERY_MARKER = '(SELECT U0."card_id" FROM '
+
+    @classmethod
+    def _dependency_subqueries(cls, sql: str) -> list[str]:
+        """Every `IN (SELECT U0."card_id" FROM ...)` dependency subquery in the compiled
+        statement, each sliced out by balanced parentheses. Slicing matters: the OUTER
+        `"cardpicker_card"."id" IN (<pks>)` term carries the same pk literals in the scoped and
+        the pre-fix shape alike, so an assertion made against the whole statement would be
+        satisfied by the outer term and could never tell the two apart."""
+        fragments: list[str] = []
+        start = sql.find(cls.SUBQUERY_MARKER)
+        while start != -1:
+            depth = 0
+            for offset, char in enumerate(sql[start:], start=start):
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        fragments.append(sql[start : offset + 1])
+                        break
+            else:
+                raise AssertionError("unbalanced dependency subquery in compiled SQL")
+            start = sql.find(cls.SUBQUERY_MARKER, offset)
+        return fragments
+
+    @staticmethod
+    def _scope_fragment(scope: list[int]) -> str:
+        return f'U0."card_id" IN ({", ".join(str(pk) for pk in scope)})'
+
+    def _assert_every_subquery_scoped(self, sql: str, scope: list[int], expected_count: int) -> None:
+        subqueries = self._dependency_subqueries(sql)
+        assert len(subqueries) == expected_count, (
+            f"expected {expected_count} dependency subqueries, found {len(subqueries)} - if a subquery was "
+            "added or removed, scope it and update this count rather than relaxing the assertion"
+        )
+        for subquery in subqueries:
+            assert self._scope_fragment(scope) in subquery, f"unscoped dependency subquery: {subquery}"
+
+    def _assert_no_subquery_scoped(self, sql: str) -> None:
+        for subquery in self._dependency_subqueries(sql):
+            assert 'U0."card_id" IN (' not in subquery, f"BULK mode took a scoping branch: {subquery}"
+
+    # -- fallback calculator -------------------------------------------------
+
+    def test_fallback_scopes_every_dependency_subquery(self, db):
+        """Three subqueries: the fallback calculator's own non-rescannable `CardScanLog` exclusion
+        (scoped since issue #469) plus the two join-key no-hit populations (this fix)."""
+        card_a = CardFactory(name="Fallback Scope A")
+        card_b = CardFactory(name="Fallback Scope B")
+        scope = [card_a.pk, card_b.pk]
+
+        sql = str(_fallback_eligible_cards_queryset(card_ids=scope).query)
+
+        self._assert_every_subquery_scoped(sql, scope, expected_count=3)
+        # ...and the outer query is still bounded exactly as it always was.
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in sql
+
+    def test_the_pre_fix_fallback_shape_leaves_the_join_key_subqueries_unscoped(self, db):
+        """The mutation proof, in-file: the pre-fix shape reconstructed literally - `card_ids`
+        forwarded to `_eligible_cards_queryset` but the join-key pair built unscoped - must FAIL
+        the assertion above. Without this, `test_fallback_scopes_every_dependency_subquery` could
+        be passing for a reason unrelated to the push-down."""
+        card_a = CardFactory(name="Pre-fix A")
+        card_b = CardFactory(name="Pre-fix B")
+        scope = [card_a.pk, card_b.pk]
+        unscoped_voted, unscoped_scanned = (
+            qs.values_list("card_id", flat=True) for qs in _join_key_no_hit_subqueries()
+        )
+
+        pre_fix_sql = str(
+            _eligible_cards_queryset(
+                STAGE_D_FALLBACK_ANONYMOUS_ID,
+                rescannable_skip_reasons=FALLBACK_RESCANNABLE_SKIP_REASONS,
+                card_ids=scope,
+            )
+            .filter(Q(pk__in=unscoped_voted) | Q(pk__in=unscoped_scanned))
+            .query
+        )
+
+        unscoped = [s for s in self._dependency_subqueries(pre_fix_sql) if self._scope_fragment(scope) not in s]
+        assert len(unscoped) == 2, "the pre-fix shape must leave exactly the two join-key subqueries unscoped"
+        assert any('"cardpicker_cardprintingtag"' in s for s in unscoped)
+        assert any('"cardpicker_cardscanlog"' in s for s in unscoped)
+        # the outer query is IDENTICALLY bounded in both shapes, which is exactly why a result-set
+        # assertion cannot distinguish them.
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in pre_fix_sql
+
+    def test_fallback_bulk_mode_takes_no_scoping_branch(self, db):
+        self._assert_no_subquery_scoped(str(_fallback_eligible_cards_queryset().query))
+
+    # -- slow-path calculator ------------------------------------------------
+
+    def test_slow_path_scopes_every_dependency_subquery(self, db):
+        """Four subqueries: the two join-key no-hit populations, this calculator's own
+        already-routed `CardScanLog` exclusion, and the fallback-voted `CardPrintingTag`
+        exclusion."""
+        card_a = CardFactory(name="Slow Path Scope A")
+        card_b = CardFactory(name="Slow Path Scope B")
+        scope = [card_a.pk, card_b.pk]
+
+        sql = str(_slow_path_eligible_cards_queryset(card_ids=scope).query)
+
+        self._assert_every_subquery_scoped(sql, scope, expected_count=4)
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in sql
+
+    def test_slow_path_bulk_mode_takes_no_scoping_branch(self, db):
+        self._assert_no_subquery_scoped(str(_slow_path_eligible_cards_queryset().query))
+
+    # -- the shared builder --------------------------------------------------
+
+    def test_join_key_no_hit_subqueries_stay_lazy(self, db):
+        """They must compile INTO the one eligibility statement. Materialising them instead reads
+        both whole populations into this process's memory per micro-batch - the regression PR #526
+        already had to undo once in `local_illustration`."""
+        for population in _join_key_no_hit_subqueries([1, 2]):
+            assert population._result_cache is None
+
+    def test_join_key_no_hit_subqueries_bulk_sql_is_unchanged(self, db):
+        """`card_ids=None` must compile to exactly the statement this codebase built before the
+        helper gained the parameter - the literal pre-fix expressions, inlined here."""
+        voted, scanned = _join_key_no_hit_subqueries()
+
+        assert str(voted.values_list("card_id", flat=True).query) == str(
+            CardPrintingTag.objects.filter(anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True)
+            .values_list("card_id", flat=True)
+            .query
+        )
+        assert str(scanned.values_list("card_id", flat=True).query) == str(
+            CardScanLog.objects.filter(anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason__in=JOIN_KEY_NO_HIT_SKIP_REASONS)
+            .values_list("card_id", flat=True)
+            .query
+        )
+
+    # -- the other half: a pure cost narrowing, not a behaviour change -------
+
+    def _no_hit_card(self, name: str):
+        """A card the join-key calculator concluded has no confident hit, via a real `is_no_match`
+        vote - i.e. in both calculators' eligible population."""
+        card = CardFactory(name=name)
+        CardPrintingTag.objects.create(
+            card=card,
+            printing=None,
+            is_no_match=True,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            confidence=JOIN_KEY_NO_MATCH_CONFIDENCE,
+        )
+        return card
+
+    def test_fallback_scoped_and_unscoped_eligible_sets_agree(self, db):
+        eligible = self._no_hit_card("Fallback Eligible")
+        skipped_no_hit = CardFactory(name="Fallback Skip-Routed")
+        CardScanLog.objects.create(
+            card=skipped_no_hit, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="unknown-set-code"
+        )
+        never_seen = CardFactory(name="Fallback Never Seen By Join Key")
+        scope = [eligible.pk, skipped_no_hit.pk, never_seen.pk]
+
+        unscoped = set(_fallback_eligible_cards_queryset().filter(pk__in=scope).values_list("pk", flat=True))
+        scoped = set(_fallback_eligible_cards_queryset(card_ids=scope).values_list("pk", flat=True))
+
+        assert unscoped == scoped == {eligible.pk, skipped_no_hit.pk}
+
+    def test_slow_path_scoped_and_unscoped_eligible_sets_agree(self, db):
+        eligible = self._no_hit_card("Slow Path Eligible")
+        already_routed = self._no_hit_card("Slow Path Already Routed")
+        CardScanLog.objects.create(
+            card=already_routed, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
+        )
+        fallback_resolved = self._no_hit_card("Slow Path Fallback Resolved")
+        CardPrintingTag.objects.create(
+            card=fallback_resolved,
+            printing=CanonicalCardFactory(name="Slow Path Fallback Resolved"),
+            is_no_match=False,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            confidence=FALLBACK_CONFIDENCE_SINGLE_EVIDENCE,
+        )
+        scope = [eligible.pk, already_routed.pk, fallback_resolved.pk]
+
+        unscoped = set(_slow_path_eligible_cards_queryset().filter(pk__in=scope).values_list("pk", flat=True))
+        scoped = set(_slow_path_eligible_cards_queryset(card_ids=scope).values_list("pk", flat=True))
+
+        assert unscoped == scoped == {eligible.pk}
+
+    def test_a_dependency_row_outside_the_scope_still_cannot_change_the_result(self, db):
+        """The correctness argument for narrowing the subqueries at all: a row either subquery
+        would find OUTSIDE `card_ids` could never survive the outer `.filter(pk__in=card_ids)`
+        anyway, so dropping it from the subquery's own reach cannot move the answer."""
+        in_scope = self._no_hit_card("In Scope")
+        out_of_scope = self._no_hit_card("Out Of Scope")  # a join-key no-hit row the scope excludes
+
+        scoped = set(_slow_path_eligible_cards_queryset(card_ids=[in_scope.pk]).values_list("pk", flat=True))
+
+        assert scoped == {in_scope.pk}
+        assert out_of_scope.pk not in scoped
+
+    def test_bulk_mode_eligible_sets_are_unchanged(self, db):
+        """`card_ids=None` still selects the whole join-key no-hit population."""
+        card_a = self._no_hit_card("Bulk A")
+        card_b = self._no_hit_card("Bulk B")
+
+        assert set(_fallback_eligible_cards_queryset().values_list("pk", flat=True)) == {card_a.pk, card_b.pk}
+        assert set(_slow_path_eligible_cards_queryset().values_list("pk", flat=True)) == {card_a.pk, card_b.pk}
