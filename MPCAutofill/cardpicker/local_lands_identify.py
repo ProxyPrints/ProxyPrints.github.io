@@ -88,7 +88,7 @@ so a report can show how much of a run's cost this patch actually avoided.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 from cardpicker import local_ocr, local_phash
 from cardpicker.image_cdn_fetch import fetch_card_image
@@ -249,14 +249,25 @@ class LandsIdentifyResult:
     outcomes: list[LandIdentifyOutcome] = field(default_factory=list)
 
 
-def _land_pool_selected_cards(index: CandidateNameIndex, sample_size: Optional[int]) -> list[SelectedCard]:
+def _land_pool_selected_cards(
+    index: CandidateNameIndex, sample_size: Optional[int], card_ids: Optional[Iterable[int]] = None
+) -> list[SelectedCard]:
     """Mirrors select_candidates' own base-queryset + candidate-lookup shape, but against
     LANDS_ANONYMOUS_ID's own idempotence/exclusion state (never OCR_ANONYMOUS_ID/PHASH_
     ANONYMOUS_ID's) and filtered to is_lands_target rather than select_candidates' engine-
-    specific dpi-floor-only filter. Deterministic pk order so sample_size is reproducible."""
+    specific dpi-floor-only filter. Deterministic pk order so sample_size is reproducible.
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite): passed straight THROUGH
+    to `local_identify_printing_tags._eligible_base_queryset`, which pushes it onto its own outer
+    `Card` query AND into its `CardScanLog` exclusion subquery (see that function's own
+    docstring). It is deliberately NOT applied to the queryset this function receives back, nor
+    to the `selected` list built below: this function materialises one `SelectedCard` per
+    surviving row, so a Python-side filter would still have iterated the whole catalog first -
+    precisely the "looks scoped, is not" failure mode this work exists to prevent.
+    `card_ids=None` (the management command's only calling shape) is byte-identical to before."""
     selected: list[SelectedCard] = []
     queryset = (
-        _eligible_base_queryset(LANDS_ANONYMOUS_ID)
+        _eligible_base_queryset(LANDS_ANONYMOUS_ID, card_ids=card_ids)
         .only("pk", "name", "identifier", "source_id", "content_phash")
         .order_by("pk")
     )
@@ -539,6 +550,7 @@ def run_lands_identify(
     sample_size: Optional[int] = 300,
     fetch_budget: int = 0,
     audit_sample_size: int = 20,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> LandsIdentifyResult:
     """Orchestrator. See module docstring for the full pipeline, dry_run/sample_size semantics,
     and the evidence-first data source (issue #359). fetch_budget bounds real image fetches
@@ -546,7 +558,32 @@ def run_lands_identify(
     land_pool_size + per_name_candidate_counts (both free) with zero network cost, useful for a
     first, instant read of pool shape before spending any fetch budget on the artist-extraction-
     rate sample. fetch_budget only bounds the LIVE-FETCH FALLBACK branch - a card with current
-    stored evidence never touches it, regardless of how small fetch_budget is."""
+    stored evidence never touches it, regardless of how small fetch_budget is.
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite): when given, restricts
+    this whole pass to that set of card pks, pushed through `_land_pool_selected_cards` into
+    `local_identify_printing_tags._eligible_base_queryset` (see both docstrings). Note what that
+    changes about the "always computed over the FULL pool" wording above: `land_pool_size` and
+    `per_name_candidate_counts` are over the full pool WITHIN THE SCOPE, since there is no
+    cheaper honest reading available to a scoped caller - computing them catalog-wide would
+    reintroduce the O(catalog) pass the scope exists to remove. `card_ids=None` (the management
+    command's only calling shape) is byte-identical to before, full pool included.
+
+    FETCH BUDGET IS A SEPARATE DECISION FROM SCOPING (issue #533, and the reason this note
+    exists): the live-fetch fallback branch still calls `fetch_card_image` +
+    `run_ocr_for_card`/`detect_illus_anchor` for any scoped card without CURRENT stored evidence.
+    Making this function scopeable does NOT make per-batch fetching safe - `fetch_budget` is
+    per-INVOCATION, so a per-batch caller invoking this once per micro-batch multiplies the
+    effective ceiling against a shared, rate-limited CDN by the number of batches. A per-batch
+    caller must consider `fetch_budget` EXPLICITLY: 0 (the default) keeps a scoped run entirely
+    free, serving only evidence-backed cards, unless #533's own separate fetch decision has
+    authorised otherwise. No default budget is changed by this scoping work.
+
+    STILL O(CATALOG) ON ONE AXIS: `CandidateNameIndex()` below builds an in-memory index over
+    CanonicalCard's 113k+ rows on every invocation. It is keyed by card NAME over a different
+    table entirely, so `card_ids` cannot narrow it; it needs the process-cache-behind-a-version-
+    stamp treatment PR #526 established for the illustration calculator, deliberately out of
+    scope here (scoping queries is this change; caching indexes is the follow-up)."""
     run_id = run_id or generate_run_id()
     index = CandidateNameIndex()
 
@@ -556,7 +593,7 @@ def run_lands_identify(
 
     # land_pool_size + per_name_candidate_counts: full pool, no sampling, no fetches - always
     # computed regardless of sample_size/fetch_budget (see module docstring).
-    full_selected = _land_pool_selected_cards(index, sample_size=None)
+    full_selected = _land_pool_selected_cards(index, sample_size=None, card_ids=card_ids)
     result.land_pool_size = len(full_selected)
     for selected in full_selected:
         result.per_name_candidate_counts[selected.card.name] = len(selected.candidates)

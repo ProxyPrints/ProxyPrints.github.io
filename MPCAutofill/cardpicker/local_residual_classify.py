@@ -48,9 +48,9 @@ explicit "write pass runs only after my go" instruction this module was built un
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
-from django.db.models import Q
+from django.db.models import Q, QuerySet
 
 from cardpicker import local_phash
 from cardpicker.artist_consensus import resolve_and_persist_artist
@@ -100,6 +100,44 @@ ALTERED_FRAME_TAG_NAME = "altered-frame"
 FRAME_MISMATCH_ARTIST_CONFIDENCE = 0.8
 FRAME_MISMATCH_TAG_CONFIDENCE = 0.7
 D0_SIBLING_ARTIST_CONFIDENCE = 0.9
+
+
+def _frame_mismatch_scan_log_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[CardScanLog]":
+    """`run_frame_mismatch_recovery`'s own eligibility source: every durable frame-mismatch
+    `CardScanLog` row, whichever engine wrote it. Split out of that function as a named seam so
+    the batch scoping below is assertable against the COMPILED SQL (issue #533's first blocking
+    prerequisite requires exactly that - a result-set assertion cannot distinguish "scoped in
+    SQL" from "materialised catalog-wide and filtered in Python afterwards", which is the whole
+    defect class).
+
+    BATCH SCOPING (`card_ids`): this queryset is the one catalog-scale read on the frame-mismatch
+    path - `CardScanLog` is 2,093,147 rows live, append-only and growing, and its caller
+    materialises the result into Python `set`s. Unscoped, that is a full-table pass plus a
+    catalog-scale Python structure inside every 25-card micro-batch. Pushing `card_ids` in HERE
+    (rather than intersecting the materialised sets afterwards) is what makes the read itself
+    O(batch). Purely a cost narrowing: a row outside `card_ids` could only ever have produced a
+    card the caller would then have dropped anyway. `card_ids=None` (BULK mode - the management
+    command's only calling shape) leaves this byte-identical to before."""
+    queryset = CardScanLog.objects.filter(skip_reason="frame-mismatch")
+    if card_ids is not None:
+        queryset = queryset.filter(card_id__in=card_ids)
+    return queryset
+
+
+def _art_hash_artist_voted_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[CardArtistVote]":
+    """`run_d0_sibling_artist_propagation`'s own idempotence source: every `CardArtistVote` this
+    calculator's identity has already cast. Split out as a named seam for the same
+    compiled-SQL-assertability reason as `_frame_mismatch_scan_log_queryset` above.
+
+    BATCH SCOPING (`card_ids`): the caller materialises this into a Python `set` for its
+    `.exclude(pk__in=...)`, so unscoped it is both a catalog-wide read of `CardArtistVote`
+    filtered by `anonymous_id` alone AND a catalog-scale in-memory set, per micro-batch. Purely
+    a cost narrowing - an already-voted card outside `card_ids` could never appear in the scoped
+    target queryset it excludes from. `card_ids=None` is byte-identical to before."""
+    queryset = CardArtistVote.objects.filter(anonymous_id=ART_HASH_ARTIST_ANONYMOUS_ID)
+    if card_ids is not None:
+        queryset = queryset.filter(card_id__in=card_ids)
+    return queryset
 
 
 def recover_frame_mismatch_printing_via_phash(card: Card, index: CandidateNameIndex) -> Optional[int]:
@@ -196,6 +234,7 @@ def run_frame_mismatch_recovery(
     ocr_refetch_budget: int = 0,
     fallback_refetch_budget: int = 0,
     audit_sample_size: int = 20,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> FrameMismatchRecoveryResult:
     """Part 3's dual-yield recovery pass. For every distinct card with a durable frame-mismatch
     CardScanLog row (RESCANNABLE_SKIP_REASONS deliberately keeps these eligible - see that
@@ -216,6 +255,29 @@ def run_frame_mismatch_recovery(
 
     A card flagged by more than one engine only needs recovering once - phash (free) takes
     priority over OCR/fallback (both cost a fetch) when more than one flagged the same card.
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite): when given, restricts
+    this whole pass to that set of card pks, pushed INTO `_frame_mismatch_scan_log_queryset` (see
+    that function's own docstring) - i.e. into the `CardScanLog` read itself, before anything is
+    materialised into Python - rather than intersected against the catalog-wide sets afterwards.
+    `card_ids=None` (the management command's only calling shape) is byte-identical to before.
+
+    FETCH BUDGETS ARE A SEPARATE DECISION FROM SCOPING (issue #533, and the reason this note
+    exists): `ocr_refetch_budget`/`fallback_refetch_budget` still admit real CDN image fetches +
+    fresh OCR/fallback passes, delegated into `local_identify_printing_tags`' helpers via
+    `recover_frame_mismatch_printing_via_ocr_refetch`/`_via_fallback_refetch`. Making this
+    function scopeable does NOT make per-batch fetching safe - both budgets are per-INVOCATION,
+    so a per-batch caller invoking this once per micro-batch multiplies the effective fetch
+    ceiling by the number of batches against a shared, rate-limited CDN. A per-batch caller must
+    therefore consider the budgets EXPLICITLY: pass 0 (the default, and the only value that
+    guarantees zero network cost - the phash path is genuinely free) unless #533's own separate
+    fetch decision has authorised otherwise. No default budget is changed by this scoping work.
+
+    STILL O(CATALOG) ON ONE AXIS: `CandidateNameIndex()` below builds an in-memory index over
+    CanonicalCard's 113k+ rows on every invocation. That is keyed by card NAME over a different
+    table entirely, so `card_ids` cannot narrow it; it needs the process-cache-behind-a-version-
+    stamp treatment PR #526 established for the illustration calculator, which is deliberately
+    out of scope here (scoping queries is this change; caching indexes is the follow-up).
     """
     run_id = run_id or generate_run_id()
     altered_frame_tag = Tag.objects.filter(name=ALTERED_FRAME_TAG_NAME).first()
@@ -227,7 +289,7 @@ def run_frame_mismatch_recovery(
         FALLBACK_ANONYMOUS_ID: set(),
     }
     for anonymous_id, card_id in (
-        CardScanLog.objects.filter(skip_reason="frame-mismatch").values_list("anonymous_id", "card_id").distinct()
+        _frame_mismatch_scan_log_queryset(card_ids).values_list("anonymous_id", "card_id").distinct()
     ):
         if anonymous_id in card_ids_by_engine:
             card_ids_by_engine[anonymous_id].add(card_id)
@@ -390,7 +452,10 @@ class D0SiblingPropagationResult:
 
 
 def run_d0_sibling_artist_propagation(
-    run_id: Optional[str] = None, dry_run: bool = True, chunk_size: int = 2000
+    run_id: Optional[str] = None,
+    dry_run: bool = True,
+    chunk_size: int = 2000,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> D0SiblingPropagationResult:
     """Part 3's d=0 sibling propagation - identical-image entailment: if card A and card B share
     the exact same content_phash (d=0, byte-identical art crop hash) and B has a resolved artist
@@ -401,7 +466,32 @@ def run_d0_sibling_artist_propagation(
     RE-RUNNABLE as a plain command flag - expected near-zero yield today (the volume check found
     only 3 cards catalog-wide currently have any resolved artist at all - see
     docs/features/catalog-completion-plan.md's Status section), but grows for free as real
-    confirmations accumulate; cheap to re-invoke, no reason to gate re-runs behind anything."""
+    confirmations accumulate; cheap to re-invoke, no reason to gate re-runs behind anything.
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite): when given, the TARGET
+    population (the cards this pass would vote on) is that set of card pks, and the narrowing is
+    pushed into every read this function makes rather than applied after the fact:
+
+      1. `already_voted_ids` - `_art_hash_artist_voted_queryset(card_ids)`, so the `CardArtistVote`
+         read filtered by this identity's `anonymous_id` is bounded too, not just the outer query
+         it feeds. See that function's own docstring.
+      2. `target_cards` - `.filter(pk__in=card_ids)` applied INSIDE this function, on the
+         queryset, so the scope reaches the compiled SQL rather than a Python-side filter over a
+         catalog-scale iteration.
+      3. the `phash_to_artist_id` SOURCE index - narrowed by a SUBQUERY over the batch's own
+         `content_phash` values (`Card.objects.filter(pk__in=card_ids, ...)`, kept lazy so it
+         compiles as `IN (SELECT ...)` and is never materialised). Without this the index is
+         built by iterating every artist-resolved card in the catalog, which is exactly the
+         "looks scoped, is not" failure this work exists to prevent: the outer target query would
+         be O(batch) while the pass as a whole stayed O(catalog).
+         RESULT-EQUIVALENT, not an approximation: a source card whose `content_phash` no target
+         card shares contributes a dict key nothing ever looks up, and narrowing by phash removes
+         only such keys - it never changes which source card wins a phash the batch DOES contain,
+         since the first-wins iteration order within any surviving phash group is untouched.
+
+    `card_ids=None` (the management command's only calling shape) leaves all three reads exactly
+    as they were - byte-identical to before. This function performs no image fetch on any path,
+    so a per-batch caller has no fetch-budget decision to make here."""
     run_id = run_id or generate_run_id()
 
     resolved_source_cards = (
@@ -426,6 +516,14 @@ def run_d0_sibling_artist_propagation(
             "inferred_canonical_artist",
         )
     )
+    if card_ids is not None:
+        # Item 3 of the BATCH SCOPING note above - a lazy queryset, deliberately NOT a
+        # materialised set, so this compiles into the source query as `content_phash IN
+        # (SELECT ...)` instead of pulling the batch's hashes through Python first.
+        batch_content_phashes = Card.objects.filter(pk__in=card_ids, content_phash__isnull=False).values_list(
+            "content_phash", flat=True
+        )
+        resolved_source_cards = resolved_source_cards.filter(content_phash__in=batch_content_phashes)
     phash_to_artist_id: dict[int, int] = {}
     for card in resolved_source_cards.iterator(chunk_size=chunk_size):
         # content_phash is guaranteed non-null here by the filter() above; mypy can't see
@@ -439,9 +537,7 @@ def run_d0_sibling_artist_propagation(
     if not phash_to_artist_id:
         return result
 
-    already_voted_ids = set(
-        CardArtistVote.objects.filter(anonymous_id=ART_HASH_ARTIST_ANONYMOUS_ID).values_list("card_id", flat=True)
-    )
+    already_voted_ids = set(_art_hash_artist_voted_queryset(card_ids).values_list("card_id", flat=True))
     target_cards = (
         Card.objects.filter(content_phash__in=phash_to_artist_id.keys())
         .exclude(pk__in=already_voted_ids)
@@ -449,6 +545,8 @@ def run_d0_sibling_artist_propagation(
             "canonical_artist", "canonical_card__artist", "inferred_canonical_card__artist", "inferred_canonical_artist"
         )
     )
+    if card_ids is not None:
+        target_cards = target_cards.filter(pk__in=card_ids)
 
     votes_batch: list[CardArtistVote] = []
     touched_card_ids: list[int] = []

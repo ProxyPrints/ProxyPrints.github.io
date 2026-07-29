@@ -15,6 +15,7 @@ from cardpicker.local_detect_ai_art import (
     AI_ART_CONFIDENCE_MULTI_FIELD,
     AI_ART_CONFIDENCE_SINGLE_FIELD,
     AI_GENERATED_TAG_NAME,
+    _eligible_cards_queryset,
     calculate_ai_art_verdict,
     find_marker_hits,
     normalize_ocr_text,
@@ -441,3 +442,123 @@ class TestPurgeWriteAtomicity:
             run_ai_art_detector(dry_run=False)
 
         assert CardTagVote.objects.filter(pk=stale.pk).exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-batch hot-path contract (issues #458/#460, via #533's first blocking
+# prerequisite: anything a per-micro-batch caller invokes must cost O(batch),
+# never O(catalog))
+# ---------------------------------------------------------------------------
+
+_MARKER_TEXT = "2024 not for resale trademtgen midjourney"
+
+
+class TestEligibleCardsQuerysetCardIdScoping:
+    """`_eligible_cards_queryset`/`run_ai_art_detector` gained a `card_ids` parameter, mirroring
+    `local_calculate_verdicts._eligible_cards_queryset`'s issue-#469 fix and
+    `local_illustration._eligible_illustration_cards_queryset`'s PR-#526 one. Both halves are
+    pinned, because only the first can tell them apart: that the `CardScanLog` exclusion subquery
+    is genuinely narrowed in the COMPILED SQL (result-set equivalence cannot distinguish "scoped
+    in SQL" from "materialised catalog-wide and filtered in Python afterwards"), and that the
+    eligible SET is identical either way."""
+
+    @staticmethod
+    def _scan_log_subquery(sql: str) -> str:
+        """The `CardScanLog` exclusion subquery, sliced out of the compiled SQL by balanced
+        parentheses. `U0` is Django's alias for exactly this subquery (`U1` is the correlated
+        `tag_votes` EXISTS pair), so slicing keeps the assertions below from being satisfied by a
+        literal appearing elsewhere - notably the OUTER `card.id IN (...)`, which the scoped and
+        the pre-fix shape carry identically."""
+        start = sql.index('(SELECT U0."card_id" FROM "cardpicker_cardscanlog"')
+        depth = 0
+        for offset, char in enumerate(sql[start:], start=start):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return sql[start : offset + 1]
+        raise AssertionError("unbalanced CardScanLog subquery in compiled SQL")
+
+    def test_card_ids_narrows_the_cardscanlog_subquery_itself_not_just_the_outer_query(self, db):
+        """The structural proof. Before this parameter existed the only way to scope this
+        calculator was to filter the returned queryset, which narrows the outer `Card` query and
+        leaves the `CardScanLog` subquery compiling to an unbounded scan of a 2,093,147-row,
+        append-only, still-growing table on every 25-card micro-batch."""
+        tag = _seed_tag()
+        card_a = CardFactory(name="Scope A")
+        card_b = CardFactory(name="Scope B")
+
+        scoped_sql = str(_eligible_cards_queryset(tag, card_ids=[card_a.pk, card_b.pk]).query)
+        # the pre-fix shape: function unscoped, caller filters afterwards.
+        pre_fix_sql = str(_eligible_cards_queryset(tag).filter(pk__in=[card_a.pk, card_b.pk]).query)
+
+        assert f'U0."card_id" IN ({card_a.pk}, {card_b.pk})' in self._scan_log_subquery(scoped_sql)
+        assert 'U0."card_id" IN' not in self._scan_log_subquery(pre_fix_sql)
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in scoped_sql
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in pre_fix_sql
+
+    def test_card_ids_none_leaves_bulk_mode_untouched(self, db):
+        """BULK mode (the management command's only calling shape) must never take the
+        `card_id__in` branch."""
+        tag = _seed_tag()
+
+        assert 'U0."card_id" IN' not in self._scan_log_subquery(str(_eligible_cards_queryset(tag).query))
+
+    def test_scoped_and_unscoped_eligible_sets_agree(self, db):
+        """Pure cost narrowing, not a behaviour change."""
+        tag = _seed_tag()
+        excluded_card = CardFactory(name="Excluded Card")
+        # any skip reason OUTSIDE AI_ART_RESCANNABLE_SKIP_REASONS permanently excludes it.
+        CardScanLog.objects.create(card=excluded_card, anonymous_id=AI_ART_ANONYMOUS_ID, skip_reason="no-marker-hit")
+        eligible_card = CardFactory(name="Eligible Card")
+        scope = [excluded_card.pk, eligible_card.pk]
+
+        unscoped = set(_eligible_cards_queryset(tag).filter(pk__in=scope).values_list("pk", flat=True))
+        scoped = set(_eligible_cards_queryset(tag, card_ids=scope).values_list("pk", flat=True))
+
+        assert unscoped == scoped == {eligible_card.pk}
+
+    def test_a_rescannable_scan_log_row_inside_the_scope_stays_eligible(self, db):
+        tag = _seed_tag()
+        card = CardFactory(name="Rescannable Card")
+        CardScanLog.objects.create(card=card, anonymous_id=AI_ART_ANONYMOUS_ID, skip_reason="no-evidence")
+
+        assert set(_eligible_cards_queryset(tag, card_ids=[card.pk]).values_list("pk", flat=True)) == {card.pk}
+
+    def test_bulk_mode_eligible_set_is_unchanged(self, db):
+        tag = _seed_tag()
+        card_a = CardFactory(name="Bulk A")
+        card_b = CardFactory(name="Bulk B")
+
+        assert set(_eligible_cards_queryset(tag).values_list("pk", flat=True)) == {card_a.pk, card_b.pk}
+
+
+class TestRunAiArtDetectorCardIdScoping:
+    def test_a_scoped_run_only_votes_on_cards_inside_the_scope(self, db):
+        _seed_tag()
+        in_scope = CardFactory(name="In Scope", content_phash=42)
+        _evidence(in_scope, legal_line_raw_text=_MARKER_TEXT)
+        # deliberately marker-FREE: unscoped, this card would have earned a "no-marker-hit"
+        # CardScanLog row, so the scan-log assertion below is a real one rather than vacuous.
+        out_of_scope = CardFactory(name="Out Of Scope", content_phash=43)
+        _evidence(out_of_scope, artist_ocr_name="Rebecca Guay")
+
+        result = run_ai_art_detector(dry_run=False, card_ids=[in_scope.pk])
+
+        assert result.votes_written == 1
+        assert list(CardTagVote.objects.values_list("card_id", flat=True)) == [in_scope.pk]
+        # the out-of-scope card is untouched in every table, not merely unvoted.
+        assert not CardScanLog.objects.filter(card_id=out_of_scope.pk).exists()
+
+    def test_card_ids_none_still_votes_on_the_whole_catalog(self, db):
+        _seed_tag()
+        card_a = CardFactory(name="Bulk A", content_phash=42)
+        _evidence(card_a, legal_line_raw_text=_MARKER_TEXT)
+        card_b = CardFactory(name="Bulk B", content_phash=43)
+        _evidence(card_b, legal_line_raw_text=_MARKER_TEXT)
+
+        result = run_ai_art_detector(dry_run=False)
+
+        assert result.votes_written == 2
+        assert set(CardTagVote.objects.values_list("card_id", flat=True)) == {card_a.pk, card_b.pk}

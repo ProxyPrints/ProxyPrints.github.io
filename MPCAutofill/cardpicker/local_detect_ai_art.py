@@ -62,7 +62,7 @@ resume/idempotence mechanism `local_identify_printing_tags.RESCANNABLE_SKIP_REAS
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 from django.db.models import QuerySet
 
@@ -331,7 +331,7 @@ class AiArtDetectorResult:
     audit: list[dict[str, object]] = field(default_factory=list)
 
 
-def _eligible_cards_queryset(tag: Tag) -> "QuerySet[Card]":
+def _eligible_cards_queryset(tag: Tag, card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
     """Every card NOT already voted on by this calculator's own anonymous_id for the AI-Generated
     tag specifically (the (card, tag, anonymous_id) uniqueness constraint on CardTagVote is what
     makes this a plain exclude - a single filter() call with both conditions applies to the SAME
@@ -342,17 +342,38 @@ def _eligible_cards_queryset(tag: Tag) -> "QuerySet[Card]":
     Deliberately unrestricted by `card_type`/`printing_tag_status` - AI-art detection is
     orthogonal to printing identification (a token or an unresolved card's art can be just as
     plausibly AI-generated as any other card's), unlike local_identify_printing_tags.py's own
-    eligibility, which specifically needs an unresolved printing to vote on."""
-    non_rescannable_scanned_card_ids = (
-        CardScanLog.objects.filter(anonymous_id=AI_ART_ANONYMOUS_ID)
-        .exclude(skip_reason__in=AI_ART_RESCANNABLE_SKIP_REASONS)
-        .values_list("card_id", flat=True)
+    eligibility, which specifically needs an unresolved printing to vote on.
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite): mirrors
+    `local_calculate_verdicts._eligible_cards_queryset`'s own issue-#469 fix exactly. When a
+    per-batch caller has already narrowed the population to a set of card pks, that narrowing is
+    pushed INTO this queryset - both onto the outer `Card` query AND into the `CardScanLog`
+    exclusion subquery, which Django compiles as an UNCORRELATED `IN (SELECT U0."card_id" FROM
+    "cardpicker_cardscanlog" U0 WHERE ...)`: unscoped, that is a full pass over a 2,093,147-row,
+    append-only, still-growing table on every 25-card micro-batch. Applying `card_ids` AFTER this
+    function returns narrows only the outer query and leaves that subquery unbounded - the exact
+    defect this scoping prevents, and why the tests assert on the COMPILED SQL rather than on
+    result-set equivalence alone (result-set equivalence cannot tell "scoped in SQL" apart from
+    "filtered in Python afterwards"). Purely a cost narrowing, never a behaviour change: a
+    scan-log row found outside `card_ids` could never survive the outer `.filter(pk__in=card_ids)`
+    regardless. The `tag_votes__anonymous_id`/`tag_votes__tag` exclusion needs no such push -
+    Django already compiles it as a CORRELATED `NOT EXISTS(... U1."card_id" =
+    "cardpicker_card"."id" ...)`, so the outer scope bounds it for free. `card_ids=None` (BULK
+    mode - the management command's only calling shape) leaves this byte-identical to before."""
+    non_rescannable_scanned_card_ids_qs = CardScanLog.objects.filter(anonymous_id=AI_ART_ANONYMOUS_ID).exclude(
+        skip_reason__in=AI_ART_RESCANNABLE_SKIP_REASONS
     )
-    return (
+    if card_ids is not None:
+        non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(card_id__in=card_ids)
+    non_rescannable_scanned_card_ids = non_rescannable_scanned_card_ids_qs.values_list("card_id", flat=True)
+    queryset = (
         Card.objects.exclude(tag_votes__anonymous_id=AI_ART_ANONYMOUS_ID, tag_votes__tag=tag)
         .exclude(pk__in=non_rescannable_scanned_card_ids)
         .distinct()
     )
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
+    return queryset
 
 
 def run_ai_art_detector(
@@ -360,6 +381,7 @@ def run_ai_art_detector(
     dry_run: bool = True,
     chunk_size: int = 500,
     audit_sample_size: int = 20,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> AiArtDetectorResult:
     """Batch runner over every currently-eligible card with a CURRENT `ImageEvidence` row (its
     `content_hash` matching the card's own live `content_phash` - an evidence row from a prior
@@ -378,6 +400,15 @@ def run_ai_art_detector(
     invariant, not "never resolves at all"). "AI-Generated" is plain `TagModerationClass.
     STANDARD` (see the module docstring's SENSITIVE-TAG DECISION section) - the shared
     human-backed gate is this tag's only gate, same as any other STANDARD tag.
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite): when given, restricts
+    this whole pass to that set of card pks, pushed INTO `_eligible_cards_queryset` (see that
+    function's own docstring) rather than applied to the queryset it returns. Everything
+    downstream of the eligibility query is already strictly per-card, so scoping the eligibility
+    query is sufficient to make the whole runner O(batch). No image fetch on any path (module
+    docstring: this reads only already-persisted `ImageEvidence` OCR text), so a per-batch caller
+    has no fetch-budget decision to make here. `card_ids=None` (the management command's only
+    calling shape) is byte-identical to before.
     """
     run_id = run_id or generate_run_id()
     result = AiArtDetectorResult(dry_run=dry_run, run_id=run_id)
@@ -391,7 +422,7 @@ def run_ai_art_detector(
     votes_batch: list[CardTagVote] = []
     scan_log_batch: list[CardScanLog] = []
 
-    for card in _eligible_cards_queryset(tag).iterator(chunk_size=chunk_size):
+    for card in _eligible_cards_queryset(tag, card_ids=card_ids).iterator(chunk_size=chunk_size):
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
