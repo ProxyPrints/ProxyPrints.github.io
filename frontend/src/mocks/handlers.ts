@@ -39,6 +39,7 @@ import {
   sourceDocument3,
 } from "@/common/test-constants";
 import {
+  participationAtRevealThreshold,
   participationCurrentRatio,
   participationPostSweep,
 } from "@/features/stats/testFixtures";
@@ -1041,6 +1042,27 @@ export const catalogStatsPostSweep = http.get(
         runHistory: catalogStatsRunHistory,
         catalogComposition: catalogStatsCatalogComposition,
         participation: participationPostSweep,
+      },
+      { status: 200 }
+    )
+);
+
+// 2026-07-29 owner ruling (features/stats/humanProgressReveal.ts) - the homepage's gated
+// human-progress series. `participationAtRevealThreshold` sits exactly at
+// HUMAN_VOTE_REVEAL_PERCENT's default (10%), so this handler exercises the real-browser "series
+// is visible" path (ParticipationGraph.spec.ts) the same way catalogStatsCurrentRatio/PostSweep
+// exercise the "series absent" path.
+export const catalogStatsAtRevealThreshold = http.get(
+  buildRoute("1/catalogStats/"),
+  () =>
+    HttpResponse.json(
+      {
+        generatedAt: "2026-07-29T06:00:00Z",
+        contributionsOverTime: catalogStatsContributionsOverTime,
+        skipBreakdown: catalogStatsSkipBreakdown,
+        runHistory: catalogStatsRunHistory,
+        catalogComposition: catalogStatsCatalogComposition,
+        participation: participationAtRevealThreshold,
       },
       { status: 200 }
     )
