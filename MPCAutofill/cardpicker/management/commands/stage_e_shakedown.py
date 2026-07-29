@@ -34,7 +34,15 @@ FORCED RE-EXTRACTION (spec point 3, the one conveyor change - see `stage_e_dispa
 own docstring for the mechanism): `force_stage_c_reextract=True` is passed on every batch this
 driver dispatches, unconditionally - the whole reason this command exists is that tail cards already
 carry a CURRENT full-manifest `ImageEvidence` row with blank values, so the conveyor's ordinary
-already-done check would otherwise skip every one of them.
+already-done check would otherwise skip every one of them. `short_circuit=False` is passed on every
+batch too, also unconditionally: a tail card is in this cohort precisely BECAUSE its tier-1
+collector-line read came back blank, so re-extracting it while still permitting the tier-1
+short-circuit would only reproduce that same blank read - the full multi-tier escalation ladder is
+the whole point of the re-extraction. That value used to be IMPLIED by `force_stage_c_reextract=
+True` (the conveyor hardcoded the pair together for this, its only caller) and is passed explicitly
+as of 2026-07-28, when `stream_full_catalog`'s full-catalog pass needed the first WITHOUT the second
+- see `stage_e_dispatch._run_stage_c`'s own "WHY THE TWO WERE CONFLATED" note. NOTHING about this
+driver's own behaviour changed: it always got `short_circuit=False`, and still does.
 
 RE-INVOCATION / RESUME (spec point 4): `--reextracted-after <iso>` (REQUIRED) additionally excludes
 any tail card whose CURRENT evidence `updated_at` already postdates that timestamp - i.e. a card
@@ -275,6 +283,17 @@ class Command(BaseCommand):
                 run_id=run_id,
                 batch_size=len(chunk),
                 force_stage_c_reextract=True,
+                # 2026-07-28: `short_circuit=False` used to be IMPLIED by
+                # `force_stage_c_reextract=True` (`stage_e_dispatch._run_stage_c` hardcoded it), and
+                # is now passed explicitly because those two settings were decoupled for
+                # `stream_full_catalog`'s full-catalog pass - see `_run_stage_c`'s own "WHY THE TWO
+                # WERE CONFLATED, AND WHY THEY NO LONGER ARE" docstring note. This driver's
+                # behaviour is UNCHANGED: it always got `short_circuit=False` and still does. It is
+                # load-bearing here, not incidental - every card in this cohort is in it precisely
+                # BECAUSE its tier-1 collector-line read came back blank, so re-extracting one while
+                # still permitting the tier-1 short-circuit would just reproduce that same blank
+                # read (module docstring's FORCED RE-EXTRACTION section).
+                short_circuit=False,
             )
 
             if outcome.status in _HALT_STATUSES:

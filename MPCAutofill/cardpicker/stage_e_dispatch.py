@@ -562,7 +562,11 @@ def _stage_c_fetch_ahead_worker(
 
 
 def _run_stage_c(
-    batch_ids: list[int], run_id: str, outcome: DispatchOutcome, force_stage_c_reextract: bool = False
+    batch_ids: list[int],
+    run_id: str,
+    outcome: DispatchOutcome,
+    force_stage_c_reextract: bool = False,
+    short_circuit: Optional[bool] = None,
 ) -> Optional[EnvelopeTrip]:
     """
     Per-card Stage C extraction over whichever of `batch_ids` still lack a full manifest - the SAME
@@ -594,20 +598,41 @@ def _run_stage_c(
 
     `force_stage_c_reextract` (issue #465, `management/commands/stage_e_shakedown.py`'s one conveyor
     change): `False` (the default) is BYTE-IDENTICAL to the pre-#465 behaviour below - the
-    already-done exclusion applies and `compute_card_evidence` gets `short_circuit=None` (deferring
-    to its own env-var default), exactly as before this parameter existed. `True` is passed ONLY by
-    that driver, for cards whose CURRENT full-manifest `ImageEvidence` row already exists but carries
-    blank values (the Bug-A tail's own signature - a card the already-done check below would
-    otherwise wrongly treat as finished): it (a) skips the already-done exclusion entirely, so every
-    id in `batch_ids` gets a fresh fetch + extract regardless of manifest completeness, and (b) forces
-    `short_circuit=False` into `compute_card_evidence` - the same escalation-forcing effect
-    `run_image_evidence_cohort.py`'s own `--no-shortcircuit` flag has (see that command's own
-    docstring for the mechanism reused here, not reimplemented), so a zero-digit tier-1 read is never
-    allowed to short-circuit past the fuller multi-tier escalation that could recover a real read.
-    Transfer-checking (phase 1) is deliberately UNCONDITIONAL regardless of this flag - a
-    force-re-extracted card with a genuinely current, good md5-sibling gets FIXED by transfer
-    immediately rather than paying for a real re-fetch of what would produce the same bytes anyway;
+    already-done exclusion applies, exactly as before this parameter existed. `True` skips the
+    already-done exclusion entirely, so every id in `batch_ids` gets a fresh fetch + extract
+    regardless of manifest completeness - built for cards whose CURRENT full-manifest
+    `ImageEvidence` row already exists but carries blank values (the Bug-A tail's own signature, a
+    card the already-done check below would otherwise wrongly treat as finished). Transfer-checking
+    (phase 1) is deliberately UNCONDITIONAL regardless of this flag - a force-re-extracted card with
+    a genuinely current, good md5-sibling gets FIXED by transfer immediately rather than paying for
+    a real re-fetch of what would produce the same bytes anyway;
     `evidence_transfer.find_transfer_source`'s own asserts are what keep this safe.
+
+    `short_circuit` (2026-07-28, `management/commands/stream_full_catalog.py`'s one conveyor
+    change - DECOUPLED from `force_stage_c_reextract`, see below): forwarded verbatim to
+    `image_evidence.compute_card_evidence`'s own parameter of the same name. `None` (the default)
+    is that function's own "resolve from the `STAGE_C_NO_SHORTCIRCUIT` env var AT CALL TIME"
+    behaviour (`image_evidence._short_circuit_enabled_by_env`); an explicit `False` disables the
+    collector-line OCR tier-1 short-circuit so every card runs the full extractor escalation ladder
+    (the same effect `run_image_evidence_cohort.py`'s own `--no-shortcircuit` flag has - that
+    command's mechanism reused here, not reimplemented); an explicit `True` forces the
+    short-circuit on regardless of the env var.
+
+    WHY THE TWO WERE CONFLATED, AND WHY THEY NO LONGER ARE: issue #465 introduced
+    `force_stage_c_reextract` for exactly ONE caller (`stage_e_shakedown`) with exactly ONE cohort
+    (the issue-#418 Bug-A blank-tier-1 tail). For that cohort the two settings genuinely co-vary -
+    every card in it is a card whose tier-1 read came back blank, so re-extracting it while still
+    permitting the tier-1 short-circuit would reproduce the very blank read that put it in the
+    cohort. `force_stage_c_reextract=True` therefore hardcoded `short_circuit=False` alongside it,
+    and one parameter carried two independent meanings ("ignore the already-done manifest check"
+    and "run the full escalation ladder") purely because the sole caller wanted both.
+    A FULL-CATALOG pass (`stream_full_catalog`, 2026-07-28) is the first caller that wants the
+    first meaning WITHOUT the second: it re-extracts every card in the catalog, the overwhelming
+    majority of which read fine at tier 1, and forcing 6 extra tesseract calls per card across
+    230k cards is a multiple of the run's whole compute budget for no recovery benefit. The two
+    are now separate parameters with separate defaults, and `stage_e_shakedown` passes
+    `short_circuit=False` EXPLICITLY (its behaviour is unchanged - the value it always got, now
+    stated at the call site instead of inferred from a sibling flag).
 
     Returns the `EnvelopeTrip` this call itself recorded (only possible via the instant Google
     lockout bar - see `GoogleFetchLockoutError` below), or `None`. A lockout stops Stage C
@@ -633,7 +658,6 @@ def _run_stage_c(
                 card_id__in=batch_ids, extractor_versions__contains=manifest_versions
             ).values_list("card_id", flat=True)
         )
-    short_circuit: Optional[bool] = False if force_stage_c_reextract else None
     lexicon = known_set_codes()
 
     # PHASE 1 (module docstring): build the work list, resolving evidence transfer BEFORE
@@ -823,18 +847,24 @@ def dispatch_micro_batch(
     run_id: Optional[str] = None,
     batch_size: Optional[int] = None,
     force_stage_c_reextract: bool = False,
+    short_circuit: Optional[bool] = None,
 ) -> DispatchOutcome:
     """
     The CONVEYOR itself - one micro-batch dispatch decision (docs/proposals/stage-e-streaming.md
     §3, this module's own docstring). Called by `cardpicker.stage_e_signals`'s own event receivers
     (via `dispatch_for_card`, `card_ids=[the triggering card's own pk]`), by `stream_backstop_sweep`
-    (`card_ids=None`, letting `_select_micro_batch` fill the whole batch from the backlog), and by
+    (`card_ids=None`, letting `_select_micro_batch` fill the whole batch from the backlog), by
     `management/commands/stage_e_shakedown.py` (issue #465, `card_ids=<its own driven chunk>`,
-    `force_stage_c_reextract=True`).
+    `force_stage_c_reextract=True, short_circuit=False`), and by
+    `management/commands/stream_full_catalog.py` (2026-07-28, `card_ids=<its own driven chunk>`,
+    both of those two settings independently operator-selected per invocation).
 
-    `force_stage_c_reextract` (issue #465): `False` (the default) is BYTE-IDENTICAL to this
-    function's pre-#465 behaviour - forwarded straight through to `_run_stage_c` (see that function's
-    own docstring for the two things `True` changes). Only the shakedown driver ever passes `True`.
+    `force_stage_c_reextract` (issue #465) and `short_circuit` (2026-07-28): both forwarded
+    straight through to `_run_stage_c` - see that function's own docstring for what each one does,
+    and for the "WHY THE TWO WERE CONFLATED, AND WHY THEY NO LONGER ARE" note. Their defaults
+    (`False`/`None`) together reproduce this function's pre-#465 behaviour BYTE-IDENTICALLY: the
+    already-done manifest check applies, and `compute_card_evidence` resolves its short-circuit
+    from the `STAGE_C_NO_SHORTCIRCUIT` env var at call time.
 
     Ordering: default-off gate -> no-self-resume gate -> fresh envelope sample -> batch selection ->
     concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`) -> Stage C (sequential, per-card)
@@ -923,7 +953,11 @@ def dispatch_micro_batch(
 
         try:
             lockout_trip = _run_stage_c(
-                batch_ids, dispatch_run_id, outcome, force_stage_c_reextract=force_stage_c_reextract
+                batch_ids,
+                dispatch_run_id,
+                outcome,
+                force_stage_c_reextract=force_stage_c_reextract,
+                short_circuit=short_circuit,
             )
             # Stage D still runs even after a mid-batch lockout trip - "in-flight work drains, nothing
             # NEW starts" (docs/features/stage-e-operations.md's HALT semantics) - see _run_stage_d's
