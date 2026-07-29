@@ -377,7 +377,6 @@ from typing import Iterable, Optional
 
 import imagehash
 
-from django.db import transaction
 from django.db.models import Count, Max, Q, QuerySet
 
 from cardpicker.image_evidence import current_evidence_queryset
