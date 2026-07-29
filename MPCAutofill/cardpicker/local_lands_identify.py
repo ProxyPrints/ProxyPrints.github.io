@@ -93,6 +93,12 @@ from typing import Iterable, Optional
 from cardpicker import local_ocr, local_phash
 from cardpicker.image_cdn_fetch import fetch_card_image
 from cardpicker.image_evidence import current_evidence_queryset
+
+# Issue #533's third blocking prerequisite - see the identically-reasoned import in
+# `local_residual_classify.py` for why this is a plain module-level import (no cycle exists to
+# defer around: nothing on `local_calculate_verdicts`' import closure reaches this module) and why
+# the cache is reused rather than extracted to a leaf module.
+from cardpicker.local_calculate_verdicts import _get_cached_candidate_name_index
 from cardpicker.local_fallback import detect_illus_anchor, match_artist
 from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
@@ -579,13 +585,25 @@ def run_lands_identify(
     free, serving only evidence-backed cards, unless #533's own separate fetch decision has
     authorised otherwise. No default budget is changed by this scoping work.
 
-    STILL O(CATALOG) ON ONE AXIS: `CandidateNameIndex()` below builds an in-memory index over
-    CanonicalCard's 113k+ rows on every invocation. It is keyed by card NAME over a different
-    table entirely, so `card_ids` cannot narrow it; it needs the process-cache-behind-a-version-
-    stamp treatment PR #526 established for the illustration calculator, deliberately out of
-    scope here (scoping queries is this change; caching indexes is the follow-up)."""
+    CATALOG-SCALE INDEX, PROCESS-CACHED (issue #533's THIRD blocking prerequisite, 2026-07-29 -
+    this docstring previously recorded it as the outstanding follow-up): the `CandidateNameIndex`
+    this pass needs is an in-memory index over CanonicalCard's 113k+ rows (measured 1.48s). It is
+    keyed by card NAME over a different table entirely, so `card_ids` cannot narrow it, and a
+    per-batch caller invoking this once per 25-card micro-batch over a ~135,000-row queue would
+    rebuild it ~5,400 times. It is therefore resolved through
+    `local_calculate_verdicts._get_cached_candidate_name_index()` - the SAME per-worker-process,
+    version-stamped cache `run_join_key_calculator`/`run_fallback_calculator`/
+    `run_illustration_calculator`/`run_frame_mismatch_recovery` use, not a second implementation.
+
+    NOT LAZY HERE, unlike every other caller of that helper, and deliberately so: this function's
+    very first read is `_land_pool_selected_cards`, which calls `index.candidates_for(card.name)`
+    on every row of the eligibility queryset, so there is no "before we know we need it" window to
+    defer into. Deferring by pre-checking `.exists()` would trade the version-stamp check for an
+    extra query on EVERY invocation, including the ones that do have work. What an empty
+    `card_ids` scope pays here is therefore the stamp check (three aggregates) and not the 1.48s
+    build - see `_candidate_name_index_version_stamp` for what those aggregates cost."""
     run_id = run_id or generate_run_id()
-    index = CandidateNameIndex()
+    index = _get_cached_candidate_name_index()
 
     result = LandsIdentifyResult(
         dry_run=dry_run, run_id=run_id, sample_size=sample_size or 0, fetch_budget=fetch_budget

@@ -36,6 +36,7 @@ from cardpicker.local_lands_identify import (
     run_lands_identify,
 )
 from cardpicker.models import (
+    CanonicalPrintingMetadata,
     CardPrintingTag,
     CardScanLog,
     LandsAmbiguousResidue,
@@ -45,6 +46,7 @@ from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
+    CanonicalPrintingMetadataFactory,
     CardFactory,
     ImageEvidenceFactory,
 )
@@ -987,3 +989,102 @@ class TestRunLandsIdentifyCardIdScoping:
         result = run_lands_identify(dry_run=True, card_ids=[card.pk])
 
         assert result.fetch_attempted == 0
+
+
+class TestRunLandsIdentifyUsesTheSharedCandidateNameIndexCache:
+    """Issue #533's THIRD blocking prerequisite (2026-07-29). `run_lands_identify` used to call
+    `CandidateNameIndex()` directly at the top of every invocation - a 113,224-row scan, measured
+    1.48s. PR #541 made this function scopeable by `card_ids`, i.e. usable by a
+    per-25-card-micro-batch caller; the index is keyed by card NAME over a different table, so
+    `card_ids` cannot narrow it. At 25-card batches over a ~135,000-row queue that was ~5,400
+    rebuilds.
+
+    It now resolves through `local_calculate_verdicts._get_cached_candidate_name_index()` - the
+    SAME per-worker-process, version-stamped cache the join-key/fallback/illustration/frame-
+    mismatch calculators use, not a second implementation. These tests count REAL
+    `CandidateNameIndex.__init__` calls: a cache that silently rebuilds every time passes every
+    behavioural test in this file while fixing nothing."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self):
+        import cardpicker.local_calculate_verdicts as verdicts_module
+
+        verdicts_module.reset_candidate_name_index_cache_for_tests()
+        yield
+        verdicts_module.reset_candidate_name_index_cache_for_tests()
+
+    @staticmethod
+    def _count_constructions(monkeypatch) -> list[int]:
+        """Patches the REAL `__init__` (not a replacement) so the indexes handed back stay fully
+        functional - the pool assertions below are on real behaviour, not a stub."""
+        import cardpicker.local_calculate_verdicts as verdicts_module
+
+        count = [0]
+        real_init = CandidateNameIndex.__init__
+
+        def counting_init(self, *args, **kwargs):
+            count[0] += 1
+            real_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(verdicts_module.CandidateNameIndex, "__init__", counting_init)
+        return count
+
+    def test_the_index_is_built_once_across_two_invocations(self, db, monkeypatch):
+        """Two invocations = two Stage E micro-batches in one worker process. No
+        CanonicalCard/CanonicalExpansion/CanonicalPrintingMetadata write happens between them, so
+        the version stamp is unchanged and the second invocation must reuse the first's index."""
+        count = self._count_constructions(monkeypatch)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+        CanonicalCardFactory(name="Plains")
+        card_one = CardFactory(name="Plains")
+        card_two = CardFactory(name="Plains")
+
+        first = run_lands_identify(dry_run=True, fetch_budget=0, card_ids=[card_one.pk])
+        second = run_lands_identify(dry_run=True, fetch_budget=0, card_ids=[card_two.pk])
+
+        # both invocations really used the index - this is not "one built, one no-op".
+        assert first.land_pool_size == 1
+        assert second.land_pool_size == 1
+        assert count[0] == 1
+
+    def test_a_canonical_card_write_between_invocations_still_rebuilds(self, db, monkeypatch):
+        """The cache must not go stale for the scoped caller either - the rebuilt index actually
+        sees the newly added canonical printing rather than a stale snapshot."""
+        count = self._count_constructions(monkeypatch)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+        CanonicalCardFactory(name="Plains")
+        card_one = CardFactory(name="Plains")
+        run_lands_identify(dry_run=True, fetch_budget=0, card_ids=[card_one.pk])
+        assert count[0] == 1
+
+        CanonicalCardFactory(name="Island")  # the invalidation event
+        card_two = CardFactory(name="Island")
+
+        second = run_lands_identify(dry_run=True, fetch_budget=0, card_ids=[card_two.pk])
+
+        assert count[0] == 2
+        assert second.land_pool_size == 1  # the REBUILT index resolved "Island"
+
+    def test_an_in_place_edhrec_rank_backfill_between_invocations_rebuilds(self, db, monkeypatch):
+        """PR #526's finding, exercised end-to-end through a real per-batch runner:
+        `import_scryfall_printing_metadata` backfills `edhrec_rank` IN PLACE
+        (`bulk_update`), moving neither max pk nor row count on ANY table. Under a naive stamp the
+        second invocation here reuses a stale, under-populated index for the worker's whole
+        lifetime. See `test_local_calculate_verdicts.
+        TestCandidateNameIndexVersionStampDetectsInPlaceWrites` for the stamp-level proof."""
+        count = self._count_constructions(monkeypatch)
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+        printing = CanonicalCardFactory(name="Plains")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, edhrec_rank=None)
+        card_one = CardFactory(name="Plains")
+        card_two = CardFactory(name="Plains")
+
+        run_lands_identify(dry_run=True, fetch_budget=0, card_ids=[card_one.pk])
+        assert count[0] == 1
+
+        # a bare UPDATE: no INSERT, no DELETE, so max pk and row count are unmoved everywhere.
+        CanonicalPrintingMetadata.objects.filter(canonical_card=printing).update(edhrec_rank=5)
+
+        run_lands_identify(dry_run=True, fetch_budget=0, card_ids=[card_two.pk])
+
+        assert count[0] == 2
