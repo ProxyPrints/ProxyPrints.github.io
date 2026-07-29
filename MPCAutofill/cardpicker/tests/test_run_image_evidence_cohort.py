@@ -68,7 +68,7 @@ from django.core.management.base import CommandError
 
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.management.commands import run_image_evidence_cohort as cohort_command
-from cardpicker.models import ImageEvidence, PilotRunLedger
+from cardpicker.models import CardScanLog, ImageEvidence, PilotRunLedger
 from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory
 
 
@@ -589,6 +589,35 @@ class TestFetchOneCard:
         assert evidence.transferred is True
         assert evidence.transferred_from_card_id == sibling.pk
         assert evidence.symbol_phash == 999
+
+    @pytest.mark.django_db
+    def test_a_transfer_anomaly_row_carries_this_runs_run_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """2026-07-29, from the run_id audit: `evidence_transfer.find_transfer_source` can write a
+        durable `CardScanLog` anomaly row and was the one machine writer in the app stamping no
+        `run_id`, making those rows invisible to `image_evidence.build_reconciliation_report`'s
+        run-scoped filter. The function now takes the stamp; this pins THIS caller passing it,
+        which is a separate mistake from the function forgetting to record it.
+
+        The anomaly is an md5 pair whose `content_phash` disagrees - impossible for genuinely
+        byte-identical files - so the transfer is refused and the card falls through to a fetch."""
+        sibling = CardFactory(md5_checksum="abc123", content_phash=111)
+        target = CardFactory(md5_checksum="abc123", content_phash=222)
+        ImageEvidenceFactory(
+            card=sibling,
+            content_hash=111,
+            md5_checksum="abc123",
+            extractor_versions={key: "v1" for key in cohort_command.MANIFEST_EXTRACTOR_KEYS},
+        )
+        stop_event = threading.Event()
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", lambda card, dpi=None: None)
+
+        cohort_command._fetch_one_card(card_id=target.pk, stop_event=stop_event, run_id="a-cohort-run", dry_run=False)
+
+        log = CardScanLog.objects.get(card=target, anonymous_id="evidence-transfer-v1")
+        assert log.run_id == "a-cohort-run"
 
     @pytest.mark.django_db
     def test_dry_run_finds_a_transfer_but_writes_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:

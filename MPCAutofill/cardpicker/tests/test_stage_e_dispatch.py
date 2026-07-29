@@ -41,6 +41,7 @@ from cardpicker.management.commands.stream_backstop_sweep import (
 )
 from cardpicker.models import (
     CardPrintingTag,
+    CardScanLog,
     EnvelopeTrip,
     ImageEvidence,
     PilotRunLedger,
@@ -1587,6 +1588,34 @@ class TestEvidenceTransferInDispatch:
         assert fetched_card_ids == [real_card.pk]  # the transfer target never hits the fetch stage
         assert ImageEvidence.objects.get(card=transfer_target).transferred is True
         assert ImageEvidence.objects.get(card=real_card).transferred is False
+
+    @STREAMING_ON
+    def test_a_transfer_anomaly_row_carries_the_dispatch_run_id(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        """2026-07-29, from the run_id audit. `find_transfer_source` can write a durable
+        `CardScanLog` anomaly row, and it was the ONE machine-written scan log in the app carrying
+        no run stamp - invisible to `image_evidence.build_reconciliation_report`, which filters by
+        `run_id`. `evidence_transfer` now takes the stamp; THIS test is what pins the dispatcher
+        actually passing it, which is a separate mistake and one that the evidence_transfer unit
+        tests cannot catch (they call the function directly).
+
+        The anomaly is an md5 pair whose `content_phash` disagrees - impossible for genuinely
+        byte-identical files, so the transfer is refused, the row is written, and the card falls
+        through to real extraction."""
+        sibling = CardFactory(name="Sibling", md5_checksum="abc123", content_phash=111)
+        target = CardFactory(name="Target", md5_checksum="abc123", content_phash=222)
+        ImageEvidenceFactory(
+            card=sibling,
+            content_hash=111,
+            md5_checksum="abc123",
+            extractor_versions=dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
+        )
+        _install_stage_c_stub(monkeypatch, fetch_result=lambda card, dpi=None: _png_bytes())
+
+        outcome = dispatch_micro_batch(card_ids=[target.pk], run_id="a-dispatch-run")
+
+        assert outcome.stage_c_transferred == 0
+        log = CardScanLog.objects.get(card=target, anonymous_id="evidence-transfer-v1")
+        assert log.run_id == "a-dispatch-run"
 
 
 class TestDecoupledFetchAhead:
