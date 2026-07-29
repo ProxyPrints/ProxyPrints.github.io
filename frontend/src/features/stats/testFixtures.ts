@@ -24,6 +24,15 @@
  */
 import { Participation } from "@/common/schema_types";
 
+// distinctCardsWithHumanVotes/distinctCardsRoutedToReview/distinctCardsRoutedToReviewWithHumanVotes
+// (added by the catalog-stats-distinct-cards PR, not independently measured against production
+// like the fields above) - illustrative placeholder figures only, chosen to satisfy the
+// Participation shape while respecting its real invariants: distinctCardsWithHumanVotes <=
+// humanVotes.total (votes can stack on one card), and
+// distinctCardsRoutedToReviewWithHumanVotes <= min(distinctCardsWithHumanVotes,
+// distinctCardsRoutedToReview) (it is that pair's intersection). Held flat across both fixtures,
+// same as humanVotes/distinctHumanVoters above - this task does not model how a full machine
+// sweep would move the review-routing counts, so it is deliberately not asserted here.
 export const participationCurrentRatio: Participation = {
   total: 230_770,
   confirmable: 103_687,
@@ -31,6 +40,9 @@ export const participationCurrentRatio: Participation = {
   fresh: 120_776,
   humanVotes: { printingTag: 125, artist: 6, tag: 106, total: 237 },
   distinctHumanVoters: 11,
+  distinctCardsWithHumanVotes: 218,
+  distinctCardsRoutedToReview: 42_000,
+  distinctCardsRoutedToReviewWithHumanVotes: 9,
   md5Groups: {
     groupsWithMultipleCards: 16_957,
     cardsInMultiCardGroups: 34_095,
@@ -45,6 +57,9 @@ export const participationPostSweep: Participation = {
   fresh: 22_770,
   humanVotes: { printingTag: 125, artist: 6, tag: 106, total: 237 },
   distinctHumanVoters: 11,
+  distinctCardsWithHumanVotes: 218,
+  distinctCardsRoutedToReview: 42_000,
+  distinctCardsRoutedToReviewWithHumanVotes: 9,
   md5Groups: {
     groupsWithMultipleCards: 16_957,
     cardsInMultiCardGroups: 34_095,
@@ -54,6 +69,14 @@ export const participationPostSweep: Participation = {
 
 // 237 / 2_370 = exactly 10% - see this file's own module comment for why the denominator is
 // pinned to a literal rather than derived from the live HUMAN_VOTE_REVEAL_PERCENT export.
+//
+// distinctCardsWithHumanVotes/distinctCardsRoutedToReview/distinctCardsRoutedToReviewWithHumanVotes
+// are pinned to exactly 10% on BOTH ratios this fixture can back - the current votes-over-cards
+// one (humanVotes.total / total = 237 / 2_370) AND the card-denominated one the deferred consumer
+// swap will move the gate onto (distinctCardsRoutedToReviewWithHumanVotes /
+// distinctCardsRoutedToReview = 100 / 1_000). A future editor changing one set of numbers to
+// retarget this fixture at a different percentage must keep the other consistent, or this
+// fixture stops meaning "exactly at the reveal boundary" under one of the two ratios.
 export const participationAtRevealThreshold: Participation = {
   total: 2_370,
   confirmable: 1_400,
@@ -61,6 +84,9 @@ export const participationAtRevealThreshold: Participation = {
   fresh: 670,
   humanVotes: { printingTag: 125, artist: 6, tag: 106, total: 237 },
   distinctHumanVoters: 11,
+  distinctCardsWithHumanVotes: 218, // <= humanVotes.total (237)
+  distinctCardsRoutedToReview: 1_000, // <= total (2_370)
+  distinctCardsRoutedToReviewWithHumanVotes: 100, // 100 / 1_000 = exactly 10%
   md5Groups: {
     groupsWithMultipleCards: 169,
     cardsInMultiCardGroups: 340,

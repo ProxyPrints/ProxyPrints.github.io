@@ -1207,6 +1207,22 @@ export interface Participation {
   fresh: number;
   humanVotes: HumanVoteCounts;
   distinctHumanVoters: number;
+  // CARD-denominated (not vote-denominated, unlike humanVotes) - distinct card_id across
+  // CardPrintingTag/CardArtistVote/CardTagVote filtered to HUMAN_SOURCES, unioned across the
+  // three tables so a card voted on in two tables counts once.
+  distinctCardsWithHumanVotes: number;
+  // Distinct card_id in CardScanLog routed to review (slow-path agent, skip_reason=
+  // SLOW_PATH_TO_REVIEW_REASON) - a distinct-card count, not a row count, since CardScanLog is
+  // an append-only audit trail and can carry more than one row per (card, anonymous_id) pair.
+  // Only ever grows (nothing clears the marker when a card later gets a human vote) - a
+  // denominator, not a progress measure on its own; see distinctCardsRoutedToReviewWithHumanVotes.
+  distinctCardsRoutedToReview: number;
+  // The intersection of distinctCardsRoutedToReview and distinctCardsWithHumanVotes: cards both
+  // routed to review AND carrying a human vote. THIS, not distinctCardsWithHumanVotes over
+  // distinctCardsRoutedToReview, is the pair that forms a valid progress ratio -
+  // distinctCardsWithHumanVotes is not a subset of distinctCardsRoutedToReview (a person can
+  // vote on a card the machine never routed), so dividing them directly is not coherent.
+  distinctCardsRoutedToReviewWithHumanVotes: number;
   md5Groups: Md5GroupStats;
 }
 
@@ -3249,6 +3265,21 @@ const typeMap: any = {
     [
       { json: "confirmable", js: "confirmable", typ: 0 },
       { json: "contested", js: "contested", typ: 0 },
+      {
+        json: "distinctCardsRoutedToReview",
+        js: "distinctCardsRoutedToReview",
+        typ: 0,
+      },
+      {
+        json: "distinctCardsRoutedToReviewWithHumanVotes",
+        js: "distinctCardsRoutedToReviewWithHumanVotes",
+        typ: 0,
+      },
+      {
+        json: "distinctCardsWithHumanVotes",
+        js: "distinctCardsWithHumanVotes",
+        typ: 0,
+      },
       { json: "distinctHumanVoters", js: "distinctHumanVoters", typ: 0 },
       { json: "fresh", js: "fresh", typ: 0 },
       { json: "humanVotes", js: "humanVotes", typ: r("HumanVoteCounts") },

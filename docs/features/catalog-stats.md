@@ -99,7 +99,7 @@ confirmations".
 | `skipBreakdown`         | 4                | `CardScanLog.skip_reason`, grouped by reason and by reason+`anonymous_id` (engine) | ~11 distinct reasons observed in production                                                                         |
 | `runHistory`            | 6                | `PilotRunLedger` - status/duration/`votes_written`, most recent 50                 | See "The already-voted caveat" below                                                                                |
 | `catalogComposition`    | 7                | `cardpicker.models.summarise_contributions()`, reused verbatim                     | The cheapest panel - moves an existing live query (`GET 2/contributions/`) onto this cache instead of adding one    |
-| `participation`         | (call to action) | `question_feed.get_remaining_estimate()` + human vote counts + md5-group figures   | Raw counts only - see "No percent-complete field" below                                                             |
+| `participation`         | (call to action) | `question_feed.get_remaining_estimate()` + human vote counts + md5-group figures   | Raw counts only - see "No percent-complete field" below; card-denominated counts in "Cards vs. votes" below         |
 
 ## The already-voted caveat (`runHistory`)
 
@@ -129,11 +129,81 @@ Measured 2026-07-29: total human votes across all three vote tables is
 against a `total` (from `get_remaining_estimate()`) of 230,770 - roughly
 0.1%. `compute_participation` deliberately emits **only raw counts** -
 `confirmable`/`contested`/`fresh`/`total`, `humanVotes` (by table and
-summed), `distinctHumanVoters`, and the md5-group figures
+summed), `distinctHumanVoters`, `distinctCardsWithHumanVotes`,
+`distinctCardsRoutedToReview`, `distinctCardsRoutedToReviewWithHumanVotes`,
+and the md5-group figures
 (`groupsWithMultipleCards`/`cardsInMultiCardGroups`/`largestGroupSize`) -
 never a single computed ratio. A meter pinned to 0.1% reads as "this
 project failed" rather than "this project needs you" - the page decides
 how to frame the numbers; the backend never pre-computes that choice away.
+
+## Cards vs. votes (`distinctCardsWithHumanVotes`, `distinctCardsRoutedToReview`, `distinctCardsRoutedToReviewWithHumanVotes`)
+
+Added 2026-07-29 so a future front-page consumer can render a
+cards-over-cards participation ratio instead of votes-over-cards. Before
+this trio of fields, the only human-activity numerator available was
+`humanVotes.total` (a vote count) against a `total`/`confirmable`
+denominator that is card-counted - dividing the two over-counts
+participation, since one card can carry several independent human votes
+(a printing tag, an artist vote, and a descriptor tag are three separate
+votes on the same card). `frontend/src/features/stats/ ParticipationGraph.tsx`'s own module docstring documents this exact
+`humanVotes.total / total` ratio as the approximation it deliberately
+avoids rendering (measured 2026-07-29, ≈0.1%, worse once machine votes
+grow) - these fields make an exact cards/cards ratio possible without
+that pitfall. Wiring the graph itself up to these fields is a separate,
+follow-up task (this pass only adds the backend counts).
+
+- **`distinctCardsWithHumanVotes`** - distinct `card_id` across
+  `CardPrintingTag`/`CardArtistVote`/`CardTagVote`, filtered to
+  `HUMAN_SOURCES` (this module's own USER/ADMIN/FEDERATED split, see
+  above) and unioned across the three tables in Python, the same
+  `distinct_voters`-style set-union `compute_participation` already uses
+  for `distinctHumanVoters` - a card voted on in two tables counts once.
+  This is cheap **only because the `HUMAN_SOURCES` filter keeps the row
+  set tiny** (low hundreds today, per the 237-vote figure above); it is
+  not a pattern to copy for an unfiltered count. Answers "total human
+  reach across the catalog, routed or not."
+- **`distinctCardsRoutedToReview`** - distinct `card_id` in `CardScanLog`
+  filtered to the slow-path agent
+  (`local_calculate_verdicts.SLOW_PATH_ANONYMOUS_ID`) and
+  `skip_reason=SLOW_PATH_TO_REVIEW_REASON` - the same filter shape
+  `review_clusters._review_queue_card_ids()` already uses. **This must be
+  a distinct-card count, computed with
+  `.values("card_id").distinct().count()`, never a plain `.count()`.**
+  `CardScanLog` is an append-only audit trail (see that model's own
+  docstring): a card can accumulate more than one row for the same
+  `(card, anonymous_id)` pair over time, since multiple runs can each
+  abstain on the same card independently - a raw row count would report
+  rows, not cards, and silently overstate this figure. Unlike the human
+  vote tables, `CardScanLog` is a genuinely large table (order 10^5 rows),
+  so this is computed as one `.distinct().count()` query rather than a
+  Python-side set union. `CardScanLog`'s only declared index is on
+  `(card, anonymous_id)` (see that model's `Meta.indexes`) - this filter
+  is on `anonymous_id` + `skip_reason` without `card` in the predicate, so
+  that index's leading column doesn't help it; no index in this codebase
+  currently supports this exact filter (open item, not addressed by this
+  change - see the introducing PR's report).
+  **This count is not, on its own, a progress measure: it only ever
+  grows.** Nothing clears a card's routing marker when it later gets a
+  human vote - `CardScanLog` is append-only - so `distinctCardsRoutedToReview`
+  rises monotonically as the sweep runs, even while people are actively
+  contributing. Treat it strictly as a denominator, paired with
+  `distinctCardsRoutedToReviewWithHumanVotes` below, never charted alone
+  as "how much is done."
+- **`distinctCardsRoutedToReviewWithHumanVotes`** - the INTERSECTION of
+  the two sets above: cards that are both routed to review AND carry a
+  human vote. **This is the pair that forms a valid progress ratio** -
+  `distinctCardsWithHumanVotes` is deliberately NOT a subset of
+  `distinctCardsRoutedToReview` (a person can vote on a card the machine
+  never routed to review at all), so `distinctCardsWithHumanVotes / distinctCardsRoutedToReview` is not a coherent ratio. `distinctCards RoutedToReviewWithHumanVotes / distinctCardsRoutedToReview` is, by
+  construction, a proper subset over its own superset, and rises as
+  people work the review queue. Computed by reusing the same
+  `distinctCardsWithHumanVotes` card-id set built once above and
+  filtering the `CardScanLog` routed queryset down to
+  `card_id__in=<that tiny set>` - cheap because that IN-list is small and
+  the model's own `(card, anonymous_id)` index serves it, rather than
+  pulling every routed card id into Python to intersect there or
+  re-querying the three vote tables a second time.
 
 ## Deferred charts (1 and 5)
 

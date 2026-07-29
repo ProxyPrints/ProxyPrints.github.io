@@ -77,6 +77,10 @@ from django.db.models import Count
 from django.db.models.functions import TruncWeek
 from django.utils import timezone
 
+from cardpicker.local_calculate_verdicts import (
+    SLOW_PATH_ANONYMOUS_ID,
+    SLOW_PATH_TO_REVIEW_REASON,
+)
 from cardpicker.models import (
     Card,
     CardArtistVote,
@@ -318,6 +322,37 @@ def compute_participation() -> dict[str, Any]:
     `humanVotes`/`distinctHumanVoters` filter on `HUMAN_SOURCES` (module docstring's own section -
     USER/ADMIN/FEDERATED, NOT `vote_consensus`'s four-source machine-derived set), matching the
     237-vote/~11-voter figures measured against production on 2026-07-29.
+
+    Also emits three CARD-denominated counts (issue #233 follow-up, 2026-07-29) so a future
+    front-page consumer can render a cards-over-cards participation ratio instead of
+    votes-over-cards (one card can carry several independent human votes - a printing tag, an
+    artist vote, a descriptor tag - so `humanVotes.total / total` over-counts; see
+    `frontend/src/features/stats/ParticipationGraph.tsx`'s own module docstring, which documents
+    this exact ratio as the approximation it deliberately avoids rendering - this trio of fields
+    is meant to make an exact version of it possible, in a follow-up task that wires the graph up
+    to them):
+
+    - `distinctCardsWithHumanVotes` - distinct `card_id` across `CardPrintingTag`/
+      `CardArtistVote`/`CardTagVote`, filtered to `HUMAN_SOURCES` and unioned across the three
+      tables (a card voted on in two tables counts once). "Total human reach across the catalog,
+      routed or not."
+    - `distinctCardsRoutedToReview` - distinct `card_id` in `CardScanLog` filtered to the
+      slow-path agent (`local_calculate_verdicts.SLOW_PATH_ANONYMOUS_ID`) and
+      `skip_reason=SLOW_PATH_TO_REVIEW_REASON` - same filter shape `review_clusters.
+      _review_queue_card_ids()` already uses. Genuinely a distinct-CARD count, not a row count:
+      `CardScanLog` is an append-only audit trail (see that model's own docstring) - a card can
+      accumulate more than one row for the same `(card, anonymous_id)` pair across re-runs, so a
+      plain `.count()` here would report rows, not cards, and silently overstate the denominator.
+    - `distinctCardsRoutedToReviewWithHumanVotes` - the INTERSECTION of the two sets above: cards
+      that are both routed to review AND carry a human vote. **This, not `distinctCardsWith
+      HumanVotes` over `distinctCardsRoutedToReview`, is the pair that forms a valid progress
+      ratio.** `distinctCardsWithHumanVotes` is not a subset of `distinctCardsRoutedToReview` (a
+      person can vote on a card the machine never routed to review), and nothing clears a card's
+      routing marker when it later gets a human vote (`CardScanLog` is append-only, per above), so
+      `distinctCardsRoutedToReview` only ever grows - a ratio against it directly would fall as
+      the sweep routes more cards even while people are actively contributing, exactly backwards.
+      `distinctCardsRoutedToReviewWithHumanVotes / distinctCardsRoutedToReview` is a proper
+      subset-over-superset ratio by construction and rises as people work the queue.
     """
     counts = get_remaining_estimate()
 
@@ -331,6 +366,40 @@ def compute_participation() -> dict[str, Any]:
     distinct_voters: set[str] = set()
     for model in _VOTE_MODELS:
         distinct_voters.update(model.objects.filter(source__in=HUMAN_SOURCES).values_list("anonymous_id", flat=True))
+
+    # Distinct CARDS (not votes) carrying at least one human vote in any of the three tables,
+    # unioned in Python exactly like `distinct_voters` above - cheap ONLY because the
+    # `HUMAN_SOURCES` filter keeps the row set tiny (low hundreds today, per module docstring's
+    # measured figures); do not copy this pattern for an unfiltered/all-source count without
+    # re-checking that the row set is still small.
+    distinct_cards_with_human_votes: set[int] = set()
+    for model in _VOTE_MODELS:
+        distinct_cards_with_human_votes.update(
+            model.objects.filter(source__in=HUMAN_SOURCES).values_list("card_id", flat=True)
+        )
+
+    # Distinct CARDS routed to review, via a DB-side `.distinct()` rather than the Python-set
+    # union above - `CardScanLog` rows number in the order of 10^5, unlike the low-hundreds human
+    # vote tables, so materialising every row into Python would be wasteful; the database can
+    # dedupe `card_id` itself. `.values("card_id").distinct().count()`, not `.count()` - see this
+    # function's own docstring above for why a raw row count would overstate cards on this
+    # append-only table. Kept as a queryset (not yet evaluated) so the intersection query below
+    # can reuse the same base filter rather than re-stating it.
+    routed_to_review_qs = CardScanLog.objects.filter(
+        anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+    )
+    distinct_cards_routed_to_review = routed_to_review_qs.values("card_id").distinct().count()
+
+    # The intersection of the two sets above - see this function's own docstring for why this,
+    # not the two counts independently, is the valid progress ratio's numerator. Cheap because
+    # `distinct_cards_with_human_votes` (already built above, once) is small - filtering the large
+    # `CardScanLog` table down to `card_id__in=<that tiny set>` (which the model's own
+    # `(card, anonymous_id)` index serves) is far cheaper than pulling all ~10^5 routed card ids
+    # into Python to intersect there, and reuses the human-vote set rather than re-querying the
+    # three vote tables a second time.
+    distinct_cards_routed_to_review_with_human_votes = (
+        routed_to_review_qs.filter(card_id__in=distinct_cards_with_human_votes).values("card_id").distinct().count()
+    )
 
     md5_group_sizes = list(
         Card.objects.exclude(md5_checksum__isnull=True)
@@ -348,6 +417,9 @@ def compute_participation() -> dict[str, Any]:
         "fresh": counts.fresh,
         "humanVotes": {**human_vote_counts, "total": total_human_votes},
         "distinctHumanVoters": len(distinct_voters),
+        "distinctCardsWithHumanVotes": len(distinct_cards_with_human_votes),
+        "distinctCardsRoutedToReview": distinct_cards_routed_to_review,
+        "distinctCardsRoutedToReviewWithHumanVotes": distinct_cards_routed_to_review_with_human_votes,
         "md5Groups": {
             "groupsWithMultipleCards": len(md5_group_sizes),
             "cardsInMultiCardGroups": sum(md5_group_sizes),
@@ -387,6 +459,9 @@ def zeroed_catalog_stats() -> dict[str, Any]:
             "fresh": 0,
             "humanVotes": {"printingTag": 0, "artist": 0, "tag": 0, "total": 0},
             "distinctHumanVoters": 0,
+            "distinctCardsWithHumanVotes": 0,
+            "distinctCardsRoutedToReview": 0,
+            "distinctCardsRoutedToReviewWithHumanVotes": 0,
             "md5Groups": {"groupsWithMultipleCards": 0, "cardsInMultiCardGroups": 0, "largestGroupSize": 0},
         },
     }

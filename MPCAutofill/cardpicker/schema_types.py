@@ -3222,6 +3222,14 @@ class Participation(BaseModel):
     The call-to-action panel - see cardpicker.catalog_stats.compute_participation's own docstring
     for why this deliberately carries no "percent complete" field: emit counts, let the page
     decide the framing.
+
+    `distinctCardsWithHumanVotes`/`distinctCardsRoutedToReview`/
+    `distinctCardsRoutedToReviewWithHumanVotes` are CARD-denominated counts (issue #233
+    follow-up, 2026-07-29), additive to the fields above - see `compute_participation`'s own
+    docstring for the exact filters each uses, why `distinctCardsRoutedToReview` must be a
+    distinct-card count rather than a row count, and why the intersection
+    (`distinctCardsRoutedToReviewWithHumanVotes`), not the first two counts directly, is the pair
+    that forms a valid progress ratio.
     """
 
     total: int
@@ -3230,6 +3238,9 @@ class Participation(BaseModel):
     fresh: int
     humanVotes: HumanVoteCounts
     distinctHumanVoters: int
+    distinctCardsWithHumanVotes: int
+    distinctCardsRoutedToReview: int
+    distinctCardsRoutedToReviewWithHumanVotes: int
     md5Groups: Md5GroupStats
 
     @staticmethod
@@ -3241,6 +3252,9 @@ class Participation(BaseModel):
         fresh = from_int(obj.get("fresh"))
         humanVotes = HumanVoteCounts.from_dict(obj.get("humanVotes"))
         distinctHumanVoters = from_int(obj.get("distinctHumanVoters"))
+        distinctCardsWithHumanVotes = from_int(obj.get("distinctCardsWithHumanVotes"))
+        distinctCardsRoutedToReview = from_int(obj.get("distinctCardsRoutedToReview"))
+        distinctCardsRoutedToReviewWithHumanVotes = from_int(obj.get("distinctCardsRoutedToReviewWithHumanVotes"))
         md5Groups = Md5GroupStats.from_dict(obj.get("md5Groups"))
         return Participation(
             total=total,
@@ -3249,6 +3263,9 @@ class Participation(BaseModel):
             fresh=fresh,
             humanVotes=humanVotes,
             distinctHumanVoters=distinctHumanVoters,
+            distinctCardsWithHumanVotes=distinctCardsWithHumanVotes,
+            distinctCardsRoutedToReview=distinctCardsRoutedToReview,
+            distinctCardsRoutedToReviewWithHumanVotes=distinctCardsRoutedToReviewWithHumanVotes,
             md5Groups=md5Groups,
         )
 
@@ -3260,6 +3277,9 @@ class Participation(BaseModel):
         result["fresh"] = from_int(self.fresh)
         result["humanVotes"] = to_class(HumanVoteCounts, self.humanVotes)
         result["distinctHumanVoters"] = from_int(self.distinctHumanVoters)
+        result["distinctCardsWithHumanVotes"] = from_int(self.distinctCardsWithHumanVotes)
+        result["distinctCardsRoutedToReview"] = from_int(self.distinctCardsRoutedToReview)
+        result["distinctCardsRoutedToReviewWithHumanVotes"] = from_int(self.distinctCardsRoutedToReviewWithHumanVotes)
         result["md5Groups"] = to_class(Md5GroupStats, self.md5Groups)
         return result
 
