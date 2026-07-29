@@ -15,6 +15,8 @@ this suite.
 from PIL import Image, ImageDraw
 
 import cardpicker.local_ocr as local_ocr
+from cardpicker.attribute_tags import seed_attribute_tags
+from cardpicker.default_tags import seed_default_tags
 from cardpicker.local_fallback import (
     BLEED_ASPECT_RATIO,
     BLEED_EDGE_TAG_NAME,
@@ -35,7 +37,7 @@ from cardpicker.local_fallback import (
     run_fallback_for_card,
 )
 from cardpicker.local_identify_printing_tags import CandidatePrinting, SelectedCard
-from cardpicker.models import VotePolarity, VoteSource
+from cardpicker.models import Tag, VotePolarity, VoteSource
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
@@ -173,8 +175,42 @@ class TestCastBorderAttributeVote:
         card = CardFactory()
         assert cast_border_attribute_vote(card, "black") is None
 
-    def test_every_taxonomy_color_maps_to_a_real_tag_name(self):
+    def test_taxonomy_key_set_is_exactly_the_v1_border_classes(self):
+        """KEYS ONLY - this asserts nothing about which tag each colour maps TO. Despite its
+        previous name (`test_every_taxonomy_color_maps_to_a_real_tag_name`) it never checked
+        that the values were real tag names, let alone the right ones; the two tests below are
+        what do that. Kept as its own case because the key set is `classify_border_color`'s
+        closed output space and several call sites branch on membership in it."""
         assert set(BORDER_COLOR_TO_TAG.keys()) == {"black", "white", "silver", "borderless"}
+
+    def test_each_taxonomy_color_maps_to_its_own_correct_tag(self):
+        """THE MAPPING ITSELF, pinned to literals - the only assertion in the repo that a
+        black-bordered card is voted "Black Border" and not something else.
+
+        Written out rather than derived on purpose: every other test of this table either
+        iterates it to build its own fixture and then compares the verdict against that same
+        table (`test_local_layout_class_cast.py`'s two round-trip cases), or happens to pin one
+        pair incidentally. Swapping two values here is a silent, catalogue-wide mislabelling -
+        ~139k black-bordered rows would be voted "White Border" - and before this test the
+        `white` and `silver` entries had no assertion anywhere in the suite at all.
+        """
+        assert BORDER_COLOR_TO_TAG == {
+            "black": "Black Border",
+            "white": "White Border",
+            "silver": "Silver Border",
+            "borderless": "Borderless",
+        }
+
+    def test_every_taxonomy_tag_name_exists_after_the_real_seed_commands_run(self, db):
+        """The "is a REAL Tag name" half: each value must be a row one of the two seed commands
+        this project actually ships creates. `run_layout_class_cast` hard-raises on a missing
+        tag and `cast_border_attribute_vote` degrades to casting nothing, so a value that no
+        seeder produces silently disables border voting rather than failing loudly at deploy."""
+        seed_default_tags()
+        seed_attribute_tags()
+        seeded = set(Tag.objects.values_list("name", flat=True))
+        missing = sorted(set(BORDER_COLOR_TO_TAG.values()) - seeded)
+        assert not missing, f"BORDER_COLOR_TO_TAG values with no seeder: {missing}"
 
 
 class TestRenderSetSymbol:

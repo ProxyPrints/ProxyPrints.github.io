@@ -63,9 +63,18 @@ class TestCalculateLayoutClassVerdict:
         assert verdict.tag_name is None
         assert verdict.confidence is None
 
-    def test_each_taxonomy_value_maps_onto_its_own_tag(self, db):
-        # Mirrors BORDER_COLOR_TO_TAG's own mapping exactly - the whole point of reusing that
-        # table rather than a second copy.
+    def test_every_taxonomy_value_routes_through_the_shared_table_and_is_a_hit(self, db):
+        """ROUTING, NOT MAPPING CONTENT. The expected tag name is read from
+        BORDER_COLOR_TO_TAG, and `calculate_layout_class_verdict` IS a lookup in
+        BORDER_COLOR_TO_TAG, so this compares the table against itself and cannot detect a
+        wrong colour->tag pairing. What it does prove is the property worth proving here: no
+        taxonomy value falls into the defensive non-hit branch, and the verdict carries the
+        shared table's value rather than a second private copy.
+
+        The table's CONTENTS are pinned to literals in
+        test_local_fallback.py::test_each_taxonomy_color_maps_to_its_own_correct_tag - one
+        place, deliberately, so the literals don't get copied into three files and drift.
+        """
         for layout_class, tag_name in BORDER_COLOR_TO_TAG.items():
             card = CardFactory(name=f"Card {layout_class}")
             evidence = _evidence(card, layout_class=layout_class)
@@ -163,6 +172,11 @@ class TestRunLayoutClassCast:
 
         assert result.votes_written == 3
         for layout_class, card in cards.items():
+            # Same table-against-itself caveat as
+            # TestCalculateLayoutClassVerdict::test_every_taxonomy_value_routes_through_the_
+            # shared_table_and_is_a_hit - what this leg proves is one vote per card carrying the
+            # shared table's value end-to-end through the writer, not that the pairing is right.
+            # The pairing is pinned in test_local_fallback.py.
             vote = CardTagVote.objects.get(card=card)
             assert vote.tag.name == BORDER_COLOR_TO_TAG[layout_class]
 
