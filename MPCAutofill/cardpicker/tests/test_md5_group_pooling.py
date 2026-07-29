@@ -33,6 +33,8 @@ from unittest.mock import patch
 
 import pytest
 
+from django.conf import settings as django_settings
+
 from cardpicker import printing_consensus
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
@@ -69,7 +71,12 @@ from cardpicker.tests.factories import (
     CardPrintingTagFactory,
     ImageEvidenceFactory,
 )
-from cardpicker.vote_consensus import VoteTuple, pool_group_votes, resolve_vote_weight
+from cardpicker.vote_consensus import (
+    VoteTuple,
+    pool_group_votes,
+    resolve_vote_weight,
+    resolve_weighted_consensus,
+)
 
 
 @pytest.fixture
@@ -906,3 +913,295 @@ class TestVersionedCalculatorIdentity:
         votes, is_group = group_printing_votes(card)
         assert is_group is False
         assert [vote.dedupe_key for vote in build_group_printing_vote_tuples(votes, pool=is_group)] == [None]
+
+
+class TestCallerSuppliedGroupMustBeComplete:
+    """
+    `resolve_printing`/`group_printing_votes`' `group_card_ids` - and, transitively,
+    `resolve_and_persist_printing`'s `members` - is an OPTIMISATION whose contract is "the
+    COMPLETE md5 identity group", now ENFORCED by `printing_consensus._require_full_md5_group`
+    rather than merely documented.
+
+    The hazard is not a hypothetical about a weaker answer. Consensus pools across the whole
+    group and deduplicates per AGENT, so the tally is DEFINED over the group: a subset yields a
+    DIFFERENT tally and can select a different winning printing, silently - no exception, no log
+    line, a plausible resolution computed from part of the evidence and then written onto every
+    member. No caller passes a narrowed group today; the batch-scopeability pass (#533/#541) is
+    what makes it imminent, since scoping every read by a batch's `card_ids` is correct for the
+    batch's TARGETS and wrong for a target's md5 NEIGHBOURHOOD lookup like this one.
+
+    `test_batch_boundary_subset_would_have_picked_a_different_printing` is the load-bearing case:
+    it builds a group straddling a simulated batch boundary and shows, by computing the unguarded
+    answer alongside the true one, that the guard converts a plausible-but-wrong resolution into
+    a loud failure.
+    """
+
+    HUMAN_1 = "11111111-1111-4111-8111-111111111111"
+    HUMAN_2 = "22222222-2222-4222-8222-222222222222"
+    HUMAN_3 = "33333333-3333-4333-8333-333333333333"
+    HUMAN_4 = "44444444-4444-4444-8444-444444444444"
+
+    @staticmethod
+    def _unguarded_resolution(group_card_ids):
+        """
+        What `resolve_printing` WOULD have returned for `group_card_ids` before this guard
+        existed: `group_printing_votes`' own multi-member query and branch, then the identical
+        tuple-building and resolver call, with the completeness check simply absent. Reproduced
+        here rather than by monkeypatching the guard off, so the counterfactual is visible in the
+        test and the code under test is never run with its guard disabled.
+        """
+        votes = list(
+            CardPrintingTag.objects.filter(card_id__in=group_card_ids)
+            .select_related("printing")
+            .order_by("card_id", "pk")
+        )
+        printings_by_id: dict = {}
+        vote_tuples = build_group_printing_vote_tuples(
+            votes, pool=len(group_card_ids) > 1, printings_by_id=printings_by_id
+        )
+        winning_key = resolve_weighted_consensus(
+            vote_tuples,
+            min_weight=django_settings.PRINTING_TAG_MIN_VOTES,
+            min_share=django_settings.PRINTING_TAG_MIN_SHARE,
+        )
+        return printings_by_id[winning_key] if isinstance(winning_key, int) else winning_key
+
+    # ---- the contract holds for every shape a caller actually produces ----------------------
+
+    def test_the_full_group_is_accepted_and_resolves_identically_to_omitting_it(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, self.HUMAN_1)
+        human_vote(card_b, printing, self.HUMAN_2)
+
+        full_group = md5_group_card_ids(card_a)
+        assert set(full_group) == {card_a.pk, card_b.pk}
+        assert resolve_printing(card_a, group_card_ids=full_group) == printing
+        assert resolve_printing(card_a) == printing  # omitting the argument: the same answer
+
+    def test_ordering_of_a_complete_group_is_irrelevant(self, db, md5_groups):
+        """Order is normalised away deliberately: the value is only ever consumed by a
+        `card_id__in` filter and a `len()`, and the pooled tally's determinism comes from that
+        query's own `order_by`, never from this argument - so rejecting an unsorted but complete
+        group would be a gratuitous failure with no soundness content behind it."""
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, self.HUMAN_1)
+        human_vote(card_b, printing, self.HUMAN_2)
+
+        assert resolve_printing(card_a, group_card_ids=list(reversed(md5_group_card_ids(card_a)))) == printing
+
+    def test_omitting_the_parameter_still_derives_the_group_itself(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, self.HUMAN_1)
+        human_vote(card_b, printing, self.HUMAN_2)
+
+        votes, is_group = group_printing_votes(card_a)  # no group_card_ids at all
+        assert is_group is True
+        assert len(votes) == 2
+        assert resolve_printing(card_a) == printing
+
+    def test_a_group_of_one_may_pass_its_own_single_pk(self, db):
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        human_vote(card, printing, self.HUMAN_1)
+
+        votes, is_group = group_printing_votes(card, [card.pk])
+        assert is_group is False
+        assert len(votes) == 1
+
+    # ---- every incomplete shape raises ------------------------------------------------------
+
+    def test_a_strict_subset_raises(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, self.HUMAN_1)
+        human_vote(card_b, printing, self.HUMAN_2)
+
+        with pytest.raises(ValueError) as excinfo:
+            resolve_printing(card_a, group_card_ids=[card_a.pk])
+        message = str(excinfo.value)
+        assert f"missing [{card_b.pk}]" in message
+        # the message must say WHY, so whoever hits it fixes the wiring rather than the check
+        assert "DIFFERENT one" in message
+        assert "DIFFERENT WINNING PRINTING" in message
+        assert "group_card_ids=None" in message
+
+    def test_a_superset_raises(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        outsider = CardFactory()  # checksum-less: its own group of one, not a member of card_a's
+        md5_groups("same-bytes", card_a, card_b)
+
+        with pytest.raises(ValueError) as excinfo:
+            resolve_printing(card_a, group_card_ids=[card_a.pk, card_b.pk, outsider.pk])
+        assert f"not in the group [{outsider.pk}]" in str(excinfo.value)
+
+    def test_a_foreign_pk_raises_even_at_the_right_length(self, db, md5_groups):
+        """Same cardinality as the real group, one member swapped for a stranger - the shape a
+        length-only or count-only check would wave straight through."""
+        card_a, card_b = CardFactory(), CardFactory()
+        outsider = CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+
+        with pytest.raises(ValueError) as excinfo:
+            resolve_printing(card_a, group_card_ids=[card_a.pk, outsider.pk])
+        message = str(excinfo.value)
+        assert f"missing [{card_b.pk}]" in message
+        assert f"not in the group [{outsider.pk}]" in message
+
+    def test_an_empty_group_raises(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+
+        with pytest.raises(ValueError):
+            resolve_printing(card_a, group_card_ids=[])
+
+    def test_a_group_of_one_passed_twice_raises_because_duplicates_flip_the_pooling_branch(self, db):
+        """
+        Why duplicates are rejected rather than tolerated - and why plain set equality would have
+        left this second, narrower hole open. `[pk, pk]` is set-equal to `[pk]`, but
+        `group_printing_votes` branches on `len(group_card_ids) <= 1`, so the duplicate takes the
+        MULTI-MEMBER branch and pools with `dedupe_key` set. For a genuine group of one holding
+        one agent's two contradicting votes that flips the answer outright: pooled, the agent is
+        withheld entirely; unpooled - the correct reading for a singleton - its two votes stand.
+        """
+        card = CardFactory()
+        printing_x, printing_y = CanonicalCardFactory(), CanonicalCardFactory()
+        # one agent, two contradicting votes on ONE card - permitted, since the uniqueness
+        # constraint is on (card, printing, anonymous_id)
+        human_vote(card, printing_x, self.HUMAN_1)
+        human_vote(card, printing_y, self.HUMAN_1)
+
+        assert md5_group_card_ids(card) == [card.pk]
+        with pytest.raises(ValueError) as excinfo:
+            resolve_printing(card, group_card_ids=[card.pk, card.pk])
+        assert f"duplicated [{card.pk}]" in str(excinfo.value)
+
+        # ...and the flip that duplicate would have caused is real, not theoretical:
+        singleton_votes, singleton_is_group = group_printing_votes(card)
+        assert singleton_is_group is False
+        assert len(build_group_printing_vote_tuples(singleton_votes, pool=singleton_is_group)) == 2
+        assert build_group_printing_vote_tuples(singleton_votes, pool=True) == []
+
+    def test_a_duplicated_member_of_a_real_group_also_raises(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+
+        with pytest.raises(ValueError) as excinfo:
+            resolve_printing(card_a, group_card_ids=[card_a.pk, card_a.pk, card_b.pk])
+        assert f"duplicated [{card_a.pk}]" in str(excinfo.value)
+
+    def test_group_printing_votes_rejects_a_subset_directly(self, db, md5_groups):
+        """The guard lives at the point of CONSUMPTION, so it cannot be reached around by
+        calling `group_printing_votes` instead of `resolve_printing`."""
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+
+        with pytest.raises(ValueError):
+            group_printing_votes(card_a, [card_b.pk])
+
+    # ---- the real scenario: an identity group straddling a batch boundary --------------------
+
+    def test_batch_boundary_subset_would_have_picked_a_different_printing(self, db, md5_groups):
+        """
+        THE SCENARIO THE GUARD EXISTS FOR. Three byte-identical cards; a batch-scopeable pass
+        (#533/#541) is processing a batch that happens to contain only two of them, and its
+        author threads the batch's `card_ids` into `resolve_printing` exactly the way they thread
+        it into every other read in the loop.
+
+        Votes are arranged so the two readings disagree on the WINNER, not merely on confidence:
+
+          HUMAN_1  printing_y on card_a  AND  printing_x on card_c
+                   -> contradicts itself across the FULL group, so pooling withholds it
+                      entirely; inside the batch it looks perfectly consistent and counts 1.0
+                      towards y.
+          HUMAN_2  printing_y on card_b        -> 1.0 for y in both readings
+          HUMAN_3  printing_x on card_c        -> 1.0 for x, invisible to the batch
+          HUMAN_4  printing_x on card_c        -> 1.0 for x, invisible to the batch
+
+        Full group : x = 2.0 (HUMAN_3 + HUMAN_4), y = 1.0 (HUMAN_2), HUMAN_1 withheld
+                     -> quorum 2.0, share 0.67  -> resolves printing_x
+        In-batch   : y = 2.0 (HUMAN_1 + HUMAN_2), x = 0.0
+                     -> quorum 2.0, share 1.00  -> resolves printing_y
+
+        Both are fully gated, human-backed, entirely plausible resolutions. They are different
+        printings.
+        """
+        card_a, card_b, card_c = CardFactory(), CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b, card_c)
+        printing_x, printing_y = CanonicalCardFactory(), CanonicalCardFactory()
+
+        human_vote(card_a, printing_y, self.HUMAN_1)
+        human_vote(card_c, printing_x, self.HUMAN_1)  # HUMAN_1 now contradicts itself group-wide
+        human_vote(card_b, printing_y, self.HUMAN_2)
+        human_vote(card_c, printing_x, self.HUMAN_3)
+        human_vote(card_c, printing_x, self.HUMAN_4)
+
+        in_batch = sorted([card_a.pk, card_b.pk])  # card_c fell into a different batch
+        assert set(md5_group_card_ids(card_a)) == {card_a.pk, card_b.pk, card_c.pk}
+
+        truth = resolve_printing(card_a)  # the whole identification target's own answer
+        plausible_but_wrong = self._unguarded_resolution(in_batch)  # what the narrowed call gave
+
+        assert truth == printing_x
+        assert plausible_but_wrong == printing_y
+        assert truth != plausible_but_wrong  # a DIFFERENT winner, not a weaker signal
+
+        # ...and the guard turns that silent divergence into a loud failure.
+        with pytest.raises(ValueError) as excinfo:
+            resolve_printing(card_a, group_card_ids=in_batch)
+        assert f"missing [{card_c.pk}]" in str(excinfo.value)
+
+    # ---- the persist path --------------------------------------------------------------------
+
+    def test_partial_members_raises_before_anything_is_written(self, db, md5_groups):
+        """`members`' completeness is enforced transitively (its pks become `group_card_ids`),
+        and the raise lands before the write loop - so a narrowed group cannot leave the group
+        half-written and disagreeing with itself, which is issue #473 ruling 1's own invariant."""
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, self.HUMAN_1)
+        human_vote(card_b, printing, self.HUMAN_2)
+
+        with pytest.raises(ValueError):
+            resolve_and_persist_printing(card_a, members=[card_a])
+
+        card_a.refresh_from_db()
+        card_b.refresh_from_db()
+        assert card_a.printing_tag_status == PrintingTagStatus.UNRESOLVED
+        assert card_b.printing_tag_status == PrintingTagStatus.UNRESOLVED
+        assert card_a.inferred_canonical_card_id is None
+        assert card_b.inferred_canonical_card_id is None
+
+    def test_members_must_contain_the_callers_own_card_instance(self, db, md5_groups):
+        """An equal-pk COPY satisfies every pk-level check and still strands the caller on a
+        stale status, so instance identity is checked separately - at no query cost."""
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        copy_of_a = Card.objects.get(pk=card_a.pk)
+        assert copy_of_a is not card_a and copy_of_a.pk == card_a.pk
+
+        with pytest.raises(ValueError) as excinfo:
+            resolve_and_persist_printing(card_a, members=[copy_of_a, card_b])
+        assert "unreplaced" in str(excinfo.value)
+
+    def test_the_members_list_md5_group_cards_produces_is_accepted(self, db, md5_groups):
+        """The one shape a real caller passes today (`consensus_recompute`) must be unaffected."""
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, self.HUMAN_1)
+        human_vote(card_b, printing, self.HUMAN_2)
+
+        members = md5_group_cards(card_a)
+        assert resolve_and_persist_printing(card_a, members=members) == printing
+        card_a.refresh_from_db()
+        card_b.refresh_from_db()
+        assert card_a.printing_tag_status == PrintingTagStatus.RESOLVED
+        assert card_b.printing_tag_status == PrintingTagStatus.RESOLVED

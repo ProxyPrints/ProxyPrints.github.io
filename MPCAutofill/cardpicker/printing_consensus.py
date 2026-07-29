@@ -110,6 +110,108 @@ def md5_group_card_ids(card: Card) -> list[int]:
     return sorted(set(_card_ids_with_md5_checksums({checksum})) | {card.pk})
 
 
+def _require_full_md5_group(card: Card, group_card_ids: Sequence[int], parameter: str) -> None:
+    """
+    Raises unless `group_card_ids` is EXACTLY `card`'s md5 identity group. The completeness
+    guard behind every caller-supplied group in this module - see `group_printing_votes`, its
+    only call site, and `resolve_printing`'s docstring for the contract it enforces.
+
+    WHY THIS EXISTS AT ALL (issue #473 ruling 1; docs/theory.md §10a's population-dependence
+    classification, PR #546)
+    ------------------------------------------------------------------------------------------
+    Consensus pools votes across the whole md5 identity group and deduplicates per AGENT
+    (`build_group_printing_vote_tuples` -> `vote_consensus.pool_group_votes`), so the tally is
+    DEFINED over the group, not over whatever subset of it a caller happened to hold. Hand this
+    module a subset and you do not get a weakened tally, you get a DIFFERENT one:
+
+      - an agent that voted consistently on the members you kept but contradicted itself on a
+        member you dropped is COUNTED here, where the full group withholds it entirely;
+      - conversely, dropping the member carrying an agent's second, agreeing vote does not
+        change that agent's contribution at all (pooling already collapsed it) - so the error is
+        not even monotone in the number of members dropped;
+      - the surviving members' weights are re-shared against a smaller total, moving
+        `min_share`.
+
+    The failure is SILENT: no exception, no log line, a plausible-looking `CanonicalCard` that
+    can be a DIFFERENT PRINTING from the one the whole group's evidence selects, persisted onto
+    every member by `resolve_and_persist_printing`. The invariant at risk - "one identification
+    target gets one tally" - is exactly the thing #473 exists to establish, and it is not
+    something a docstring can hold up on its own once a batch-scoping pass starts threading a
+    batch's `card_ids` through this file (#533/#541: scoping a batch's TARGETS by `card_ids` is
+    correct; scoping a target's md5 NEIGHBOURHOOD lookup by the same list is not). This guard is
+    what makes that distinction enforceable rather than advisory.
+
+    WHAT IS COMPARED, AND WHY IT IS NOT JUST SET EQUALITY
+    -----------------------------------------------------
+    `sorted(group_card_ids) == md5_group_card_ids(card)`, i.e. set equality AND no duplicates;
+    ordering is normalised away and genuinely does not matter, duplicates genuinely do.
+
+      - ORDER is irrelevant because of how the value is CONSUMED: `group_printing_votes` only
+        ever feeds it to `filter(card_id__in=...)` (set semantics) and takes its `len()`. The
+        determinism of the pooled tally comes from that query's own `.order_by("card_id", "pk")`,
+        never from the order of this argument - so rejecting a correct group for arriving
+        unsorted would be a gratuitous failure with no soundness content behind it.
+      - DUPLICATES are NOT harmless, which is why plain set equality would have left a second,
+        narrower hole open here. `group_printing_votes` branches on `len(group_card_ids) <= 1`:
+        `[pk, pk]` for a genuine group of ONE compares set-equal to `[pk]` but has length 2, so
+        it takes the multi-member branch and pools with `dedupe_key` set. That flips the tally
+        for a real, reachable shape - one agent holding two contradicting printing votes on a
+        single card is withheld under pooling and counted without it - i.e. exactly the
+        silent-different-winner failure this function exists to stop, arriving through the one
+        comparison a set-equality check waves through.
+
+    COST, STATED PLAINLY: this re-derives the group, so `group_card_ids` NO LONGER SAVES A
+    QUERY. Its optimisation value is gone, deliberately, and it is retained only as a checked
+    assertion (removing the parameter outright would churn `resolve_and_persist_printing` and
+    `consensus_recompute` for no soundness gain). That is an honest trade rather than a
+    regression: what it costs back is ONE query - `md5_group_card_ids` is zero queries for a
+    checksum-less card and, for a card with a checksum, a single equality lookup on
+    `Card.md5_checksum`, which carries `db_index=True`. Set against the `CardPrintingTag` fetch
+    with `select_related("printing")` this function's caller is about to issue anyway - plus, on
+    the persist path, one UPDATE per member and possibly an Elasticsearch round trip - the
+    parameter was always buying back a marginal fraction of the call's cost. Correctness that is
+    checked in production is worth more than that, so this is deliberately NOT behind a
+    settings/DEBUG flag: a guard that only fires in tests does not make the unsafe call
+    unrepresentable where the damage is done, and the wiring mistake it guards is one that would
+    reach production looking entirely reasonable.
+
+    Not an `assert`, for the same reason: `python -O` strips those, and this must hold in the
+    deployment where a wrong resolution actually gets written. `ValueError` matches this
+    codebase's convention for a caller-supplied value that violates a documented contract
+    (`golden_set.get_golden_cards`'s completeness check, `operating_envelope.acknowledge_trip`,
+    `integrations.game.base`), as distinct from the `RuntimeError` it uses for missing
+    environment/seed preconditions.
+
+    Race note: the authoritative group is re-read here, so a checksum written to a sibling
+    between the caller deriving its group and this check re-deriving it raises rather than
+    resolving. That is the safe direction (the caller's group is genuinely stale at that point,
+    and its resolution would be computed over the wrong target), it is self-healing on the next
+    call, and in practice a card's checksum is written once by backfill/scan and not churned.
+    """
+    authoritative = md5_group_card_ids(card)  # sorted and deduplicated by construction
+    supplied = list(group_card_ids)
+    if sorted(supplied) == authoritative:
+        return
+
+    supplied_set = set(supplied)
+    missing = sorted(set(authoritative) - supplied_set)
+    foreign = sorted(supplied_set - set(authoritative))
+    duplicated = sorted({card_id for card_id in supplied_set if supplied.count(card_id) > 1})
+    raise ValueError(
+        f"`{parameter}` is not card {card.pk}'s full md5 identity group "
+        f"(missing {missing}, not in the group {foreign}, duplicated {duplicated}). "
+        "This parameter is an OPTIMISATION ONLY and MUST be exactly `md5_group_card_ids(card)`. "
+        "A partial group does not produce a weaker tally, it produces a DIFFERENT one: consensus "
+        "pools votes across the whole group and deduplicates per agent, so dropping members "
+        "changes which agents are counted and which are withheld for self-contradiction, and can "
+        "therefore select a DIFFERENT WINNING PRINTING - silently, with a plausible-looking "
+        "result written to every member. If you arrived here from a batch-scoping pass (#533/"
+        "#541): scope the batch's TARGETS by its card_ids, never a target's md5 neighbourhood "
+        f"lookup. The fix is to pass `{parameter}=None` and let this module derive the group "
+        "itself, which costs one indexed query - never to widen or delete this check."
+    )
+
+
 def md5_group_cards(card: Card) -> list[Card]:
     """
     `card`'s md5 group as `Card` INSTANCES, with the caller's own `card` object first and
@@ -187,9 +289,18 @@ def get_resolved_printings(identifiers: Iterable[str]) -> dict[str, ResolvedPrin
 def group_printing_votes(card: Card, group_card_ids: Sequence[int] | None = None) -> tuple[list[CardPrintingTag], bool]:
     """
     Every `CardPrintingTag` row cast against any member of `card`'s md5 identity group, plus
-    whether that group actually has more than one member. Pass `group_card_ids` when the caller
-    already knows the group (e.g. it is about to persist to those same members) to avoid
-    re-deriving it.
+    whether that group actually has more than one member.
+
+    `group_card_ids`, when given, MUST be `card`'s COMPLETE md5 identity group - it is a
+    convenience for a caller that already derived the group (e.g. it is about to persist to those
+    same members), NOT a way to ask this function about part of one. That is CHECKED, not merely
+    documented: this is the one place in this module where a caller-supplied group is consumed,
+    so `_require_full_md5_group` is called here, before either use of the value below, and a
+    narrowed group (the shape a batch-scoping pass would naturally produce - see #533/#541)
+    raises instead of quietly returning a different tally's worth of rows. Read that function's
+    docstring before changing this line, and note that the check must MOVE WITH THE CONSUMPTION:
+    it lives here rather than in `resolve_printing` precisely so it cannot be bypassed by a
+    second entry point, and so the group is re-derived once per call rather than twice.
 
     A group of ONE reads `card.printing_tags.all()` - deliberately the identical expression
     this module used before issue #473, not a `filter(card_id__in=[card.pk])` that happens to
@@ -201,6 +312,8 @@ def group_printing_votes(card: Card, group_card_ids: Sequence[int] | None = None
     """
     if group_card_ids is None:
         group_card_ids = md5_group_card_ids(card)
+    else:
+        _require_full_md5_group(card, group_card_ids, "group_card_ids")
     if len(group_card_ids) <= 1:
         return list(card.printing_tags.all()), False
     votes = list(
@@ -287,6 +400,16 @@ def build_group_printing_vote_tuples(
     With `pool=False` (a group of one) no vote is keyed, `pool_group_votes` is never called, and
     the returned list is exactly what this module built before #473.
 
+    `votes` AND `pool` MUST COME FROM ONE `group_printing_votes` CALL, unsplit. This function
+    shares `resolve_printing`'s silent-different-answer failure mode - a subset of a group's
+    votes, or the right votes with `pool=False`, yields a plausible tally computed from part of
+    the evidence - but it CANNOT check itself: it takes no `Card`, so it has no way to derive
+    what the complete set would be, and `question_feed.is_likely_resolve_printing` legitimately
+    feeds it a list that is not the DB's (it appends a hypothetical vote). The completeness
+    guarantee therefore has to be established upstream, by `group_printing_votes`'
+    `_require_full_md5_group` check, and carried here by passing that call's two return values
+    together. Do not filter `votes` between the two calls, and do not compute `pool` yourself.
+
     Passing a `printings_by_id` dict populates it with each voted `CanonicalCard` (needed to map
     a winning outcome key back to a printing). Callers that only need the outcome KEY - e.g.
     `question_feed.is_likely_resolve_printing`, which runs this in a scan loop - pass `None` and
@@ -340,7 +463,27 @@ def resolve_printing(
     identification target, so its votes are tallied once, together, and the outcome applies to
     all of it. A card with no checksum, or the only card with its checksum, is a group of one
     (ruling 3) and takes the pre-#473 path unchanged - same rows, same query, same tuples, same
-    result. `group_card_ids` may be passed by a caller that already derived the group.
+    result.
+
+    `group_card_ids` - THE CONTRACT, in full
+    ----------------------------------------
+    Optional. When given it MUST be `card`'s COMPLETE md5 identity group, i.e. exactly
+    `md5_group_card_ids(card)` (ordering is normalised and irrelevant; duplicates are not
+    permitted). It is a convenience for a caller that has already derived the group, never a way
+    to scope this call to part of one.
+
+    A BATCH-NARROWED GROUP IS THE SPECIFIC MISUSE THIS GUARDS. If you are threading a batch's
+    `card_ids` through the pipeline (#533/#541), do not thread it into here: a batch's `card_ids`
+    scopes which TARGETS get resolved, and this argument is a target's md5 NEIGHBOURHOOD, whose
+    members may lie outside the batch entirely. Scoping it by the batch is the natural-looking
+    move and it is wrong.
+
+    Passing anything else raises `ValueError`, because the failure it would otherwise cause is
+    silent and is not a mere loss of signal: a subset yields a DIFFERENT tally, not a weaker one,
+    and can select a different winning printing. See `_require_full_md5_group` for the full
+    argument, what exactly is compared, and what the check costs; the check itself runs inside
+    `group_printing_votes` below, where the value is actually consumed. Omitting the argument is
+    always correct and costs one indexed query.
     """
     votes, is_group = group_printing_votes(card, group_card_ids)
     if not votes:
@@ -391,8 +534,24 @@ def resolve_and_persist_printing(
 
     A group of one (a checksum-less or unique-checksum card - ruling 3) writes exactly the one
     row it always did, through the caller's own `card` instance, with no additional query.
+
     `members` may be passed by a caller that already materialized the group (see
-    `md5_group_cards`, whose contract this expects: `card` itself, first, unreplaced).
+    `md5_group_cards`, whose contract this expects: `card` itself, first, unreplaced). Both
+    halves of that contract are now CHECKED rather than assumed, because both fail silently:
+
+      - COMPLETENESS is enforced transitively and for free - the pks of `members` become
+        `resolve_printing`'s `group_card_ids`, so a partial `members` is rejected by
+        `_require_full_md5_group` on the line below, BEFORE anything is written. That matters
+        twice over here: a narrowed `members` would not only compute a different tally, it would
+        also persist the result to only part of the group, leaving siblings on a stale
+        `printing_tag_status` and putting the group into exactly the self-disagreeing state
+        ruling 1 says must be impossible by construction.
+      - IDENTITY (`card` itself present, not a freshly-fetched equal-pk copy) is checked here,
+        at no query cost, since the pk-level check above cannot see it. Substituting a copy
+        leaves this function writing through a different instance from the one the caller holds
+        and will read `printing_tag_status` off afterwards - the caller silently strands on a
+        stale status, which is the failure the `md5_group_cards` docstring already warns about
+        and which nothing verified until now.
 
     Also pushes each written card into Elasticsearch, but only when the outcome actually changes
     what's indexed for THAT card (see `_effective_indexed_printing_id`) - entering RESOLVED,
@@ -410,6 +569,17 @@ def resolve_and_persist_printing(
     one this is the same single write, in the same place, it always was.
     """
     group_cards = list(members) if members is not None else md5_group_cards(card)
+    if members is not None and not any(member is card for member in group_cards):
+        # identity, not `card.pk in {m.pk for m in group_cards}`: an equal-pk COPY is precisely
+        # the case this rejects (see the `members` paragraph above). Completeness is left to
+        # `resolve_printing`'s own guard on the next line rather than re-derived here.
+        raise ValueError(
+            f"`members` must contain the caller's own `card` instance (pk {card.pk}) itself, "
+            "unreplaced - see `md5_group_cards`, whose output this expects. A freshly-fetched "
+            "copy of the same row has the same pk but is a different object: this function would "
+            "write the resolution through the copy, leaving the caller's `card` on a stale "
+            "`printing_tag_status`/`inferred_canonical_card` with nothing to indicate it."
+        )
     result = resolve_printing(card, group_card_ids=[member.pk for member in group_cards])
 
     for member in sorted(group_cards, key=lambda group_card: group_card.pk):
