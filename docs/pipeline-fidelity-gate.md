@@ -1207,10 +1207,12 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   excludes cards carrying a non-rescannable scan log for the calculator's
   own identity, so a repaired `-v1` would never re-examine the cards it
   wrongly skipped. **Still nothing MEASURED in prod**: a read-only
-  counterfactual replay projects ~10,600 illustration votes and ~2,500
-  printing votes over a 160,585-card eligible population, but no `-v2` run
-  has written a row. Do not read `-v1`'s near-zero vote count as a
-  measured statement about illustration matching's yield.
+  counterfactual replay over a 30,000-card sample of the 160,585-card
+  `-v2`-eligible population (2,350 of them reach the calculator with artist
+  OCR; the rest skip as `no-artist-ocr`) projects **~10,277 illustration
+  votes and ~3,233 printing votes** catalog-wide — but no `-v2` run has
+  written a row. Do not read `-v1`'s near-zero vote count as a measured
+  statement about illustration matching's yield.
 - **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —
   **ZERO output of any kind. Under diagnosis; may be retired.** The
