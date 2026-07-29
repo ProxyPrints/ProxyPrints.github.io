@@ -10,16 +10,30 @@ means these votes can NEVER resolve consensus by themselves, regardless of volum
 still has to confirm. See `docs/features/printing-tags.md`'s Stage 4 section for the full
 design writeup (census methodology).
 
-D1 IS NOT CROSS-VERIFIED AGAINST SCRYFALL (corrected 2026-07-29). This docstring, the D1 tier
-comment below and `docs/features/printing-tags.md` all used to say D1's uniqueness was confirmed
-against "Scryfall's own printings_count". No such check exists, or ever existed. The column that
-check reads - `CanonicalPrintingMetadata.catalogued_printings_count`, renamed from the misleading
-`printings_count` in migration 0099 - is a COUNT of OUR OWN `CanonicalCard` rows per oracle id,
-computed by `printing_metadata_import` from our own table. The check therefore restates the
-name-uniqueness test that ran one line above it and excludes nothing: measured against the live
-catalogue on 2026-07-29, 137 D1 candidates before the check and 137 after. See
-`select_d1_candidates` for the structural proof, and issue #600 for the open question of what a
-real external check would look like.
+D1 IS NOW CROSS-VERIFIED AGAINST SCRYFALL - FOR REAL, AND FOR THE FIRST TIME (2026-07-29,
+issue #600). The history matters because the failure mode is easy to re-create:
+
+  * Until 2026-07-29 this docstring, the D1 tier comment below and
+    `docs/features/printing-tags.md` all claimed D1's uniqueness was confirmed against
+    "Scryfall's own printings_count". No such check existed. The column that check read is a
+    COUNT OF OUR OWN `CanonicalCard` rows per oracle id, computed by `printing_metadata_import`
+    from our own table - it was renamed `catalogued_printings_count` (migration 0099) to stop
+    the name asserting otherwise. The condition restated the name-uniqueness test one line above
+    it and excluded nothing: measured against the live catalogue, 137 D1 candidates before the
+    condition and 137 after.
+  * The check now performed is the one that was advertised:
+    `catalogued_printings_count == scryfall_default_cards_printings_count`, i.e. WE HOLD EVERY
+    PRINTING SCRYFALL LISTS OF THIS ORACLE CARD. The second column is populated from Scryfall's
+    `default_cards` bulk export in the same pass that already parses it - no new requests.
+
+WHAT THE GUARANTEE IS AND IS NOT. It is: "our catalogue holds as many printings of this oracle
+card as the Scryfall bulk export we last parsed lists". It is NOT "as many as exist in the world
+right now" - a stale bulk file bounds the claim's freshness (both counts are computed in one
+pass, and `printing_metadata_import._is_fresh` re-downloads whenever the remote entry's
+`updated_at` changes, so the bound is the refresh interval, not unbounded). And it is not a
+paper-only or all-languages count: see
+`CanonicalPrintingMetadata.scryfall_default_cards_printings_count` for exactly what a
+`default_cards` row is.
 
 VOTES THIS MODULE CASTS TODAY CARRY WEIGHT (2026-07-29). The 2026-07-14 production run's 28,112
 votes are permanently zero-weighted, but that is a ruling about THAT COHORT, held out as a
@@ -34,7 +48,7 @@ import collections
 import itertools
 import uuid
 from dataclasses import dataclass, field
-from typing import Iterable, Literal, Optional
+from typing import Iterable, Literal, NamedTuple, Optional
 
 from django.db.models import QuerySet
 from django.utils import timezone
@@ -85,9 +99,10 @@ def generate_run_id() -> str:
 
 Tier = Literal["d1", "d2"]
 
-# D1 = name matches exactly one CanonicalCard row in our catalogue. That is the whole test -
-# it IS "our table happens to have one row", and nothing corroborates it externally (see the
-# module docstring's correction and `select_d1_candidates`).
+# D1 = name matches exactly one CanonicalCard row in our catalogue, AND we hold every printing
+# of that oracle card the Scryfall bulk export lists (see `select_d1_candidates`). The second
+# half is what stops "our table happens to have one row" from being mistaken for "this card
+# genuinely has one printing".
 # D2 = name matches multiple CanonicalCard rows, but the card's own `expansion_hint`
 # (parsed at upload time from a lone set-code bracket token in the source filename -
 # `cardpicker/tags.py::Tags.extract()`) narrows it to exactly one.
@@ -105,6 +120,34 @@ class DeductiveVote:
         return CONFIDENCE_BY_TIER[self.tier]
 
 
+class IndexedPrinting(NamedTuple):
+    """
+    One `CanonicalCard` row as `CanonicalNameIndex` holds it: its pk plus BOTH printing counts,
+    carried side by side precisely because D1's guarantee is a comparison BETWEEN them and a
+    single number cannot express it (see `select_d1_candidates`).
+
+    EITHER COUNT MAY BE `None`, and `None` never means zero or one - it means "no number is
+    known here", which D1 treats as unverifiable:
+
+      * `catalogued_printings_count is None` - the `CanonicalCard` has no
+        `CanonicalPrintingMetadata` sidecar at all (`printing_metadata` is a nullable reverse
+        OneToOne, so a row predating that import joins to NULL). Unreachable in the live
+        catalogue on 2026-07-29: all 113,224 rows carry a sidecar.
+      * `scryfall_printings_count is None` - Scryfall publishes no printing count for this row:
+        either `CanonicalCard.canonical_id` is NULL (81 rows in production, exactly the 81
+        bulk-data rows Scryfall itself ships with no `oracle_id`), or the oracle id was absent
+        from the bulk file the importer last parsed (0 rows in production, but that is a
+        property of today's import filter rather than a guarantee).
+
+    These are kept as `None` rather than mapped to a sentinel integer on purpose: the defect
+    this whole change exists to fix was a fabricated number being read as a real one.
+    """
+
+    pk: int
+    catalogued_printings_count: int | None
+    scryfall_printings_count: int | None
+
+
 class CanonicalNameIndex:
     """
     In-memory index over every `CanonicalCard`, built once and reused across the whole scan -
@@ -114,27 +157,31 @@ class CanonicalNameIndex:
     """
 
     def __init__(self) -> None:
-        by_name: dict[str, list[tuple[int, int]]] = collections.defaultdict(list)
-        by_name_expansion: dict[tuple[str, str], list[tuple[int, int]]] = collections.defaultdict(list)
+        by_name: dict[str, list[IndexedPrinting]] = collections.defaultdict(list)
+        by_name_expansion: dict[tuple[str, str], list[IndexedPrinting]] = collections.defaultdict(list)
         rows = CanonicalCard.objects.select_related("expansion", "printing_metadata").values_list(
-            "pk", "name", "expansion__code", "printing_metadata__catalogued_printings_count"
+            "pk",
+            "name",
+            "expansion__code",
+            "printing_metadata__catalogued_printings_count",
+            "printing_metadata__scryfall_default_cards_printings_count",
         )
-        for pk, name, expansion_code, catalogued_printings_count in rows:
+        for pk, name, expansion_code, catalogued_printings_count, scryfall_printings_count in rows:
             normalised = to_searchable(name)
-            # catalogued_printings_count can be null if a CanonicalCard predates the metadata
-            # import (`printing_metadata` is a nullable reverse OneToOne) - mapped to -1 so it
-            # can never be mistaken for a real count of 1. In the live catalogue on 2026-07-29
-            # this branch is unreachable: all 113,224 CanonicalCard rows carry a metadata row.
-            count = catalogued_printings_count if catalogued_printings_count is not None else -1
-            by_name[normalised].append((pk, count))
-            by_name_expansion[(normalised, expansion_code.lower())].append((pk, count))
+            entry = IndexedPrinting(
+                pk=pk,
+                catalogued_printings_count=catalogued_printings_count,
+                scryfall_printings_count=scryfall_printings_count,
+            )
+            by_name[normalised].append(entry)
+            by_name_expansion[(normalised, expansion_code.lower())].append(entry)
         self._by_name = dict(by_name)
         self._by_name_expansion = dict(by_name_expansion)
 
-    def exact_matches(self, name: str) -> list[tuple[int, int]]:
+    def exact_matches(self, name: str) -> list[IndexedPrinting]:
         return self._by_name.get(to_searchable(name), [])
 
-    def exact_matches_in_expansion(self, name: str, expansion_code_lower: str) -> list[tuple[int, int]]:
+    def exact_matches_in_expansion(self, name: str, expansion_code_lower: str) -> list[IndexedPrinting]:
         return self._by_name_expansion.get((to_searchable(name), expansion_code_lower), [])
 
 
@@ -173,38 +220,64 @@ def _eligible_base_queryset() -> "QuerySet[Card]":
 
 def select_d1_candidates(index: "CanonicalNameIndex | None" = None) -> Iterable[DeductiveVote]:
     """
-    D1: the card's name matches exactly one `CanonicalCard` row in our catalogue.
+    D1: the card's name matches exactly one `CanonicalCard` row in our catalogue, AND our
+    catalogue holds every printing of that row's oracle card that Scryfall's `default_cards`
+    export lists.
 
-    THE SECOND CONDITION EXCLUDES NOTHING - it is entailed by the first (2026-07-29). It is left
-    in place, labelled, rather than silently deleted, because deleting it would erase the evidence
-    that D1's advertised external corroboration was never implemented; issue #600 tracks the
-    decision about what replaces it. Do not read it as a safety net.
+    TWO CONDITIONS, AND THE SECOND IS NOT ENTAILED BY THE FIRST (issue #600, implemented
+    2026-07-29). The condition that used to sit here - `catalogued_printings_count == 1` -
+    WAS entailed, and excluded nothing: `catalogued_printings_count` is the number of
+    `CanonicalCard` rows sharing this row's oracle id, rows sharing an oracle id share that
+    oracle card's name, so a group of size N > 1 puts N rows under one normalised name and
+    `len(matches) == 1` has already rejected the card. It has been deleted, not softened.
 
-    Why it is entailed: `catalogued_printings_count` is the number of `CanonicalCard` rows sharing
-    this row's `canonical_id` (oracle id). Rows sharing an oracle id share that oracle card's
-    name, so an oracle group of size N > 1 puts N rows under the same normalised name and
-    `len(matches) == 1` has already rejected the card. Rows with a NULL `canonical_id` are stored
-    as 1 by the importer. Either way, `len(matches) == 1` implies the count is 1.
+    The replacement compares our count against SCRYFALL's own count for the same oracle id
+    (`scryfall_default_cards_printings_count`, built by `printing_metadata_import` from the bulk
+    file it already parses - no extra requests). Equality is exactly D1's advertised guarantee:
+    a unique local match is only evidence of a unique PRINTING if we are not simply missing the
+    others. This CAN exclude, and cannot be derived from the name-uniqueness test, because the
+    two counts come from different sources - which is the entire point.
 
-    Measured against the live catalogue 2026-07-29, both directions:
-      - 14,893 normalised names have exactly one `CanonicalCard` row; all 14,893 of those rows
-        have `catalogued_printings_count == 1`. Zero have > 1. Zero are NULL.
-      - 137 cards in the eligible pool (104,969) reach this condition; 137 pass it.
+    UNKNOWN IS NOT AGREEMENT. A `None` on either side (see `IndexedPrinting`) fails the gate:
+    "Scryfall publishes no count for this row" is not evidence that our one row is all there is.
+    That covers the 81 production rows with a NULL `canonical_id` - which the old code handed a
+    fabricated `1`, i.e. an assertion of exactly the thing being checked - and any oracle id
+    absent from the bulk file.
 
-    What the condition was MEANT to catch - "Scryfall publishes more printings of this card than
-    we have imported, so a unique local match is not proof of anything" - is real and is NOT
-    caught here. Counting the bulk-data file directly on 2026-07-29 finds 2 oracle ids where we
-    hold one row and Scryfall publishes more. This predicate cannot see them, because it is
-    computed from the same table whose incompleteness it is supposed to detect.
+    A STALE BULK FILE BOUNDS THE CLAIM, and the failure is asymmetric. If our catalogue holds
+    printings the file does not list (ours > Scryfall's), the counts differ and the gate
+    excludes - the safe direction, and the direction a stale file produces when the catalogue is
+    refreshed ahead of it. What the gate cannot see is a file stale in the OTHER direction: if
+    both our catalogue and the count come from the same out-of-date export, they agree while
+    reality has moved on. That is why the guarantee is stated against "the export we last
+    parsed" rather than against reality; `printing_metadata_import._is_fresh` bounds how far
+    behind that can be.
+
+    Measured against the live catalogue 2026-07-29 (read-only), the eligible pool being 104,969:
+      - 137 candidates reach the gate.
+      - 137 pass it. The new gate excludes 0 TODAY - not because it is inert like its
+        predecessor, but because the property it checks currently holds for all 137. This is a
+        real result, and it is not stable: of the 14,893 normalised names with exactly one
+        `CanonicalCard` row, 2 already disagree with Scryfall (`Chandra, Chill of Compliance`,
+        `Tragic Trajectory` - we hold one printing each, Scryfall lists two), and neither
+        happens to have an eligible `Card` naming it. 82 of our 35,990 oracle ids hold fewer
+        printings than Scryfall lists; 0 hold more. `test_deductive_backfill.py`'s
+        `TestD1ScryfallPrintingCountGate` pins the exclusion behaviour so it cannot silently
+        revert to excluding nothing.
     """
     index = index or CanonicalNameIndex()
     for card in _eligible_base_queryset().only("pk", "name", "source_id").iterator(chunk_size=5000):
         matches = index.exact_matches(card.name)
         if len(matches) == 1:
-            printing_pk, catalogued_printings_count = matches[0]
-            # Entailed by `len(matches) == 1` above - see this function's docstring. Not a gate.
-            if catalogued_printings_count == 1:
-                yield DeductiveVote(card_id=card.pk, printing_id=printing_pk, tier="d1")
+            match = matches[0]
+            # The real cross-check. Both counts must be KNOWN and must AGREE - see this
+            # function's docstring for why unknown-on-either-side is a rejection.
+            if (
+                match.catalogued_printings_count is not None
+                and match.scryfall_printings_count is not None
+                and match.catalogued_printings_count == match.scryfall_printings_count
+            ):
+                yield DeductiveVote(card_id=card.pk, printing_id=match.pk, tier="d1")
 
 
 def select_d2_candidates(index: "CanonicalNameIndex | None" = None) -> Iterable[DeductiveVote]:
@@ -217,8 +290,11 @@ def select_d2_candidates(index: "CanonicalNameIndex | None" = None) -> Iterable[
             continue  # D1's territory, or no match at all - not D2
         narrowed = index.exact_matches_in_expansion(card.name, card.expansion_hint)
         if len(narrowed) == 1:
-            printing_pk, _catalogued_printings_count = narrowed[0]
-            yield DeductiveVote(card_id=card.pk, printing_id=printing_pk, tier="d2")
+            # Neither printing count is consulted here, deliberately. D2's deduction is
+            # "the expansion hint names exactly one of the several rows this name matches",
+            # which is a statement about our rows and does not claim printing-level
+            # completeness the way D1's does.
+            yield DeductiveVote(card_id=card.pk, printing_id=narrowed[0].pk, tier="d2")
 
 
 def select_candidates(tier: Literal["d1", "d2", "all"]) -> Iterable[DeductiveVote]:
@@ -359,6 +435,7 @@ __all__ = [
     "generate_run_id",
     "CONFIDENCE_BY_TIER",
     "DeductiveVote",
+    "IndexedPrinting",
     "CanonicalNameIndex",
     "BackfillResult",
     "select_d1_candidates",
