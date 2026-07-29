@@ -1,0 +1,40 @@
+{
+  "title": "Artist External Links Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "found": {
+      "type": "boolean"
+    },
+    "pageUrl": {
+      "type": ["string", "null"]
+    },
+    "location": {
+      "type": ["string", "null"]
+    },
+    "links": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "One of the fixed commerce-only allowlist field names, in fixed priority order: website, artstation, inprnt, mountainmage, omalink."
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": ["type", "url"],
+        "additionalProperties": false
+      }
+    },
+    "hasSignatureService": {
+      "type": "boolean",
+      "description": "Surfaced as a boolean flag only, never as a link - see MTGAC integration docs."
+    }
+  },
+  "required": ["found", "pageUrl", "location", "links", "hasSignatureService"],
+  "additionalProperties": false
+}
