@@ -44,7 +44,14 @@ on:
       # close. Supersedes the individual cardpicker entries above; those
       # are kept because they name the files the extractable-primitives
       # tether cares about.
-      - "MPCAutofill/cardpicker/*.py"
+      #
+      # `**`, not `*.py` (widened 2026-07-29 with the roster scan itself): a
+      # single `*` does NOT match a slash in a GitHub path filter, so
+      # `cardpicker/*.py` never matched `cardpicker/management/commands/`.
+      # That is the same one-directory hole the scan had — leaving it here
+      # would mean the widened scan still only ran on the weekly cron for
+      # exactly the PRs that introduce the problem.
+      - "MPCAutofill/cardpicker/**"
       - "federation-hash-tool/**"
   schedule:
     # Weekly, independent of any PR — catches rot introduced by a change
@@ -57,7 +64,8 @@ on:
       - "docs/**"
       - ".github/wiki-publish-map.json"
       - ".github/scripts/**"
-      - "MPCAutofill/cardpicker/*.py"
+      # `**` for the same reason as the pull_request filter above.
+      - "MPCAutofill/cardpicker/**"
   workflow_dispatch:
 
 permissions:
