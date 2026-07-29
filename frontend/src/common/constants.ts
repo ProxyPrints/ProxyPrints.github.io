@@ -61,11 +61,16 @@ export const UpstreamDesktopToolSourceURL =
   "https://github.com/chilli-axe/mpc-autofill/tree/master/desktop-tool/";
 
 // Community-maintained MTG artist directory - not affiliated with this project. See
-// ArtistSupportLink.tsx and docs/features/artist-support-links.md for the full v1 design
-// (deterministic link-out only, no per-artist database, no existence check).
+// ArtistSupportLink.tsx (the M2 applet) and docs/features/artist-support-links.md for the full
+// design: the applet prefers MTGAC's own authoritative pageUrl (from 2/artistExternalLinks/)
+// over this deterministically-constructed URL, falling back to the constructed form only when
+// no data is available (cache cold, or the artist isn't indexed) - see that endpoint's own
+// backend docstring for why 8.2% of constructed URLs are wrong.
 export const MTGArtistConnection = "MTG Artist Connection";
 export const MTGArtistConnectionArtistBaseURL =
   "https://www.mtgartistconnection.com/artist/";
+export const MTGArtistConnectionHomepageURL =
+  "https://www.mtgartistconnection.com/";
 
 export const Card: CardType = CardTypeSchema.Card;
 export const Cardback: CardType = CardTypeSchema.Cardback;

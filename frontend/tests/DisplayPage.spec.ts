@@ -920,7 +920,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(select).toHaveValue("force-bleed");
   });
 
-  test("the promoted artist line shows a plain credit + a support button naming MTG Artist Connection for a card with a known canonical artist (E2 - promoted, no longer a collapsed accordion; SPEC-display-left-rail.md §5/§8)", async ({
+  test("the promoted artist line shows a plain credit + the MTG Artist Connection applet (page-link button, credit line) for a card with a known canonical artist (M2 applet round, docs/features/artist-support-links.md)", async ({
     page,
     network,
   }) => {
@@ -943,22 +943,34 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       "Alpha Artist"
     );
 
-    // The support link itself now visibly names its destination and reads as a real button
-    // (btn-outline-primary btn-sm), not a bare orange hotlink - the artist's own name moved to
-    // the plain credit line above. Rail-delegacy round - scoped to the promoted `.artist-line`
-    // specifically: the "More details" disclosure's `CardMetaTable` also renders its own
-    // Canonical Artist row with the same `artist-support-link` testid (a second, legitimate
-    // mount of the same shared component, not a duplicate bug - see CardMetaTable.tsx).
+    // M2 round: ArtistSupportLink is now a self-contained applet (RTK Query fetch, no
+    // caller-supplied children/className for button styling - see ArtistSupportLink.tsx's own
+    // module docstring). The primary page-link button now names the ARTIST (the applet's own
+    // credit line, asserted separately below, names MTG Artist Connection instead) and reads as
+    // a solid `btn-primary` button, not the old caller-styled `btn-outline-primary`. Scoped to
+    // the promoted `.artist-line` specifically: the "More details" disclosure's `CardMetaTable`
+    // also renders its own Canonical Artist row with the same `artist-support-link` testid (a
+    // second, legitimate mount of the same shared component, not a duplicate bug - see
+    // CardMetaTable.tsx).
     const link = page
       .getByTestId("display-artist-section")
       .getByTestId("artist-support-link");
     await expect(link).toBeVisible();
-    await expect(link).toContainText("Support on MTG Artist Connection");
-    await expect(link).toHaveClass(/btn-outline-primary/);
+    await expect(link).toContainText("Alpha Artist");
+    await expect(link).toHaveClass(/btn-primary/);
     await expect(link).toHaveAttribute(
       "href",
       "https://www.mtgartistconnection.com/artist/Alpha%20Artist"
     );
+
+    // The applet's own MTG Artist Connection credit line - an obligation from the MTGAC
+    // partnership (they accepted site credits), not decoration; always present regardless of
+    // how many commerce links (if any) this artist has.
+    const credit = page
+      .getByTestId("display-artist-section")
+      .getByTestId("artist-support-credit");
+    await expect(credit).toBeVisible();
+    await expect(credit).toContainText("MTG Artist Connection");
   });
 
   test("the Slot Actions section's Delete removes the slot and returns the rail to idle", async ({

@@ -1643,13 +1643,11 @@ export function QuestionFeed() {
               }}
             />
             {confirmedArtistName != null && (
-              <div
-                className="mt-2 text-muted small"
-                data-testid="question-feed-artist-support"
-              >
-                <ArtistSupportLink artistName={confirmedArtistName}>
+              <div className="mt-2" data-testid="question-feed-artist-support">
+                <div className="text-muted small mb-1">
                   Art by {confirmedArtistName} - support them
-                </ArtistSupportLink>
+                </div>
+                <ArtistSupportLink artistName={confirmedArtistName} />
               </div>
             )}
             <ActionRow>

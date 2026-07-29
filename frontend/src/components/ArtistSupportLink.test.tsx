@@ -1,7 +1,31 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import React from "react";
+import { Provider } from "react-redux";
+
+import { localBackend, noBackend } from "@/common/test-constants";
+import {
+  artistExternalLinksDivergentSlug,
+  artistExternalLinksFullRow,
+  artistExternalLinksInstagramOnly,
+  artistExternalLinksNotFound,
+  artistExternalLinksOneLink,
+  ArtistExternalLinksTestArtists,
+  artistExternalLinksWithSignatureBadge,
+  artistExternalLinksZeroLinks,
+} from "@/mocks/handlers";
+import { server } from "@/mocks/server";
+import { setupStore } from "@/store/store";
 
 import { ArtistSupportLink, buildArtistSupportURL } from "./ArtistSupportLink";
+
+function renderApplet(artistName: string, backend = localBackend) {
+  const store = setupStore({ backend });
+  render(
+    <Provider store={store}>
+      <ArtistSupportLink artistName={artistName} />
+    </Provider>
+  );
+}
 
 describe("buildArtistSupportURL", () => {
   it("URL-encodes the artist name into an MTG Artist Connection artist-page URL", () => {
@@ -17,22 +41,183 @@ describe("buildArtistSupportURL", () => {
   });
 });
 
-describe("ArtistSupportLink", () => {
-  it("renders an external, deterministically-built link with the expected etiquette attributes", () => {
-    render(
-      <ArtistSupportLink artistName="Harold McNeill">
-        Harold McNeill
-      </ArtistSupportLink>
-    );
+describe("ArtistSupportLink applet", () => {
+  it("never renders as an empty box: the MTGAC page link and the credit are present before any network response resolves", () => {
+    // no server.use(...) at all - the request is in flight (or, with noBackend below, never
+    // even fires) - the applet's base shape must already be there, not a spinner/empty state.
+    renderApplet("Harold McNeill");
 
-    const link = screen.getByTestId("artist-support-link");
-    expect(link).toHaveAttribute(
+    expect(screen.getByTestId("artist-support-applet")).toBeInTheDocument();
+    expect(screen.getByTestId("artist-support-link")).toHaveAttribute(
       "href",
-      "https://www.mtgartistconnection.com/artist/Harold%20McNeill"
+      buildArtistSupportURL("Harold McNeill")
     );
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    expect(link).toHaveAttribute("title", "via MTG Artist Connection");
-    expect(link).toHaveTextContent("Harold McNeill");
+    expect(screen.getByTestId("artist-support-credit")).toHaveTextContent(
+      "MTG Artist Connection"
+    );
+    expect(
+      screen.queryByTestId("artist-support-commerce-links")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("artist-support-signature-badge")
+    ).not.toBeInTheDocument();
+  });
+
+  it("with no remote backend configured, still renders the fallback applet and makes no request at all", () => {
+    // No server.use(...) either - if a request were made, MSW's onUnhandledRequest: "error"
+    // config would fail this test, so a clean pass here IS the "no request" assertion.
+    renderApplet("Harold McNeill", noBackend);
+
+    expect(screen.getByTestId("artist-support-link")).toHaveAttribute(
+      "href",
+      buildArtistSupportURL("Harold McNeill")
+    );
+    expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
+  });
+
+  it("cache-miss/not-indexed response falls back to the deterministic URL, never a broken or empty state", async () => {
+    server.use(artistExternalLinksNotFound);
+    renderApplet("Harold McNeill");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("artist-support-link")).toHaveAttribute(
+        "href",
+        buildArtistSupportURL("Harold McNeill")
+      )
+    );
+    expect(
+      screen.queryByTestId("artist-support-commerce-links")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("artist-support-signature-badge")
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
+  });
+
+  it("zero commerce links (found: true): still renders the MTGAC page link and the credit, no commerce buttons, no empty box", async () => {
+    server.use(artistExternalLinksZeroLinks);
+    renderApplet(ArtistExternalLinksTestArtists.zeroLinks);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("artist-support-link")).toHaveAttribute(
+        "href",
+        `https://www.mtgartistconnection.example/artist/${encodeURIComponent(
+          ArtistExternalLinksTestArtists.zeroLinks
+        )}`
+      )
+    );
+    expect(
+      screen.queryByTestId("artist-support-commerce-links")
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
+  });
+
+  it("pageUrl is preferred over the constructed URL when the response is found, even when they genuinely disagree (the 8.2% divergence case)", async () => {
+    server.use(artistExternalLinksDivergentSlug);
+    renderApplet(ArtistExternalLinksTestArtists.divergentSlug);
+
+    const constructedURL = buildArtistSupportURL(
+      ArtistExternalLinksTestArtists.divergentSlug
+    );
+    const mtgacPageUrl =
+      "https://www.mtgartistconnection.example/artist/Aurelien%20D%20Vasseur";
+    // sanity-check the fixture itself actually diverges, so this test would fail loudly if the
+    // fixture were ever "fixed" to coincidentally match - the whole point is that they disagree.
+    expect(mtgacPageUrl).not.toEqual(constructedURL);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("artist-support-link")).toHaveAttribute(
+        "href",
+        mtgacPageUrl
+      )
+    );
+    expect(screen.getByTestId("artist-support-link")).not.toHaveAttribute(
+      "href",
+      constructedURL
+    );
+  });
+
+  it("exactly one commerce link renders one stretched button", async () => {
+    server.use(artistExternalLinksOneLink);
+    renderApplet(ArtistExternalLinksTestArtists.oneLink);
+
+    const links = await screen.findAllByTestId("artist-support-commerce-link");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute(
+      "href",
+      "https://cormacwindemere.example/"
+    );
+    expect(links[0]).toHaveClass("w-100");
+  });
+
+  it("full row (5 commerce links) renders in the fixed priority order, capped at 5", async () => {
+    server.use(artistExternalLinksFullRow);
+    renderApplet(ArtistExternalLinksTestArtists.fullRow);
+
+    const links = await screen.findAllByTestId("artist-support-commerce-link");
+    expect(links).toHaveLength(5);
+    expect(links.map((link) => link.getAttribute("data-link-type"))).toEqual([
+      "website",
+      "artstation",
+      "inprnt",
+      "mountainmage",
+      "omalink",
+    ]);
+  });
+
+  it("an artist whose only link is instagram surfaces it (the 157-artist rescue scenario)", async () => {
+    server.use(artistExternalLinksInstagramOnly);
+    renderApplet(ArtistExternalLinksTestArtists.instagramOnly);
+
+    const links = await screen.findAllByTestId("artist-support-commerce-link");
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute("data-link-type", "instagram");
+    expect(links[0]).toHaveTextContent("Instagram");
+  });
+
+  it("the Mark's Signature Service flag renders as a badge, never as a link", async () => {
+    server.use(artistExternalLinksWithSignatureBadge);
+    renderApplet(ArtistExternalLinksTestArtists.signatureService);
+
+    const badge = await screen.findByTestId("artist-support-signature-badge");
+    expect(badge.tagName).toBe("SPAN");
+    expect(badge).not.toHaveAttribute("href");
+    expect(badge).toHaveTextContent("Mark's Signature Service");
+    // the badge must never be counted as (or rendered inside) a commerce link button
+    const commerceLinks = screen.getAllByTestId("artist-support-commerce-link");
+    for (const link of commerceLinks) {
+      expect(link).not.toHaveAttribute(
+        "data-link-type",
+        "markssignatureservice"
+      );
+    }
+  });
+
+  it("the MTG Artist Connection credit is always present and links to their homepage", async () => {
+    server.use(artistExternalLinksOneLink);
+    renderApplet(ArtistExternalLinksTestArtists.oneLink);
+
+    const credit = await screen.findByTestId("artist-support-credit");
+    expect(credit).toHaveTextContent("MTG Artist Connection");
+    const creditLink = credit.querySelector("a");
+    expect(creditLink).toHaveAttribute(
+      "href",
+      "https://www.mtgartistconnection.com/"
+    );
+  });
+
+  it("every rendered link/button carries the external-link etiquette attributes", async () => {
+    server.use(artistExternalLinksOneLink);
+    renderApplet(ArtistExternalLinksTestArtists.oneLink);
+
+    const primaryLink = screen.getByTestId("artist-support-link");
+    expect(primaryLink).toHaveAttribute("target", "_blank");
+    expect(primaryLink).toHaveAttribute("rel", "noopener noreferrer");
+
+    const commerceLink = await screen.findByTestId(
+      "artist-support-commerce-link"
+    );
+    expect(commerceLink).toHaveAttribute("target", "_blank");
+    expect(commerceLink).toHaveAttribute("rel", "noopener noreferrer");
   });
 });

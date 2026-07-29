@@ -8,19 +8,23 @@ Connection](https://www.mtgartistconnection.com) (MTGAC) - a
 community-maintained directory of Magic: the Gathering artists, not
 affiliated with this project or its operator.
 
-**Status, updated for the M1 backend addition below**: a partnership with
-MTGAC's operator was agreed after this doc's original v1 design (below) was
-written. They offered site credits (accepted, see Credits), an embed
-(**declined** - this project's no-third-party-embeds posture), and a data
-endpoint (accepted). MTGAC has since supplied public bulk/single-artist
-endpoints; the backend consumer for that data (M1: daily-cached fetch +
-normalise + cache, one new read endpoint) is now built - see "M1: the
-verified backend integration" below. **M2 (wiring the frontend to actually
-consume it, replacing/augmenting the deterministic link-out described in
-"v1 design" below) is not built yet.** Until M2 ships, every user-visible
-surface still behaves exactly as "v1 design" describes.
+**Status: both M1 and M2 are built.** A partnership with MTGAC's operator
+was agreed after this doc's original v1 design (below) was written. They
+offered site credits (accepted, see Credits), an embed (**declined** -
+this project's no-third-party-embeds posture), and a data endpoint
+(accepted). MTGAC has since supplied public bulk/single-artist endpoints;
+the backend consumer for that data (M1: daily-cached fetch + normalise +
+cache, one new read endpoint) is built - see "M1: the verified backend
+integration" below - and the frontend applet that actually consumes it
+(M2: `ArtistSupportLink.tsx`, RTK Query, commerce-link buttons, the
+Mark's Signature Service badge, the MTGAC credit line) is built too - see
+"M2: the frontend applet" below. The original v1 design (immediately
+below) is now the FALLBACK behaviour, not the only behaviour: every
+surface still degrades to it gracefully whenever the backend has no data
+for an artist (cold cache, artist not yet indexed, or no remote backend
+configured at all).
 
-## v1 design: zero-crawl, deterministic link-out only
+## v1 design: zero-crawl, deterministic link-out only (now the fallback)
 
 The core constraint, decided up front: **v1 does no verification of any
 kind**. No per-artist database, no crawling MTG Artist Connection to build
@@ -57,24 +61,27 @@ compare against.
   builder above, unit-tested directly (`ArtistSupportLink.test.tsx`) for
   the encoding behaviour (spaces -> `%20`, `&` -> `%26`, etc.) since that's
   the one thing this feature can silently get wrong with no visual symptom.
-- `ArtistSupportLink({ artistName, className?, children })` - a plain
-  `<a>` wrapping whatever `children` the caller wants as the link text,
-  with the link-etiquette attributes fixed regardless of caller:
-  `target="_blank"`, `rel="noopener noreferrer"` (opening an
-  attacker-controllable-by-nobody but still third-party page shouldn't
-  hand it a `window.opener` reference), `title="via MTG Artist Connection"` (a hover disclosure of where the link goes, since the
-  domain itself doesn't appear in the link text on either surface below),
-  and a trailing `box-arrow-up-right` Bootstrap Icon so it reads as
-  external at a glance. `data-testid="artist-support-link"` on the anchor
-  itself.
+  Still used as the fallback construction whenever the backend has no data
+  for an artist - see "M2: the frontend applet" below.
+- `ArtistSupportLink({ artistName, className? })` - the M2 applet (was: a
+  plain `<a>` wrapping caller-supplied `children`; **`children` is gone**,
+  the applet now owns its own content/labels entirely). Fetches
+  `2/artistExternalLinks/` via RTK Query (`useGetArtistExternalLinksQuery`,
+  `store/api.ts`) and renders, in this order: a primary page-link button
+  (MTGAC's `pageUrl` when available, `buildArtistSupportURL` otherwise -
+  ALWAYS present), any commerce-link buttons (0-5, fixed priority order),
+  the Mark's Signature Service badge (when true), and the MTG Artist
+  Connection credit line (ALWAYS present). See "M2: the frontend applet"
+  below for the full design.
 
 **Gating is the caller's job, not the component's**: `ArtistSupportLink`
 takes an `artistName: string` (not optional/nullable) - it has no opinion
-on when an artist is "confirmed enough" to link. Every caller below only
+on when an artist is "confirmed enough" to render. Every caller below only
 renders it once the artist is confirmed/known via the same precedence
 chain the backend's `Card.serialise` exposes (i.e. `canonicalArtist` is
 non-null) or a vote the user just cast themselves - never for a vote-
 pending or unknown artist, since there'd be no name to build a URL from.
+M2 didn't widen this gate at all, only what gets rendered once it's open.
 
 ## Surfaces (three, as of the Proposal H pane migration)
 
@@ -82,9 +89,8 @@ pending or unknown artist, since there'd be no name to build a URL from.
    the `"Canonical Aritst"` row - yes, that's a pre-existing typo in the
    row label, left as-is since fixing it is out of scope for this change).
    `cardDocument.canonicalArtist != null` renders
-   `<ArtistSupportLink artistName={...}>{...}</ArtistSupportLink>` in
-   place of the plain name text; `null` still renders `"Unknown"` as
-   before, unchanged.
+   `<ArtistSupportLink artistName={...} />` in place of the plain name
+   text; `null` still renders `"Unknown"` as before, unchanged.
 2. **`/whatsthat`'s post-answer moment** (`QuestionFeed.tsx`'s `"artist"`
    item type). `ArtistVotePicker` gained an optional `onArtistConfirmed?: (artistName: string) => void` prop, called from inside its own
    `submit()`'s success handler only when a real named artist was voted
@@ -92,9 +98,9 @@ pending or unknown artist, since there'd be no name to build a URL from.
    calls it, there's nothing to link). `QuestionFeed.tsx` wires this to
    local state (`confirmedArtistName`, reset every new item alongside the
    rest of the per-question state - see the fetch effect's own comment on
-   why that reset has to be unconditional, not dependency-array-keyed)
-   and renders `"Art by <Name> - support them"` with the link right below
-   the picker once set. `ArtistVotePicker`'s _other_ caller
+   why that reset has to be unconditional, not dependency-array-keyed) and
+   renders a plain `"Art by <Name> - support them"` text line followed by
+   the applet, once set. `ArtistVotePicker`'s _other_ caller
    (`AttributeVotingPanel`, the Card Detail Modal's own voting surface)
    doesn't pass this prop, so its behaviour is unchanged - the confirm
    banner is specific to the `/whatsthat` funnel's own post-answer moment,
@@ -103,17 +109,16 @@ pending or unknown artist, since there'd be no name to build a URL from.
    (`frontend/src/features/display/ArtistSection.tsx`, left-panel
    unification, issue #164) - the follow-on this doc originally
    anticipated. Same precedence chain/gating as surface 1:
-   `cardDocument.canonicalArtist != null` renders the link (`"Art by <Name>"`), `null` renders plain `"Unknown"` text, never a link with
-   nothing to point at. Reads the rail's currently-selected slot's own
-   `CardDocument` (already resident in `cardDocumentsByIdentifier`) - no
-   new fetch.
+   `cardDocument.canonicalArtist != null` renders a plain `"Art by <Name>"` credit line followed by the applet; `null` renders plain
+   `"Unknown"` text, never an applet with nothing to point at. Reads the
+   rail's currently-selected slot's own `CardDocument` (already resident in
+   `cardDocumentsByIdentifier`) for the artist name - the applet's own data
+   fetch is separate (keyed by that name), not piggybacked on this read.
 
 **Not built** (explicitly out of scope, noted so a future session doesn't
 have to re-derive why): the confidently-known-artist collapsed display
 inside `ArtistVotePicker` itself (the `"<name> wrong?"` span, shared by
-both its callers) does not get a link - only the three surfaces above.
-Also not built as of M1: none of the three surfaces above actually consume
-MTGAC's real data yet - that's M2, see below.
+both its callers) does not get an applet - only the three surfaces above.
 
 ## M1: the verified backend integration
 
@@ -302,6 +307,56 @@ docstring for the full reasoning (including the independent engineering
 case for synthetic fixtures - stable, minimal, each hazard exercised
 deliberately).
 
+## M2: the frontend applet
+
+**Fetch via RTK Query, never an ad-hoc `fetch`.** `useGetArtistExternalLinksQuery`
+(`store/api.ts`) wraps the raw generated hook the same way every other
+backend-specific query in this codebase does - `skip`ped entirely when no
+remote backend is configured, so a demo/local-only session makes zero
+network calls and falls straight back to the deterministic URL, silently.
+`found: false` is a normal, expected response (cold cache, or an artist
+this project doesn't index in `CanonicalArtist` yet), never surfaced as an
+error - the applet treats it exactly like "no data yet."
+
+**Design target: zero and one commerce links, not four or five.** The
+same 2,389-artist measurement M1's allowlist is built on: 812 artists have
+zero commerce links, 818 have exactly one, only 13 have all five
+(`instagram`'s last-resort allowlisting - see M1's allowlist section above
+
+- rescues 157 of those 812 down to 655; roughly 598 have nothing but the
+  MTGAC page link regardless of what's allowlisted). The applet is built for
+  that distribution: the MTGAC page-link button and the MTG Artist
+  Connection credit line are ALWAYS rendered (an obligation, not decoration
+- MTGAC accepted site credits as part of the partnership), and commerce
+  buttons/the signature badge are purely additive on top. **The applet never
+  renders as an empty box** - even an artist with nothing else still shows
+  the page-link button and the credit.
+
+**No layout shift while loading.** The loading state and the "found:
+false"/zero-commerce-link state render identically (page-link button +
+credit only) - for roughly a third of all artists that's not a shift at
+all, since the loaded state IS the base shape; for the rest, commerce
+buttons/the badge appear additively below a base that was already there,
+never a spinner collapsing into a differently-shaped final layout.
+
+**`pageUrl` is preferred over the constructed URL whenever the backend has
+it** - this is the actual point of the applet, not a nice-to-have: see
+M1's own 8.2% slug-divergence finding above. A cold cache, a not-yet-
+loaded request, an unconfigured remote backend, and an artist absent from
+`CanonicalArtist` all fall back to the identical deterministic
+construction, indistinguishably.
+
+**Buttons stretch to fill the applet** (owner instruction) - every
+rendered button/link is full-width within whatever container the caller
+gives it (Bootstrap `w-100`/`d-grid`), so the applet reads consistently
+whether that container is the Card Detail Modal's narrow table cell or the
+`/display` rail's full-width panel.
+
+**Link labels**: `website` → "Website", `artstation` → "ArtStation",
+`inprnt` → "INPRNT", `mountainmage` → "Mountain Mage Signatures",
+`omalink` → "Original Magic Art", `instagram` → "Instagram" - rendered in
+the backend's own fixed priority order, never re-sorted client-side.
+
 ## Credits
 
 `frontend/src/pages/about.tsx` credits MTG Artist Connection by name,
@@ -312,24 +367,36 @@ richer, blessed integration later.
 
 ## Tests
 
-- `ArtistSupportLink.test.tsx` (Jest/RTL) - the URL-encoding behaviour of
-  `buildArtistSupportURL` directly, plus the component's fixed link-
-  etiquette attributes.
+- `ArtistSupportLink.test.tsx` (Jest/RTL, M2) - the URL-encoding behaviour
+  of `buildArtistSupportURL` directly; the applet's own behaviour end to
+  end against the RTK Query hook (MSW-mocked, `src/mocks/handlers.ts`'s
+  synthetic `artistExternalLinks*` handlers - see their own module comment
+  for why they're synthetic): never an empty box before data arrives or
+  with no remote backend configured, cache-miss/not-found falls back to
+  the deterministic URL, `pageUrl` is preferred over the constructed URL
+  when they genuinely disagree, zero/one/five-commerce-link rendering, the
+  fixed priority order and 5-cap (including the `instagram` last-resort
+  rescue scenario), the Mark's Signature Service badge renders as a badge
+  never a link, the MTGAC credit line is always present, and every
+  rendered link carries the external-link etiquette attributes.
 - `tests/ArtistSupportLink.spec.ts` (Playwright) - surface 1: a known
-  canonical artist renders the link with the correct href/attributes; no
+  canonical artist renders the link with the correct href/attributes (MSW
+  default not-found response, so this exercises the fallback URL); no
   canonical artist renders plain `"Unknown"` text with no link at all.
 - `tests/QuestionFeed.spec.ts` (formerly `QuestionFeedArtistAndTag.spec.ts`,
   Playwright) - surface 2: the
   post-answer banner appears (with the correct href) after voting for a
   named artist; voting "Unknown artist" never shows it.
 - `tests/DisplayPage.spec.ts` (Playwright) - surface 3: the rail's Artist
-  section shows the support link for a slot with a known canonical artist
-  (Print Options and Slot Actions' own new-section coverage lives in the
-  same file, alongside this).
+  section shows the applet (page-link button naming the artist, own MTGAC
+  credit line) for a slot with a known canonical artist (Print Options and
+  Slot Actions' own new-section coverage lives in the same file, alongside
+  this).
 - `MPCAutofill/cardpicker/tests/test_artist_external_links.py` (M1,
   backend) - the normaliser against every hazard above (using synthetic
   fixtures - see `mtgac_synthetic_fixtures.py`'s docstring for why),
   cache-hit/cache-miss/not-indexed-artist endpoint behaviour (asserting no
-  outbound call ever happens on the request path), and the warm
+  outbound call ever happens on the request path), the warm
   command/function's idempotency and cache-preservation-on-failure
-  behaviour.
+  behaviour, and the `caches["shared"]`-not-configured graceful-degradation
+  suite.
