@@ -8,7 +8,18 @@ more than a vote. `VoteSource.DEDUCTION` (weight `PRINTING_TAG_MACHINE_WEIGHT`, 
 hard "at least one human-backed vote" gate in `cardpicker.vote_consensus.resolve_weighted_consensus`
 means these votes can NEVER resolve consensus by themselves, regardless of volume - a human
 still has to confirm. See `docs/features/printing-tags.md`'s Stage 4 section for the full
-design writeup (census methodology, Scryfall `printings_count` cross-verification).
+design writeup (census methodology).
+
+D1 IS NOT CROSS-VERIFIED AGAINST SCRYFALL (corrected 2026-07-29). This docstring, the D1 tier
+comment below and `docs/features/printing-tags.md` all used to say D1's uniqueness was confirmed
+against "Scryfall's own printings_count". No such check exists, or ever existed. The column that
+check reads - `CanonicalPrintingMetadata.catalogued_printings_count`, renamed from the misleading
+`printings_count` in migration 0098 - is a COUNT of OUR OWN `CanonicalCard` rows per oracle id,
+computed by `printing_metadata_import` from our own table. The check therefore restates the
+name-uniqueness test that ran one line above it and excludes nothing: measured against the live
+catalogue on 2026-07-29, 137 D1 candidates before the check and 137 after. See
+`select_d1_candidates` for the structural proof, and issue #600 for the open question of what a
+real external check would look like.
 
 VOTES THIS MODULE CASTS TODAY CARRY WEIGHT (2026-07-29). The 2026-07-14 production run's 28,112
 votes are permanently zero-weighted, but that is a ruling about THAT COHORT, held out as a
@@ -74,8 +85,9 @@ def generate_run_id() -> str:
 
 Tier = Literal["d1", "d2"]
 
-# D1 = name matches exactly one CanonicalCard, cross-verified against Scryfall's own
-# `printings_count` (not just "our table happens to have one row" - see module docstring).
+# D1 = name matches exactly one CanonicalCard row in our catalogue. That is the whole test -
+# it IS "our table happens to have one row", and nothing corroborates it externally (see the
+# module docstring's correction and `select_d1_candidates`).
 # D2 = name matches multiple CanonicalCard rows, but the card's own `expansion_hint`
 # (parsed at upload time from a lone set-code bracket token in the source filename -
 # `cardpicker/tags.py::Tags.extract()`) narrows it to exactly one.
@@ -105,14 +117,15 @@ class CanonicalNameIndex:
         by_name: dict[str, list[tuple[int, int]]] = collections.defaultdict(list)
         by_name_expansion: dict[tuple[str, str], list[tuple[int, int]]] = collections.defaultdict(list)
         rows = CanonicalCard.objects.select_related("expansion", "printing_metadata").values_list(
-            "pk", "name", "expansion__code", "printing_metadata__printings_count"
+            "pk", "name", "expansion__code", "printing_metadata__catalogued_printings_count"
         )
-        for pk, name, expansion_code, printings_count in rows:
+        for pk, name, expansion_code, catalogued_printings_count in rows:
             normalised = to_searchable(name)
-            # printings_count can be null if a CanonicalCard predates the metadata import
-            # (`printing_metadata` is a nullable reverse OneToOne) - treat as "unverifiable",
-            # never as 1, so it can't slip through the D1 Scryfall cross-check by accident.
-            count = printings_count if printings_count is not None else -1
+            # catalogued_printings_count can be null if a CanonicalCard predates the metadata
+            # import (`printing_metadata` is a nullable reverse OneToOne) - mapped to -1 so it
+            # can never be mistaken for a real count of 1. In the live catalogue on 2026-07-29
+            # this branch is unreachable: all 113,224 CanonicalCard rows carry a metadata row.
+            count = catalogued_printings_count if catalogued_printings_count is not None else -1
             by_name[normalised].append((pk, count))
             by_name_expansion[(normalised, expansion_code.lower())].append((pk, count))
         self._by_name = dict(by_name)
@@ -159,12 +172,38 @@ def _eligible_base_queryset() -> "QuerySet[Card]":
 
 
 def select_d1_candidates(index: "CanonicalNameIndex | None" = None) -> Iterable[DeductiveVote]:
+    """
+    D1: the card's name matches exactly one `CanonicalCard` row in our catalogue.
+
+    THE SECOND CONDITION EXCLUDES NOTHING - it is entailed by the first (2026-07-29). It is left
+    in place, labelled, rather than silently deleted, because deleting it would erase the evidence
+    that D1's advertised external corroboration was never implemented; issue #600 tracks the
+    decision about what replaces it. Do not read it as a safety net.
+
+    Why it is entailed: `catalogued_printings_count` is the number of `CanonicalCard` rows sharing
+    this row's `canonical_id` (oracle id). Rows sharing an oracle id share that oracle card's
+    name, so an oracle group of size N > 1 puts N rows under the same normalised name and
+    `len(matches) == 1` has already rejected the card. Rows with a NULL `canonical_id` are stored
+    as 1 by the importer. Either way, `len(matches) == 1` implies the count is 1.
+
+    Measured against the live catalogue 2026-07-29, both directions:
+      - 14,893 normalised names have exactly one `CanonicalCard` row; all 14,893 of those rows
+        have `catalogued_printings_count == 1`. Zero have > 1. Zero are NULL.
+      - 137 cards in the eligible pool (104,969) reach this condition; 137 pass it.
+
+    What the condition was MEANT to catch - "Scryfall publishes more printings of this card than
+    we have imported, so a unique local match is not proof of anything" - is real and is NOT
+    caught here. Counting the bulk-data file directly on 2026-07-29 finds 2 oracle ids where we
+    hold one row and Scryfall publishes more. This predicate cannot see them, because it is
+    computed from the same table whose incompleteness it is supposed to detect.
+    """
     index = index or CanonicalNameIndex()
     for card in _eligible_base_queryset().only("pk", "name", "source_id").iterator(chunk_size=5000):
         matches = index.exact_matches(card.name)
         if len(matches) == 1:
-            printing_pk, printings_count = matches[0]
-            if printings_count == 1:
+            printing_pk, catalogued_printings_count = matches[0]
+            # Entailed by `len(matches) == 1` above - see this function's docstring. Not a gate.
+            if catalogued_printings_count == 1:
                 yield DeductiveVote(card_id=card.pk, printing_id=printing_pk, tier="d1")
 
 
@@ -178,7 +217,7 @@ def select_d2_candidates(index: "CanonicalNameIndex | None" = None) -> Iterable[
             continue  # D1's territory, or no match at all - not D2
         narrowed = index.exact_matches_in_expansion(card.name, card.expansion_hint)
         if len(narrowed) == 1:
-            printing_pk, _printings_count = narrowed[0]
+            printing_pk, _catalogued_printings_count = narrowed[0]
             yield DeductiveVote(card_id=card.pk, printing_id=printing_pk, tier="d2")
 
 
