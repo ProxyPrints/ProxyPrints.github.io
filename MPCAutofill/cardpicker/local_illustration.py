@@ -45,10 +45,33 @@ recoverable fact: at 1 illustration → N printings the calculator KNOWS the ill
 with full confidence and merely cannot choose a printing, so ``IllustrationVerdict`` retains that
 ``illustration_id`` and the candidate printing pks. At N>1 illustrations there is no single
 identity to retain and none is invented. The two are separate ``skip_reason`` strings so the
-recoverable population is queryable. Nothing about the retained identity is PERSISTED here:
-human illustration answers have no vote model yet (issue #524, ``CardIllustrationVote``), and
-persisting the machine side is that issue's job — this abstain is the seam it plugs into, not
-the intended end state.
+recoverable population is queryable.
+
+THE SECOND WRITE GRAIN — ``CardIllustrationVote`` (issue #524, 2026-07-28). The retained identity
+above is now PERSISTED, which is what #526's abstain-with-evidence was staged for. A run writes
+at two independent grains:
+
+  - ``CardPrintingTag`` — only at 1:1. The rule above is UNCHANGED; #524 does not weaken it.
+  - ``CardIllustrationVote`` — whenever exactly ONE illustration was resolved, however many
+    printings it maps to. That is the 1:1 cards PLUS the entire
+    ``multiple-printings-one-illustration`` population, i.e. most of the coverage the 1:1 rule
+    withholds at the printing grain is retained at the artwork grain instead of discarded.
+    At N>1 illustrations nothing is written at either grain.
+
+An illustration vote is a claim about the ARTWORK and must never be expanded into printing votes
+for the printings sharing it — that expansion is exactly issue #525's defect. The narrowing stays
+a READ: ``printings_for_illustration`` below. ``CardIllustrationVote``'s UNCONDITIONAL
+(card, anonymous_id) unique constraint makes the contradiction unrepresentable at the table level
+rather than merely discouraged by a submit view machine writers never call; see that model's own
+docstring, and ``_split_new_illustration_votes`` here for why the write path must compare the
+stored illustration_id VALUE and not just that key.
+
+THE ARTIST INPUT IS OCR-DERIVED, NEVER VOTE-DERIVED (issue #523). Stated here as well as at the
+``match_artist`` call site because #524 is precisely the change that makes the loop reachable: a
+human illustration answer can derive a ``CardArtistVote`` (``illustration_id → artist`` is
+functional), so if artist votes ever became input to this calculator's artist matching it would
+re-confirm an artist derived from an illustration it proposed itself — agreement manufactured out
+of one human click. The input is and must remain ``ImageEvidence.artist_ocr_name``.
 
 Wired into ``local_calculate_verdicts.py`` (management command) after the fallback calculator,
 before slow-path routing. Reuses ``_eligible_cards_queryset`` from that module for the base
@@ -57,10 +80,12 @@ after writes (human-backed consensus prevents machine-only resolution).
 """
 
 import logging
+import uuid as uuid_module
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+from django.db import transaction
 from django.db.models import Count, Max, Q, QuerySet
 
 from cardpicker.image_evidence import current_evidence_queryset
@@ -70,12 +95,14 @@ from cardpicker.models import (
     CanonicalCard,
     CanonicalPrintingMetadata,
     Card,
+    CardIllustrationVote,
     CardPrintingTag,
     CardScanLog,
     CardTypes,
     ImageEvidence,
     PrintingTagStatus,
     VoteSource,
+    purge_stale_machine_votes,
 )
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.search.sanitisation import to_searchable
@@ -210,6 +237,46 @@ class IllustrationIndex:
     def illustration_printings(self, artist_pk: int, searchable_card_name: str) -> dict[str, list[int]]:
         """Return ``{illustration_id_str → [printing_pk]}`` for the given (artist, card_name) key."""
         return dict(self._index.get((artist_pk, searchable_card_name), {}))
+
+
+# ---------------------------------------------------------------------------
+# Read-side narrowing: illustration → candidate printings (issue #524)
+# ---------------------------------------------------------------------------
+
+
+def printings_for_illustration(
+    illustration_id: "str | uuid_module.UUID",
+    candidate_printing_pks: Optional[Iterable[int]] = None,
+) -> "QuerySet[CanonicalCard]":
+    """
+    THE NARROWING, AS A READ. Given a Scryfall ``illustration_id``, return the ``CanonicalCard``
+    printings that carry it, joined through ``CanonicalPrintingMetadata.illustration_id``.
+
+    This is the whole reason ``CardIllustrationVote`` stores an artwork rather than a printing.
+    ``illustration_id → printing`` is 1:N (roughly 2.2 printings per illustration across the
+    catalogue), so knowing the artwork narrows the printing without determining it. That
+    narrowing is DERIVABLE FROM REFERENCE DATA AT READ TIME and must stay that way: it must
+    NEVER be materialised as implied ``CardPrintingTag`` rows. Writing one row picks a printing
+    the evidence does not support; writing N rows asserts N mutually exclusive printings under a
+    single identity, which is exactly the defect issue #525 was filed for. There is no vote here
+    and this function writes nothing.
+
+    ``candidate_printing_pks`` (optional) intersects the result with a caller-supplied candidate
+    list — e.g. ``IllustrationVerdict.candidate_printing_pks``, or the printings a Stage E
+    micro-batch is already working with. Pass it whenever the caller HAS such a list, so the
+    query costs O(candidates) instead of O(every printing carrying this artwork); the parameter
+    exists for the same reason ``_eligible_illustration_cards_queryset``'s own ``card_ids``
+    does (issues #458/#460 — nothing a micro-batch calls may cost O(catalog)). ``None`` returns
+    the unscoped set.
+
+    Returns a LAZY queryset (never a list), so a caller that only wants ``.count()``,
+    ``.exists()``, or a ``values_list`` of pks never hydrates model instances, and so this
+    composes into a larger query as a subquery rather than a materialised ``IN`` list.
+    """
+    queryset = CanonicalCard.objects.filter(printing_metadata__illustration_id=illustration_id)
+    if candidate_printing_pks is not None:
+        queryset = queryset.filter(pk__in=candidate_printing_pks)
+    return queryset
 
 
 # ---------------------------------------------------------------------------------------------
@@ -360,6 +427,16 @@ class IllustrationCalculatorResult:
     # obtained from a dry run rather than a live write.
     cards_abstained_ambiguous: int = 0
     printing_votes_withheld: int = 0
+    # ILLUSTRATION-IDENTITY COVERAGE (issue #524) — counted separately from the printing-vote
+    # counters above because the two now diverge on purpose: every card whose evidence resolves to
+    # exactly ONE illustration records a `CardIllustrationVote`, including the cards the 1:1 rule
+    # makes abstain from a printing vote. `illustration_votes_would_cast` therefore includes
+    # `cards_abstained_ambiguous`' single-illustration share, and is the measure of how much of the
+    # coverage `printing_votes_withheld` reports as lost is in fact RETAINED at the artwork grain
+    # rather than discarded. Counted in dry-run mode too, same as the pair above.
+    illustration_votes_would_cast: int = 0
+    illustration_votes_written: int = 0
+    illustration_votes_already_voted: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -462,6 +539,24 @@ def calculate_illustration_verdict(
     real ``CandidatePrinting`` objects from ``CandidateNameIndex.candidates_for()`` or lightweight
     adapter objects (see ``_CandidateAdapter`` below).
     """
+    # INVARIANT (issue #523) — THE ARTIST INPUT IS OCR-EVIDENCE-DERIVED AND MUST NEVER BE
+    # VOTE-DERIVED. Both arguments below are vote-free by construction and must stay that way:
+    # `evidence.artist_ocr_name` comes off an `ImageEvidence` row (Tesseract output), and
+    # `illustration_index.artist_by_pk` is built from `CanonicalCard`/`CanonicalArtist` reference
+    # data. Neither reads `CardArtistVote`.
+    #
+    # WHY THIS MATTERS NOW RATHER THAN LATER: `illustration_id -> artist` is functional, so a human
+    # illustration answer can legitimately derive a `CardArtistVote` from it - and this calculator
+    # runs the INVERSE direction, matching an OCR artist name to find the illustration. Sourcing
+    # the artist input from votes would close the loop: the calculator would re-confirm an artist
+    # that was itself derived from an illustration the calculator proposed, manufacturing
+    # multi-source "agreement" out of a single human click and a single machine guess. Issue #524
+    # (`CardIllustrationVote`, landed alongside this comment) is what makes that loop reachable at
+    # all, which is why the lock lands with it and not after.
+    #
+    # Pinned by `test_local_illustration.py::TestArtistInputIsOcrDerivedNotVoteDerived`, which
+    # asserts on THIS SEAM directly - the exact argument passed here - rather than on the verdict,
+    # because a rewire that swapped the source could still produce an identical verdict.
     surviving_card_pks = match_artist(evidence.artist_ocr_name, candidates, illustration_index.artist_by_pk)
 
     if surviving_card_pks is None:
@@ -548,6 +643,149 @@ class _CandidateAdapter:
     pk: int
 
 
+# ---------------------------------------------------------------------------------------------
+# CardIllustrationVote write path (issue #524)
+#
+# FOLLOW-UP — UNIFY WITH THE GENERALIZED PRIMITIVE. The two functions below are a deliberate
+# small equivalent of `local_calculate_verdicts._split_new_printing_tag_votes` /
+# `_purge_and_write_printing_tag_votes`, written here rather than there because that module is
+# being generalized concurrently by another worker and must not be edited from this change. Once
+# that generalization lands (a model-agnostic split/purge/write primitive), these should be
+# deleted and replaced by calls into it — with the ONE semantic difference below carried across,
+# not dropped: this model's split compares the illustration_id VALUE as well as the
+# (card, anonymous_id) key.
+# ---------------------------------------------------------------------------------------------
+
+
+def _split_new_illustration_votes(
+    votes_batch: list[CardIllustrationVote],
+) -> tuple[list[CardIllustrationVote], int]:
+    """
+    Partition `votes_batch` into (votes to write, count already voted) — the same pre-write
+    skip-if-exists guard, and the same ordering contract, as
+    `local_calculate_verdicts._split_new_printing_tag_votes`: one batched existence query scoped
+    to just the (card_id, anonymous_id) pairs present in this batch, run BEFORE any purge (a
+    purge run first would delete exactly the rows this function looks for, making the
+    `already_voted` counter structurally zero forever — see that function's own docstring and
+    `stage_e_dispatch.DispatchOutcome`'s "zero forever would suggest the guard itself is dead
+    code" contract).
+
+    THE ONE DIFFERENCE, AND IT IS LOAD-BEARING: this function compares the illustration_id VALUE,
+    not only the (card_id, anonymous_id) KEY.
+
+    `CardIllustrationVote`'s unique constraint is UNCONDITIONAL on (card, anonymous_id) — see
+    that model's own docstring for why it diverges from `CardPrintingTag`/`CardArtistVote`. Under
+    a key-only comparison that constraint would make a CORRECTED answer permanently unlandable:
+    if a metadata refresh (an `import_scryfall_printing_metadata` run that changes which
+    illustration this card's artwork resolves to) produces a DIFFERENT `illustration_id` for a
+    card that already has a row, a key-only split sees the existing row, calls it "already
+    voted", drops the card from `new_votes` — and so the card never reaches the purge that would
+    have made room for the new value. Even if it somehow did reach the insert,
+    `ignore_conflicts=True` would swallow it silently. The stale answer would win forever, with
+    no error and no counter moving.
+
+    So the comparison is on the pair AND the value:
+      - existing row, SAME illustration_id  → genuinely redundant. Skipped, counted in
+        `already_voted`. Re-running the calculator is a no-op, which is the idempotence property
+        the whole Stage D framework depends on.
+      - existing row, DIFFERENT illustration_id → a changed conclusion, NOT a collision. Kept in
+        `new_votes`, so `_purge_and_write_illustration_votes` deletes the stale row and writes
+        the new one inside one transaction — an overwrite, which is what a corrected answer is.
+      - no existing row → a fresh vote. Kept.
+
+    `is_unknown` rows compare as a NULL illustration_id, so a flip in either direction between
+    "unknown" and a named illustration is also treated as a changed answer, not a collision.
+
+    This is deliberately NOT the "skip-and-count, not retract-and-recast" choice
+    `_split_new_printing_tag_votes` documents, and the difference is not an inconsistency: that
+    function's reasoning is explicitly conditioned on both racing invocations computing the SAME
+    verdict from the SAME inputs, and it names a genuinely-changed conclusion (re-extracted
+    evidence, a corrected catalogue) as the case its skip does NOT cover. Here the value
+    comparison is what distinguishes the two, so the redundant case is still skipped and only the
+    genuinely-changed case overwrites.
+    """
+    if not votes_batch:
+        return [], 0
+
+    card_ids = {vote.card_id for vote in votes_batch}
+    anonymous_ids = {vote.anonymous_id for vote in votes_batch}
+    existing_by_key: dict[tuple[int, str], Optional[uuid_module.UUID]] = {
+        (card_id, anonymous_id): illustration_id
+        for card_id, anonymous_id, illustration_id in CardIllustrationVote.objects.filter(
+            card_id__in=card_ids, anonymous_id__in=anonymous_ids
+        ).values_list("card_id", "anonymous_id", "illustration_id")
+    }
+
+    new_votes = []
+    for vote in votes_batch:
+        key = (vote.card_id, vote.anonymous_id)
+        if key in existing_by_key and _same_illustration(existing_by_key[key], vote.illustration_id):
+            continue  # unchanged answer — a genuine no-op
+        new_votes.append(vote)
+    return new_votes, len(votes_batch) - len(new_votes)
+
+
+def _same_illustration(stored: Any, proposed: Any) -> bool:
+    """
+    Value comparison for `_split_new_illustration_votes`, normalising through `uuid.UUID` so a
+    string-vs-UUID mismatch never reads as a changed answer. `IllustrationVerdict.illustration_id`
+    is a `str` (the index keys on strings), the DB column is a `UUIDField`, and an unsaved model
+    instance holds whatever the caller assigned — three representations of the same value that
+    a naive `==` would call different, which would turn every re-run into a spurious overwrite.
+    `None` (an `is_unknown` row) compares equal only to `None`.
+    """
+    return _as_uuid(stored) == _as_uuid(proposed)
+
+
+def _as_uuid(value: Any) -> Optional[uuid_module.UUID]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, uuid_module.UUID):
+        return value
+    try:
+        return uuid_module.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _purge_and_write_illustration_votes(anonymous_id: str, new_votes: list[CardIllustrationVote]) -> None:
+    """
+    Purge + write, all-or-nothing — the established semantics of
+    `local_calculate_verdicts._purge_and_write_printing_tag_votes`, applied to
+    `CardIllustrationVote`. Read that function's docstring for the full reasoning; the three
+    properties carried over verbatim are:
+
+    ORDERING: callers MUST run `_split_new_illustration_votes` FIRST and pass its `new_votes`
+    output here, never the raw batch. `purge_stale_machine_votes` deletes by CALCULATOR FAMILY
+    (`^<family>-v\\d+$`), which necessarily includes the caller's own current `anonymous_id`, so a
+    purge run first empties the table the split is about to interrogate.
+
+    SCOPED TO `new_votes`, NOT THE FULL BATCH: a card whose vote the split skipped as unchanged
+    must KEEP its existing row. Purging on the full batch would delete that row and then not
+    re-insert it (it is no longer in `new_votes`), destroying a committed vote to replace it with
+    nothing.
+
+    CANCEL-SAFETY: DELETE and INSERT are separate statements; a process killed between them —
+    which this project's operator does deliberately, mid-flight — would otherwise leave the
+    affected cards with their previous vote deleted and no replacement. `transaction.atomic()`
+    makes the pair all-or-nothing. `ignore_conflicts=True` stays as the second line of defence for
+    the residual check-then-insert window.
+
+    WHAT THE PURGE DOES HERE THAT IT DOES NOT DO FOR `CardPrintingTag`: because
+    `cardillustrationvote_unique_vote` is unconditional on (card, anonymous_id), the purge is also
+    the mechanism by which a CHANGED answer replaces the stale one — the split lets such a card
+    through precisely so it reaches this delete-then-insert. Both stale-VERSION rows (`...-v1`
+    when the calculator is now `...-v2`) and stale-VALUE rows under the current version are
+    removed by the same family-scoped DELETE, so version self-overwrite (#519/#520) is preserved
+    unchanged and answer correction works by the same path.
+    """
+    if not new_votes:
+        return
+    with transaction.atomic():
+        purge_stale_machine_votes(CardIllustrationVote, anonymous_id, "card_id", [_v.card_id for _v in new_votes])
+        CardIllustrationVote.objects.bulk_create(new_votes, ignore_conflicts=True)
+
+
 # ---------------------------------------------------------------------------
 # Batch runner
 # ---------------------------------------------------------------------------
@@ -567,6 +805,26 @@ def run_illustration_calculator(
     batches ``CardPrintingTag`` writes, calls ``resolve_and_persist_printing`` per touched card.
     ``dry_run=True`` (default) computes and counts everything without writing.
     ``card_ids`` is forwarded to the eligibility queryset for Stage E micro-batch scoping.
+
+    TWO INDEPENDENT WRITE GRAINS (issue #524). A run now produces up to two kinds of vote per
+    card, on DIFFERENT conditions, and they must not be conflated:
+
+      - ``CardPrintingTag`` — cast ONLY at 1:1 (exactly one illustration mapping to exactly one
+        printing). Issue #525's rule, UNCHANGED by #524. Nothing below weakens it.
+      - ``CardIllustrationVote`` — cast whenever exactly ONE illustration was resolved, no matter
+        how many printings that illustration maps to. That includes every card the 1:1 rule makes
+        abstain from a printing vote with ``MULTIPLE_PRINTINGS_SKIP_REASON``, which is the whole
+        point: #526 deliberately RETAINED the resolved ``illustration_id`` on the verdict so this
+        writer can persist it without re-deriving anything, and until #524 there was nowhere to
+        put it. At N>1 illustrations nothing is written at either grain — there is no single
+        identity to record, and the ``MULTIPLE_ILLUSTRATIONS_SKIP_REASON`` scan-log row #526
+        writes is retained exactly as-is.
+
+    The illustration vote is a claim about the ARTWORK, not the printing. It does NOT imply, and
+    must never be expanded into, printing votes for the printings sharing that artwork — see
+    ``printings_for_illustration``, which is the read-side narrowing that replaces materialising
+    them, and ``CardIllustrationVote``'s own docstring for the constraint that makes the
+    contradiction unrepresentable.
     """
     run_id = run_id or generate_run_id()
     result = IllustrationCalculatorResult(dry_run=dry_run, run_id=run_id)
@@ -583,6 +841,7 @@ def run_illustration_calculator(
     candidate_name_index: Optional[CandidateNameIndex] = None
 
     votes_batch: list[CardPrintingTag] = []
+    illustration_votes_batch: list[CardIllustrationVote] = []
     scan_log_batch: list[CardScanLog] = []
     touched_card_ids: list[int] = []
 
@@ -700,6 +959,38 @@ def run_illustration_calculator(
             searchable_card_name=searchable_card_name,
         )
 
+        # THE ILLUSTRATION-IDENTITY WRITE (issue #524), decided BEFORE the skip branch below
+        # because it is deliberately NOT conditioned on whether a printing vote gets cast.
+        #
+        # `verdict.illustration_id` is non-empty on EXACTLY the cards where one illustration
+        # survived - the 1:1 vote AND the `MULTIPLE_PRINTINGS_SKIP_REASON` abstention - and empty
+        # at N>1 illustrations, where there is no single identity and #526 deliberately invents no
+        # representative. So this one truthiness check IS the rule "exactly one illustration
+        # resolved". Nothing is re-derived: #526 retained this field on the verdict for precisely
+        # this consumer.
+        #
+        # The confidence written here is BASE_CONFIDENCE, not `verdict.confidence`. Those differ on
+        # the abstain path, and correctly so: `verdict.confidence` is the confidence in the
+        # PRINTING (0.0 when no printing was chosen), while this vote's claim is about the
+        # ARTWORK, which the calculator resolved with full confidence in both cases - the module
+        # docstring's "the calculator KNOWS the illustration identity with full confidence and
+        # merely cannot choose a printing". Reusing `verdict.confidence` would silently record a
+        # confident identity claim as a zero-confidence one on the majority of its own population.
+        if verdict.illustration_id:
+            result.illustration_votes_would_cast += 1
+            if not dry_run:
+                illustration_votes_batch.append(
+                    CardIllustrationVote(
+                        card_id=card.pk,
+                        illustration_id=verdict.illustration_id,
+                        is_unknown=False,
+                        anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+                        source=VoteSource.DEDUCTION,
+                        confidence=BASE_CONFIDENCE,
+                        run_id=run_id,
+                    )
+                )
+
         if verdict.skip_reason:
             result.skip_counts[verdict.skip_reason] = result.skip_counts.get(verdict.skip_reason, 0) + 1
             if verdict.skip_reason in (MULTIPLE_ILLUSTRATIONS_SKIP_REASON, MULTIPLE_PRINTINGS_SKIP_REASON):
@@ -785,6 +1076,20 @@ def run_illustration_calculator(
         # the two, which this project's operator does deliberately, mid-flight.
         new_votes, result.already_voted = _split_new_printing_tag_votes(votes_batch)
         _purge_and_write_printing_tag_votes(ILLUSTRATION_ANONYMOUS_ID, new_votes)
+
+        # Same ordering contract, same transaction shape, for the illustration grain - see
+        # `_split_new_illustration_votes`/`_purge_and_write_illustration_votes` above, including
+        # why this split compares the illustration_id VALUE and not just the key. Deliberately a
+        # SEPARATE transaction from the printing-tag write rather than one wrapping both: the two
+        # grains are independent claims, and coupling them would mean an illustration identity the
+        # calculator resolved with full confidence gets rolled back because a printing vote for
+        # some OTHER card in the same batch failed to insert.
+        new_illustration_votes, result.illustration_votes_already_voted = _split_new_illustration_votes(
+            illustration_votes_batch
+        )
+        _purge_and_write_illustration_votes(ILLUSTRATION_ANONYMOUS_ID, new_illustration_votes)
+        result.illustration_votes_written = len(new_illustration_votes)
+
         if scan_log_batch:
             CardScanLog.objects.bulk_create(scan_log_batch)
         for touched_card in Card.objects.filter(pk__in=touched_card_ids):
