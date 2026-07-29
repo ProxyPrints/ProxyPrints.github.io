@@ -5,9 +5,16 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
+    # Chains behind 0090_stage_e_full_catalog_cursor (PR #532) rather than depending on 0089
+    # directly, even though this migration touches nothing that one touches. Both were authored as
+    # 0090 against 0089; two migrations sharing a parent with neither depending on the other leaves
+    # the cardpicker graph with TWO leaf nodes, which Django rejects at migrate time with
+    # "Conflicting migrations detected; multiple leaf nodes in the migration graph". #532 was green
+    # and mergeable first, so this one renumbered and chained behind it. Purely a graph-ordering
+    # dependency - there is no schema or data relationship between the two.
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        ("cardpicker", "0089_canonicalprintingmetadata_illustration_id"),
+        ("cardpicker", "0090_stage_e_full_catalog_cursor"),
     ]
 
     operations = [
