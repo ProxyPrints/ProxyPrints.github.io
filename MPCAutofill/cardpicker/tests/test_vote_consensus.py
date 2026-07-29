@@ -536,9 +536,60 @@ class TestImplicitVoteCapForm:
     `settings.PRINTING_TAG_IMPLICIT_CAP` (default 1.0, strictly below min_weight=2 per decision
     S3). C1/C2 hold under either candidate form the matrix considered; C3/C4 are the cells
     that DIVERGE between forms - this is the cap form's own behaviour, the one that shipped.
+
+    WHAT THE CAP IS FOR. An implicit vote is a PASSIVE ACCEPTANCE, and the trigger is the
+    FILTER CHIP: "a low-weight, hard-capped `IMPLICIT` vote cast passively when someone picks
+    a candidate under an active `/editor` filter chip" (docs/identification-pipeline.md:234).
+    The person picked a card; they never tapped "yes, this tag applies". The chip's tags are
+    read as endorsed for that card as a by-product of the pick.
+
+    THE INVARIANT: passive acceptance never decides. Twenty people quietly taking the
+    suggestion the UI put in front of them is not the same evidence as one person deliberately
+    voting, and must never add up to more. See docs/theory.md:254-260 (§4 soundness
+    mechanisms), docs/features/printing-tags.md's implicit-vote section, and the ratified
+    D5/S3 cells in docs/reference/vote-weight-matrix.md (2026-07-22 vote-weight scenario
+    matrix, implemented in PR #325).
+
+    TWO SEPARATE MECHANISMS ENFORCE THAT, and conflating them is how this class ended up
+    testing neither (see below):
+
+      (a) `VoteSource.IMPLICIT` is in `_MACHINE_DERIVED_SOURCES`, so an implicit vote is never
+          human-backed and can never satisfy the `has_human_backed` gate - "no matter how many
+          implicit votes pile up" (vote_consensus.py's own comment on that set).
+      (b) THE CAP bounds the summed implicit weight per outcome group, so implicit weight can
+          never supply the QUORUM weight alone. Per that same comment, (a) "is what stops it
+          from ever supplying the human-backed bit, WHICH THE CAP ALONE WOULD NOT" - and
+          symmetrically, (a) alone does not bound quorum weight in any cell where some real
+          human vote has already satisfied the gate. They are deliberately belt-and-braces.
+
+    READ THIS BEFORE ADDING A CELL HERE. Only mechanism (b) is the cap, and the cap lives
+    inside `full_weight`, which is consulted ONLY when `exclude_non_human` is false. A cell
+    that puts 2 human votes on the winning side (C2, C4, and the D4 cell below) trips D4's
+    human-quorum exclusion and discards non-human weight before the cap is reached; a cell with
+    NO human vote at all (C1) is decided by (a) before the cap can matter. Both shapes pass
+    identically with the `min(...)` deleted from `full_weight`. A cell that actually exercises
+    the cap needs exactly one human-backed group whose human weight alone stays BELOW
+    min_weight - i.e. the realistic shape where one person really did vote and the question is
+    whether a pile of passive acceptances can finish the job for them. The two
+    `passive_acceptances` tests below are that shape and go red when the `min(...)` is removed.
     """
 
-    def test_c1_implicit_only_never_resolves(self):
+    def test_c1_repeated_picks_under_a_filter_chip_never_resolve_without_a_human_vote(self):
+        """SCENARIO (matrix cell C1): ten different people each pick the same candidate card
+        while the same `/editor` filter chip is active. Ten passive endorsements of outcome X,
+        and not one deliberate vote. The card must not resolve.
+
+        WHICH MECHANISM DECIDES THIS: (a), the human-backed gate - NOT the cap. With no
+        human-backed weight anywhere, `resolve_weighted_consensus` returns None at the
+        `winner["has_human_backed"]` check whatever `full_weight` computed. Verified by
+        mutation (2026-07-29): deleting the cap leaves this cell green.
+
+        That is not a defect in this test - (a) is a real, separately-ratified half of the
+        invariant and this is the right cell to pin it with. It is recorded here only so this
+        cell is not mistaken for evidence that the CAP works. The cap's own cells are the two
+        `passive_acceptances` tests below, which need a human vote present precisely because
+        that is the only shape in which the cap, rather than the gate, is doing the work.
+        """
         weight = settings.PRINTING_TAG_IMPLICIT_WEIGHT
         votes = [VT("X", weight, False, is_implicit=True) for _ in range(10)]
         assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) is None
@@ -570,15 +621,77 @@ class TestImplicitVoteCapForm:
         votes = [VT("A", 1.0, True)] * 2 + [VT("B", weight, False, is_implicit=True) for _ in range(3)]
         assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
 
-    def test_implicit_weight_is_hard_capped_per_outcome_group(self):
-        # enough implicit votes on the losing side that their RAW sum would exceed the cap several
-        # times over - the cap must clip the group's contribution regardless of vote count.
+    def test_implicit_dissent_volume_loses_to_d4_exclusion_not_to_the_cap(self):
+        # NOT A CAP TEST, despite the shape - named for what it actually exercises. A's 2 human
+        # votes clear min_weight on human weight alone, so D4 sets `exclude_non_human` and drops
+        # B's implicit pile in full BEFORE `full_weight` (the cap's only call site) is reached.
+        # The cap is unreached dead weight in this cell; deleting `min(...)` from
+        # `full_weight` leaves this assertion green. The cells that DO reach the cap are the
+        # two `passive_acceptances` tests below.
         weight = settings.PRINTING_TAG_IMPLICIT_WEIGHT
         cap = settings.PRINTING_TAG_IMPLICIT_CAP
         many_implicit_votes = int(cap / weight) + 10
         votes = [VT("A", 1.0, True)] * 2 + [
             VT("B", weight, False, is_implicit=True) for _ in range(many_implicit_votes)
         ]
+        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
+
+    def test_passive_acceptances_cannot_finish_the_quorum_one_real_voter_started(self):
+        """SCENARIO: one person deliberately voted for outcome A. Sixteen other people then
+        picked that candidate card while an `/editor` filter chip was active - sixteen passive
+        endorsements of A as a by-product of picking it, no second deliberate vote. Does the
+        card resolve?
+
+        It must not. That is what "passive acceptance must not accumulate into a decision"
+        means in the only shape where the CAP is the thing deciding it: one real human vote
+        has already satisfied the human-backed gate, so mechanism (a) is spent, and the
+        implicit pile is live weight in `full_weight`. The cap is all that stands between
+        sixteen shrugs and a resolution.
+
+            capped:   1.0 + min(4.0, 1.0) = 2.0  -> short of quorum, stays unresolved
+            uncapped: 1.0 +      4.0       = 5.0 -> resolves on accumulated shrugs
+
+        min_weight=3 rather than the usual 2 on purpose: at min_weight=2, one human vote plus
+        a fully-capped implicit pile lands exactly ON quorum (1.0 + 1.0), which is decision
+        D2's deliberate promotion path - a real ruling, but it makes that cell unable to tell
+        capped from uncapped. Raising the bar by one vote isolates the cap without changing
+        which mechanism is under test.
+        """
+        weight = settings.PRINTING_TAG_IMPLICIT_WEIGHT
+        cap = settings.PRINTING_TAG_IMPLICIT_CAP
+        passive_acceptances = int(4 * cap / weight)  # raw sum = 4x the cap
+        votes = [VT("A", 1.0, True)] + [VT("A", weight, False, is_implicit=True) for _ in range(passive_acceptances)]
+        assert resolve_weighted_consensus(votes, min_weight=3, min_share=0.6) is None
+
+    def test_passive_acceptances_cannot_outrank_the_one_person_who_actually_voted(self):
+        """SCENARIO: one person deliberately voted for A, and four others picked that candidate
+        under a filter chip endorsing A. Meanwhile forty people picked candidates under a chip
+        endorsing the competing outcome B - nobody ever deliberately voted for B at all. Whose
+        answer wins?
+
+        A's, and the card resolves to A. Volume of passive acceptance must not out-rank the
+        one person who actually made a claim, and B - which no human ever asserted - must not
+        be able to take the card's resolution away by sheer count either.
+
+            capped:   A = 1.0 + min(1.0, 1.0) = 2.0  vs  B = min(10.0, 1.0) = 1.0
+                      -> A selected, clears min_weight=2, share 2/3 >= 0.6, human-backed -> "A"
+            uncapped: A = 2.0                        vs  B = 10.0
+                      -> B selected; B has no human-backed weight, so the resolver returns
+                         None. The pile of shrugs does not win the card, it DE-RESOLVES it -
+                         a card a real person answered correctly is dragged back to unresolved
+                         by forty people who never answered anything.
+
+        The same cell as the test above, read from winner selection rather than quorum: this
+        is why the cap is per OUTCOME GROUP and not a global bound.
+        """
+        weight = settings.PRINTING_TAG_IMPLICIT_WEIGHT
+        cap = settings.PRINTING_TAG_IMPLICIT_CAP
+        at_cap = int(cap / weight)
+        votes = (
+            [VT("A", 1.0, True)]
+            + [VT("A", weight, False, is_implicit=True) for _ in range(at_cap)]
+            + [VT("B", weight, False, is_implicit=True) for _ in range(at_cap * 10)]
+        )
         assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
 
     def test_implicit_cap_is_configured_strictly_below_min_votes(self):
