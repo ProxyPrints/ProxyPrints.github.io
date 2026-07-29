@@ -345,6 +345,36 @@ class TestDriverChunkingAndRunIdPrefix:
         assert ledger.counters["stage_c_completed"] == 1
         assert ledger.counters["trigger_reason"] == "shakedown"
 
+    @STREAMING_ON
+    def test_short_circuit_false_still_reaches_compute_card_evidence(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BYTE-IDENTICAL-BEHAVIOUR guard for the 2026-07-28 decoupling: `short_circuit=False` used
+        to be IMPLIED by `force_stage_c_reextract=True` inside `stage_e_dispatch._run_stage_c` and
+        is now passed explicitly by this driver (see that function's own "WHY THE TWO WERE
+        CONFLATED, AND WHY THEY NO LONGER ARE" note). It is load-bearing here - every card in this
+        cohort is in it BECAUSE its tier-1 read came back blank, so re-extracting one while still
+        permitting the tier-1 short-circuit would just reproduce that same blank read."""
+        card = CardFactory(content_phash=1)
+        _blank_tail_evidence(card)
+
+        observed: list[Any] = []
+        _install_ok_stage_c_stub(monkeypatch)
+
+        import cardpicker.image_evidence as image_evidence_module
+
+        stubbed_compute = image_evidence_module.compute_card_evidence
+
+        def _recording(*args: Any, **kwargs: Any) -> Any:
+            observed.append(kwargs.get("short_circuit"))
+            return stubbed_compute(*args, **kwargs)
+
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _recording)
+
+        call_command("stage_e_shakedown", "--reextracted-after", _now_cutoff())
+
+        assert observed == [False]
+
 
 class TestDriverStopsOnHaltOrThrottle:
     @STREAMING_ON
