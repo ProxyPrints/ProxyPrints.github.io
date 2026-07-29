@@ -347,7 +347,9 @@ class TestAgainstRealRepo(unittest.TestCase):
         for identity in (
             "local-ocr-v1",
             "stage-d-slow-path-v1",
-            "stage-d-illustration-v1",
+            # `-v2` since 2026-07-29 (the border-colour gate fix); the roster
+            # tether is keyed on the CURRENT identity, version suffix included.
+            "stage-d-illustration-v2",
             "local-name-frequency-v1",
         ):
             self.assertIn(identity, found)

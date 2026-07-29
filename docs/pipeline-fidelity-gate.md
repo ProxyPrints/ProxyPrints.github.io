@@ -1189,17 +1189,28 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   behaviour and not evidence of dormancy; it is listed here so that a
   reader auditing vote counts does not mistake "no votes" for "not
   running."
-- **`stage-d-illustration-v1`** (`ILLUSTRATION_ANONYMOUS_ID`,
+- **`stage-d-illustration-v2`** (`ILLUSTRATION_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_illustration.py`](../MPCAutofill/cardpicker/local_illustration.py)) —
-  **DORMANT, under repair. 3 votes in its entire existence.** It is meant
-  to cast a printing vote from illustration identity (issue #507), and it
-  is not doing so. Root cause diagnosed: its eligibility gate reads
-  `ImageEvidence.layout_class` believing that field carries the card's
-  faced-ness, when what it actually holds is a **border colour** — so the
-  gate excludes essentially the whole catalog. A fix is in flight on a
-  separate branch. Do not read this engine's near-zero vote count as a
-  measured statement about illustration matching's yield; nothing has
-  been measured yet.
+  **was DORMANT as `-v1` (3 votes in its entire existence); repaired and
+  re-versioned 2026-07-29, not yet run in prod.** It casts a printing vote
+  from illustration identity (issue #507). The `-v1` root cause: its
+  eligibility gate read `ImageEvidence.layout_class` believing that field
+  carries the card's faced-ness, when what it actually holds is a **border
+  colour** (black 138,728 / borderless 72,603 / white 7,475 / `''` 1,455 /
+  silver 408), so the gate excluded 99.28% of every population handed to
+  it — 3,409 `multi-faced-v1` `CardScanLog` rows out of 3,426 scanned. The
+  gate is now DELETED rather than repaired: `CanonicalPrintingMetadata.face_illustrations`
+  retains every face's own `illustration_id`, so a back-face scan resolves
+  to the artwork on the side actually scanned and there is no wrong-vote
+  exposure left to guard. The `-v2` rename is load-bearing, not cosmetic —
+  `multi-faced-v1` is not a rescannable skip reason and eligibility
+  excludes cards carrying a non-rescannable scan log for the calculator's
+  own identity, so a repaired `-v1` would never re-examine the cards it
+  wrongly skipped. **Still nothing MEASURED in prod**: a read-only
+  counterfactual replay projects ~10,600 illustration votes and ~2,500
+  printing votes over a 160,585-card eligible population, but no `-v2` run
+  has written a row. Do not read `-v1`'s near-zero vote count as a
+  measured statement about illustration matching's yield.
 - **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —
   **ZERO output of any kind. Under diagnosis; may be retired.** The
