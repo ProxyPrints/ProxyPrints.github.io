@@ -203,7 +203,7 @@ class TestFederatedWeighting:
     def test_federated_vote_with_human_backed_false_does_not_satisfy_the_gate_alone(self):
         # mirrors test_ai_only_votes_never_resolve_even_with_large_weight - a federated vote
         # explicitly marked not-human-backed can never single-handedly clear consensus, same
-        # as an AI vote, regardless of how much weight it carries
+        # as a machine vote, regardless of how much weight it carries
         votes = [VoteTuple(outcome_key="a", weight=settings.VOTE_FEDERATED_WEIGHT * 100, is_human_backed=False)]
         assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) is None
 

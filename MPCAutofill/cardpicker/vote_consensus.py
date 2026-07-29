@@ -29,9 +29,9 @@ _SOURCE_WEIGHTS: dict[str, float] = {
 }
 
 # Every source NOT in this set counts as "human-backed" for resolve_weighted_consensus's
-# require_privileged gate (the "an AI-only group can never resolve a card by itself, no matter
-# how many AI votes pile up" invariant that every stage of this project is built around -
-# verified live at scale, 0/28,112 violations in deductive_backfill's production run). A single
+# require_privileged gate (the "a machine-only group can never resolve a card by itself, no
+# matter how many machine votes pile up" invariant that every stage of this project is built
+# around - verified live at scale, 0/28,112 violations in deductive_backfill's production run). A single
 # shared set + helper, not scattered `!= VoteSource.AI` comparisons in each of printing_
 # consensus.py/artist_consensus.py/tag_consensus.py (as it was before the AI->DEDUCTION/OCR
 # split) - deliberately centralized here: a future new machine-derived source only ever needs
@@ -319,7 +319,7 @@ def resolve_weighted_consensus(
         one unified formula, with no special-cased branch for admin votes);
       - its share of the total weight across all groups is >= `min_share`;
       - it contains at least one human-backed vote (a hard gate, independent of the weight math
-        above, so that no volume of non-human-backed votes - e.g. AI-only - can ever resolve
+        above, so that no volume of non-human-backed votes - e.g. machine-only - can ever resolve
         consensus on their own).
 
     With `require_privileged=True` (sensitive tags - see docs/features/moderation.md), a winner

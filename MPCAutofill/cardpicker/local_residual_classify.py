@@ -657,7 +657,7 @@ def verify_no_single_machine_vote_resolutions(card_ids: list[int]) -> list[int]:
     behind that specific outcome - resolve_weighted_consensus's own human-backed gate
     (cardpicker.artist_consensus shares it with cardpicker.printing_consensus; see
     test_artist_votes.py::TestResolveArtist::test_ai_only_insufficient for the existing template
-    asserting AI-only votes alone can never resolve) should make an all-machine resolution
+    asserting machine-only votes alone can never resolve) should make an all-machine resolution
     structurally impossible. Returns violating card pks (empty means clean)."""
     violations: list[int] = []
     for card in Card.objects.filter(pk__in=card_ids).prefetch_related("artist_votes"):
