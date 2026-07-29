@@ -109,7 +109,7 @@ DEDUCTIVE_BACKFILL_ANONYMOUS_ID = "deductive-backfill-v1"
 DEDUCTIVE_BACKFILL_FAMILY = calculator_family(DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
 
 # THE COHORT BOUNDARY. This exact string is stamped on the `run_id` column of the 28,112 rows the
-# 2026-07-14 run wrote, by data migration `0096_freeze_deductive_backfill_zero_weight_cohort`,
+# 2026-07-14 run wrote, by data migration `0097_freeze_deductive_backfill_zero_weight_cohort`,
 # and on nothing else - ever. It is the whole of what "that cohort" means in code: a row is in
 # the zeroed cohort if and only if it carries this run_id.
 #
@@ -129,7 +129,7 @@ DEDUCTIVE_BACKFILL_FAMILY = calculator_family(DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
 #
 # THE COST, PAID KNOWINGLY: the 28,112 production rows had `run_id = NULL` (the backfill predated
 # run_id stamping), so adopting this required a WRITE to production vote rows. That write is
-# migration 0096, and it is deliberately the narrowest possible one: it sets a single NULL
+# migration 0097, and it is deliberately the narrowest possible one: it sets a single NULL
 # metadata column, on rows selected by an exhaustive three-way predicate (anonymous_id, run_id IS
 # NULL, created_at inside the measured window), touching no `source`, no `printing`, no `card`,
 # no `confidence` - nothing any consensus computation reads except this override itself. It is
@@ -139,7 +139,7 @@ DEDUCTIVE_BACKFILL_FAMILY = calculator_family(DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
 # of the boundary not being a fact about the data at all. A one-time metadata write that makes
 # the provenance real is cheaper than either.
 #
-# The timestamp does appear ONCE, in migration 0096's selection predicate. That is the right and
+# The timestamp does appear ONCE, in migration 0097's selection predicate. That is the right and
 # only place for it: a migration is a dated historical artifact by construction, it runs once, and
 # after it runs the datetime is never consulted again by anything.
 DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID = "deductive-backfill-v1/20260714-ratified-zero-weight"
@@ -157,7 +157,7 @@ DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID = "deductive-backfill-v1/20260714-ratified
 #      silently truncated or rejected at write time, i.e. the cohort would end up unmarked.
 #
 # The fourth and most important guard cannot live here, because it is a claim about the DATABASE
-# rather than about this module: the string above must equal the string migration 0096 actually
+# rather than about this module: the string above must equal the string migration 0097 actually
 # wrote. Editing this constant without editing history would silently un-scope the ruling with no
 # error, so `test_vote_consensus.TestZeroWeightCohortScopeIsPinned` imports that migration module
 # and asserts the two are equal. Migrations are append-only; that is what makes it a real check.

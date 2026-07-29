@@ -78,7 +78,7 @@ def stamp_cohort_run_id(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor
         created_at__lt=COHORT_CREATED_BEFORE,
     ).update(run_id=ZERO_WEIGHT_RUN_ID)
     print(
-        f"  0096: stamped run_id={ZERO_WEIGHT_RUN_ID!r} on {updated} CardPrintingTag rows "
+        f"  0097: stamped run_id={ZERO_WEIGHT_RUN_ID!r} on {updated} CardPrintingTag rows "
         f"(production expects {EXPECTED_PRODUCTION_ROWS}; 0 is correct on any other database)"
     )
 
@@ -92,12 +92,22 @@ def unstamp_cohort_run_id(apps: StateApps, schema_editor: BaseDatabaseSchemaEdit
     """
     CardPrintingTag = apps.get_model("cardpicker", "CardPrintingTag")
     reverted = CardPrintingTag.objects.filter(run_id=ZERO_WEIGHT_RUN_ID).update(run_id=None)
-    print(f"  0096 (reverse): cleared run_id on {reverted} CardPrintingTag rows")
+    print(f"  0097 (reverse): cleared run_id on {reverted} CardPrintingTag rows")
 
 
 class Migration(migrations.Migration):
+    # Depends on 0096 rather than on 0095, which is what this migration was authored against.
+    # 0096_card_scan_log_anon_skip_idx (#568) and this migration (#570) merged independently and
+    # both declared 0095, leaving the graph with two leaf nodes and `migrate` refusing to run.
+    # The chain is linearised here by putting this one second. The order is not a correctness
+    # constraint - 0096 adds an index to `cardpicker_cardscanlog` and this one UPDATEs `run_id` on
+    # `cardpicker_cardprintingtag`, disjoint tables with no shared column, constraint or trigger,
+    # so neither can affect the other's outcome in either order. It reflects merge order (#568
+    # landed first) and re-run safety: this migration's `run_id__isnull=True` conjunct makes it a
+    # no-op if it is ever applied twice, whereas re-running an `AddIndex` would error, so the
+    # renumbered file is the one that is safe to have been renamed.
     dependencies = [
-        ("cardpicker", "0095_canonicalprintingmetadata_face_illustrations"),
+        ("cardpicker", "0096_card_scan_log_anon_skip_idx"),
     ]
 
     operations = [

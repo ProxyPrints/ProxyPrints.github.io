@@ -145,7 +145,7 @@ class TestDeductiveBackfillCohortZeroWeight:
     """
     2026-07-23 owner ruling, as clarified 2026-07-29: the votes the 2026-07-14 deductive-name-
     backfill RUN wrote (source=DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
-    run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID - the stamp migration 0096 put on exactly those
+    run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID - the stamp migration 0097 put on exactly those
     28,112 rows) carry weight 0.0 in every consensus computation, permanently, as a measurement
     control - proven here at the `resolve_printing` level (winner selection, the quorum/share
     gate, and promotion), contrasted against unchanged behaviour for ordinary (non-cohort)
@@ -242,7 +242,7 @@ class TestDeductiveBackfillCohortZeroWeight:
         assert resolve_printing(card) == printing
 
     def test_an_unstamped_backfill_vote_is_not_in_the_control_cohort(self, db):
-        # `run_id=None` - the shape every deductive-backfill row had BEFORE migration 0096, and
+        # `run_id=None` - the shape every deductive-backfill row had BEFORE migration 0097, and
         # the shape any hand-written or imported DEDUCTION row has. It is NOT the frozen cohort,
         # so it weighs 0.5 and promotes. Pinned because "unstamped" is the easy thing to
         # accidentally treat as "in the cohort" when re-reading this rule later.

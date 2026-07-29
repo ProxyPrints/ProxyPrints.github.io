@@ -58,7 +58,7 @@ class TestResolveVoteWeight:
 
     def test_a_vote_from_the_frozen_cohort_is_zero_weight(self):
         # THE cohort row shape: all three conjuncts present, exactly as the 28,112 production
-        # rows read after migration 0096 stamped them.
+        # rows read after migration 0097 stamped them.
         assert (
             resolve_vote_weight(
                 VoteSource.DEDUCTION, DEDUCTIVE_BACKFILL_ANONYMOUS_ID, DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
@@ -77,7 +77,7 @@ class TestResolveVoteWeight:
         assert _SOURCE_WEIGHTS[VoteSource.DEDUCTION] == settings.PRINTING_TAG_MACHINE_WEIGHT
 
     def test_an_unstamped_deductive_backfill_vote_is_not_in_the_cohort(self):
-        # run_id=None is what every deductive-backfill row looked like BEFORE migration 0096;
+        # run_id=None is what every deductive-backfill row looked like BEFORE migration 0097;
         # after it, only the frozen cohort carries the stamp. A NULL run_id therefore means
         # "not the control", which is the correct reading now the ruling is cohort-scoped.
         assert (
@@ -219,13 +219,13 @@ class TestZeroWeightCohortScopeIsPinned:
     def test_the_code_constant_equals_what_the_migration_actually_wrote(self):
         """
         THE LOAD-BEARING ONE. `DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID` is not a setting - it is a
-        claim about 28,112 rows in the production database, put there by migration 0096. Editing
+        claim about 28,112 rows in the production database, put there by migration 0097. Editing
         the constant without editing the database would leave the override matching nothing and
         the control cohort silently restored to full machine weight, with no error and no failing
         test anywhere else. Migrations are append-only history, which is what makes comparing
         against one a real check rather than a restatement of the same literal.
         """
-        migration = import_module("cardpicker.migrations.0096_freeze_deductive_backfill_zero_weight_cohort")
+        migration = import_module("cardpicker.migrations.0097_freeze_deductive_backfill_zero_weight_cohort")
         assert migration.ZERO_WEIGHT_RUN_ID == DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
         # and the migration must still be selecting the cohort it claims to select
         assert migration.COHORT_ANONYMOUS_ID == DEDUCTIVE_BACKFILL_ANONYMOUS_ID

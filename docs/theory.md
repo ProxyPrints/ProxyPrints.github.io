@@ -403,7 +403,7 @@ and 2026-07-29 scoped the override to the calculator _family_, which
 zeroed every vote the method would ever cast — more than was ruled; it
 is now scoped to the original run, identified by a `run_id` stamped onto
 exactly those 28,112 rows (`cardpicker.vote_consensus.DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID`, written by migration
-`0096_freeze_deductive_backfill_zero_weight_cohort`). The audit numbers
+`0097_freeze_deductive_backfill_zero_weight_cohort`). The audit numbers
 above are unchanged by this clarification: they are still exactly why
 this particular block of votes is the one held out. The rows themselves are never deleted or
 hidden: they remain visible in raw vote tallies and every display
