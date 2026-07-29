@@ -115,6 +115,7 @@ class AdminCanonicalPrintingMetadata(admin.ModelAdmin[CanonicalPrintingMetadata]
         "frame",
         "edhrec_rank",
         "catalogued_printings_count",
+        "scryfall_default_cards_printings_count",
         "released_at",
         "lang",
     )

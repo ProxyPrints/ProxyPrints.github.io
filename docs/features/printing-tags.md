@@ -26,18 +26,44 @@ printings, artists, tags, and moderation from one screen.
   per-printing model (`identifier` = Scryfall printing UUID, unique on
   `(expansion, collector_number)`) — no separate `CanonicalPrinting` model
   was added. `CanonicalPrintingMetadata` (OneToOne) holds the
-  Scryfall fields `CanonicalCard` doesn't (full*art, border_color, frame,
+  Scryfall fields `CanonicalCard` doesn't (full\*art, border_color, frame,
   frame_effects, promo_types, edhrec_rank, released_at, lang), populated by
   `cardpicker/printing_metadata_import.py` +
-  `import_scryfall_printing_metadata`. It also holds one field that is
-  **not** Scryfall data: `catalogued_printings_count` counts how many
-  `CanonicalCard` rows \_we* hold per oracle id, computed by that same
-  importer as a `Counter` over our own table. It says nothing about how
-  many printings Scryfall publishes, and cannot detect that our catalogue
-  is missing printings, because it is derived from the catalogue itself.
-  It was called `printings_count` until 2026-07-29 (migration 0099), and
-  this document described it as Scryfall printing data — that was false.
+  `import_scryfall_printing_metadata`. It also holds **two printing counts
+  that must never be conflated**, both computed by that importer rather
+  than copied off a bulk-data row:
+
+  - `catalogued_printings_count` counts how many `CanonicalCard` rows
+    \_we\* hold per oracle id — a `Counter` over our own table. It says
+    nothing about how many printings Scryfall publishes, and cannot
+    detect that our catalogue is missing printings, because it is derived
+    from the catalogue itself. It was called `printings_count` until
+    2026-07-29 (migration 0099), and this document described it as
+    Scryfall printing data — that was false.
+  - `scryfall_default_cards_printings_count` counts how many rows
+    Scryfall's `default_cards` bulk export lists for the same oracle id —
+    a second `Counter`, over the rows that importer already parses, so it
+    costs no extra Scryfall requests (migration 0100). The name says
+    `default_cards` because that is the only claim it can support:
+    `default_cards` is ~one row per printing, English-preferred, so the
+    count **includes** every distinct printing/variant Scryfall knows of
+    (reprints, promos, showcase/borderless variants with their own
+    collector numbers, tokens, and digital-only Arena/MTGO printings —
+    9,354 digital rows of 116,254 on 2026-07-29) and **excludes** the
+    per-language duplicates of a printing that also exists in English
+    (those live only in `all_cards`, which this codebase does not
+    download). It is not a paper-only count and not an all-languages
+    count. `NULL` means "Scryfall publishes no count for this row", never
+    zero and never one — either `canonical_id` is NULL (81 production
+    rows, exactly the 81 bulk rows Scryfall itself ships with no
+    `oracle_id`), or the oracle id was absent from the bulk file last
+    parsed (0 today).
+
+  The **difference** between the two is the only thing in this schema that
+  can say "our catalogue is missing printings of this card", which is what
+  the deductive backfill's D1 tier gates on.
   `CardPrintingTag.printing` FKs directly to `CanonicalCard`.
+
 - **Card payload — machine-suggested printing + tag vote status** (Proposal H
   §4.4′, issue #184, PR #195; consumed by the Select Version section, issue
   #167 — see [[grid-selector.md]]'s own "Select Version section" entry):
@@ -372,7 +398,8 @@ printings, artists, tags, and moderation from one screen.
   `manage.py deductive_backfill_printing_tags` casts `source=deduction`
   votes (weight `PRINTING_TAG_MACHINE_WEIGHT`) for cards whose printing is
   logically entailed by data already in the catalog — D1 (name matches
-  exactly one `CanonicalCard` row in our catalogue) and D2 (name +
+  exactly one `CanonicalCard` row in our catalogue, **and** we hold every
+  printing of that oracle card Scryfall's bulk export lists) and D2 (name +
   `Card.expansion_hint` narrows to exactly one row) tiers.
   Idempotent/resumable (the "no existing vote"
   eligibility check doubles as the checkpoint). `VoteSource.DEDUCTION`
@@ -382,19 +409,38 @@ printings, artists, tags, and moderation from one screen.
   docstring. Production run: 28,112 votes written, 0/28,112 later
   resolved a card on their own (human-backed gate verified at scale).
 
-  **The first tier is not cross-verified against Scryfall, and never
-  was** (corrected 2026-07-29). This entry used to say D1 was "cross-verified against
-  Scryfall's own `printings_count`". No such verification exists. The
-  column that claim referred to counts our own `CanonicalCard` rows (see
-  the Data model entry above), so the condition it feeds restates the
-  name-uniqueness test that immediately precedes it and excludes nothing —
-  measured against the live catalogue on 2026-07-29, 137 D1 candidates
-  before the condition and 137 after, and all 14,893 uniquely-named
-  `CanonicalCard` rows in the catalogue carry a count of exactly 1. The
-  condition is left in the code, labelled as entailed rather than deleted,
-  so the gap stays visible; **issue #600** tracks what a real external
-  check would be. D1's actual claim is the one it can support: the name
-  matches exactly one row _in our catalogue_.
+  **The first tier is now cross-verified against Scryfall — for real, and
+  for the first time** (issue #600, implemented 2026-07-29). The history
+  is recorded because the failure mode is easy to re-create. This entry
+  used to say D1 was "cross-verified against Scryfall's own
+  `printings_count`". No such verification existed: the column that claim
+  referred to counts our own `CanonicalCard` rows (see the Data model
+  entry above), so the condition it fed restated the name-uniqueness test
+  immediately preceding it and excluded nothing — measured against the
+  live catalogue on 2026-07-29, 137 D1 candidates before the condition and
+  137 after, with all 14,893 uniquely-named `CanonicalCard` rows carrying
+  a count of exactly 1.
+
+  That condition is **deleted**, not softened, and replaced by the one it
+  claimed to be: `catalogued_printings_count == scryfall_default_cards_printings_count` — we hold every printing of this
+  oracle card that Scryfall's bulk export lists. A `NULL` on the Scryfall
+  side fails the gate: "no count published" is not evidence of
+  completeness, which is what the previous code's fabricated `1` asserted
+  for the 81 rows with a NULL `canonical_id`.
+
+  **Measured effect (live catalogue, read-only, 2026-07-29): 137
+  candidates before the gate, 137 after — the real check excludes 0
+  today.** Reported plainly rather than hunted past: it means the
+  guarantee currently holds for every D1 candidate, which is worth knowing
+  and is now pinned by a regression test. It is not a stable property. Of
+  the 14,893 normalised names with exactly one `CanonicalCard` row, 2
+  already disagree with Scryfall (`Chandra, Chill of Compliance` and
+  `Tragic Trajectory`: we hold one printing each, Scryfall lists two) and
+  are excluded the moment an eligible `Card` names either; 82 of our
+  35,990 oracle ids hold fewer printings than Scryfall lists, and 0 hold
+  more. The gate's scope is bounded by the export it reads: it asserts
+  completeness against **the bulk file last parsed**, not against reality
+  at this instant.
 
 - **External-IP tag import (Scryfall Tagger)** (W9 per-printing design,
   revised 2026-07-27): `manage.py import_external_ip_tags` imports

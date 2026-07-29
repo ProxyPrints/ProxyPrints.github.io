@@ -15,12 +15,17 @@ also revisits single-candidate names that deductive backfill left unresolved.
 
 THAT LAST SENTENCE USED TO NAME A CAUSE IT COULD NOT HAVE (corrected 2026-07-29). It said those
 names were "rejected by deductive backfill's own Scryfall printings_count cross-check". That
-cohort is empty and always was: the check in question rejects nothing (it is entailed by the
-name-uniqueness test that precedes it - see `deductive_backfill.select_d1_candidates`, and issue
-#600), and the column it reads counts our own rows rather than anything Scryfall reports. Single-
-candidate names that are still unresolved got that way through the ordinary eligibility filters
-- an existing vote, a "Custom" tag, a non-English language, an already-confirmed match - not
-through an external cross-check.
+cohort was empty and always had been: the check in question rejected nothing (it was entailed by
+the name-uniqueness test preceding it - see `deductive_backfill.select_d1_candidates`, and issue
+#600), and the column it read counts our own rows rather than anything Scryfall reports.
+D1 NOW HAS A REAL CROSS-CHECK (issue #600, same day): it requires
+`catalogued_printings_count == scryfall_default_cards_printings_count`, i.e. that we hold every
+printing of the oracle card Scryfall's bulk export lists. That check CAN reject - it just
+rejects 0 of the 137 live D1 candidates today - so this cohort is no longer empty by
+construction, merely empty in fact. Do not re-word this into "rejected by the cross-check"
+without measuring: single-candidate names that are still unresolved today got that way through
+the ordinary eligibility filters (an existing vote, a "Custom" tag, a non-English language, an
+already-confirmed match), and this module's selection does not itself consult either count.
 
 PASS-2 FALLBACK PRINTING VOTES ARE RETIRED (owner ruling 2026-07-29, redundancy doctrine -
 "anything made redundant is retired", and the test is the EVIDENCE SOURCE, not the vote cast).
@@ -356,9 +361,9 @@ class CandidateNameIndex:
     """
     Like cardpicker.deductive_backfill.CanonicalNameIndex, but keyed on the same to_searchable
     name normalisation and carrying (expansion_code, collector_number, edhrec_rank) per candidate
-    instead of just a catalogued_printings_count - both engines here need to check a
-    parsed/matched value against a candidate's actual identity, not just count how many
-    candidates exist. Built once,
+    instead of that index's pair of printing counts - both engines here need to check a
+    parsed/matched value against a candidate's actual identity, not to compare how many printings
+    we hold against how many Scryfall lists. Built once,
     reused across the whole scan (one query over CanonicalCard's 113k+ rows, not one per card).
 
     issue #372: also carries a secondary "de-concatenated" index (`_by_concat`) used only as a

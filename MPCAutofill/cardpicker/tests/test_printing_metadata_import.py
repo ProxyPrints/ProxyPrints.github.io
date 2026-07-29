@@ -54,8 +54,18 @@ def _seed_row_matching_record(canonical_card: Any) -> None:
     """
     Seeds a CanonicalPrintingMetadata row field-identical to what `_record()`'s base bulk
     record produces for the same card - the "unchanged" leg of diff-aware sync tests.
+
+    `scryfall_default_cards_printings_count=None` because `_record()` emits NO `oracle_id`:
+    the importer then has no oracle id to look the Scryfall count up under and stores NULL.
+    The factory's default of 1 would make every seeded row differ from its own record and turn
+    these "unchanged" legs into updates.
     """
-    CanonicalPrintingMetadataFactory(canonical_card=canonical_card, edhrec_rank=1234, released_at=date(2015, 1, 1))
+    CanonicalPrintingMetadataFactory(
+        canonical_card=canonical_card,
+        edhrec_rank=1234,
+        released_at=date(2015, 1, 1),
+        scryfall_default_cards_printings_count=None,
+    )
 
 
 class _BulkWriteSpy:
@@ -161,6 +171,52 @@ class TestImportScryfallPrintingMetadata:
         assert CanonicalPrintingMetadata.objects.get(canonical_card=card_a).catalogued_printings_count == 2
         assert CanonicalPrintingMetadata.objects.get(canonical_card=card_b).catalogued_printings_count == 2
         assert CanonicalPrintingMetadata.objects.get(canonical_card=card_c).catalogued_printings_count == 1
+
+    def test_scryfall_printings_count_is_counted_over_the_bulk_file_not_our_table(self, db, tmp_path):
+        # THE DISTINCTION THIS COLUMN EXISTS FOR. The bulk file lists THREE printings of one
+        # oracle card; we hold ONE of them. catalogued_printings_count must say 1 (our table)
+        # and scryfall_default_cards_printings_count must say 3 (the file). A single number
+        # cannot express that gap, which is why there are two columns.
+        oracle_id = uuid.uuid4()
+        held = CanonicalCardFactory(canonical_id=oracle_id)
+        records = [
+            _record(id=str(held.identifier), oracle_id=str(oracle_id)),
+            _record(id=str(uuid.uuid4()), oracle_id=str(oracle_id)),  # not in our catalogue
+            _record(id=str(uuid.uuid4()), oracle_id=str(oracle_id)),  # not in our catalogue
+        ]
+        path = _write_bulk_data_file(tmp_path, records)
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=held)
+        assert metadata.catalogued_printings_count == 1
+        assert metadata.scryfall_default_cards_printings_count == 3
+
+    def test_scryfall_printings_count_is_null_when_canonical_id_is_null(self, db, tmp_path):
+        # 81 rows in production on 2026-07-29 - exactly the 81 bulk rows Scryfall itself ships
+        # with no oracle_id (Secret Lair reversible_card printings). There is no oracle group to
+        # count, so the column is NULL. The sibling catalogued_printings_count stores a
+        # fabricated 1 for these rows; this one must NOT copy that habit.
+        card = CanonicalCardFactory(canonical_id=None)
+        path = _write_bulk_data_file(tmp_path, [_record(id=str(card.identifier))])
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=card)
+        assert metadata.scryfall_default_cards_printings_count is None
+        assert metadata.catalogued_printings_count == 1  # the fabricated one, unchanged
+
+    def test_scryfall_printings_count_is_null_when_oracle_id_absent_from_bulk_file(self, db, tmp_path):
+        # our canonical_id is not in the file at all (0 rows in production today, but that is a
+        # property of the current import filter, not a guarantee - a tightened paper/language/
+        # digital rule, or a stale cache, makes it reachable). NULL, not 0 and not 1: the file
+        # tells us nothing about this oracle card, and "nothing" must not read as "complete".
+        card = CanonicalCardFactory(canonical_id=uuid.uuid4())
+        path = _write_bulk_data_file(tmp_path, [_record(id=str(card.identifier), oracle_id=str(uuid.uuid4()))])
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        assert CanonicalPrintingMetadata.objects.get(canonical_card=card).scryfall_default_cards_printings_count is None
 
     def test_rerun_updates_existing_metadata(self, db, tmp_path):
         canonical_card = CanonicalCardFactory()

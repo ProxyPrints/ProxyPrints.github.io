@@ -25,10 +25,33 @@ from cardpicker.vote_consensus import (
     resolve_vote_weight,
 )
 
+_UNSET = object()
 
-def _unique_printing(name: str, catalogued_printings_count: int = 1, **kwargs) -> "CanonicalCardFactory":
+
+def _unique_printing(
+    name: str,
+    catalogued_printings_count: int = 1,
+    scryfall_printings_count: "int | None | object" = _UNSET,
+    **kwargs,
+) -> "CanonicalCardFactory":
+    """
+    One `CanonicalCard` plus its metadata sidecar, named `name`.
+
+    `scryfall_printings_count` DEFAULTS TO MATCHING `catalogued_printings_count`, i.e. "we hold
+    every printing Scryfall lists" - so a test that isn't about printing completeness gets a
+    D1-eligible printing whatever count it asks for, and a test that IS about completeness has
+    to say so explicitly by passing a different value (or `None` for "Scryfall publishes no
+    count"). Pinning the default to a literal 1 instead would silently turn every
+    `catalogued_printings_count=N>1` caller into a completeness test by accident.
+    """
     printing = CanonicalCardFactory(name=name, **kwargs)
-    CanonicalPrintingMetadataFactory(canonical_card=printing, catalogued_printings_count=catalogued_printings_count)
+    CanonicalPrintingMetadataFactory(
+        canonical_card=printing,
+        catalogued_printings_count=catalogued_printings_count,
+        scryfall_default_cards_printings_count=(
+            catalogued_printings_count if scryfall_printings_count is _UNSET else scryfall_printings_count
+        ),
+    )
     return printing
 
 
@@ -70,28 +93,11 @@ class TestD1Selection:
         CardFactory(name="Forest")
         assert list(select_d1_candidates()) == []
 
-    def test_catalogued_printings_count_greater_than_one_excludes_from_d1(self, db):
-        # THIS TEST ASSERTS OVER A STATE THE IMPORTER CANNOT PRODUCE (labelled 2026-07-29).
-        # It builds, via the factory, one CanonicalCard row whose catalogued_printings_count is
-        # 2 - and `import_scryfall_printing_metadata` computes that column as the number of
-        # CanonicalCard rows sharing an oracle id, so one row can only ever score 1. The test
-        # passes, and proves nothing about production: measured on the live catalogue
-        # 2026-07-29, all 14,893 uniquely-named rows carry a count of exactly 1, and the
-        # condition under test excluded 0 of 137 D1 candidates.
-        #
-        # It used to be commented as proving a "Scryfall cross-check" catches printings we
-        # haven't imported. It does not - see `select_d1_candidates`' docstring and issue #600.
-        # Kept, deliberately: it pins the branch's behaviour so that whatever real check
-        # replaces the condition has a failing-first test to grow from.
-        _unique_printing("Gilded Drake", catalogued_printings_count=2)
-        CardFactory(name="Gilded Drake")
-        assert list(select_d1_candidates()) == []
-
     def test_missing_printing_metadata_is_treated_as_unverifiable(self, db):
         # a CanonicalCard with no CanonicalPrintingMetadata sidecar at all (predates that
-        # import) must never be silently treated as catalogued_printings_count == 1.
-        # Also unreachable in production as of 2026-07-29: all 113,224 CanonicalCard rows
-        # carry a metadata sidecar. Kept as a guard on the -1 sentinel, not as evidence.
+        # import) has NEITHER count, so D1's comparison has nothing to compare and must not
+        # treat the absence as agreement. Unreachable in production as of 2026-07-29: all
+        # 113,224 CanonicalCard rows carry a metadata sidecar.
         CanonicalCardFactory(name="No Metadata Card")
         CardFactory(name="No Metadata Card")
         assert list(select_d1_candidates()) == []
@@ -141,6 +147,103 @@ class TestD1Selection:
         # a foreign-language card's name isn't a trustworthy signal for it.
         _unique_printing("Foreign Language Card")
         CardFactory(name="Foreign Language Card", language="FR")
+        assert list(select_d1_candidates()) == []
+
+
+class TestD1ScryfallPrintingCountGate:
+    """
+    D1's cross-check against Scryfall's OWN printing count (issue #600, 2026-07-29).
+
+    WHY THIS CLASS EXISTS AND WHY IT IS SHAPED THIS WAY. The condition it replaces
+    (`catalogued_printings_count == 1`) passed every test in this file while checking nothing:
+    it was entailed by the `len(matches) == 1` test one line above it, and the single test that
+    claimed to cover it built - via the factory - one `CanonicalCard` row with a count of 2, a
+    state `import_scryfall_printing_metadata` cannot produce (one row in an oracle group can
+    only ever score 1). That test asserted over a fixture-only universe and was deleted here
+    rather than adapted.
+
+    So the load-bearing test in this class is `test_importer_produces_the_state_the_gate_rejects`
+    below: it drives the REAL importer over a real bulk-data file, reproduces the exact live
+    production shape (Scryfall lists two printings, we hold one, the name is therefore unique),
+    and asserts D1 declines. That state is reachable in production - the live catalogue held 2
+    such oracle ids on 2026-07-29 - so unlike its predecessor this test fails if the gate is
+    weakened back to a tautology.
+    """
+
+    def test_agreeing_counts_are_d1(self, db):
+        # the ordinary case: we hold the only printing Scryfall lists.
+        printing = _unique_printing("Agreed Card", catalogued_printings_count=1, scryfall_printings_count=1)
+        card = CardFactory(name="Agreed Card")
+        votes = list(select_d1_candidates())
+        assert [(v.card_id, v.printing_id) for v in votes] == [(card.pk, printing.pk)]
+
+    def test_scryfall_lists_more_printings_than_we_hold_excludes_from_d1(self, db):
+        # THE RISK D1 ADVERTISED PROTECTION AGAINST, and the shape the live catalogue actually
+        # has: a unique local name match that is unique only because we imported one of two
+        # printings. "Chandra, Chill of Compliance" and "Tragic Trajectory" were exactly this on
+        # 2026-07-29 (we hold 1, Scryfall lists 2).
+        _unique_printing("Chandra, Chill of Compliance", catalogued_printings_count=1, scryfall_printings_count=2)
+        CardFactory(name="Chandra, Chill of Compliance")
+        assert list(select_d1_candidates()) == []
+
+    def test_we_hold_more_printings_than_scryfall_lists_excludes_from_d1(self, db):
+        # the stale-bulk-file direction: our catalogue outran the export we last parsed. The
+        # gate is equality, not ">=", so this excludes too - the safe direction, since a count
+        # we can't reconcile is not corroboration. 0 oracle ids in production on 2026-07-29.
+        _unique_printing("Outran The Export", catalogued_printings_count=2, scryfall_printings_count=1)
+        CardFactory(name="Outran The Export")
+        assert list(select_d1_candidates()) == []
+
+    def test_null_scryfall_count_is_unverifiable_not_agreement(self, db):
+        # NULL means "Scryfall publishes no count for this row" - a CanonicalCard with a NULL
+        # canonical_id (81 in production, the reversible_card printings Scryfall itself ships
+        # with no oracle_id), or an oracle id absent from the bulk file. The previous code gave
+        # exactly these rows a fabricated 1, which ASSERTED the very completeness being checked.
+        _unique_printing("No Oracle Id Card", catalogued_printings_count=1, scryfall_printings_count=None)
+        CardFactory(name="No Oracle Id Card")
+        assert list(select_d1_candidates()) == []
+
+    def test_importer_produces_the_state_the_gate_rejects(self, db, tmp_path):
+        """
+        END-TO-END, THROUGH THE REAL IMPORTER - no hand-set counts anywhere.
+
+        A bulk file listing TWO printings of one oracle card; our catalogue holds only the
+        first. `import_scryfall_printing_metadata` must therefore record
+        catalogued=1/scryfall=2, and D1 must decline to vote on a `Card` naming it - even
+        though the name matches exactly one `CanonicalCard` row, which is precisely why the
+        old `catalogued_printings_count == 1` condition passed it.
+        """
+        import json
+        import uuid as uuid_module
+
+        from cardpicker.models import CanonicalPrintingMetadata
+        from cardpicker.printing_metadata_import import (
+            import_scryfall_printing_metadata,
+        )
+
+        oracle_id = uuid_module.uuid4()
+        held = CanonicalCardFactory(name="Half Imported Card", canonical_id=oracle_id)
+        not_held_printing_id = uuid_module.uuid4()
+        path = tmp_path / "default_cards.json"
+        path.write_text(
+            "\n".join(
+                json.dumps(record)
+                for record in [
+                    {"id": str(held.identifier), "oracle_id": str(oracle_id), "lang": "en"},
+                    {"id": str(not_held_printing_id), "oracle_id": str(oracle_id), "lang": "en"},
+                ]
+            )
+        )
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=held)
+        assert metadata.catalogued_printings_count == 1
+        assert metadata.scryfall_default_cards_printings_count == 2
+
+        CardFactory(name="Half Imported Card")
+        index = module.CanonicalNameIndex()
+        assert len(index.exact_matches("Half Imported Card")) == 1  # the old condition's input
         assert list(select_d1_candidates()) == []
 
 

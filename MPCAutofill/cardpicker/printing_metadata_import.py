@@ -49,6 +49,14 @@ DOUBLE_FACED_LAYOUTS = frozenset({"transform", "modal_dfc", "double_faced_token"
 
 class PrintingMetadataRow(BaseModel):
     id: uuid.UUID
+    # Scryfall's ORACLE id - the identity of the CARD, shared by every printing of it, as opposed
+    # to `id` above which is the identity of THIS PRINTING. Parsed solely so
+    # `import_scryfall_printing_metadata` can count printings per oracle card over the rows it is
+    # already reading (see `scryfall_default_cards_printings_count` on the model). Optional
+    # because Scryfall genuinely omits it on some rows - 81 of 116,254 on 2026-07-29, all Secret
+    # Lair `reversible_card` printings - and those rows must end up with a NULL count rather than
+    # being bucketed together under a fabricated shared key.
+    oracle_id: uuid.UUID | None = None
     lang: str = "en"
     released_at: date | None = None
     full_art: bool = False
@@ -346,6 +354,7 @@ _METADATA_SYNC_FIELDS = [
     "promo_types",
     "edhrec_rank",
     "catalogued_printings_count",
+    "scryfall_default_cards_printings_count",
     "released_at",
     "lang",
     "art_crop_url",
@@ -436,11 +445,26 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
     """
     Enriches every existing `CanonicalCard` with Scryfall printing metadata fields that
     `CanonicalCard` doesn't itself store (full art, border colour, frame, promo types,
-    EDHREC rank, release date, language), plus ONE locally-computed field:
-    `catalogued_printings_count`, a denormalised count of how many `CanonicalCard` rows WE
-    hold per oracle card. That one is not read off the bulk data at all - it is a Counter
-    over our own table (see the `canonical_id_counts` build below), so it measures our
-    catalogue's coverage and can never report Scryfall's own printing total.
+    EDHREC rank, release date, language), plus TWO DERIVED PRINTING COUNTS that are computed
+    here rather than copied off a single row, and that must never be conflated:
+
+      * `catalogued_printings_count` - how many `CanonicalCard` rows WE hold per oracle card.
+        Not read off the bulk data at all: a Counter over our own table (see the
+        `canonical_id_counts` build below), so it measures our catalogue's coverage and can
+        never report Scryfall's own printing total.
+      * `scryfall_default_cards_printings_count` - how many rows the `default_cards` bulk
+        export lists per oracle card. A second Counter, over the `oracle_id` of the rows this
+        function has ALREADY parsed (see the `scryfall_oracle_counts` build below). This costs
+        no extra Scryfall traffic whatsoever - it is one more pass over a list already in
+        memory. Per-card `/cards/...` lookups for the same figure would be ~113k requests, and
+        the standing instruction is not to hammer Scryfall's servers.
+
+    THE TWO ARE LOOKED UP UNDER THE SAME KEY - this row's `CanonicalCard.canonical_id` - so a
+    consumer comparing them is comparing two counts of THE SAME oracle card. The bulk row's own
+    `oracle_id` is used only to BUILD the Scryfall-side counter, never to read from it; if our
+    `canonical_id` ever disagreed with the bulk row's `oracle_id`, keying the lookup on ours
+    yields NULL ("unverifiable") rather than a number about a different card.
+
     Only enriches rows that `CanonicalCard`'s own weekly import
     (`import_canonical_card_data`) has already decided are canonical - this command does
     no filtering of its own (no separate paper/language/digital rules), since that
@@ -471,6 +495,15 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
 
     rows = _parse_rows(path)
 
+    # SCRYFALL's own printings-per-oracle-card count, over the rows just parsed. See
+    # `CanonicalPrintingMetadata.scryfall_default_cards_printings_count` for exactly what a
+    # `default_cards` row is and therefore what this number does and does not include (short
+    # version: one row per printing, English-preferred, digital printings in, per-language
+    # duplicates of an English printing out). Rows Scryfall publishes with no `oracle_id` are
+    # skipped rather than bucketed under a shared `None` key - they have no oracle card to be
+    # a printing OF.
+    scryfall_oracle_counts: Counter[uuid.UUID] = Counter(row.oracle_id for row in rows if row.oracle_id is not None)
+
     identifier_to_pk: dict[uuid.UUID, int] = {}
     pk_to_canonical_id: dict[int, uuid.UUID | None] = {}
     canonical_id_counts: Counter[uuid.UUID] = Counter()
@@ -494,6 +527,14 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
         # twenty. `canonical_id is None` has no oracle group to count at all, so it is stored as 1
         # by fiat - that 1 asserts nothing about the world.
         catalogued_printings_count = canonical_id_counts[canonical_id] if canonical_id is not None else 1
+        # SCRYFALL's count for the SAME oracle id - deliberately `.get`, and deliberately left
+        # NULL rather than defaulted, in both cases where Scryfall does not tell us a number:
+        # `canonical_id is None` (no oracle id to look up - the 81 `reversible_card` rows) and
+        # an oracle id absent from this bulk file (0 today; reachable if our catalogue outlives
+        # the file, e.g. a stale cache, or a future import filter divergence). NULL is the whole
+        # point: it says "unverifiable", which a consumer can act on, whereas the fabricated 1
+        # one line above asserts something false about the world.
+        scryfall_printings_count = scryfall_oracle_counts.get(canonical_id) if canonical_id is not None else None
         metadata_rows.append(
             CanonicalPrintingMetadata(
                 canonical_card_id=canonical_card_pk,
@@ -504,6 +545,7 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
                 promo_types=row.promo_types,
                 edhrec_rank=row.edhrec_rank,
                 catalogued_printings_count=catalogued_printings_count,
+                scryfall_default_cards_printings_count=scryfall_printings_count,
                 released_at=row.released_at,
                 lang=row.lang,
                 art_crop_url=row.art_crop_url,
