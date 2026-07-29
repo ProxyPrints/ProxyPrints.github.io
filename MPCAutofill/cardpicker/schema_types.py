@@ -2829,10 +2829,11 @@ class RetractImplicitVoteRequest(BaseModel):
 
 class ArtistExternalLink(BaseModel):
     """
-    One commerce-only external link for an artist (MTG Artist Connection integration - see
+    One external link for an artist (MTG Artist Connection integration - see
     cardpicker.artist_external_links's module docstring). `type` is one of the fixed allowlist
-    field names (website/artstation/inprnt/mountainmage/omalink) - the parent response's `links`
-    list is in fixed priority order, never re-sorted per-artist.
+    field names, in fixed priority order (website/artstation/inprnt/mountainmage/omalink/
+    instagram - instagram is a deliberate last-resort exception, not a commerce field, see that
+    module's own docstring) - the parent response's `links` list is never re-sorted per-artist.
     """
 
     type: str

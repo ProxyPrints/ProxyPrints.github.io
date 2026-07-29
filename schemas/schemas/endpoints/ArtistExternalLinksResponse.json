@@ -20,7 +20,7 @@
         "properties": {
           "type": {
             "type": "string",
-            "description": "One of the fixed commerce-only allowlist field names, in fixed priority order: website, artstation, inprnt, mountainmage, omalink."
+            "description": "One of the fixed allowlist field names, in fixed priority order: website, artstation, inprnt, mountainmage, omalink, instagram (instagram is a deliberate last-resort exception, not a commerce field - see docs/features/artist-support-links.md)."
           },
           "url": {
             "type": "string"

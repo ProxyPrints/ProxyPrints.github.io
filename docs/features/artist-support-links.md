@@ -156,12 +156,25 @@ sample of the real export):
 - Bare non-URL text (an artist's own name, typo'd into the wrong field) is
   dropped.
 
-**Commerce-only allowlist (owner ruling)**, fixed priority order so the
-rendered row never reorders between artists: the artist's own `website`
-(top-level field), `artstation`, `inprnt`, `mountainmage` (URL form only),
-`omalink` - capped at 5. Pure socials (`instagram`/`twitter`/`facebook`/
-`youtube`/`bluesky`) and `patreon` (a support channel, not a
-purchase/browse/signing link) are excluded entirely.
+**Commerce-only allowlist (owner ruling), plus `instagram` as a deliberate
+last-resort exception**, fixed priority order so the rendered row never
+reorders between artists: the artist's own `website` (top-level field),
+`artstation`, `inprnt`, `mountainmage` (URL form only), `omalink`,
+`instagram` - capped at 5. `twitter`/`facebook`/`youtube`/`bluesky` and
+`patreon` (a support channel, not a purchase/browse/signing link) are
+excluded entirely.
+
+`instagram` is LAST, deliberately, because of what it does and doesn't
+change: measured against the real 2,389-record export, 812 artists have
+zero links under the pure commerce-only allowlist; `instagram` appears on
+1,428 artists overall but only on 157 of those 812 (it correlates with
+already having a `website`/`artstation`), moving the empty-applet case
+from 812 down to 655. Being last means it never crowds out a real
+commerce link for an artist who has one - the 5-cap still fills from
+`website` onward first. The other socials were measured and rejected as
+rescues too small to justify the clutter: `twitter` (105), `facebook`
+(82), `bluesky` (11), `youtube` (10).
+
 `markssignatureservice` is surfaced separately as a **boolean flag**, never
 as a link.
 

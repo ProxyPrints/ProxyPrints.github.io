@@ -1062,10 +1062,12 @@ export interface RetractImplicitVoteRequest {
 }
 
 /**
- * One commerce-only external link for an artist (MTG Artist Connection integration - see
+ * One external link for an artist (MTG Artist Connection integration - see
  * MPCAutofill/cardpicker/artist_external_links.py's module docstring). `type` is one of the
- * fixed allowlist field names (website/artstation/inprnt/mountainmage/omalink) - the parent
- * response's `links` array is in fixed priority order, never re-sorted per-artist.
+ * fixed allowlist field names, in fixed priority order (website/artstation/inprnt/mountainmage/
+ * omalink/instagram - instagram is a deliberate last-resort exception, not a commerce field, see
+ * that module's own docstring) - the parent response's `links` array is never re-sorted
+ * per-artist.
  */
 export interface ArtistExternalLink {
   type: string;

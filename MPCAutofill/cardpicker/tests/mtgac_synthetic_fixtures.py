@@ -124,7 +124,11 @@ BARE_TEXT_RECORD = raw_record(
     links={"artstation": "Gideon Marrow"},
 )
 
-# All 5 allowlisted fields populated - priority order / 5-cap verification.
+# All 6 allowlisted fields populated (the 5 commerce fields plus `instagram`, appended last) -
+# priority order / 5-cap verification. `instagram` being present here but ABSENT from the
+# normalised result (capped out by the 5 higher-priority commerce fields) is the "5-cap holds
+# with six real candidates" case - that combination only became possible once `instagram` joined
+# the allowlist, since before that there were exactly 5 allowlisted fields, never 6.
 FULL_ALLOWLIST_RECORD = raw_record(
     "Helia Sunstrike",
     website="https://heliasunstrike.example/",
@@ -135,6 +139,15 @@ FULL_ALLOWLIST_RECORD = raw_record(
         "omalink": "https://original-art.example/collections/helia-sunstrike?rfsn=7654321.abcdef",
         "instagram": "https://www.instagram.example/heliasunstrike/",
     },
+)
+
+# The 157-artist rescue scenario `instagram`'s allowlisting exists for: no website, no other
+# commerce field at all - `instagram` is this artist's ONLY link, and being allowlisted (as the
+# deliberate last-resort exception) is the only thing standing between this artist and an
+# entirely linkless applet (MTGAC page link + credit only).
+INSTAGRAM_ONLY_RECORD = raw_record(
+    "Percival Ashgrove",
+    links={"instagram": "https://www.instagram.example/percivalashgrove/"},
 )
 
 # No name at all - must be skipped when building a blob, never crash the whole batch.

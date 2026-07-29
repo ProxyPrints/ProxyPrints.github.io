@@ -48,6 +48,7 @@ from cardpicker.tests.mtgac_synthetic_fixtures import (
     EMAIL_IN_WEBSITE_RECORD,
     FULL_ALLOWLIST_RECORD,
     HANDLE_URL_RECORD,
+    INSTAGRAM_ONLY_RECORD,
     MISSING_NAME_RECORD,
     SCHEME_LESS_RECORD,
     WHITESPACE_RECORD,
@@ -209,11 +210,24 @@ class TestNormaliseArtistRecordBareText:
 class TestNormaliseArtistRecordAllowlistAndPriority:
     def test_only_allowlisted_field_types_are_ever_present(self):
         result = normalise_artist_record(CLEAN_RECORD)
-        assert set(_link_types(result)) <= {"website", "artstation", "inprnt", "mountainmage", "omalink"}
+        assert set(_link_types(result)) <= {
+            "website",
+            "artstation",
+            "inprnt",
+            "mountainmage",
+            "omalink",
+            "instagram",
+        }
 
     def test_pure_socials_are_never_surfaced(self):
+        # `instagram` is deliberately NOT in this list (owner ruling, added after the initial
+        # allowlist) - it's allowlisted now, just last-priority; see
+        # TestNormaliseArtistRecordInstagramLastResort below for its own coverage. CLEAN_RECORD
+        # separately demonstrates instagram getting capped out by 5 higher-priority commerce
+        # links present in the same fixture (test_only_allowlisted_field_types_are_ever_present
+        # plus test_capped_at_five_links below cover that combination).
         result = normalise_artist_record(CLEAN_RECORD)
-        for excluded in ("instagram", "twitter", "facebook", "youtube", "bluesky"):
+        for excluded in ("twitter", "facebook", "youtube", "bluesky"):
             assert excluded not in _link_types(result)
 
     def test_patreon_is_never_surfaced(self):
@@ -223,10 +237,14 @@ class TestNormaliseArtistRecordAllowlistAndPriority:
         assert "patreon" not in _link_types(result)
 
     def test_priority_order_is_fixed_regardless_of_input_key_order(self):
+        # FULL_ALLOWLIST_RECORD has all 6 allowlisted fields populated (5 commerce + instagram) -
+        # this also proves instagram is LAST priority and gets capped out below.
         result = normalise_artist_record(FULL_ALLOWLIST_RECORD)
         assert _link_types(result) == ["website", "artstation", "inprnt", "mountainmage", "omalink"]
 
     def test_capped_at_five_links(self):
+        # Six real allowlisted candidates present (the first time this combination is even
+        # possible, now that instagram joined the allowlist) - the cap must still hold at 5.
         result = normalise_artist_record(FULL_ALLOWLIST_RECORD)
         assert len(result["links"]) == 5
 
@@ -234,6 +252,40 @@ class TestNormaliseArtistRecordAllowlistAndPriority:
         result = normalise_artist_record(FULL_ALLOWLIST_RECORD)
         assert _link_url(result, "omalink") == FULL_ALLOWLIST_RECORD["links"]["omalink"]
         assert "rfsn=" in _link_url(result, "omalink")
+
+
+class TestNormaliseArtistRecordInstagramLastResort:
+    """
+    `instagram` is a deliberate LAST-priority exception to the commerce-only allowlist (owner
+    ruling, added after the initial allowlist): not a purchase/browse/signing surface itself, but
+    allowlisted anyway because it rescues 157 of the 812 artists who would otherwise have zero
+    links at all, while never crowding out a real commerce link for an artist who has one (being
+    last in priority means the 5-cap always favours the 5 commerce fields first).
+    """
+
+    def test_artist_whose_only_link_is_instagram_surfaces_it(self):
+        # The exact 157-artist scenario this exception exists for.
+        result = normalise_artist_record(INSTAGRAM_ONLY_RECORD)
+        assert _link_types(result) == ["instagram"]
+        assert _link_url(result, "instagram") == INSTAGRAM_ONLY_RECORD["links"]["instagram"]
+
+    def test_instagram_is_included_when_it_fits_within_the_cap(self):
+        record = raw_record(
+            "Wren Fairholt",
+            website="https://wrenfairholt.example/",
+            links={"instagram": "https://www.instagram.example/wrenfairholt/"},
+        )
+        result = normalise_artist_record(record)
+        assert _link_types(result) == ["website", "instagram"]
+
+    def test_instagram_never_crowds_out_a_higher_priority_commerce_link(self):
+        # Six real candidates (FULL_ALLOWLIST_RECORD) - instagram is dropped, every commerce
+        # field survives. Same fixture/assertion as TestNormaliseArtistRecordAllowlistAndPriority's
+        # own priority-order test, restated here under this exception's own dedicated class for
+        # discoverability.
+        result = normalise_artist_record(FULL_ALLOWLIST_RECORD)
+        assert "instagram" not in _link_types(result)
+        assert len(result["links"]) == 5
 
 
 class TestComputeArtistExternalLinksBlob:

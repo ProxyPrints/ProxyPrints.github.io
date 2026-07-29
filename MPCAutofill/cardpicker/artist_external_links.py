@@ -89,12 +89,27 @@ dirty in specific, measured ways (all confirmed against the real bulk export, 2,
 - Bare non-URL text - e.g. `artstation` holding the artist's own display name, typo'd into the
   wrong field upstream, confirmed on at least one real record.
 
-**Commerce-only allowlist (owner ruling).** Only links that let a user purchase or browse art, or
-get prints signed, are ever surfaced - see `_LINK_PRIORITY` below for the fixed order (never
+**Commerce-only allowlist (owner ruling), PLUS `instagram` as a deliberate last-resort (owner
+ruling, added after the initial allowlist).** Only links that let a user purchase or browse art,
+or get prints signed, are ever surfaced - see `_LINK_PRIORITY` below for the fixed order (never
 re-sorted per-artist, so the rendered row doesn't reorder between artists) and `_EXCLUDED_FIELDS`
-for what's deliberately left out (the pure socials, plus `patreon` - a support channel, not a
-purchase/browse/signing one). `markssignatureservice` is surfaced separately as a boolean flag,
-never as a link.
+for what's deliberately left out (`twitter`/`facebook`/`youtube`/`bluesky`, plus `patreon` - a
+support channel, not a purchase/browse/signing one).
+
+`instagram` is NOT a purchase/browse/signing surface either, but it's allowlisted anyway, LAST,
+as a deliberate exception: measured against the real 2,389-record export, 812 artists have zero
+links under the pure commerce-only allowlist, and `instagram` appears on 1,428 artists overall
+(60%) but only on 157 of those specific 812 zero-link artists (it correlates heavily with artists
+who already have a `website`/`artstation`) - moving the empty-applet case from 812 down to 655.
+Being LAST in priority means it never crowds out a real commerce link for an artist who has one
+(the 5-cap still favours `website`/`artstation`/`inprnt`/`mountainmage`/`omalink` first), while
+still giving an artist with nothing else a single link instead of an empty applet. The other
+socials were measured and rejected for the same 812-zero-link rescue: `twitter` (105), `facebook`
+(82), `bluesky` (11), `youtube` (10) - not worth the added clutter for that little rescue value.
+`markssignatureservice` is surfaced separately as a boolean flag, never as a link. These five
+purchase/browse/signing fields plus `instagram` plus the five rejected socials plus
+`markssignatureservice` are the complete link vocabulary present in the export - there is nothing
+else to consider.
 
 **Affiliate referral parameters are kept intact, deliberately.** 167 of 2,389 `omalink` values
 carry MTGAC's own `rfsn=` affiliate parameter - retained as a good-faith gesture per owner
@@ -140,18 +155,25 @@ CACHE_KEY = "artist-external-links-v1"
 # staleness. Freshness is the warm command's job, not the cache's.
 CACHE_TIMEOUT = None
 
-# Fixed priority order (owner ruling): only links that let a user purchase or browse art, or get
-# prints signed. `website` is a TOP-LEVEL field on the raw record, everything else lives under
-# `links`. This list's ORDER is the rendered order - never re-sorted per-artist, so the row
-# doesn't visually reorder between artists that happen to have different subsets of these present.
-_LINK_PRIORITY: list[str] = ["website", "artstation", "inprnt", "mountainmage", "omalink"]
+# Fixed priority order (owner ruling): the first five are commerce fields (purchase/browse/
+# signing); `instagram` is appended LAST as a deliberate exception - see module docstring's
+# allowlist section for the exact rescue numbers (812 -> 655 zero-link artists) and why LAST
+# matters (never crowds out a real commerce link; still rescues an artist with nothing else).
+# `website` is a TOP-LEVEL field on the raw record, everything else lives under `links`. This
+# list's ORDER is the rendered order - never re-sorted per-artist, so the row doesn't visually
+# reorder between artists that happen to have different subsets of these present. DO NOT move
+# `instagram` earlier without re-reading the ruling this comment points to.
+_LINK_PRIORITY: list[str] = ["website", "artstation", "inprnt", "mountainmage", "omalink", "instagram"]
 
 _MAX_LINKS = 5
 
 # Deliberately excluded from the allowlist (owner ruling), named here so a future editor doesn't
-# "helpfully" add them back without re-reading the ruling: the pure socials carry no purchase/
-# browse/signing value, and `patreon` is a support channel, not a place to buy/browse/sign art.
-_EXCLUDED_FIELDS = frozenset({"instagram", "twitter", "facebook", "youtube", "bluesky", "patreon"})
+# "helpfully" add them back without re-reading the ruling: these carry no purchase/browse/signing
+# value (or, for `patreon`, are a support channel rather than a place to buy/browse/sign art), and
+# were individually measured and rejected as zero-link-artist rescues too small to justify the
+# added clutter (see module docstring: twitter 105, facebook 82, bluesky 11, youtube 10 - all
+# smaller than instagram's 157, which WAS allowlisted for exactly that reason).
+_EXCLUDED_FIELDS = frozenset({"twitter", "facebook", "youtube", "bluesky", "patreon"})
 
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
@@ -225,6 +247,7 @@ def normalise_artist_record(record: dict[str, Any]) -> dict[str, Any]:
         ("inprnt", links_raw.get("inprnt")),
         ("mountainmage", links_raw.get("mountainmage")),
         ("omalink", links_raw.get("omalink")),
+        ("instagram", links_raw.get("instagram")),
     ]
     assert [field for field, _ in candidates] == _LINK_PRIORITY
 
