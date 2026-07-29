@@ -308,6 +308,18 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    step 5 is released (always, including on an exception - see "Concurrency
    cap" below).
 
+Before adding a calculator to step 7, check which class its inference falls
+into — [`docs/theory.md`](../theory.md) §10a. Two of the three are safe to
+dispatch per batch and one is not, and the split is not about cost: a
+calculator whose conclusion is a **count over the population** (e.g.
+`run_name_frequency_elimination`) stays a whole-catalog tail pass even though
+it does no I/O at all, while a calculator that merely **looks up neighbours by
+a join key** (md5 checksum, `content_phash`, name) is safe per batch only if
+the scoping narrows the batch's **join-key values**, not its card ids —
+otherwise a card whose only sibling sits outside the batch silently loses it
+and nothing errors. PR #541's `run_d0_sibling_artist_propagation` scoping is
+the worked example of the second.
+
 ### Evidence transfer and decoupled fetch-ahead (issues #473 PR-2 and #472, 2026-07-25)
 
 Both landed together (owner-approved fold — "same function, one coherent
@@ -1416,7 +1428,11 @@ Two-step sequence to bring retracted cards back into the active population:
   design authority for every number and decision cited above.
 - [`docs/theory.md`](../theory.md) — "Streaming and continuous operation":
   why moving from batch to streaming (and this envelope's pause/resume
-  mechanism) changes nothing about the pipeline's soundness model.
+  mechanism) changes nothing about the pipeline's soundness model. Its §10a
+  is the exception that matters when wiring a new calculator into the
+  dispatch loop: the class of inference whose premise is a count over the
+  whole population, for which the processing window is a parameter of what
+  the inference asserts.
 - [`docs/pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md) — the
   existing "note-prominently"/kill RSS bars and the 7.0 load-average
   escalation threshold this envelope reuses, in their original BULK-mode
