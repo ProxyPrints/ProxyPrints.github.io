@@ -480,7 +480,9 @@ firing the echo exactly as before this change.
 - **Cron backstop** (`manage.py stream_backstop_sweep`): re-runs the same
   eligibility selectors against the Stage C backlog, then (once that's empty)
   the Stage D join-key-eligible backlog, dispatching micro-batches until both
-  are exhausted, the envelope trips, or `--max-batches` is reached. Both
+  are PROVEN empty (a complete observed lap of each cursor that dispatched
+  nothing — see "Wrap semantics" below; a cursor wrap alone is not proof),
+  the envelope trips, or `--max-batches` is reached. Both
   backlogs are now cursor-backed, per-call-bounded walks (issue
   [#458](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/458) for
   Stage C, issue
@@ -545,27 +547,71 @@ sweep DISJOINT pk ranges instead of duplicating verification work; two
 dispatches walking DIFFERENT cursors (Stage C vs. Stage D) never contend at
 all, since they update different rows.
 
-**Wrap semantics, and the exhausted-vs-cap-hit distinction (issue #460 §4).**
+**The claim is sized to what a call CONSUMES, not to the chunk it read
+(2026-07-29).** The CAS claim used to cover the whole chunk (`chunk[-1]`)
+and the fill loop then stopped the instant `limit` ids had been found — so
+with `STAGE_E_SELECTION_CHUNK_SIZE = 250` and a micro-batch of `25`, a chunk
+holding 250 eligible cards yielded 25 while the cursor had ALREADY moved
+past the other 225. Those 225 were then unreachable until the cursor lapped
+the whole pk space: a dense backlog drained at roughly
+`STAGE_E_MICRO_BATCH_SIZE / STAGE_E_SELECTION_CHUNK_SIZE` ≈ 10% per lap,
+each lap costing a full traversal. The order is now READ → VERIFY → decide
+the consumption boundary → CAS-claim exactly that boundary, so an unconsumed
+chunk tail is simply never claimed and the very next call resumes at the
+first candidate it didn't take. The CAS remains the one ownership mechanism
+and is still forward-only, so concurrent walkers still sweep disjoint
+ranges; the only cost of the reordering is that a walker which LOSES a claim
+has already spent one bounded `verify_chunk` query on the range it turns out
+not to own, and discards it (bounded by `STAGE_E_SELECTION_CHUNK_SIZE` and
+by the 3-retry budget — never by catalog size).
+
+**Wrap semantics: a wrap is a LAP BOUNDARY, never an empty backlog
+(2026-07-29; supersedes the pre-fix "exhausted-vs-cap-hit" wording, and
+closes issue #468).**
 Reaching the end of the pk space (an empty chunk) resets `position` to `0`
 and increments `wrap_count` — but the call that triggers the wrap STOPS
 immediately rather than continuing to scan from `0` in the same call, so a
 single call's own cost stays bounded regardless of where the cursor happens
-to be. `_cursor_chunk_walk` returns `(found_ids, exhausted)`:
-`exhausted=True` iff THIS call reached the end of the pk space and wrapped
-(genuinely nothing left, at least until the next full pk-space cycle);
-`exhausted=False` on an empty result means the SCAN CAP (or CAS retry
-budget) was hit with more pk space still unscanned ahead of the cursor — a
-common outcome on a backlog that's sparse relative to the catalog.
-`_select_micro_batch` doesn't need this distinction (it has no
-caller-visible "empty" vs. "exhausted" difference to make) and discards it;
-the backstop sweep's own `handle()` loop DOES need it for backlog (b) — it
-breaks with "Backlog exhausted" only on `exhausted=True`, and on a
-cap-hit-empty result CONTINUES to the next batch instead of ending the
-sweep early (already bounded by `--max-batches`, so this can never become
-an unbounded loop).
-Treating cap-hit-empty as exhaustion was exactly the pre-#460 bug: it would
-have ended a sweep with backlog (b) cards still waiting, unexamined, past
-the scan cap. The NEXT dispatch/sweep iteration (event-driven or backstop)
+to be. `_cursor_chunk_walk` returns `(found_ids, wrapped)`, and `wrapped`
+means ONLY that this call ran off the end of the pk space. It does NOT mean
+the backlog is empty — cards can remain eligible behind the cursor (claimed
+by a concurrent walker this walk never verified, or simply not yet
+re-reached this lap), and a wrap says nothing about how much work the lap
+that just ended dispatched. `wrapped=False` on an empty result still means
+what issue #460 §4 said: the SCAN CAP (or CAS retry budget) was hit with
+more pk space still unscanned ahead of the cursor — a common outcome on a
+backlog that's sparse relative to the catalog.
+
+The backstop sweep therefore may NOT stop on a wrap. It stops only on
+EVIDENCE that a complete observed lap of a cursor — from one wrap through to
+its next — yielded zero eligible cards, tracked per cursor by
+`stage_e_dispatch.SweepLapTracker`, and only once BOTH cursors have produced
+that evidence; anything less continues to the next batch (already bounded by
+`--max-batches`, so this can never become an unbounded loop). The FIRST wrap
+a sweep sees for a cursor is deliberately not evidence — the cursor started
+mid-pk-space, so the stretch that just ended is a partial lap; it only arms
+the tracker. Backlog (a) now reports its walk status through
+`DispatchOutcome.stage_c_backlog_found`/`stage_c_backlog_wrapped` instead of
+having it discarded by `_select_micro_batch` (issue #468).
+Breaking on the first wrap was the live 2026-07-28 defect: a run dispatched
+41 batches and printed "Backlog exhausted" with the `stage_c` cursor at
+position 46,297 and `wrap_count` 7 — mid-catalog after seven laps of a
+230,753-card catalog. Because `Q_CLUSTER["max_attempts"] = 1` makes a
+`throttled-concurrency-cap` dispatch look SUCCESSFUL to django-q2, the sweep
+is the only recovery path those cards have, so a sweep that stops early
+leaves them permanently unprocessed. The success message now states the
+evidence it actually has: `Backlog exhausted - a full lap of both sweep cursors dispatched nothing.`
+
+**What the confirming lap costs.** Every individual sweep iteration is
+bounded exactly as before (`STAGE_E_SELECTION_SCAN_CAP` candidates across
+`SCAN_CAP/CHUNK_SIZE` bounded queries; nothing scales with catalog size),
+but an invocation that finds nothing now walks a cursor's whole pk space
+TWICE before concluding, instead of stopping at the first wrap. On a small
+catalog that is two iterations; at ~230k cards with
+`STAGE_E_SELECTION_SCAN_CAP = 1000` a lap is ~231 iterations, so ~460 of
+`--max-batches`' default 1000 go to confirming an empty backlog — raise
+`--max-batches` if the catalog grows enough that two laps no longer fit.
+The NEXT dispatch/sweep iteration (event-driven or backstop)
 picks up each cursor's own walk from wherever it stopped, `0` after a wrap.
 
 **Cadence.** A full catalog cycle, for either cursor, takes roughly
@@ -1088,10 +1134,12 @@ Neither existing driver can do a full-catalog pass:
 - `stream_backstop_sweep` is a BACKLOG processor. Both of its selectors are
   "cards that still need work", so it SKIPS everything already done — which
   is most of the catalog, and exactly the cards a re-extraction pass exists
-  to revisit. It also terminates on `_cursor_chunk_walk`'s `exhausted=True`,
-  which means only "this cursor reached the end of the pk space and wrapped",
-  not "the backlog is empty" — a full-catalog pass driven that way would end
-  at the first lap boundary.
+  to revisit. Its termination is also lap-shaped: it now requires a complete
+  observed lap of BOTH sweep cursors to have dispatched nothing (2026-07-29 —
+  before that it terminated on `_cursor_chunk_walk`'s wrap flag alone, which
+  means only "this cursor reached the end of the pk space", not "the backlog
+  is empty", and a full-catalog pass driven that way would have ended at the
+  first lap boundary). Either way it is a backlog cursor, not an enumerator.
 - `stage_e_shakedown` has the right driver shape but a cohort hardcoded to
   the issue-#418 Bug-A blank-tier-1 tail.
 

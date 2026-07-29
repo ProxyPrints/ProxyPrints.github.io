@@ -57,6 +57,8 @@ from cardpicker.operating_envelope import (
 )
 from cardpicker.stage_e_concurrency import _LOCK_NAMESPACE
 from cardpicker.stage_e_dispatch import (
+    SweepLapTracker,
+    _cursor_chunk_walk,
     _FetchOutcomeWindow,
     _select_micro_batch,
     dispatch_for_card,
@@ -1140,8 +1142,11 @@ class TestStageDBacklog:
 
 
 class TestBackstopSweepBacklogBExhaustedVsCapHit:
-    """Issue #460 §4 - the sweep loop's own distinction between backlog (b)'s `exhausted=True`
-    (break) and a cap-hit-empty result (`exhausted=False`, continue to the next batch)."""
+    """Issue #460 §4 - the sweep loop's own distinction between backlog (b)'s cap-hit-empty result
+    (`wrapped=False`, continue to the next batch) and any conclusion of emptiness. As of the
+    2026-07-29 lap-evidence fix a wrap alone no longer ends the sweep either (see
+    `TestWrapIsNotExhaustion` below), so the "continue past a cap hit" behaviour these two tests
+    pin is now the ONLY behaviour short of a full observed empty lap."""
 
     @STREAMING_ON
     @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=1, STAGE_E_SELECTION_SCAN_CAP=1)
@@ -1157,9 +1162,15 @@ class TestBackstopSweepBacklogBExhaustedVsCapHit:
 
         output = capsys.readouterr().out
         assert "batches_dispatched=1" in output
-        assert "Backlog exhausted - nothing left to dispatch." in output
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
         assert vote.printing_id == printing.pk
+        # PRE-2026-07-29 this asserted "Backlog exhausted - nothing left to dispatch." here, on the
+        # strength of a single backlog-(b) wrap. That assertion encoded the defect: with
+        # SCAN_CAP=1 neither cursor gets anywhere near a COMPLETE observed lap inside five batches,
+        # so the sweep has no evidence its backlogs are empty and must not claim they are. It stops
+        # on `--max-batches` instead - the work still gets done (asserted above), the overstated
+        # claim is gone.
+        assert "Backlog exhausted" not in output
 
     @STREAMING_ON
     @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=1, STAGE_E_SELECTION_SCAN_CAP=1)
@@ -1181,6 +1192,332 @@ class TestBackstopSweepBacklogBExhaustedVsCapHit:
         assert "Backlog exhausted" not in output
         assert "Envelope halt" not in output
         assert "sweep stopped" not in output
+
+
+class TestSweepLapTracker:
+    """2026-07-29 - `stage_e_dispatch.SweepLapTracker`, the bookkeeping that turns a sequence of
+    `_cursor_chunk_walk` results into the ONE thing `stream_backstop_sweep` is allowed to stop on:
+    evidence that a COMPLETE observed lap of a cursor yielded zero eligible cards. Pure in-memory
+    logic, no DB."""
+
+    def test_the_first_wrap_only_arms_the_tracker_and_never_proves_emptiness(self) -> None:
+        tracker = SweepLapTracker()
+        # The cursor was somewhere mid-pk-space when this sweep started, so the stretch that just
+        # ended is a PARTIAL lap - it never examined the range behind its own starting position.
+        assert tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True) is False
+        assert tracker.empty_lap_observed(StageESweepCursor.STAGE_C) is False
+
+    def test_a_second_wrap_with_nothing_found_in_between_is_the_proof(self) -> None:
+        tracker = SweepLapTracker()
+        tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True)  # arms
+        tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=False)  # a cap-hit call mid-lap
+        assert tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True) is True
+
+    def test_a_lap_that_dispatched_work_is_not_an_empty_lap(self) -> None:
+        tracker = SweepLapTracker()
+        tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True)  # arms
+        tracker.record(StageESweepCursor.STAGE_C, found=7, wrapped=False)  # work this lap
+        assert tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True) is False
+
+    def test_work_found_in_the_same_call_as_the_wrap_still_disqualifies_that_lap(self) -> None:
+        """The exact shape of the live 2026-07-28 incident: a walk that finds cards AND then runs
+        off the end of the pk space. The wrap is not a licence to stop - the lap dispatched work."""
+        tracker = SweepLapTracker()
+        tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True)  # arms
+        assert tracker.record(StageESweepCursor.STAGE_C, found=3, wrapped=True) is False
+        # ...and the next lap starts clean, so it can prove emptiness on its own merits.
+        assert tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True) is True
+
+    def test_a_proof_is_revoked_the_moment_work_reappears(self) -> None:
+        tracker = SweepLapTracker()
+        tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True)
+        assert tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True) is True
+        assert tracker.record(StageESweepCursor.STAGE_C, found=1, wrapped=False) is False
+        assert tracker.empty_lap_observed(StageESweepCursor.STAGE_C) is False
+
+    def test_the_two_cursors_are_tracked_independently(self) -> None:
+        tracker = SweepLapTracker()
+        tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True)
+        assert tracker.record(StageESweepCursor.STAGE_C, found=0, wrapped=True) is True
+        assert tracker.empty_lap_observed(StageESweepCursor.STAGE_D) is False
+
+
+class TestDenseBacklogDrainsWithoutLapping:
+    """2026-07-29 - the "walk skips most of a dense backlog, permanently, per lap" defect.
+
+    PRE-FIX the CAS claimed the whole chunk (`chunk[-1]`) before verification and the fill loop
+    then stopped the instant `limit` ids had been found, so with the production
+    `STAGE_E_SELECTION_CHUNK_SIZE=250`/`STAGE_E_MICRO_BATCH_SIZE=25` ratio a chunk holding 250
+    eligible cards yielded 25 and the cursor had already moved past the other 225 - a dense backlog
+    drained at ~10% per lap, each lap costing a full traversal of the pk space. POST-FIX the claim
+    is sized to what the call actually consumes, so the unconsumed tail is never claimed and the
+    next call resumes inside the same chunk."""
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=250, STAGE_E_SELECTION_SCAN_CAP=1000)
+    def test_a_chunk_sized_dense_backlog_drains_in_batch_sized_calls_without_a_single_wrap(self, db: Any) -> None:
+        # Exactly one chunk's worth of eligible cards - the brief's own 250/25 scenario.
+        cards = [CardFactory(content_phash=i) for i in range(1, 251)]
+        expected = {card.pk for card in cards}
+
+        drained: list[int] = []
+        for _ in range(10):  # ceil(250 / 25) calls, and not one more
+            drained.extend(_select_micro_batch([], batch_size=25))
+
+        assert len(drained) == 250
+        assert len(set(drained)) == 250, "no card may be dispatched twice while draining one lap"
+        assert set(drained) == expected
+        # THE point: every card was reached inside a single pass of the pk space. Pre-fix this
+        # cursor would have wrapped after the first call (position already at the chunk end) and
+        # only 25 of the 250 would be drained per lap.
+        cursor = StageESweepCursor.objects.get(name=StageESweepCursor.STAGE_C)
+        assert cursor.wrap_count == 0
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=250, STAGE_E_SELECTION_SCAN_CAP=1000)
+    def test_the_unconsumed_tail_of_a_chunk_is_never_claimed(self, db: Any) -> None:
+        cards = [CardFactory(content_phash=i) for i in range(1, 101)]
+
+        batch = _select_micro_batch([], batch_size=25)
+
+        assert batch == [card.pk for card in cards[:25]]
+        cursor = StageESweepCursor.objects.get(name=StageESweepCursor.STAGE_C)
+        # The claim stops at the LAST CONSUMED pk, not at the end of the 100-candidate chunk the
+        # walk read and verified - so `pk__gt=position` on the next call starts at card 26.
+        assert cursor.position == cards[24].pk
+        assert cursor.position != cards[-1].pk
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=250, STAGE_E_SELECTION_SCAN_CAP=11)
+    def test_a_partially_consumed_chunk_still_advances_fully_when_the_limit_is_not_reached(self, db: Any) -> None:
+        """The non-dense case is unchanged: a chunk that does not fill the batch is claimed whole,
+        exactly as before, so a sparse backlog still crosses ineligible cards at chunk speed. (The
+        scan cap is set to the candidate count so the call stops on the cap rather than running on
+        to wrap - a wrap would reset `position` to 0 and hide what this test is measuring.)"""
+        done = [CardFactory(content_phash=i) for i in range(1, 11)]
+        for card in done:
+            _full_evidence(card)
+        eligible = CardFactory(content_phash=100)
+
+        batch = _select_micro_batch([], batch_size=25)
+
+        assert batch == [eligible.pk]
+        cursor = StageESweepCursor.objects.get(name=StageESweepCursor.STAGE_C)
+        assert cursor.position == eligible.pk  # the whole chunk was consumed, so the whole chunk is claimed
+
+
+class TestConcurrentWalkersStayDisjoint:
+    """2026-07-29 - the claim protocol still holds after the read/verify/claim reordering.
+    `StageESweepCursor`'s own docstring: the CAS on `position` is the ONE ownership mechanism, and
+    two concurrent walkers on the SAME cursor must sweep disjoint ranges. What changed is only
+    WHERE a lost race's wasted work lands (the loser has already spent one bounded `verify_chunk`
+    query on a range it turns out not to own, and discards it) - never WHICH cards a winner
+    returns. The interleaving below is deterministic rather than threaded: a hook fires inside
+    walker A's own pre-CAS window and runs walker B's entire walk there, which is the worst case
+    the CAS exists to survive."""
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=5, STAGE_E_SELECTION_SCAN_CAP=5)
+    def test_a_walker_that_loses_the_claim_returns_none_of_the_other_walkers_cards(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cards = [CardFactory(content_phash=i) for i in range(1, 21)]
+
+        def _everything_eligible(chunk: list[int]) -> list[int]:
+            return list(chunk)
+
+        real_try_advance = StageESweepCursor.try_advance
+        walker_b: dict[str, Any] = {}
+        state = {"nested": False}
+
+        def _hooked_try_advance(name: str, from_position: int, to_position: int) -> bool:
+            if not state["nested"]:
+                # Walker A has read and verified its chunk and is about to claim. Walker B runs its
+                # WHOLE walk right here, inside that window, and claims first.
+                state["nested"] = True
+                walker_b["result"] = _cursor_chunk_walk(StageESweepCursor.STAGE_C, _everything_eligible, 3)
+            return real_try_advance(name, from_position, to_position)
+
+        monkeypatch.setattr(StageESweepCursor, "try_advance", staticmethod(_hooked_try_advance))
+
+        a_ids, _a_wrapped = _cursor_chunk_walk(StageESweepCursor.STAGE_C, _everything_eligible, 3)
+        b_ids, _b_wrapped = walker_b["result"]
+
+        assert b_ids == [card.pk for card in cards[:3]], "walker B won the claim it made first"
+        assert a_ids == [card.pk for card in cards[3:6]], "walker A retried from B's new position"
+        assert set(a_ids).isdisjoint(b_ids), "two walkers on one cursor must sweep disjoint ranges"
+        assert len(set(a_ids) | set(b_ids)) == len(a_ids) + len(b_ids), "no card dispatched twice"
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=5, STAGE_E_SELECTION_SCAN_CAP=100)
+    def test_interleaved_walkers_partition_a_dense_backlog_with_no_overlap_and_no_gaps(self, db: Any) -> None:
+        """Two walkers alternating on the same cursor until it wraps: between them they must cover
+        every eligible card exactly once. (Sequential calls model the settled outcome of any
+        interleaving - the CAS is what makes every interleaving settle this way.)"""
+        cards = [CardFactory(content_phash=i) for i in range(1, 21)]
+
+        def _everything_eligible(chunk: list[int]) -> list[int]:
+            return list(chunk)
+
+        walker_a: list[int] = []
+        walker_b: list[int] = []
+        for turn in range(20):
+            target = walker_a if turn % 2 == 0 else walker_b
+            ids, wrapped = _cursor_chunk_walk(StageESweepCursor.STAGE_C, _everything_eligible, 3)
+            target.extend(ids)
+            if wrapped:
+                break
+
+        assert set(walker_a).isdisjoint(walker_b)
+        assert sorted(walker_a + walker_b) == sorted(card.pk for card in cards)
+        assert len(walker_a + walker_b) == 20, "no card dispatched twice across the two walkers"
+
+
+class TestCursorWalkStaysBounded:
+    """Invariant the fixes above must not cost (issues #458/#460): every query a walk issues is
+    shaped by `STAGE_E_SELECTION_CHUNK_SIZE`/`STAGE_E_SELECTION_SCAN_CAP`, never by catalog size.
+    Asserted on captured query counts and on the compiled SQL's own LIMIT, not by inspection."""
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=10, STAGE_E_SELECTION_SCAN_CAP=40)
+    def test_the_chunk_read_is_compiled_with_the_chunk_size_as_its_sql_limit(self, db: Any) -> None:
+        catalog = []
+        for i in range(1, 201):
+            card = CardFactory(content_phash=i)
+            _full_evidence(card)  # nothing eligible - forces the walk to spend its whole scan cap
+            catalog.append(card)
+
+        with CaptureQueriesContext(connection) as captured:
+            found, wrapped = _cursor_chunk_walk(StageESweepCursor.STAGE_C, lambda chunk: [], 25)
+
+        assert found == []
+        assert wrapped is False  # scan cap hit with 160 candidates still ahead of the cursor
+        chunk_reads = [
+            q["sql"] for q in captured.captured_queries if "cardpicker_card" in q["sql"] and "LIMIT" in q["sql"]
+        ]
+        assert chunk_reads, "the walk must issue at least one chunk read"
+        for sql in chunk_reads:
+            assert "LIMIT 10" in sql, f"chunk read not bounded by STAGE_E_SELECTION_CHUNK_SIZE: {sql}"
+        # SCAN_CAP=40 / CHUNK_SIZE=10 = exactly four chunk reads, whatever the catalog holds.
+        assert len(chunk_reads) == 4
+        cursor = StageESweepCursor.objects.get(name=StageESweepCursor.STAGE_C)
+        # Exactly SCAN_CAP=40 candidates examined, never the 200 in the catalog.
+        assert cursor.position == catalog[39].pk
+
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=10, STAGE_E_SELECTION_SCAN_CAP=40)
+    def test_dense_backlog_query_count_is_flat_regardless_of_catalog_size(self, db: Any) -> None:
+        """The dense-drain fix must not have made cost depend on how much backlog is ahead: a call
+        against a 30-card dense backlog and a call against a 600-card dense backlog issue the same
+        number of queries."""
+        for i in range(1, 31):
+            CardFactory(content_phash=i)
+        with CaptureQueriesContext(connection) as small_catalog:
+            assert len(_select_micro_batch([], batch_size=5)) == 5
+
+        StageESweepCursor.objects.all().delete()
+        for i in range(31, 601):
+            CardFactory(content_phash=i)
+        with CaptureQueriesContext(connection) as large_catalog:
+            assert len(_select_micro_batch([], batch_size=5)) == 5
+
+        assert len(large_catalog.captured_queries) == len(small_catalog.captured_queries)
+
+
+class TestWrapIsNotExhaustion:
+    """2026-07-29 - the "a completed lap is reported as an empty backlog" defect, both legs.
+    `_cursor_chunk_walk`'s second return value means "this walk crossed a lap boundary", and the
+    sweep used to break on it with "Backlog exhausted - nothing left to dispatch." A live run on
+    2026-07-28 did exactly that after 41 batches with the stage_c cursor at position 46,297 and
+    `wrap_count` 7, mid-catalog against 230,753 cards."""
+
+    def test_dispatch_micro_batch_reports_the_stage_c_walk_status_instead_of_discarding_it(self, db: Any) -> None:
+        """Issue #468's own half: `_select_micro_batch` used to drop the flag, so a Stage-C
+        cap-hit-empty and a genuinely-wrapped empty were the same "empty" status to any caller."""
+        with override_settings(
+            STAGE_E_STREAMING_ENABLED=True, STAGE_E_SELECTION_CHUNK_SIZE=1, STAGE_E_SELECTION_SCAN_CAP=1
+        ):
+            done = CardFactory(content_phash=1)
+            _full_evidence(done)
+            beyond_cap = CardFactory(content_phash=2)
+            _full_evidence(beyond_cap)
+
+            cap_hit = dispatch_micro_batch(card_ids=None)
+            assert cap_hit.status == "empty"
+            assert cap_hit.stage_c_backlog_found == 0
+            assert cap_hit.stage_c_backlog_wrapped is False  # more pk space still unscanned ahead
+
+            dispatch_micro_batch(card_ids=None)  # consumes the second (and last) candidate
+            wrapped = dispatch_micro_batch(card_ids=None)
+            assert wrapped.status == "empty"
+            assert wrapped.stage_c_backlog_wrapped is True  # ran off the end of the pk space
+
+    @STREAMING_ON
+    def test_a_wrap_with_work_still_outstanding_does_not_end_the_sweep(
+        self, db: Any, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The cursor starts PAST the only eligible card, so backlog (b)'s very first walk wraps
+        having found nothing - while a card that has never had a Stage D pass sits behind it. Under
+        the pre-fix break-on-wrap rule the sweep printed "Backlog exhausted" and ended with that
+        card unvoted and no other recovery path (django-q2 runs `max_attempts=1`)."""
+        card = CardFactory(name="Some Card", content_phash=1)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        _full_evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+        StageESweepCursor.objects.create(name=StageESweepCursor.STAGE_D, position=card.pk)
+
+        call_command("stream_backstop_sweep", "--max-batches", "10")
+
+        output = capsys.readouterr().out
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk, "the card behind the wrapping cursor still got swept"
+        assert "batches_dispatched=1" in output
+        # And once BOTH cursors have a complete, empty observed lap behind them, the sweep does
+        # still conclude - on evidence this time, and worded as the evidence it actually has.
+        assert "Backlog exhausted - a full lap of both sweep cursors dispatched nothing." in output
+
+    @STREAMING_ON
+    def test_a_genuinely_empty_backlog_still_terminates_and_promptly(
+        self, db: Any, capsys: pytest.CaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fix that never concludes "done" would be worse than the bug. With nothing eligible,
+        each walk runs straight off the end of the pk space, so the arming lap and the proving lap
+        are one iteration each - two `dispatch_micro_batch` calls, not `--max-batches` of them."""
+        for i in range(1, 4):
+            _voted_card(content_phash=i)
+
+        from cardpicker.management.commands import stream_backstop_sweep as sweep_module
+
+        real_dispatch = sweep_module.dispatch_micro_batch
+        calls = {"n": 0}
+
+        def _counting_dispatch(*args: Any, **kwargs: Any) -> Any:
+            calls["n"] += 1
+            return real_dispatch(*args, **kwargs)
+
+        monkeypatch.setattr(sweep_module, "dispatch_micro_batch", _counting_dispatch)
+
+        call_command("stream_backstop_sweep", "--max-batches", "1000")
+
+        output = capsys.readouterr().out
+        assert "Backlog exhausted - a full lap of both sweep cursors dispatched nothing." in output
+        assert "batches_dispatched=0" in output
+        assert calls["n"] == 2, "an empty backlog must cost one arming lap plus one proving lap"
+        assert PilotRunLedger.objects.count() == 0
+
+    @STREAMING_ON
+    @override_settings(STAGE_E_SELECTION_CHUNK_SIZE=250, STAGE_E_SELECTION_SCAN_CAP=1000)
+    def test_a_dense_stage_c_backlog_is_fully_swept_in_one_invocation(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """End-to-end version of the dense-drain fix, through the sweep command itself: 120 cards
+        with no evidence at all, `--batch-size 25`. Pre-fix the first batch claimed the whole
+        120-card chunk, dispatched 25, and the next walk wrapped - so a single invocation left 95
+        cards untouched behind a cursor that had already passed them."""
+        cards = [CardFactory(content_phash=i) for i in range(1, 121)]
+        _install_stage_c_stub(monkeypatch, fetch_result=_png_bytes())
+
+        call_command("stream_backstop_sweep", "--max-batches", "50", "--batch-size", "25")
+
+        capsys.readouterr()
+        evidenced = set(
+            ImageEvidence.objects.filter(
+                card_id__in=[c.pk for c in cards], extractor_versions__contains=MANIFEST_EXTRACTOR_CURRENT_VERSIONS
+            ).values_list("card_id", flat=True)
+        )
+        assert evidenced == {c.pk for c in cards}, "every card in the dense backlog was swept in ONE invocation"
 
 
 class TestEvidenceTransferInDispatch:

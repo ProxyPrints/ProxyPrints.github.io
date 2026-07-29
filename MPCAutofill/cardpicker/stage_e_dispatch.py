@@ -255,6 +255,16 @@ class DispatchOutcome:
     stage_d_fallback_already_voted: int = 0
     stage_d_illustration_votes: int = 0
     stage_d_illustration_already_voted: int = 0
+    # Stage C BACKLOG WALK status for this dispatch (issue #468 - `_select_micro_batch` used to
+    # discard it, leaving "the Stage C backlog is empty" and "the scan cap was spent finding
+    # nothing" indistinguishable to a caller). `stage_c_backlog_found` is how many ids the Stage C
+    # cursor walk contributed to this batch; `stage_c_backlog_wrapped` is whether that walk crossed
+    # a LAP BOUNDARY (ran off the end of the pk space and reset the cursor to 0) - NOT a claim that
+    # the backlog is empty, see `_cursor_chunk_walk`/`SweepLapTracker`. Both are 0/False when the
+    # walk never ran (a seed that already filled the batch, or a gate that returned before
+    # selection).
+    stage_c_backlog_found: int = 0
+    stage_c_backlog_wrapped: bool = False
     trip_id: Optional[str] = None
 
 
@@ -314,12 +324,43 @@ def _cursor_chunk_walk(
     `_MAX_SWEEP_CAS_RETRIES` consecutive CAS losses have been spent. Every one of these is a normal,
     expected stopping point, not a failure.
 
-    Returns `(found_ids, exhausted)`. `found_ids` is capped at `limit`, always a valid (possibly
-    partial, possibly empty) result. `exhausted` is `True` iff this call reached the end of the pk
-    space and wrapped - the ONLY signal that distinguishes "this cursor's backlog is genuinely empty
-    right now" from "the scan cap (or CAS retry budget) was hit with more pk space still unscanned
-    ahead of `position`" (issue #460 §4) - a cap-hit-empty result must NOT be treated as exhaustion
-    by a caller (see `stream_backstop_sweep.py`'s own handling of this distinction).
+    THE CLAIM IS SIZED TO WHAT THIS CALL ACTUALLY CONSUMES, NOT TO THE CHUNK IT READ (2026-07-29 -
+    the "dense backlog drains ~`limit/CHUNK_SIZE` per lap" defect). Before this fix the CAS claimed
+    the WHOLE chunk (`chunk[-1]`) and the fill loop then stopped the instant `limit` ids had been
+    found: with `STAGE_E_SELECTION_CHUNK_SIZE=250` and a `limit` of `STAGE_E_MICRO_BATCH_SIZE=25`,
+    a chunk holding 250 eligible cards yielded 25 and the cursor had ALREADY moved past the other
+    225 - which were then not revisited until the cursor lapped the entire pk space, so a dense
+    backlog drained at ~10% per lap and each lap cost a full traversal. The order is now
+    READ -> VERIFY -> DECIDE THE CONSUMPTION BOUNDARY -> CAS-CLAIM EXACTLY THAT BOUNDARY: the walk
+    claims up to the last pk it actually takes (`chunk[-1]` whenever the whole chunk is consumed,
+    which is every chunk that does not reach `limit`), so an unconsumed chunk tail is simply NEVER
+    CLAIMED and the very next call resumes at the first candidate it did not take.
+
+    WHY VERIFY-BEFORE-CLAIM IS STILL RACE-SAFE, and what it costs: the CAS on `position` remains the
+    one and only ownership mechanism, still forward-only (`chunk` holds pks strictly `> position`,
+    so a claim can never be a no-op self-CAS), and still serialized by the single-row UPDATE - two
+    concurrent walkers can never both win a claim over overlapping ranges, so the ids this function
+    RETURNS (and therefore the cards a caller dispatches) stay disjoint between walkers exactly as
+    before. What moved is only WHERE the wasted work lands when a claim is lost: the loser has now
+    already spent one bounded `verify_chunk` query on a range it doesn't own, and discards it. That
+    duplicate verification is bounded by `STAGE_E_SELECTION_CHUNK_SIZE` per attempt and by
+    `_MAX_SWEEP_CAS_RETRIES` attempts per call - never by catalog size - and is the deliberate price
+    of never over-claiming. The alternative (keep claiming the whole chunk, then SHRINK the cursor
+    back to the consumed boundary with a second CAS) was rejected: it needs a second write per
+    limit-reaching chunk, it moves `position` BACKWARD - the one direction the claim protocol has
+    never had to reason about - and its shrink CAS can itself lose to a walker that already claimed
+    forward from the over-claimed position, silently reinstating the very skip this fix removes.
+
+    Returns `(found_ids, wrapped)`. `found_ids` is capped at `limit`, always a valid (possibly
+    partial, possibly empty) result. `wrapped` is `True` iff this call reached the end of the pk
+    space and wrapped the cursor back to 0 - i.e. iff a LAP BOUNDARY was crossed. It is emphatically
+    NOT "the backlog is empty": cards can remain eligible behind the cursor (claimed by a concurrent
+    walker this call never verified, or - before this call's own next lap - simply not yet re-reached),
+    and a wrap says nothing about how much work the lap that just ended dispatched. It is still the
+    signal that separates "the pk space ended here" from "the scan cap (or CAS retry budget) was hit
+    with more pk space still unscanned ahead of `position`" (issue #460 §4), and callers that need
+    "is this backlog actually empty?" must accumulate it into a full-lap judgement - see
+    `SweepLapTracker` immediately below, and `stream_backstop_sweep.py`'s own use of it.
     """
     found: list[int] = []
     found_set: set[int] = set()
@@ -329,7 +370,7 @@ def _cursor_chunk_walk(
     position = StageESweepCursor.get_cursor(cursor_name).position
     examined = 0
     cas_retries = 0
-    exhausted = False
+    wrapped = False
 
     while len(found) < limit and examined < scan_cap:
         this_chunk_limit = min(chunk_size, scan_cap - examined)
@@ -343,34 +384,147 @@ def _cursor_chunk_walk(
             # never continue scanning from 0 in the same call). The CAS here can lose too (another
             # dispatch already wrapped it) - harmless either way, this call is stopping regardless.
             StageESweepCursor.try_wrap(cursor_name, position)
-            exhausted = True
+            wrapped = True
             break
 
-        if not StageESweepCursor.try_advance(cursor_name, position, chunk[-1]):
+        # Verify the bounded chunk, then decide how far this call will actually consume BEFORE
+        # claiming anything (docstring's "THE CLAIM IS SIZED TO WHAT THIS CALL ACTUALLY CONSUMES").
+        eligible_ids = set(verify_chunk(chunk))
+        take: list[int] = []
+        claim_index = len(chunk) - 1
+        for index, card_id in enumerate(chunk):
+            if card_id in eligible_ids and card_id not in found_set:
+                take.append(card_id)
+                if len(found) + len(take) >= limit:
+                    # `limit` reached mid-chunk: claim exactly up to this card and leave the rest of
+                    # the chunk unclaimed for the next call, which resumes at `pk__gt=card_id`.
+                    claim_index = index
+                    break
+        claim_to = chunk[claim_index]
+
+        if not StageESweepCursor.try_advance(cursor_name, position, claim_to):
             # Lost the race for this range to a concurrent dispatch walking the same cursor -
-            # discard the chunk (never verified, so never a candidate for this call) and retry
-            # against the now-current position, up to _MAX_SWEEP_CAS_RETRIES times.
+            # discard everything read/verified for it (never claimed, so never a candidate for this
+            # call) and retry against the now-current position, up to _MAX_SWEEP_CAS_RETRIES times.
             cas_retries += 1
             if cas_retries > _MAX_SWEEP_CAS_RETRIES:
                 break
             position = StageESweepCursor.get_cursor(cursor_name).position
             continue
 
-        # This call now owns [position, chunk[-1]] - verify only this bounded chunk.
-        examined += len(chunk)
-        eligible_ids = set(verify_chunk(chunk))
-        for card_id in chunk:
-            if card_id in eligible_ids and card_id not in found_set:
-                found.append(card_id)
-                found_set.add(card_id)
-                if len(found) >= limit:
-                    break
-        position = chunk[-1]
+        # This call now owns (position, claim_to] - and consumed all of it.
+        examined += claim_index + 1
+        found.extend(take)
+        found_set.update(take)
+        position = claim_to
 
-    return found[:limit], exhausted
+    return found[:limit], wrapped
+
+
+@dataclass
+class _CursorLapState:
+    """One sweep cursor's own lap bookkeeping inside a single `SweepLapTracker` - see that class's
+    own docstring for what each field means and why none of them live in the database."""
+
+    # Has this tracker observed a wrap for this cursor yet? Until it has, the cursor was mid-lap
+    # when the tracker started, so the next wrap closes a PARTIAL lap that proves nothing.
+    lap_started: bool = False
+    # Ids this cursor's walks have yielded since the last wrap this tracker observed.
+    found_since_wrap: int = 0
+    # Latched once a COMPLETE lap (wrap -> wrap) yielded zero ids; cleared the moment a later walk
+    # of the same cursor yields anything again.
+    empty_lap_observed: bool = False
+
+
+class SweepLapTracker:
+    """
+    LAP-COMPLETION EVIDENCE for the cursor walks above (2026-07-29 - the "a completed lap is
+    reported as an empty backlog" defect; the other half of the same defect is issue #468's
+    Stage-C leg, fixed by `_select_micro_batch_with_backlog_status` below).
+
+    `_cursor_chunk_walk`'s `wrapped` flag means ONE thing: this call ran off the end of the pk space
+    and reset the cursor to 0. `stream_backstop_sweep` used to read that as "the backlog is empty"
+    and end the sweep. It is not the same claim, and the difference is not academic - a production
+    run on 2026-07-28 dispatched 41 batches and stopped on "Backlog exhausted" with the stage_c
+    cursor sitting at position 46,297 and `wrap_count` 7, i.e. mid-catalog after seven laps of a
+    230,753-card catalog, leaving the rest of the backlog for nobody (the sweep is the ONLY recovery
+    path for a dispatch that returned `throttled-concurrency-cap`, since `Q_CLUSTER["max_attempts"]
+    = 1` records those successful and never retries them - see `stream_backstop_sweep.py`'s own
+    module docstring).
+
+    THE EVIDENCE BAR THIS CLASS ENFORCES: a backlog counts as empty only when a COMPLETE lap of its
+    cursor - from one observed wrap through to the next - yielded ZERO eligible cards. Nothing else
+    qualifies. In particular the FIRST wrap a tracker sees is deliberately not evidence: the cursor
+    was somewhere mid-pk-space when this sweep started, so the stretch it just finished is a partial
+    lap that never examined the pk range behind its own starting position. That first wrap only
+    ARMS the tracker (the cursor is now at 0, so the next wrap does close a full lap).
+
+    WHY PROCESS-LOCAL RATHER THAN A CURSOR COLUMN: a `found_since_wrap` field on `StageESweepCursor`
+    would be the durable version of this, and would additionally let two concurrent walkers pool
+    their evidence - but adding it is a migration, and a sweep invocation is exactly the scope that
+    needs the answer ("may I stop now?"). A tracker that starts cold every invocation is also the
+    CONSERVATIVE direction: the worst it can do is decline to conclude emptiness and keep sweeping
+    until `--max-batches`, never conclude emptiness on less evidence than a full observed lap.
+
+    CONCURRENCY CAVEAT, stated rather than papered over: another walker on the same cursor can claim
+    (and dispatch) ranges during this tracker's lap, which this tracker never sees. Such a lap can
+    therefore report "no work found" while a sibling walker was busy - the conclusion "this sweep
+    has nothing left to do" stays true (the work is another dispatch's, and the next scheduled sweep
+    re-checks anyway), but the operator-facing wording must not overstate it, which is why the
+    sweep's message says a full lap dispatched nothing rather than that the catalog is clean.
+    """
+
+    def __init__(self) -> None:
+        self._states: dict[str, _CursorLapState] = {}
+
+    def record(self, cursor_name: str, found: int, wrapped: bool) -> bool:
+        """Folds one `_cursor_chunk_walk` result for `cursor_name` into this tracker and returns
+        whether a complete, empty lap has been observed for that cursor (i.e. whether the caller may
+        treat this backlog as empty). `found` is how many ids that walk yielded, `wrapped` is its
+        own second return value."""
+        state = self._states.setdefault(cursor_name, _CursorLapState())
+        if found:
+            state.found_since_wrap += found
+            # Work exists again - whatever an earlier lap proved is stale.
+            state.empty_lap_observed = False
+        if wrapped:
+            if state.lap_started and state.found_since_wrap == 0:
+                state.empty_lap_observed = True
+            state.lap_started = True
+            state.found_since_wrap = 0
+        return state.empty_lap_observed
+
+    def empty_lap_observed(self, cursor_name: str) -> bool:
+        """Read-only view of the same latch `record` returns, for a caller that needs to ask about a
+        cursor it did not walk this iteration."""
+        state = self._states.get(cursor_name)
+        return state.empty_lap_observed if state is not None else False
+
+
+@dataclass
+class _StageCBacklogFill:
+    """What `_select_micro_batch_with_backlog_status` reports about the Stage C cursor walk it ran
+    (issue #468). `found` is how many ids that walk contributed to this batch (0 when the seed alone
+    already filled the batch and the cursor was never touched at all); `wrapped` is
+    `_cursor_chunk_walk`'s own second return value for that walk - a LAP BOUNDARY, not emptiness
+    (see that function's own docstring, and `SweepLapTracker` for how a caller turns a sequence of
+    these into an actual emptiness judgement)."""
+
+    found: int = 0
+    wrapped: bool = False
 
 
 def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[int]:
+    """Batch-only view of `_select_micro_batch_with_backlog_status` below - every caller that has no
+    use for the Stage C backlog walk's own status (and every test asserting purely on batch
+    composition) goes through this one. See that function's docstring for the whole design."""
+    batch, _fill = _select_micro_batch_with_backlog_status(seed_card_ids, batch_size)
+    return batch
+
+
+def _select_micro_batch_with_backlog_status(
+    seed_card_ids: Iterable[int], batch_size: int
+) -> tuple[list[int], _StageCBacklogFill]:
     """
     Builds one micro-batch's own card-id list (docs/proposals/stage-e-streaming.md §3 decision (2)):
     starts with `seed_card_ids` (the event trigger's own touched card, or an empty seed for the
@@ -398,9 +552,18 @@ def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[i
     own behavior through `_cursor_chunk_walk` is unchanged from before the #460 refactor: same
     cursor (`StageESweepCursor.STAGE_C`), same chunking/scan-cap/CAS/wrap semantics, same "a partial
     or even empty backlog fill is a valid result" posture (`dispatch_micro_batch`'s own "empty"
-    status already exists for exactly this) - this function simply doesn't need `_cursor_chunk_walk`'s
-    `exhausted` return value, since it has no caller-visible distinction to make with it.
+    status already exists for exactly this).
+
+    THE WALK'S STATUS IS NO LONGER DISCARDED (issue #468). This function used to drop
+    `_cursor_chunk_walk`'s second return value on the floor (`found, _exhausted = ...`), so
+    `dispatch_micro_batch` returned the SAME "empty" status for "the Stage C backlog is genuinely
+    empty" and "the scan cap was spent examining ineligible cards and there is more pk space ahead"
+    - the exact conflation issue #460 §4 removed from the Stage D leg, left in place on this one.
+    Both are now reported, via `_StageCBacklogFill`, up through `DispatchOutcome`
+    (`stage_c_backlog_found`/`stage_c_backlog_wrapped`) to the one caller that has a decision to
+    make with them, `stream_backstop_sweep`. Nothing about which cards land in the batch changes.
     """
+    fill = _StageCBacklogFill()
     seen: list[int] = []
     seen_set: set[int] = set()
     for card_id in seed_card_ids:
@@ -408,7 +571,9 @@ def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[i
             seen.append(card_id)
             seen_set.add(card_id)
     if len(seen) >= batch_size:
-        return seen[:batch_size]
+        # Seed alone fills the batch - the cursor is never read, so this call contributes NO lap
+        # evidence either way (a default `_StageCBacklogFill` is exactly "walk not run").
+        return seen[:batch_size], fill
 
     manifest_versions = _stage_c_manifest_versions()
 
@@ -420,13 +585,15 @@ def _select_micro_batch(seed_card_ids: Iterable[int], batch_size: int) -> list[i
         )
         return [card_id for card_id in chunk if card_id not in done_ids]
 
-    found, _exhausted = _cursor_chunk_walk(StageESweepCursor.STAGE_C, _verify_stage_c_chunk, batch_size - len(seen))
+    found, wrapped = _cursor_chunk_walk(StageESweepCursor.STAGE_C, _verify_stage_c_chunk, batch_size - len(seen))
+    fill.found = len(found)
+    fill.wrapped = wrapped
     for card_id in found:
         if card_id not in seen_set:
             seen.append(card_id)
             seen_set.add(card_id)
 
-    return seen[:batch_size]
+    return seen[:batch_size], fill
 
 
 # Bounded fetch-ahead queue depth (issue #472's own design constraint: "Bounded prefetch depth
@@ -906,9 +1073,16 @@ def dispatch_micro_batch(
         if batch_size is not None
         else getattr(settings, "STAGE_E_MICRO_BATCH_SIZE", DEFAULT_MICRO_BATCH_SIZE)
     )
-    batch_ids = _select_micro_batch(card_ids or (), effective_batch_size)
+    batch_ids, stage_c_fill = _select_micro_batch_with_backlog_status(card_ids or (), effective_batch_size)
     if not batch_ids:
-        return DispatchOutcome(status="empty", run_id=run_id)
+        # "empty" now CARRIES the Stage C walk's own status (issue #468) instead of flattening
+        # "genuinely empty" and "scan cap spent finding nothing" into one indistinguishable result.
+        return DispatchOutcome(
+            status="empty",
+            run_id=run_id,
+            stage_c_backlog_found=stage_c_fill.found,
+            stage_c_backlog_wrapped=stage_c_fill.wrapped,
+        )
 
     # CONCURRENCY CAP (companion to PR #448's vote-collision fix - cardpicker.stage_e_concurrency's
     # own module docstring has the full incident/mechanism writeup): acquired around exactly the
@@ -930,7 +1104,12 @@ def dispatch_micro_batch(
             # throttling happened - the runbook's "tune STAGE_E_MAX_CONCURRENT_DISPATCHES against
             # the observed throttle rate" instruction has nothing else to check against.
             StageEThrottleCounter.record()
-            return DispatchOutcome(status="throttled-concurrency-cap", run_id=run_id)
+            return DispatchOutcome(
+                status="throttled-concurrency-cap",
+                run_id=run_id,
+                stage_c_backlog_found=stage_c_fill.found,
+                stage_c_backlog_wrapped=stage_c_fill.wrapped,
+            )
 
         dispatch_run_id = run_id or f"stage-e-stream-{timezone.now().strftime('%Y%m%dT%H%M%S%f')}Z"
 
@@ -948,7 +1127,13 @@ def dispatch_micro_batch(
             counters={"trigger_reason": trigger_reason, "batch_size": len(batch_ids)},
         )
 
-        outcome = DispatchOutcome(status="completed", run_id=dispatch_run_id, card_ids=batch_ids)
+        outcome = DispatchOutcome(
+            status="completed",
+            run_id=dispatch_run_id,
+            card_ids=batch_ids,
+            stage_c_backlog_found=stage_c_fill.found,
+            stage_c_backlog_wrapped=stage_c_fill.wrapped,
+        )
         batch_start = time.monotonic()
 
         try:
