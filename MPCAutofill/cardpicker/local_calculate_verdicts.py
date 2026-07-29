@@ -377,7 +377,7 @@ from typing import Iterable, Optional
 
 import imagehash
 
-from django.db.models import Count, Max, Q, QuerySet
+from django.db.models import Count, Max, Q, QuerySet, Sum
 
 from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_fallback import (
@@ -404,6 +404,7 @@ from cardpicker.local_ocr import (
 from cardpicker.models import (
     CanonicalCard,
     CanonicalExpansion,
+    CanonicalPrintingMetadata,
     Card,
     CardPrintingTag,
     CardScanLog,
@@ -1159,35 +1160,114 @@ def _purge_and_write_printing_tag_votes(anonymous_id: str, new_votes: list[CardP
 # read-only in-memory lookup built from a `.values_list(...)` query, safe to hold across calls -
 # this cache lives entirely in THIS module, no signal wiring into any PROTECTED CORE module.
 #
-# Invalidation is a cheap version-stamp CHECK per call, not a write-time hook (the doc's own "no
-# soundness implication" framing): `(CanonicalCard max pk, CanonicalCard count, CanonicalExpansion
-# max pk, CanonicalExpansion count)`. Either table's INSERT (a fresh max pk) or DELETE (count
-# moves even when max pk doesn't, e.g. deleting the highest-pk row) changes the stamp and forces a
-# rebuild. An in-place UPDATE to an existing row's name/expansion FK with no insert/delete is NOT
-# detected - accepted deliberately: canonical cards/expansions are catalog data, not routinely
-# renamed in place, and a stale index in that narrow case just re-derives the same candidate
-# answer a fresh one would have anyway (no vote-soundness exposure, matching the doc's own
-# "pure performance change" framing for this whole item).
+# 2026-07-29, issue #533's THIRD blocking prerequisite: `local_residual_classify.
+# run_frame_mismatch_recovery` and `local_lands_identify.run_lands_identify` now call this cache
+# too. #541 made both scopeable by `card_ids`, which makes them per-25-card-micro-batch callers;
+# this index is keyed by card NAME over a DIFFERENT table, so `card_ids` cannot narrow it and
+# caching is the only available fix. At 25-card batches over a ~135,000-row queue that is ~5,400
+# avoided rebuilds of a 113k-row scan per runner. The "those remain once per invocation as
+# ratified" wording above therefore no longer describes those two sites; `harvest_probe.py`/
+# `resolution_tier_probe.py` (one-shot diagnostic probes, never batch-reachable) and
+# `local_identify_printing_tags.select_candidates`' own `index or CandidateNameIndex()` default
+# still do.
+#
+# INVALIDATION (version-stamp CHECK per call, not a write-time hook - the doc's own "no soundness
+# implication" framing). THE STAMP MUST DETECT IN-PLACE BACKFILLS, NOT ONLY max-pk/count MOVEMENT
+# (PR #526's finding, applied here). `CandidateNameIndex.__init__` reads FIVE columns across
+# THREE tables:
+#
+#     CanonicalCard.pk, CanonicalCard.name, CanonicalExpansion.code,
+#     CanonicalCard.collector_number, CanonicalPrintingMetadata.edhrec_rank
+#
+# so an eight-term stamp, one aggregate query per table:
+#
+#   1-2. CanonicalCard      (max pk, count)
+#   3-4. CanonicalExpansion (max pk, count)
+#   5-6. CanonicalPrintingMetadata (max pk, count)
+#   7.   CanonicalPrintingMetadata count of NON-NULL edhrec_rank
+#   8.   CanonicalPrintingMetadata SUM of edhrec_rank
+#
+# Terms 5-8 are new, and terms 5-6 alone already close a hole the original four-term stamp had
+# from the start: `CanonicalPrintingMetadata` is a SEPARATE TABLE whose primary key IS
+# `canonical_card_id`, so creating the sidecar row for an already-existing CanonicalCard moves
+# NEITHER CanonicalCard max pk NOR CanonicalCard count. `import_scryfall_printing_metadata`'s
+# `_sync_printing_metadata` creates, updates and deletes those rows independently of the card
+# import, and the four-term stamp saw none of it.
+#
+# Terms 7-8 are the #526 term proper. `_sync_printing_metadata` writes `edhrec_rank` via
+# `bulk_update(fields=_METADATA_SYNC_FIELDS)` - an UPDATE IN PLACE on rows that already exist,
+# moving neither max pk nor row count. Without a value-sensitive term, a worker process that
+# built the index before a metadata import would serve a stale, under-populated index for its
+# whole lifetime, which is exactly the defect #526 caught for `IllustrationIndex`. #526 used a
+# non-null COUNT alone because `illustration_id` is a stable UUID - once set it does not change.
+# `edhrec_rank` is NOT stable: it is Scryfall demand data that is re-ranked on every weekly bulk
+# dump, so a NULL->value backfill (caught by term 7) is only half the exposure and a
+# value->different-value re-rank (caught by term 8, missed by term 7) is the routine case.
+# Term 8 costs nothing extra: `edhrec_rank` carries no index, so term 7's non-null count is
+# already a heap scan, and both are computed in the SAME `.aggregate()` call - one query, one
+# scan of the metadata table per stamp check, ~3 orders of magnitude cheaper than the 1.48s
+# index build it exists to avoid, and paid ONCE PER INVOCATION (every caller holds the returned
+# index in a local for the whole pass), never once per card.
+#
+# STILL NOT DETECTED, accepted deliberately, each with the reason it is safe:
+#   - An in-place rename of `CanonicalCard.name` or `collector_number`. The catalog importer
+#     (`integrations/game/mtg.py`) is INSERT-ONLY for CanonicalCard - it skips every identifier
+#     already present (`existing_card_identifiers`) - so no production writer produces this.
+#   - An in-place change of `CanonicalExpansion.code` on an existing `identifier`.
+#     `GameIntegration.import_canonical_expansions` uses `bulk_sync(key_fields=["identifier"])`,
+#     which CAN update in place, so unlike the card case this writer does exist. It is accepted
+#     because (a) Scryfall set codes are stable once assigned - the field that moves in practice
+#     is `name`, which this index does not read; (b) the direction of any staleness is a MISSED
+#     match, not a wrong one: the set code the index carries is compared against the code
+#     PRINTED ON THE CARD IMAGE, which never changes, so a stale code can only fail to match and
+#     abstain; and (c) detecting it needs either a per-row read of the expansion table or a
+#     DB-specific string checksum, both of which reintroduce catalog-scaling work into a
+#     per-batch path (issues #458/#460) to guard against an event that has never occurred.
+#   - Two writes inside one stamp check that cancel exactly (e.g. an insert and a delete leaving
+#     both count and max pk unchanged, or two edhrec_rank changes summing to zero). Same
+#     accepted residual as #526's.
+# None of the above has vote-soundness exposure: `edhrec_rank` feeds only
+# `_demand_rank_for_candidates`, i.e. QUEUE ORDERING, never vote content, and the other two are
+# argued above. This remains a pure performance change.
 # ---------------------------------------------------------------------------------------------
 
-CandidateNameIndexVersionStamp = tuple[int, int, int, int]
+CandidateNameIndexVersionStamp = tuple[int, int, int, int, int, int, int, int]
 
 _candidate_name_index_cache: Optional[tuple[CandidateNameIndexVersionStamp, CandidateNameIndex]] = None
 
 
 def _candidate_name_index_version_stamp() -> CandidateNameIndexVersionStamp:
     """
-    Cheap (index-only aggregate, not a table scan) stamp used to detect a CanonicalCard/
-    CanonicalExpansion write since the cached `CandidateNameIndex` was built - see this section's
-    own module-level comment above for the full invalidation-shape rationale.
+    Stamp used to detect a CanonicalCard/CanonicalExpansion/CanonicalPrintingMetadata write since
+    the cached `CandidateNameIndex` was built - see this section's own module-level comment above
+    for the full eight-term rationale, including why the `edhrec_rank` non-null-count AND sum
+    terms are both required (in-place backfill + in-place re-rank, neither of which moves max pk
+    or row count) and what is deliberately not detected.
+
+    Three aggregate queries, one per table. The CanonicalCard/CanonicalExpansion ones and the
+    metadata table's own max-pk/count are index-only; the two `edhrec_rank` terms share a single
+    heap scan of `CanonicalPrintingMetadata` (that column carries no index), which is why they are
+    computed in ONE `.aggregate()` call together with the max-pk/count pair rather than separately.
     """
     canonical_card_agg = CanonicalCard.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
     canonical_expansion_agg = CanonicalExpansion.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
+    # `Count("edhrec_rank")` counts NON-NULL values only (SQL `COUNT(column)` semantics), which is
+    # the backfill-detecting term; `Sum` catches a re-rank that leaves the non-null count alone.
+    printing_metadata_agg = CanonicalPrintingMetadata.objects.aggregate(
+        max_pk=Max("pk"),
+        count=Count("pk"),
+        ranked_count=Count("edhrec_rank"),
+        rank_sum=Sum("edhrec_rank"),
+    )
     return (
         canonical_card_agg["max_pk"] or 0,
         canonical_card_agg["count"] or 0,
         canonical_expansion_agg["max_pk"] or 0,
         canonical_expansion_agg["count"] or 0,
+        printing_metadata_agg["max_pk"] or 0,
+        printing_metadata_agg["count"] or 0,
+        printing_metadata_agg["ranked_count"] or 0,
+        printing_metadata_agg["rank_sum"] or 0,
     )
 
 
@@ -1195,11 +1275,22 @@ def _get_cached_candidate_name_index() -> CandidateNameIndex:
     """
     Returns the current worker process's cached `CandidateNameIndex`, building (or rebuilding,
     on a version-stamp mismatch - see `_candidate_name_index_version_stamp`'s own docstring) it
-    exactly once per distinct stamp. Callers (`run_join_key_calculator`/`run_fallback_calculator`)
-    call this LAZILY - only once they already have a card to resolve candidates for, never
-    unconditionally at the top of a dispatch - so a dispatch whose `card_ids`-scoped eligible set
-    is empty never pays this call's own version-stamp query, let alone a `CandidateNameIndex`
-    build.
+    exactly once per distinct stamp.
+
+    THE SINGLE ENTRY POINT every batch-reachable caller must use. Current callers:
+    `run_join_key_calculator`/`run_fallback_calculator` (this module),
+    `local_illustration.run_illustration_calculator`,
+    `local_residual_classify.run_frame_mismatch_recovery` and
+    `local_lands_identify.run_lands_identify` (the last two added 2026-07-29 for issue #533's
+    third blocking prerequisite). Constructing `CandidateNameIndex()` directly anywhere reachable
+    from a Stage E micro-batch is the bug this function exists to prevent - `local_illustration`
+    did exactly that for a while behind a comment claiming otherwise (see its own regression test).
+
+    Callers that CAN call this lazily do - only once they already have a card to resolve
+    candidates for, never unconditionally at the top of a dispatch - so a dispatch whose
+    `card_ids`-scoped eligible set is empty never pays this call's own version-stamp queries, let
+    alone a `CandidateNameIndex` build. `run_lands_identify` is the one exception and says why in
+    its own docstring: its very first read already needs the index per row.
     """
     global _candidate_name_index_cache
     stamp = _candidate_name_index_version_stamp()

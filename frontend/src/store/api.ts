@@ -17,6 +17,7 @@ import {
 import {
   ArtistCandidatesResponse,
   ArtistConsensusResponse,
+  ArtistExternalLinksResponse,
   Card,
   CardbacksResponse,
   CardsRequest,
@@ -180,6 +181,18 @@ export const api = createApi({
       providesTags: [QueryTags.BackendSpecific],
       transformResponse: (response: PatreonResponse, meta, arg) =>
         response.patreon,
+    }),
+    // MTGAC artist-links applet (docs/features/artist-support-links.md) - cache-only on the
+    // backend, never a live MTGAC call; `found: false` is a normal, expected response (cold
+    // cache, or an artist this project doesn't index yet), not an error - ArtistSupportLink.tsx
+    // is the sole consumer and treats it as "no data, fall back to the deterministic URL".
+    getArtistExternalLinks: builder.query<ArtistExternalLinksResponse, string>({
+      query: (artistName) => ({
+        url: `2/artistExternalLinks/`,
+        method: "GET",
+        params: { name: artistName },
+      }),
+      providesTags: [QueryTags.BackendSpecific],
     }),
     getNewCardsFirstPage: builder.query<
       { [sourceKey: string]: NewCardsFirstPage },
@@ -373,6 +386,7 @@ const {
   useGetContributionsQuery: useRawGetContributionsQuery,
   useGetBackendInfoQuery: useRawGetBackendInfoQuery,
   useGetPatreonQuery: useRawGetPatreonQuery,
+  useGetArtistExternalLinksQuery: useRawGetArtistExternalLinksQuery,
   useGetNewCardsFirstPageQuery: useRawGetNewCardsFirstPageQuery,
   useGetNewCardsPageQuery: useRawGetNewCardsPageQuery,
   usePostExploreSearchQuery: useRawPostExploreSearchQuery,
@@ -448,6 +462,13 @@ export function useGetBackendInfoQuery() {
 export function useGetPatreonQuery() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   return useRawGetPatreonQuery(undefined, {
+    skip: !remoteBackendConfigured,
+  });
+}
+
+export function useGetArtistExternalLinksQuery(artistName: string) {
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  return useRawGetArtistExternalLinksQuery(artistName, {
     skip: !remoteBackendConfigured,
   });
 }

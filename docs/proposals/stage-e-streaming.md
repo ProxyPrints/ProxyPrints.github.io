@@ -557,7 +557,6 @@ via `stage_e_dispatch.py`) now build `CandidateNameIndex()` lazily (only
 once an eligible card actually needs candidate resolution, never
 unconditionally at dispatch start) and cache it at module scope for the
 worker process's lifetime, invalidated by a cheap version-stamp check
-(`(CanonicalCard max pk, count, CanonicalExpansion max pk, count)`)
 rather than a write-time signal — the "explicit invalidation event"
 above, implemented as a per-call CHECK rather than a push. `known_set_codes()`
 (the lexicon) was deliberately left AS-IS by that fix — it's ~1,000s of
@@ -567,12 +566,47 @@ own docstring already documents a specific reason process-lifetime
 caching doesn't suit it (test-isolation leakage across Django's
 per-test transactional `CanonicalExpansion` rows) that a future pass
 would need to address separately, not silently inherit from this fix.
-The four OTHER `CandidateNameIndex()` call sites this section's own
-survey found (`local_identify_printing_tags.py`/
-`local_residual_classify.py`/`local_lands_identify.py`/
-`harvest_probe.py`) are untouched and remain "once per invocation" —
-they're all `management command` entry points, not long-lived streaming
-workers, so the gap this item describes doesn't apply to them.
+
+**EXTENDED to the scoped Stage D runners (issue #533's third blocking
+prerequisite, 2026-07-29).** The paragraph above used to end by recording
+that the four OTHER `CandidateNameIndex()` call sites this section's own
+survey found were untouched and remained "once per invocation", on the
+grounds that they were management-command entry points rather than
+long-lived streaming workers. Issue #541 removed that premise for two of
+them: `local_residual_classify.run_frame_mismatch_recovery` and
+`local_lands_identify.run_lands_identify` are now `card_ids`-scopeable,
+i.e. per-25-card-micro-batch callable, and this index is keyed by card
+NAME over a different table so `card_ids` cannot narrow it. Both now go
+through the same `_get_cached_candidate_name_index()` helper (reused, not
+reimplemented — one module-level cache, or the "cache" would silently
+rebuild per module). `run_frame_mismatch_recovery` resolves it LAZILY,
+on the first card it actually recovers; `run_lands_identify` cannot,
+because its very first read needs the index per row.
+
+The remaining direct `CandidateNameIndex()` constructions —
+`local_identify_printing_tags.select_candidates`' own
+`index or CandidateNameIndex()` default, `harvest_probe.py` and
+`resolution_tier_probe.py` — are one-shot diagnostic/probe entry points,
+never reachable from a micro-batch, and stay as they are.
+
+The version stamp itself was rebuilt for this, from four terms to eight
+— the original four, plus `CanonicalPrintingMetadata`'s own max pk and
+row count, plus a count of non-null `edhrec_rank` values, plus their
+sum. The original four were blind to
+`CanonicalPrintingMetadata` entirely, even though
+`CandidateNameIndex.__init__` reads `printing_metadata__edhrec_rank`:
+that table's primary key IS `canonical_card_id`, so creating its sidecar
+rows moves neither CanonicalCard max pk nor CanonicalCard count. The last
+two terms are PR #526's finding applied here —
+`import_scryfall_printing_metadata` backfills `edhrec_rank` IN PLACE via
+`bulk_update`, an UPDATE that moves neither max pk nor row count, so a
+naive stamp serves a stale, under-populated index for the worker's whole
+lifetime. Unlike #526's `illustration_id` (a stable UUID, where a
+non-null COUNT sufficed), `edhrec_rank` is re-ranked on every weekly
+Scryfall dump, so the SUM term is required to catch a value → different
+value re-rank. See `_candidate_name_index_version_stamp`'s own section
+comment for the full list of what is deliberately still not detected and
+why none of it has vote-soundness exposure.
 
 ---
 

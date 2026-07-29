@@ -42,6 +42,10 @@ from cardpicker.artist_consensus import (
     resolve_and_persist_artist,
     resolve_artist,
 )
+from cardpicker.artist_external_links import (
+    get_cached_artist_external_links,
+    not_found_record,
+)
 from cardpicker.constants import (
     ARTIST_AUTOCOMPLETE_MAX_QUERY_LENGTH,
     ARTIST_AUTOCOMPLETE_MIN_QUERY_LENGTH,
@@ -118,6 +122,7 @@ from cardpicker.schema_types import (
     ArtistCandidatesResponse,
     ArtistConsensusRequest,
     ArtistConsensusResponse,
+    ArtistExternalLinksResponse,
     ArtistVoteTallyEntry,
     CardbacksRequest,
     CardbacksResponse,
@@ -771,6 +776,74 @@ def get_search_engine_health(request: HttpRequest) -> HttpResponse:
         raise BadRequestException("Expected GET request.")
 
     return JsonResponse(SearchEngineHealthResponse(online=ping_elasticsearch()).model_dump())
+
+
+def _artist_external_links_rate_limit_key(group: str, request: HttpRequest) -> str:
+    # unauthenticated, read-only, no anonymousId in a GET request - IP is the only signal
+    # available to key on, same reasoning as _artist_autocomplete_rate_limit_key above.
+    return request.META.get("REMOTE_ADDR", "unknown")
+
+
+def _artist_external_links_rate_limit_rate(group: str, request: HttpRequest) -> str:
+    # a callable (not a plain string) for the same reason as the other rate helpers in this file:
+    # a plain string would be bound once at import time, making the rate impossible to override
+    # in tests or via runtime settings changes.
+    rate: str = settings.ARTIST_EXTERNAL_LINKS_RATE
+    return rate
+
+
+@csrf_exempt
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_artist_external_links_rate_limit_key,
+    rate=_artist_external_links_rate_limit_rate,
+    method="GET",
+    block=False,
+)
+@ErrorWrappers.to_json
+def get_artist_external_links(request: HttpRequest) -> HttpResponse:
+    """
+    Cache-only lookup of MTG Artist Connection's external links for one artist
+    (docs/features/artist-support-links.md; cardpicker.artist_external_links's own module
+    docstring has the full daily-cached-bulk-consumer architecture). GET-only, one artist per
+    request via the `name` query parameter - there is no bulk/list shape, this never returns more
+    than one artist's data.
+
+    Three independent reasons a request returns the "not found" shape (found=False, no links),
+    all indistinguishable to the caller by design: (1) `name` doesn't match any `CanonicalArtist`
+    this project actually indexes - deliberate, not an oversight: without this check, this
+    endpoint would be a free-text lookup against the raw cached MTGAC blob, i.e. an enumerable
+    mirror of their whole directory, which is exactly what this feature's "no proxy, no embed"
+    posture rules out. (2) the name IS a real CanonicalArtist but isn't present in the cache
+    blob, either because MTGAC has no page for them or because the daily warm run hasn't
+    populated the cache yet. (3) the named `"shared"` cache backend this feature reads
+    (`cardpicker.artist_external_links.SHARED_CACHE_ALIAS`) isn't configured in this environment
+    at all yet (issue #538) - graceful degradation, not an error; see that module's own
+    docstring's "Graceful degradation" section.
+
+    Never calls upstream itself, on a cache hit OR a cache miss - see
+    `cardpicker.artist_external_links.get_cached_artist_external_links`'s own docstring for why
+    that's a security property here (this endpoint literally cannot proxy a live MTGAC request),
+    not just a performance choice.
+    """
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many artist external link lookups - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    name = request.GET.get("name")
+    if not name:
+        raise BadRequestException("Missing 'name' query parameter.")
+
+    if not CanonicalArtist.objects.filter(name=name).exists():
+        return JsonResponse(ArtistExternalLinksResponse(**not_found_record()).model_dump())
+
+    result = get_cached_artist_external_links(name)
+    return JsonResponse(ArtistExternalLinksResponse(**result).model_dump())
 
 
 @csrf_exempt

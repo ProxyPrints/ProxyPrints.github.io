@@ -98,3 +98,13 @@ coverage-ack: frontend/tests/NoMatchReasonStrip.spec.ts::NoMatchReasonStrip test
 # branch - describing the new split; see the file's own "question feed - Level 2 illustration
 # grouping" describe block for both replacements.
 coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - Level 2 illustration grouping > selecting a grouped candidate submits the identical payload to the identical endpoint as an ungrouped one — superseded by C2 (#503/PR #551): renamed + split into "selecting a grouped candidate submits its illustrationId to /2/submitIllustrationVote/, not a printing list" and "selecting an ungrouped candidate (distinct or null illustrationId) still submits to /2/submitPrintingTag/, unchanged" - the old title asserted C1's now-superseded sameness contract, not a coverage drop.
+
+# MTGAC artist-links M2 applet round (docs/features/artist-support-links.md) - ArtistSupportLink
+# became a self-contained applet (RTK Query fetch, commerce-link buttons, Mark's Signature
+# Service badge, MTGAC page link, MTGAC credit line) rather than a single caller-styled `<a>`
+# wrapping caller-supplied children/className. The rail's page-link button now names the artist
+# (was "Support on MTG Artist Connection") and reads as a solid btn-primary button (was the
+# caller-supplied btn-outline-primary) - the destination-naming credit moved into the applet's
+# own "Source: MTG Artist Connection" line, asserted separately in the renamed test below. Test
+# still present, still covers the same surface, extended with the new credit-line assertion.
+coverage-ack: frontend/tests/DisplayPage.spec.ts::DisplayPage (Proposal H, Step 1) > the promoted artist line shows a plain credit + a support button naming MTG Artist Connection for a card with a known canonical artist (E2 - promoted, no longer a collapsed accordion; SPEC-display-left-rail.md §5/§8) — renamed to "the promoted artist line shows a plain credit + the MTG Artist Connection applet (page-link button, credit line) for a card with a known canonical artist (M2 applet round, docs/features/artist-support-links.md)" when ArtistSupportLink became a self-contained applet; the button now names the artist instead of the destination (the applet's own credit line names the destination instead, newly asserted), and its class changed from caller-supplied btn-outline-primary to the applet's own btn-primary. Test still present, same surface, extended not dropped.

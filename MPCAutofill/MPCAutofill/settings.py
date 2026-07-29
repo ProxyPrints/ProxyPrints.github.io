@@ -121,6 +121,12 @@ PRINTING_TAG_IMPLICIT_SUBMISSION_RATE = env("PRINTING_TAG_IMPLICIT_SUBMISSION_RA
 # deliberate vote submission - deliberately its own setting rather than sharing
 # PRINTING_TAG_SUBMISSION_RATE (an hourly budget), which would throttle normal typing.
 ARTIST_AUTOCOMPLETE_RATE = env("ARTIST_AUTOCOMPLETE_RATE", default="120/m")
+# MTGAC artist external links (cardpicker.views.get_artist_external_links) - read-only, public,
+# unauthenticated, cache-only (never calls upstream on this path - see
+# cardpicker.artist_external_links's own module docstring), keyed by IP for the same reason as
+# ARTIST_AUTOCOMPLETE_RATE above. Fires at most once per card-detail-view/display-rail render
+# rather than per keystroke, so a much lower budget than autocomplete's is appropriate.
+ARTIST_EXTERNAL_LINKS_RATE = env("ARTIST_EXTERNAL_LINKS_RATE", default="60/m")
 
 # Saved decks (see docs/proposals/proposal-g-user-accounts-saved-decks.md, decision 4). A
 # generous, configurable soft cap on named decks (SavedDeckKind.DECK rows only - snapshot rows

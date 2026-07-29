@@ -61,4 +61,5 @@ urlpatterns = [
     path("2/revokeDeckShare/", views.post_revoke_deck_share),
     path("2/getSharedDeck/", views.post_get_shared_deck),
     path("1/funnelCounts/", views.get_funnel_counts, name="get_funnel_counts"),
+    path("2/artistExternalLinks/", views.get_artist_external_links, name="get_artist_external_links"),
 ]

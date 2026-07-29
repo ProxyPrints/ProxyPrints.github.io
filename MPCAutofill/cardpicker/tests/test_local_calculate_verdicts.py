@@ -69,6 +69,7 @@ from cardpicker.local_identify_printing_tags import (
     CandidatePrinting,
 )
 from cardpicker.models import (
+    CanonicalPrintingMetadata,
     Card,
     CardPrintingTag,
     CardScanLog,
@@ -2140,6 +2141,157 @@ class TestCandidateNameIndexLazyProcessCache:
         run_join_key_calculator(dry_run=True)
 
         assert count[0] == 2
+
+
+class TestCandidateNameIndexVersionStampDetectsInPlaceWrites:
+    """PR #526's finding, applied to `CandidateNameIndex` (issue #533's third blocking
+    prerequisite, 2026-07-29). A version stamp built only from max-pk and row count is blind to an
+    UPDATE, and `import_scryfall_printing_metadata._sync_printing_metadata` BACKFILLS
+    `CanonicalPrintingMetadata.edhrec_rank` IN PLACE via
+    `bulk_update(fields=_METADATA_SYNC_FIELDS)` - moving neither. `CandidateNameIndex.__init__`
+    reads that exact column (`printing_metadata__edhrec_rank`), so under the original four-term
+    `(CanonicalCard max pk, count, CanonicalExpansion max pk, count)` stamp a worker process that
+    built its index before a metadata import served a stale, under-populated one for its whole
+    lifetime.
+
+    Every test here mutates the underlying data in a way that does NOT move max pk or row count on
+    ANY stamped table, and asserts the cache invalidates anyway. Each one ALSO asserts that the
+    original four terms are byte-identical across the mutation, so the test is proving the stamp
+    catches something max-pk/count genuinely cannot rather than accidentally passing on an
+    incidental row-count move."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self):
+        import cardpicker.local_calculate_verdicts as module
+
+        module.reset_candidate_name_index_cache_for_tests()
+        yield
+        module.reset_candidate_name_index_cache_for_tests()
+
+    @staticmethod
+    def _stamp():
+        import cardpicker.local_calculate_verdicts as module
+
+        return module._candidate_name_index_version_stamp()
+
+    @staticmethod
+    def _count_constructions(monkeypatch) -> list[int]:
+        import cardpicker.local_calculate_verdicts as module
+
+        count = [0]
+        real_init = CandidateNameIndex.__init__
+
+        def counting_init(self, *args, **kwargs):
+            count[0] += 1
+            real_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(module.CandidateNameIndex, "__init__", counting_init)
+        return count
+
+    def test_in_place_edhrec_rank_backfill_moves_the_stamp(self, db):
+        """THE #526 CASE. `.update()` on an existing row - a bare SQL UPDATE, no INSERT, no
+        DELETE - so every max-pk and every row count on every stamped table is unchanged."""
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, edhrec_rank=None)
+
+        before = self._stamp()
+        updated = CanonicalPrintingMetadata.objects.filter(canonical_card=printing).update(edhrec_rank=1234)
+        after = self._stamp()
+
+        assert updated == 1
+        # the four terms the ORIGINAL stamp was made of did not move - this is the whole point.
+        assert before[:4] == after[:4]
+        # ...nor did the metadata table's own max pk / row count.
+        assert before[4:6] == after[4:6]
+        assert before != after
+
+    def test_in_place_edhrec_re_rank_moves_the_stamp(self, db):
+        """Beyond #526: `illustration_id` is a stable UUID, so a non-null COUNT alone was enough
+        there. `edhrec_rank` is re-ranked on every weekly Scryfall dump, so a value ->
+        DIFFERENT VALUE update is the routine case - and it moves neither the row count nor the
+        non-null count. Only the SUM term catches it."""
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, edhrec_rank=1234)
+
+        before = self._stamp()
+        CanonicalPrintingMetadata.objects.filter(canonical_card=printing).update(edhrec_rank=99)
+        after = self._stamp()
+
+        assert before[:4] == after[:4]  # original four terms blind to it
+        assert before[4:7] == after[4:7]  # so are max pk, row count AND the non-null count
+        assert before[7] != after[7]  # the sum term is the one that sees it
+        assert before != after
+
+    def test_a_metadata_row_created_for_an_existing_card_moves_the_stamp(self, db):
+        """The other hole the original four-term stamp had: `CanonicalPrintingMetadata` is a
+        SEPARATE TABLE whose primary key IS `canonical_card_id`, so creating the sidecar row for
+        an already-existing `CanonicalCard` moves neither CanonicalCard max pk nor CanonicalCard
+        count - and the four-term stamp had no CanonicalPrintingMetadata term at all."""
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+
+        before = self._stamp()
+        CanonicalPrintingMetadataFactory(canonical_card=printing, edhrec_rank=7)
+        after = self._stamp()
+
+        assert before[:4] == after[:4]
+        assert before != after
+
+    def test_a_deleted_metadata_row_moves_the_stamp(self, db):
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, edhrec_rank=7)
+
+        before = self._stamp()
+        CanonicalPrintingMetadata.objects.filter(canonical_card=printing).delete()
+        after = self._stamp()
+
+        assert before[:4] == after[:4]
+        assert before != after
+
+    def test_the_cache_actually_rebuilds_on_an_in_place_backfill_and_serves_the_new_data(self, db, monkeypatch):
+        """End-to-end on the cache itself, not just the stamp: build, backfill in place, ask
+        again - a SECOND construction happens and the returned index carries the new rank. Without
+        the `edhrec_rank` terms this test fails on BOTH assertions (one construction, stale rank),
+        which is exactly the stale-index-for-the-worker's-whole-lifetime defect #526 caught."""
+        import cardpicker.local_calculate_verdicts as module
+
+        count = self._count_constructions(monkeypatch)
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, edhrec_rank=None)
+
+        first = module._get_cached_candidate_name_index()
+        assert count[0] == 1
+        assert [c.edhrec_rank for c in first.candidates_for("Some Card")] == [None]
+
+        # a second call with NO write in between must NOT rebuild - otherwise "it invalidates"
+        # would be indistinguishable from "it never caches".
+        module._get_cached_candidate_name_index()
+        assert count[0] == 1
+
+        CanonicalPrintingMetadata.objects.filter(canonical_card=printing).update(edhrec_rank=42)
+
+        second = module._get_cached_candidate_name_index()
+        assert count[0] == 2
+        assert [c.edhrec_rank for c in second.candidates_for("Some Card")] == [42]
+
+    def test_the_cached_index_is_identical_to_a_freshly_built_one(self, db):
+        """The cache is a PERFORMANCE change only: a cache hit must answer exactly what a fresh
+        build would. Compared over `candidates_for` output for every indexed name, plus the
+        de-concatenation fallback, rather than on object identity."""
+        import cardpicker.local_calculate_verdicts as module
+
+        first_printing = CanonicalCardFactory(name="Vazal, the Compleat", expansion__code="mom", collector_number="1")
+        CanonicalPrintingMetadataFactory(canonical_card=first_printing, edhrec_rank=17)
+        CanonicalCardFactory(name="Some Card", expansion__code="won", collector_number="2")
+
+        cached = module._get_cached_candidate_name_index()
+        cached_again = module._get_cached_candidate_name_index()
+        assert cached_again is cached  # a real cache hit, not a silent rebuild
+
+        fresh = CandidateNameIndex()
+        for name in ("Vazal, the Compleat", "Some Card", "VazaltheCompleat", "Nonexistent Card"):
+            assert [
+                (c.pk, c.expansion_code, c.collector_number, c.edhrec_rank) for c in cached.candidates_for(name)
+            ] == [(c.pk, c.expansion_code, c.collector_number, c.edhrec_rank) for c in fresh.candidates_for(name)]
 
 
 class TestFallbackSlowPathInteraction:

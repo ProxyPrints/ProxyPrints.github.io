@@ -93,6 +93,63 @@ def deterministic_host_load(request, monkeypatch):
     )
 
 
+# The per-worker RSS every test sees, unless it opts out with `@pytest.mark.real_process_rss`.
+# Deliberately well under `operating_envelope.RSS_MB_PER_WORKER_CEILING` (768.0, a RATIFIED number
+# - not changed here, and not to be changed to accommodate tests).
+#
+# Why this exists (2026-07-29): the envelope has ONE gate with TWO ambient sensors. The load one was
+# pinned above; this is the other. `stage_e_dispatch._sample_envelope_signals` reads this process's
+# REAL resident set size before every dispatch decision, exactly as it should in production, which
+# left every Stage E dispatch test a function of how much memory the pytest process happened to be
+# holding (38 tests are RSS-sensitive as of this commit: 25 in test_stage_e_dispatch, 6 in
+# test_stage_e_shakedown, 7 in test_stream_full_catalog - the same split as the load-sensitive set,
+# because it is one gate with two sensors. Re-measure with the override below rather than trusting
+# that count; it was 37 a few PRs ago and #545 added one). The
+# measured margin is comfortable today (the suite peaks around 348MB VmHWM against the 768MB bar,
+# ~2.2x) but it is a margin, not a guarantee: it moves with fixture growth, with a bigger
+# testcontainers footprint, and with whatever else the three agents commonly sharing this box are
+# doing. An RSS-driven failure looks exactly like an envelope bug and costs the same hours the load
+# flakes did.
+#
+# Override with TEST_PROCESS_RSS_MB to prove a test is genuinely RSS-sensitive:
+#   TEST_PROCESS_RSS_MB=900 pytest cardpicker/tests/test_stage_e_dispatch.py   # -> RSS-bar trips
+TEST_PROCESS_RSS_MB = float(os.environ.get("TEST_PROCESS_RSS_MB", 128.0))
+
+
+@pytest.fixture(autouse=True)
+def deterministic_process_rss(request, monkeypatch):
+    """
+    Pins the per-worker RSS the ENVELOPE samples, so no assertion depends on this process's ambient
+    memory. Opt out with `@pytest.mark.real_process_rss`.
+
+    THE SEAM IS `stage_e_dispatch.get_process_rss_mb`, NOT `process_metrics.get_process_rss_mb`,
+    and the difference is the whole change: `deterministic_host_load` above can patch `os.getloadavg`
+    because `stage_e_dispatch` does `import os` and resolves the attribute at CALL time, whereas
+    `stage_e_dispatch.py` does `from cardpicker.process_metrics import get_process_rss_mb`, binding
+    the function object into its own namespace at IMPORT time. Patching `process_metrics` afterwards
+    would rebind a name nobody reads and this fixture would silently do nothing - which is why
+    `test_harness_isolation.py` asserts the value the PRODUCTION sampler returns rather than merely
+    that the fixture ran, and separately proves the `process_metrics`-side patch does NOT bite.
+    That one module-local name covers both consumers: the envelope sample in
+    `_sample_envelope_signals` and the ledger's `peak_rss_mb`.
+
+    `stage_e_dispatch` is the only production importer of the helper, so nothing else is affected.
+    `test_process_metrics.py` imports from `process_metrics` directly and never reaches
+    `stage_e_dispatch`, so its real-RSS coverage keeps sampling /proc for real with no opt-out
+    needed - the primitive itself stays honestly tested. (`run_image_evidence_cohort._get_rss_mb` is
+    a separate, deliberately duplicated implementation with its own tests; untouched.)
+    """
+    if "real_process_rss" in request.keywords:
+        return
+    # String target so importing `stage_e_dispatch` stays lazy, and `raising=True` (the default) so
+    # this fails LOUDLY if that module-local name is ever renamed or removed rather than degrading
+    # back into ambient sampling.
+    monkeypatch.setattr(
+        "cardpicker.stage_e_dispatch.get_process_rss_mb",
+        lambda: TEST_PROCESS_RSS_MB,
+    )
+
+
 def google_drive_credentials_available() -> bool:
     """
     CI baseline cleanup, 2026-07-19: a real capability probe (mirrors the

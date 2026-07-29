@@ -149,9 +149,7 @@ export function CardMetaTable({
         [
           "Canonical Aritst",
           cardDocument.canonicalArtist != null ? (
-            <ArtistSupportLink artistName={cardDocument.canonicalArtist.name}>
-              {cardDocument.canonicalArtist.name}
-            </ArtistSupportLink>
+            <ArtistSupportLink artistName={cardDocument.canonicalArtist.name} />
           ) : (
             "Unknown"
           ),

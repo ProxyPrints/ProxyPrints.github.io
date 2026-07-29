@@ -11,6 +11,7 @@ import pytest
 from cardpicker.models import EnvelopeTrip
 from cardpicker.operating_envelope import (
     FETCH_FAILURE_RATE_CEILING,
+    FETCH_FAILURE_WINDOW,
     HOST_LOAD_CEILING,
     RSS_MB_PER_WORKER_CEILING,
     EnvelopeSignals,
@@ -18,6 +19,23 @@ from cardpicker.operating_envelope import (
     check_envelope,
     current_trip,
 )
+
+
+def _failures_exactly_at_the_rate_ceiling() -> int:
+    """
+    The failure count that puts a FULL `FETCH_FAILURE_WINDOW` EXACTLY on
+    `FETCH_FAILURE_RATE_CEILING` - 5 failures in 500 at today's ratified 1%/500 numbers.
+
+    Derived rather than hardcoded for the same reason ea72abf7 derived the RSS tests from
+    `RSS_MB_PER_WORKER_CEILING`: a signal literal chosen relative to a threshold rots silently when
+    the threshold moves. The rate bar's boundary case is the worst instance of that shape, because
+    it asserts `is None` - if the ceiling rose, a hardcoded 5/500 would keep passing while no longer
+    sitting on the boundary it exists to pin. The callers' own `failures / FETCH_FAILURE_WINDOW ==
+    FETCH_FAILURE_RATE_CEILING` assertion is the tether: if a future ceiling/window pair makes this
+    count non-exact, the boundary test fails LOUDLY and asks to be rethought rather than quietly
+    testing something else.
+    """
+    return round(FETCH_FAILURE_RATE_CEILING * FETCH_FAILURE_WINDOW)
 
 
 class TestCheckEnvelopeClearSignals:
@@ -46,11 +64,12 @@ class TestCheckEnvelopeClearSignals:
 
 
 class TestHostLoadBar:
-    def test_trips_above_7_0(self, db):
-        trip = check_envelope(EnvelopeSignals(load_avg=7.1))
+    def test_trips_just_above_the_host_load_ceiling(self, db):
+        load_avg = HOST_LOAD_CEILING + 0.1
+        trip = check_envelope(EnvelopeSignals(load_avg=load_avg))
         assert trip is not None
         assert trip.bar == EnvelopeTrip.Bar.HOST_LOAD
-        assert trip.detail == {"load_avg": 7.1, "ceiling": HOST_LOAD_CEILING}
+        assert trip.detail == {"load_avg": load_avg, "ceiling": HOST_LOAD_CEILING}
 
     def test_persists_a_row(self, db):
         check_envelope(EnvelopeSignals(load_avg=9.0))
@@ -70,17 +89,34 @@ class TestRssBar:
 
 
 class TestFetchFailureRateBar:
-    def test_trips_above_1_percent_over_the_window(self, db):
-        trip = check_envelope(EnvelopeSignals(fetch_failures_in_window=6, fetch_total_in_window=500))
+    def test_trips_just_above_the_rate_ceiling_over_the_window(self, db):
+        # one failure more than the ceiling allows over a full window (6/500 = 1.2% > 1% today) -
+        # derived, not hardcoded, so a future ceiling/window change can't leave this feeding a
+        # value that no longer breaches.
+        failures = _failures_exactly_at_the_rate_ceiling() + 1
+        trip = check_envelope(
+            EnvelopeSignals(fetch_failures_in_window=failures, fetch_total_in_window=FETCH_FAILURE_WINDOW)
+        )
         assert trip is not None
         assert trip.bar == EnvelopeTrip.Bar.FETCH_FAILURE_RATE
-        assert trip.detail["fetch_failure_rate"] == pytest.approx(0.012)
+        assert trip.detail["fetch_failure_rate"] == pytest.approx(failures / FETCH_FAILURE_WINDOW)
         assert trip.detail["ceiling"] == FETCH_FAILURE_RATE_CEILING
-        assert trip.detail["failures"] == 6
-        assert trip.detail["total"] == 500
+        assert trip.detail["failures"] == failures
+        assert trip.detail["total"] == FETCH_FAILURE_WINDOW
 
-    def test_exactly_1_percent_does_not_trip(self, db):
-        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=5, fetch_total_in_window=500)) is None
+    def test_exactly_at_the_rate_ceiling_does_not_trip(self, db):
+        """The `>` (not `>=`) boundary for the rate bar, the fetch-side twin of
+        TestCheckEnvelopeClearSignals::test_exactly_at_the_ceiling_does_not_trip. Derived from the
+        ceiling rather than written as 5/500: a hardcoded pair stays GREEN if the ceiling moves, it
+        just silently stops sitting on the boundary it claims to test."""
+        failures = _failures_exactly_at_the_rate_ceiling()
+        assert failures / FETCH_FAILURE_WINDOW == FETCH_FAILURE_RATE_CEILING
+        assert (
+            check_envelope(
+                EnvelopeSignals(fetch_failures_in_window=failures, fetch_total_in_window=FETCH_FAILURE_WINDOW)
+            )
+            is None
+        )
 
     def test_never_trips_on_an_empty_window(self, db):
         """total=0 means 'not enough data yet', not a 0/0 division or a spurious trip."""
@@ -162,9 +198,35 @@ class TestCurrentTrip:
         assert current_trip() is None
 
     def test_returns_the_most_recent_open_trip_when_several_exist(self, db):
+        """
+        `current_trip` is `order_by("-tripped_at").first()` - of SEVERAL simultaneously-open trips
+        it must return the NEWEST. Two things this test used to get wrong, both fixed here:
+
+          1. It fed `rss_mb_per_worker=600.0`, a literal chosen to clear the RSS ceiling back when
+             that ceiling was 512. 70225df8 raised it to 768, so `check_envelope` returned None and
+             `second` was None - and because the trip it failed to create was also the trip being
+             asserted on, the test went VACUOUS rather than red (`current_trip()` was None too, so
+             `None == None` passed). The signal is now derived from the ceiling, as ea72abf7 already
+             did for this file's other RSS tests.
+          2. It acknowledged `first` before creating `second`, so only ONE trip was ever open and
+             the ordering the test is named for was never exercised - it would still have passed
+             against a `current_trip` that returned the OLDEST open trip. Both trips now stay open.
+
+        (The acknowledged-then-newly-tripped case that the old body actually covered is kept, under
+        its own name, as `test_an_acknowledged_trip_does_not_shadow_a_later_one` below.)
+        """
+        first = check_envelope(EnvelopeSignals(load_avg=8.0))
+        second = check_envelope(EnvelopeSignals(rss_mb_per_worker=RSS_MB_PER_WORKER_CEILING + 0.1))
+        assert first is not None and second is not None
+        assert EnvelopeTrip.objects.filter(acknowledged_at__isnull=True).count() == 2
+        assert second.tripped_at > first.tripped_at
+        assert current_trip() == second
+
+    def test_an_acknowledged_trip_does_not_shadow_a_later_one(self, db):
         first = check_envelope(EnvelopeSignals(load_avg=8.0))
         acknowledge_trip(first.trip_id, "resolved")
-        second = check_envelope(EnvelopeSignals(rss_mb_per_worker=600.0))
+        second = check_envelope(EnvelopeSignals(rss_mb_per_worker=RSS_MB_PER_WORKER_CEILING + 0.1))
+        assert second is not None
         assert current_trip() == second
 
     def test_scoped_to_run_id_but_still_gated_by_an_unscoped_trip(self, db):
