@@ -210,9 +210,61 @@ class CanonicalPrintingMetadata(models.Model):
     # Null-tolerant: some records legitimately lack it (e.g. faces without art). Indexed for
     # the Stage D illustration deduction calculator's in-memory join against CanonicalCard.
     illustration_id = models.UUIDField(null=True, blank=True, db_index=True)
+    # EVERY FACE'S OWN illustration_id, not just the front's (2026-07-29). `illustration_id`
+    # above is `PrintingMetadataRow.resolved_illustration_id`, which returns
+    # `card_faces[0].illustration_id` for a multi-faced row - the FRONT face - and discards the
+    # rest. Each face of a genuine double-faced card carries its OWN artwork and its own
+    # `illustration_id` in the same bulk-data row we already parse (e.g. "Invasion of Tolvada //
+    # The Broken Sky": front e505aa78-…, back e61d567e-…), so flattening to the front made a
+    # back-face scan unattributable: the only illustration on file for that printing belonged to
+    # the other side of the card. That gap is what
+    # `local_illustration.SINGLE_FACED_ONLY_SKIP_REASON` existed to paper over.
+    #
+    # SHAPE: an ORDERED list, in Scryfall `card_faces` order (index 0 is always the front), of
+    # `{"name": str, "illustration_id": str | None}`. Written only by
+    # `printing_metadata_import.PrintingMetadataRow.face_illustrations`.
+    #
+    # EMPTY FOR EVERYTHING THAT IS NOT A GENUINE DOUBLE-FACED CARD. `split`/`adventure`/`flip`/
+    # `aftermath`/`mutate`/`prototype` also nest multiple named modes under `card_faces`, but
+    # those modes are printed on the SAME physical face - giving "Stomp" its own entry would
+    # invent a second scannable side of "Bonecrusher Giant" that does not exist. The layout
+    # allowlist is `printing_metadata_import.DOUBLE_FACED_LAYOUTS`, the same one
+    # `get_back_face_names` already uses for exactly this distinction; single-faced rows have no
+    # `card_faces` at all and are covered by the scalar `illustration_id` above.
+    #
+    # WHY JSON AND NOT `ArrayField`/RELATED ROWS. Two CORRELATED values per face (the face's name
+    # is what `local_illustration.IllustrationIndex` keys a face-named scan on; the id alone is
+    # unusable), which `ArrayField(UUIDField)` cannot carry without a second parallel array that
+    # can desynchronise from the first. A related table would add ~2,500 rows and a JOIN to an
+    # index build that is already a per-worker-cached catalog-wide hot path, to model an at-most-
+    # two-element list. JSONField also matches `frame_effects`/`promo_types` on this same model,
+    # so `_sync_printing_metadata`'s field-by-field `!=` diff already compares this shape
+    # correctly (both sides are plain Python lists of dicts).
+    face_illustrations = models.JSONField(default=list, blank=True)
 
     def __str__(self) -> str:
         return f"Printing metadata for {self.canonical_card}"
+
+    class Meta:
+        indexes = [
+            # PARTIAL index over only the rows that HAVE per-face illustrations (~2,500 of
+            # 113,224 live). Its consumer is
+            # `local_illustration._illustration_index_version_stamp`, which must count them once
+            # per calculator invocation to notice an in-place `face_illustrations` backfill -
+            # exactly the "column populated by UPDATE, so neither max pk nor row count moves"
+            # blind spot that stamp's fifth term already documents for `illustration_id`. Without
+            # a predicate matching the count's own `WHERE`, that term is a 113k-row seq scan on a
+            # path whose whole contract is O(batch); with it, it is an index-only scan of the
+            # 2,500-row subset. NOT a GIN index: nothing filters BY a face illustration value in
+            # SQL on a hot path (`printings_for_illustration`'s containment term is a read-side
+            # narrowing called at most once per resolved card), so GIN's containment support
+            # would be paid for and unused.
+            models.Index(
+                fields=["canonical_card"],
+                condition=~models.Q(face_illustrations=[]),
+                name="cpm_face_illustrations_present",
+            )
+        ]
 
 
 class Source(models.Model):
