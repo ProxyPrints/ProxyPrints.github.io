@@ -102,7 +102,9 @@ test.describe("homepage participation graph", () => {
       page.getByTestId("participation-graph-human-progress-bar")
     ).toBeVisible();
     await expect(
-      page.getByText("People are turning that into progress")
+      page.getByText(
+        "People are keeping up with what the machine routes to them"
+      )
     ).toBeVisible();
   });
 

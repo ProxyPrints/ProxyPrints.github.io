@@ -7,18 +7,29 @@
  * first place, so a worse ratio next week can't break it.
  *
  * All renders now go through a real Redux `Provider` (mirroring Navbar.test.tsx's own precedent)
- * - `ParticipationGraph` reads `useRemoteBackendConfigured` for the new "Start with one card" CTA
- * (2026-07-29 owner ruling) added alongside this guard.
+ * - `ParticipationGraph` reads `useRemoteBackendConfigured` for the "Start with one card" CTA and
+ * `useHasContributedThisSession` (`sessionContributionSlice.ts`) for the in-session green-dot
+ * mechanic, both real store-backed selectors.
+ *
+ * 2026-07-29 consumer-swap directive additions: the gate/bar now read the card-denominated ratio
+ * (`humanProgressRatioPercent` in `humanProgressReveal.ts`), so `justBelowThreshold`/
+ * `justAboveThreshold` below nudge `distinctCardsRoutedToReview` (that ratio's own denominator),
+ * not `total` (which the old votes-over-cards ratio depended on and the new one doesn't read at
+ * all). Also covers: the always-rising `distinctCardsRoutedToReviewWithHumanVotes` count, the
+ * live-skew guard (the three card-denominated fields absent entirely), and the in-session
+ * green-dot/thank-you mechanic.
  */
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import React from "react";
 import { Provider } from "react-redux";
 
+import { Participation } from "@/common/schema_types";
 import { localBackend, noBackend } from "@/common/test-constants";
 import {
   HUMAN_VOTE_REVEAL_PERCENT,
   humanProgressRatioPercent,
 } from "@/features/stats/humanProgressReveal";
+import { recordSessionContribution } from "@/features/stats/sessionContributionSlice";
 import {
   participationAtRevealThreshold,
   participationCurrentRatio,
@@ -140,18 +151,21 @@ describe("ParticipationGraph - the 'Start with one card' CTA", () => {
 
 // 2026-07-29 owner ruling: the threshold-gated human-progress series
 // (features/stats/humanProgressReveal.ts). Below HUMAN_VOTE_REVEAL_PERCENT the page is
-// byte-for-byte the design covered by the guard above; at/above it, the series joins.
+// byte-for-byte the design covered by the guard above; at/above it, the series joins and the
+// headline flips to the routed-to-review framing (2026-07-29 consumer-swap directive, item 2).
 describe("ParticipationGraph - threshold-gated human-progress series", () => {
   // Derived from the shared participationAtRevealThreshold fixture (exactly at
-  // HUMAN_VOTE_REVEAL_PERCENT's default of 10%, 237/2_370) by nudging `total` - the same
-  // humanVotes/distinctHumanVoters, only the ratio moves.
+  // HUMAN_VOTE_REVEAL_PERCENT's default of 10%, 100/1_000 card-denominated) by nudging
+  // `distinctCardsRoutedToReview` - the new ratio's own denominator (the old `total`-nudging
+  // trick no longer moves this ratio at all, since the card-denominated ratio never reads
+  // `total`).
   const justBelowThreshold = {
     ...participationAtRevealThreshold,
-    total: 2_371, // 237 / 2_371 ≈ 9.996% - just under 10%
+    distinctCardsRoutedToReview: 1_001, // 100 / 1_001 ≈ 9.99% - just under 10%
   };
   const justAboveThreshold = {
     ...participationAtRevealThreshold,
-    total: 2_369, // 237 / 2_369 ≈ 10.004% - just over 10%
+    distinctCardsRoutedToReview: 999, // 100 / 999 ≈ 10.01% - just over 10%
   };
 
   it("just below threshold: the series does not exist - no placeholder, no teaser, unchanged headline/copy", () => {
@@ -167,7 +181,7 @@ describe("ParticipationGraph - threshold-gated human-progress series", () => {
     ).toBeInTheDocument();
   });
 
-  it("at exactly the threshold: the series joins the graph, one axis, no percentage/total text", () => {
+  it("at exactly the threshold: the series joins the graph, one axis, no percentage/total text, and the headline flips to the routed-to-review framing", () => {
     const { container } = renderWithBackend(participationAtRevealThreshold);
     expect(
       screen.getByTestId("participation-graph-human-progress")
@@ -176,7 +190,9 @@ describe("ParticipationGraph - threshold-gated human-progress series", () => {
       screen.getByTestId("participation-graph-human-progress-bar")
     ).toBeInTheDocument();
     expect(
-      screen.getByText("People are turning that into progress")
+      screen.getByText(
+        "People are keeping up with what the machine routes to them"
+      )
     ).toBeInTheDocument();
     // Same hard constraints as the below-threshold guard above: still no "%" and still no
     // `total` rendered as literal text, even with the series visible.
@@ -208,5 +224,93 @@ describe("ParticipationGraph - threshold-gated human-progress series", () => {
     expect(
       screen.getByTestId("participation-graph-join-dot")
     ).toBeInTheDocument();
+  });
+
+  // 2026-07-29 consumer-swap directive, item 3 - the always-rises reward count beside the bar.
+  it("the revealed state shows the always-rising distinctCardsRoutedToReviewWithHumanVotes count as a plain count, never a percentage", () => {
+    const { container } = renderWithBackend(participationAtRevealThreshold);
+    expect(
+      screen.getByTestId("participation-graph-reviewed-count")
+    ).toHaveTextContent(
+      participationAtRevealThreshold.distinctCardsRoutedToReviewWithHumanVotes.toLocaleString()
+    );
+    expect(container.textContent).not.toMatch(/%/);
+  });
+});
+
+// 2026-07-29 directive - "the API will not have these fields yet". A real `1/catalogStats/`
+// response can, and on merge day WILL, omit `distinctCardsWithHumanVotes`/
+// `distinctCardsRoutedToReview`/`distinctCardsRoutedToReviewWithHumanVotes` entirely, even though
+// `Participation`'s TS type claims they're required (`store/api.ts` trusts the fetch response's
+// shape directly, no runtime validation) - this is the guard for that guaranteed live-skew
+// window.
+describe("ParticipationGraph - live-skew guard: the three card-denominated fields absent entirely", () => {
+  it("renders the below-threshold design unchanged - no NaN, no undefined, no thrown error, no percentage", () => {
+    const participationWithoutCardFields = {
+      ...participationAtRevealThreshold,
+    } as Partial<Participation>;
+    delete participationWithoutCardFields.distinctCardsWithHumanVotes;
+    delete participationWithoutCardFields.distinctCardsRoutedToReview;
+    delete participationWithoutCardFields.distinctCardsRoutedToReviewWithHumanVotes;
+
+    const { container } = renderWithBackend(
+      participationWithoutCardFields as Participation
+    );
+
+    expect(
+      screen.getByText("The catalog needs human eyes")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("participation-graph-human-progress")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("participation-graph-human-progress-bar")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("participation-graph-reviewed-count")
+    ).not.toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/NaN/);
+    expect(container.textContent).not.toMatch(/undefined/);
+    expect(container.textContent).not.toMatch(/%/);
+  });
+});
+
+// 2026-07-29 directive item 4 - the dashed "you could be next" dot becomes a filled green dot
+// plus a thank-you once THIS client has cast a vote in-session (sessionContributionSlice.ts).
+describe("ParticipationGraph - in-session 'you contributed' dot", () => {
+  it("is dashed/hollow, with no thank-you, before this client has voted", () => {
+    renderWithBackend(participationCurrentRatio);
+    const joinDot = screen.getByTestId("participation-graph-join-dot");
+    expect(joinDot).toHaveAttribute("stroke-dasharray", "3 2");
+    expect(joinDot).toHaveAttribute("fill", "none");
+    expect(
+      screen.queryByTestId("participation-graph-thank-you")
+    ).not.toBeInTheDocument();
+  });
+
+  it("becomes a filled green dot with a thank-you once a vote is submitted in-session", () => {
+    const store = setupStore({ backend: localBackend });
+    render(
+      <Provider store={store}>
+        <ParticipationGraph participation={participationCurrentRatio} />
+      </Provider>
+    );
+
+    const joinDot = screen.getByTestId("participation-graph-join-dot");
+    expect(joinDot).toHaveAttribute("fill", "none");
+
+    // Simulates QuestionFeed.tsx's bumpSessionCount() dispatching this on a successful vote -
+    // the SAME store instance this component tree reads from, no remount.
+    act(() => {
+      store.dispatch(recordSessionContribution());
+    });
+
+    expect(joinDot).toHaveAttribute("fill", "var(--bs-success)");
+    expect(joinDot).not.toHaveAttribute("stroke-dasharray");
+    expect(
+      screen.getByTestId("participation-graph-thank-you")
+    ).toBeInTheDocument();
+    // Green is never the only signal - the accessible name/title changes too.
+    expect(joinDot.querySelector("title")?.textContent).toMatch(/thank you/i);
   });
 });

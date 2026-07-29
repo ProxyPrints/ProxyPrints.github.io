@@ -139,19 +139,27 @@ how to frame the numbers; the backend never pre-computes that choice away.
 
 ## Cards vs. votes (`distinctCardsWithHumanVotes`, `distinctCardsRoutedToReview`, `distinctCardsRoutedToReviewWithHumanVotes`)
 
-Added 2026-07-29 so a future front-page consumer can render a
-cards-over-cards participation ratio instead of votes-over-cards. Before
-this trio of fields, the only human-activity numerator available was
-`humanVotes.total` (a vote count) against a `total`/`confirmable`
-denominator that is card-counted - dividing the two over-counts
-participation, since one card can carry several independent human votes
-(a printing tag, an artist vote, and a descriptor tag are three separate
-votes on the same card). `frontend/src/features/stats/ ParticipationGraph.tsx`'s own module docstring documents this exact
-`humanVotes.total / total` ratio as the approximation it deliberately
-avoids rendering (measured 2026-07-29, ≈0.1%, worse once machine votes
-grow) - these fields make an exact cards/cards ratio possible without
-that pitfall. Wiring the graph itself up to these fields is a separate,
-follow-up task (this pass only adds the backend counts).
+Added 2026-07-29 so a front-page consumer can render a cards-over-cards
+participation ratio instead of votes-over-cards. Before this trio of
+fields, the only human-activity numerator available was `humanVotes.total`
+(a vote count) against a `total`/`confirmable` denominator that is
+card-counted - dividing the two over-counts participation, since one card
+can carry several independent human votes (a printing tag, an artist
+vote, and a descriptor tag are three separate votes on the same card).
+`frontend/src/features/stats/ParticipationGraph.tsx`'s own module
+docstring documents this exact `humanVotes.total / total` ratio as the
+approximation it originally shipped with (measured 2026-07-29, ≈0.1%,
+worse once machine votes grow) - these fields make an exact cards/cards
+ratio possible without that pitfall.
+
+**Consumer swap shipped (2026-07-29, this task):** the homepage graph's
+gate and drawn series (`frontend/src/features/stats/humanProgressReveal.ts`'s
+`humanProgressRatioPercent`) now compute
+`distinctCardsRoutedToReviewWithHumanVotes / distinctCardsRoutedToReview`
+instead of `humanVotes.total / total` - the old votes-over-cards path (and
+its units-mismatch caveat) is deleted, not kept as a fallback. See "The
+gated human-progress series" below for the full consumer-side writeup,
+including the live-API-skew guard this swap requires.
 
 - **`distinctCardsWithHumanVotes`** - distinct `card_id` across
   `CardPrintingTag`/`CardArtistVote`/`CardTagVote`, filtered to
@@ -242,20 +250,33 @@ The owner's original idea for the homepage graph was a literal progress bar
   the ratio drops below `HUMAN_VOTE_REVEAL_PERCENT - HUMAN_VOTE_REVEAL_HYSTERESIS_PP`. This prevents the homepage layout from
   flipping on every load if the ratio sits right on the boundary.
 - **Single accessor, single computation**: `humanProgressRatioPercent()` is
-  the one place `humanVotes.total / total` is computed; both the reveal gate
-  and the drawn bar's fill width read the SAME value, computed once per
-  render in `ParticipationGraph.tsx`. Gating on one number and drawing
-  another would let the series unlock while still rendering as a hairline -
-  the exact failure this feature exists to prevent.
-- **Units caveat**: `participation.humanVotes.total` counts _votes_;
-  `participation.total` counts _cards_. One card can carry several human
-  votes (printing tag + artist + tag), so this ratio over-counts relative to
-  "distinct cards with at least one human vote" - it is an approximation of
-  catalog coverage, not an exact measure. Documented at
-  `humanProgressRatioPercent`'s own definition; swapping in an exact
-  backend field (distinct cards carrying >= 1 human vote) later is a
-  one-line change to that function's body only. That field does not exist
-  yet - not built as part of this pass.
+  the one place the ratio is computed; both the reveal gate and the drawn
+  bar's fill width read the SAME value, computed once per render in
+  `ParticipationGraph.tsx`. Gating on one number and drawing another would
+  let the series unlock while still rendering as a hairline - the exact
+  failure this feature exists to prevent.
+- **Card-denominated ratio (2026-07-29 consumer swap)**:
+  `humanProgressRatioPercent()` computes
+  `distinctCardsRoutedToReviewWithHumanVotes / distinctCardsRoutedToReview`
+  - cards over cards, with the numerator a proper subset of the
+    denominator by construction (see "Cards vs. votes" above and that
+    field's own backend test). This REPLACES the original
+    `humanVotes.total / total` votes-over-cards approximation entirely - the
+    old path (and its units-mismatch caveat, which no longer applies) is
+    deleted, not kept as a fallback.
+- **Live-API-skew guard**: `humanProgressRatioPercent()` returns `null`
+  (never `NaN`) whenever the three card-denominated fields aren't all
+  present, finite numbers on the given object - the guaranteed state of
+  every `1/catalogStats/` response until the production API is deployed
+  past PR #566 (`store/api.ts`'s `getCatalogStats` trusts the fetch
+  response's shape directly, with no runtime validation, so a real
+  response missing these fields reaches this function exactly as typed).
+  `shouldRevealHumanProgress` treats `null` as unconditionally
+  below-threshold - `ParticipationGraph.tsx` renders its below-threshold
+  design, unchanged, with no placeholder/NaN/thrown error. Covered by
+  `humanProgressReveal.test.ts`'s "live-skew guard" describe block and
+  `ParticipationGraph.test.tsx`'s matching describe block (constructs a
+  `Participation` object with the three fields deleted).
 - **Below the threshold, nothing changes**: no placeholder, no "0%
   complete" hint, no teaser - the series simply does not exist, and the
   graph is byte-for-byte the design described above. **At or above it**,
@@ -265,6 +286,38 @@ The owner's original idea for the homepage graph was a literal progress bar
   page's CTA buttons already use). Neither state ever renders a percentage,
   or `participation.total` itself, as literal text - the ratio only ever
   drives the bar's width.
+- **The headline flips too (2026-07-29 consumer-swap directive, item 2)**:
+  below threshold, the headline/copy is the `confirmable`-count call to
+  action, unchanged from today. At/above threshold, the headline switches
+  to a "cards the machine routed to people" framing - distinct copy, not
+  the below-threshold sentences with a bar bolted on. The flip is driven
+  by the same hysteresis-gated `humanProgressRevealed` boolean as the bar
+  itself, which means it is NOT a one-way latch: since
+  `distinctCardsRoutedToReview` only ever grows, the ratio can retreat
+  below the hysteresis floor even while people are actively voting
+  (denominator outrunning numerator), and the headline would revert on
+  the next load. Known, accepted limitation this pass - tracked as
+  orchestration issue #22.
+- **A count that only ever rises (item 3)**: because
+  `distinctCardsRoutedToReview` (the ratio's denominator) grows on its
+  own, the ratio - and the bar's width - can fall even on a day people are
+  actively contributing. `ParticipationGraph.tsx`'s `ReviewedCardCount`
+  renders `distinctCardsRoutedToReviewWithHumanVotes` (the ratio's
+  numerator) as a plain count beside the bar specifically because that
+  number never decreases - see that component's own comment for why it
+  is not "redundant with the bar."
+- **The in-session "you contributed" dot (item 4)**: the dot-matrix's
+  dashed "you would be the Nth" mark becomes a filled, green,
+  "you're one of them" dot plus a short thank-you once THIS browser tab
+  has cast a vote this session. Driven entirely by in-session Redux state
+  (`frontend/src/features/stats/sessionContributionSlice.ts`, dispatched
+  from `QuestionFeed.tsx`'s existing `bumpSessionCount` on every
+  successful vote) - deliberately NOT `localStorage` and NOT a new
+  "has this anonymous_id voted" endpoint (see that slice's own module
+  comment for why both were rejected). Colour is `var(--bs-success)` -
+  `colors.ts`'s existing status-good token, not a new hue - paired with
+  changed accessible-name/title text and a visible thank-you paragraph,
+  so the state never depends on colour alone.
 - A separate, always-present addition (not gated by this threshold): a
   "Start with one card" button immediately after the dot-matrix's hollow
   "you could be next" mark, linking to `/whatsthat`, gated on
@@ -333,10 +386,14 @@ imports the msw node server; see that file's own header comment and
 graph reads correctly under both today's real vote ratio and the
 post-machine-sweep ratio, with no percentage ever computed against
 `total` - see that file's own module comment; also covers the "Start with
-one card" CTA gating and the gated human-progress series, third fixture
-`participationAtRevealThreshold`), and
+one card" CTA gating, the gated human-progress series and its
+routed-to-review headline flip, the always-rising
+`distinctCardsRoutedToReviewWithHumanVotes` count, the live-skew guard
+(the three card-denominated fields deleted entirely), and the in-session
+green-dot/thank-you mechanic), and
 `frontend/src/features/stats/humanProgressReveal.test.ts` (the reveal
-threshold's own hysteresis band, pure-function level - see "The gated
+threshold's own hysteresis band and the card-denominated accessor's
+live-skew `null` guard, both pure-function level - see "The gated
 human-progress series" above). Playwright: `frontend/tests/Stats.spec.ts`
 and `frontend/tests/ParticipationGraph.spec.ts`.
 
