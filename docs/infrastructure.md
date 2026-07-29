@@ -576,6 +576,72 @@ cherry-pick-based upstreaming workflow entirely. Always scope to
 is also why force-push is banned as a routine action (see Push policy
 above).
 
+## Caches: `default` is per-process, `shared` is not
+
+`MPCAutofill/MPCAutofill/settings.py` defines two cache aliases. Picking the
+wrong one has a silent failure mode, so pick deliberately:
+
+| You are…                                                                                                                        | Use                                   | Why                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
+| computing on miss inside one view; rate-limiting; memoising something cheap to redo                                             | `django.core.cache.cache` (`default`) | `LocMemCache`, in-process, no DB round trip                                       |
+| writing from one process and reading in another — a cron/`manage.py` warmer, a `django-q` task whose output the web tier serves | `caches["shared"]`                    | `DatabaseCache` on the `shared_cache` table; survives the writing process exiting |
+
+```python
+from django.core.cache import caches
+
+caches["shared"].set("vote-stats-v1", payload, 3600)   # cron warmer
+payload = caches["shared"].get("vote-stats-v1")        # request path
+```
+
+**The failure mode this exists to prevent** (issue #538): `default` is
+`LocMemCache`, a per-process dict. A cron-invoked management command
+populates _its own_ process's memory and exits; the gunicorn process
+answering requests never sees the write. A "cron warms, endpoint reads
+cache-only" design therefore misses 100% of the time while the cron logs
+success every run and the endpoint returns its miss-fallback — healthy from
+both ends, wrong in the middle. This is not a function of worker count: a
+separate OS process is a separate memory space at one worker or twenty.
+
+**Why `default` was not simply repointed at the shared backend.** Two live
+users are correct on `default` and would get worse on a DB cache:
+
+- `django_ratelimit` (`cardpicker/views.py`) uses the _default_ cache,
+  since no `RATELIMIT_*` setting redirects it. On a DB cache every
+  rate-limited request becomes a database read plus a write — adding load
+  through the mechanism whose job is to shed it.
+- `cardpicker/review_clusters.py` caches a `list[ReviewCluster]` derived
+  from a ~135,000-row review queue. On a DB cache each read is a pickle
+  round trip through Postgres.
+
+Both write and read inside a single gunicorn worker, so both are correct
+today. Making `default` itself shared is the separate, larger change that
+has to land before `docker/django/Dockerfile`'s gunicorn `CMD` can ever
+gain `--workers` — tracked on issue #538, not to be done as a drive-by.
+
+**Ops notes.**
+
+- No new service. The `shared` cache is a table on the existing Postgres.
+- No operator step. `cardpicker/migrations/0092_shared_cache_table.py`
+  creates the table by invoking `createcachetable` through `RunPython`, and
+  `docker/django/entrypoint.sh` already runs `migrate` on every boot — so
+  the table appears in production, in CI, and in every fresh test database
+  automatically. Do not run `manage.py createcachetable` by hand; if you
+  already have, the migration no-ops rather than erroring.
+- The migration is reversible (it drops the table, guarded by
+  introspection so a double-reverse is a no-op).
+- `MAX_ENTRIES` is 1000 with `CULL_FREQUENCY` 3, both stated explicitly
+  rather than inherited from Django's 300/3. The expected load is a handful
+  of warmed blobs, so culling should never fire — and it must not, because
+  a silently culled warm blob presents exactly like the #538 bug.
+- Default `TIMEOUT` is Django's 300s. Warmers should always pass an
+  explicit TTL; one that forgets gets a 5-minute entry and finds out fast,
+  which beats a stale blob that never expires.
+- Every `shared` read and write is ordinary traffic against the main
+  Postgres, and expired rows are only reclaimed lazily on `set`. That is
+  fine for a handful of hourly-warmed blobs and is not fine for a hot path.
+  If usage grows past that, the next step is a real cache service (issue
+  #538, option 2), not a bigger table.
+
 ## Database footprint (baseline snapshot)
 
 One-query snapshot, 2026-07-19, before `ImageEvidence` (Stage C of the
