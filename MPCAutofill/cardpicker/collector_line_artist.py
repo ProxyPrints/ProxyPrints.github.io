@@ -208,6 +208,112 @@ live 220,669-row `ImageEvidence` table (206,719 of them, 93.7%, still carry a BL
   per lexicon-valid escalation attempt - typically ~21 ms/card, bounded at ~94 ms by the existing
   8-attempt ceiling.
 
+JOINT / COLLABORATIVE ARTIST CREDITS (2026-07-29) - the defect this closes, and the one place
+where compatibility is deliberately NOT a set-membership test. Worked example, verbatim from
+production (card 679, "Weathered Wayfarer (NormalPlus Greg Hildebrandt & Tim Hildebrandt)"):
+
+    legal_line_raw_text: '034/577 R ,\n2X2 « EN © GREG HILDEBRANDT & TIM HILDEBRAMBT2022 Proxy...'
+                                                                     ^^^^^^^^^^^ garbled surname
+
+The window `GREG HILDEBRANDT` matches the STANDALONE lexicon entry "Greg Hildebrandt" at ratio
+1.00 and normalized length 15. The card's actual printing (`2x2 034`) is credited to the JOINT
+entry "Greg Hildebrandt & Tim Hildebrandt", which - being 29 normalized characters against a
+15-character candidate - is only reachable in TRUNCATED mode, and TRUNCATED mode is off for the
+legal line (and off for any collector-line window that isn't the line's whole name-shaped tail).
+So the joint entry never entered `compatible_names` and a CORRECT vote was judged contradicted.
+This is not merely a measurement artefact: the same comparison drives the Stage D veto, so
+`stage-d-join-key` was silently ABSTAINING (`skip_reason="artist-mismatch"`) on collaborative
+credits. Truncation makes it worse, not better - the crop clips the RIGHT edge, so the second
+component of a joint credit is exactly the part that gets lost, and the first component surviving
+alone is the COMMON case rather than an edge case.
+
+THE SEPARATOR VOCABULARY IS MEASURED, NOT ASSUMED (read-only census of all 2,523 `CanonicalArtist`
+rows, 2026-07-29):
+  - `' & '` (space-ampersand-space): 219 rows, and it is the ONLY joint-credit form present. Every
+    one of the 219 has exactly TWO components (no three-way credit exists in the catalog), and the
+    ampersand appears in NO other context - all 219 occurrences of the character `&` are this one.
+  - `' and '`: 0 rows. `' + '`: 0. `';'`: 0. `' x '`: 0. `'|'`: 0. Dash-separated: 0.
+  - `','`: 20 rows, NONE of them joint credits - they are name suffixes ("Edward P. Beard, Jr.")
+    and the Unfinity age gag ("Mark Rosewater, Age 54½"). Splitting on it would produce "Jr." as
+    an artist, so comma is deliberately NOT a separator here. Note the 20 include
+    "Anthony S. Waters & Edward P. Beard, Jr.", a joint credit whose SECOND component itself
+    contains a comma - which is exactly why the split is on `&` only and the components are used
+    whole rather than re-split.
+  - `'/'`: 1 row, "宋其金/Song Qijin" - a transliteration of ONE person's name into two scripts, an
+    alias rather than a collaboration. Excluded on that reading; it is also inert either way,
+    since neither half is a standalone lexicon entry that could be recovered.
+So `JOINT_CREDIT_SEPARATOR_RE` is `&` and nothing else. If the lexicon ever grows a second form,
+the census above is the thing to re-run - `_joint_credit_components` is the single place to change.
+
+WHAT THE FIX IS, PRECISELY: `is_compatible_with(artist_name)` decomposes ITS ARGUMENT - the
+printing's credit - into components and asks whether any component is in the recovered compatible
+set, by EXACT normalized equality (no fuzzy ratio is introduced anywhere; the components are
+compared with the same `_normalize` the direct test already uses). `compatible_names` itself is
+NOT widened, and `canonical_name` is therefore byte-identical - the storage path cannot write a
+name it would not have written before.
+
+The direction is the whole safety argument, and it is ONE-WAY ON PURPOSE:
+  - recovered {"Greg Hildebrandt"} vs printing "Greg Hildebrandt & Tim Hildebrandt" -> COMPATIBLE.
+    The read is a truncated view of the printing's own credit, which is the physical mechanism.
+  - recovered {"Greg Hildebrandt"} vs printing "Tim Hildebrandt" -> still CONTRADICTED. Two
+    artists do NOT become compatible with each other merely because some joint entry names both;
+    only the joint STRING is ever explained by one of its own components.
+  - recovered {"Daarken & Jared Blando"} vs printing "Daarken" -> still CONTRADICTED, deliberately.
+    That direction is not truncation: the card's pixels named a collaborator the printing does not
+    credit, which is a real disagreement about WHICH printing this is. Measured cost of holding
+    this line: 0 votes - the reverse rule was implemented and censused alongside the shipped one
+    over the full 41,129-vote population and restored NOTHING the one-way rule does not, so the
+    extra false-agreement surface buys literally zero and is not shipped.
+
+WHAT IT CAN AND CANNOT DETECT, STATED PLAINLY. It can no longer distinguish "this card is credited
+to X alone" from "this card is credited to X & Y and the crop ate Y" - those two readings are
+genuinely identical in the surviving pixels, so a card whose credit really is the standalone X
+will no longer contradict a printing credited to "X & Y". That is the exact ambiguity truncation
+creates, and this module's stated rule for it is to report the SET rather than manufacture a
+confident answer. Everything else is unchanged: a printing by an artist the reading has no
+component-level relationship with is still contradicted, a non-joint printing artist is compared
+exactly as before, and an unreadable line still produces no reading and therefore no contradiction.
+
+MEASURED BLAST RADIUS - FULL census, not a sample: every one of the 41,129 positive
+`stage-d-join-key-v1` votes, re-scored end to end against read-only production, 2026-07-29, 396 s.
+(A further 16,820 `stage-d-join-key-v1` rows are `is_no_match=True` and name no printing, so there
+is nothing for them to contradict; they are outside the population by construction.) 37,589 of the
+41,129 produce a reading at all; the other 3,540 are unreadable and never contradict anything.
+
+    apparent contradictions BEFORE                     1,261  (3.07% of the population)
+    apparent contradictions AFTER                      1,218  (2.96%)
+    removed by this fix                                   43  (3.4% of all contradictions)
+    newly-created contradictions                           0  (the change only ever widens)
+
+Because the Stage D veto fires on exactly this comparison, those 43 are also 43 CURRENTLY-
+SUPPRESSED CORRECT VOTES this restores - cards on which `skip_reason="artist-mismatch"` is written
+today and will not be. All 43 are the `' & '` class; no other separator appears in any of them,
+which is what the census above predicts. Confirmed shapes among them: "Greg Hildebrandt" vs
+"Greg Hildebrandt & Tim Hildebrandt" (the reported card 679); "Zoltan Boros" vs "Zoltan Boros &
+Gabor Szikszai"; "M. W. Kaluta" vs "M. W. Kaluta & DiTerlizzi"; "Mitchell Malloy" vs "Mitchell
+Malloy & Maddie Julyk"; and the ORDER-REVERSED cases "Brian Snõddy" vs "Paolo Parente & Brian
+Snõddy" and "Gabor Szikszai" vs "Zoltan Boros & Gabor Szikszai", where the surviving name is the
+SECOND component - which is why the test is membership over ALL components rather than a prefix
+test on the first one.
+
+THE FIX DOES NOT SWALLOW GENUINE DISAGREEMENT, MEASURED ON THE SAME POPULATION. 26 of the 1,218
+surviving contradictions still involve a joint credit on one side or the other; 8 of those have a
+JOINT printing artist and were hand-checked one by one - every one is a real disagreement in which
+the recovered name is not a component of the joint credit at all ("Dermot Power" vs "Greg
+Hildebrandt & Tim Hildebrandt", "Tobihachi" vs "Justin Hernandez & Alexis Hernandez", "Jung Park"
+vs "Jana Schirmer & Johannes Voss"). They stay contradicted, correctly.
+
+WHERE THE DEFECT CAME FROM, since it matters for who else can hit it: it is a REGRESSION OF THE
+LEGAL-LINE WIDENING, not an original flaw. Re-scoring the same 41,129 votes through the pre-
+widening code path (`recover_artist_from_collector_line`, collector text only, no card-name
+narrowing) finds 748 contradictions and this fix changes NONE of them - zero of that path's
+contradictions are this class. The reason is exactly the truncation guard: a clipped
+`GREG HILDEBRAN` matches the standalone entry and the joint entry EQUALLY well in TRUNCATED mode,
+so the joint entry was already in `compatible_names`. The full-width legal line supplies the whole
+first component, which lands a FULL exact match on the standalone entry alone, and TRUNCATED mode
+is off for that text - so widening the read is what took the joint entry out of the set. Any
+future "read a wider crop" change should expect this same shape of consequence.
+
 Pure module: every reading function takes an already-built `ArtistLexicon` and does no I/O
 whatsoever. The only DB-touching functions are `load_artist_lexicon`, `build_name_artist_lookup`
 and `build_printing_artist_lookup`, which the CALLER calls once per batch and threads through -
@@ -231,6 +337,15 @@ if TYPE_CHECKING:
 TOKEN_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’.\-]*")
 
 _NON_ALPHANUMERIC_RE = re.compile(r"[^a-z0-9]+")
+
+# The joint/collaborative-credit separator, and the ONLY one - see the module docstring's
+# separator census (read-only, all 2,523 live `CanonicalArtist` rows, 2026-07-29): 219 rows carry
+# `' & '`, every one of them exactly two components, and no other joint form exists in the
+# catalog at all. Comma is excluded on purpose (its 20 rows are name suffixes like "Jr." and the
+# Unfinity age gag, never collaborations) and so is the single `'/'` row, which is one person's
+# name transliterated into two scripts. Surrounding whitespace is flexible so a lexicon that ever
+# drifts to `'A&B'` still decomposes; the ampersand itself is required.
+JOINT_CREDIT_SEPARATOR_RE = re.compile(r"\s*&\s*")
 
 MAX_CANDIDATE_WORDS = 4
 # Below this many normalized characters a candidate is not evidence of anything - see the module
@@ -274,6 +389,33 @@ def _normalize(text: str) -> str:
     docstring's step 2 for why (the lost-space read `MIKEBIE` -> `mikebierek` is not recoverable
     any other way, and OCR punctuation noise `«`/`¢`/`%®` disappears for free)."""
     return _NON_ALPHANUMERIC_RE.sub("", text.lower())
+
+
+def _joint_credit_components(artist_name: str) -> tuple[str, ...]:
+    """The individual artists named by a JOINT credit, or an EMPTY tuple when `artist_name` is not
+    one (module docstring's JOINT / COLLABORATIVE ARTIST CREDITS section).
+
+    Split on `JOINT_CREDIT_SEPARATOR_RE` only, and on the RAW string - `_normalize` erases the
+    separator along with every other non-alphanumeric character, so decomposition has to happen
+    before normalization or it cannot happen at all. Components are returned WHOLE and never
+    re-split: the live lexicon's "Anthony S. Waters & Edward P. Beard, Jr." has a comma inside its
+    second component, and treating that comma as a separator would yield "Jr." as an artist.
+
+    A DEGENERATE split - a leading or trailing ampersand, so that only one side carries a name -
+    is reported as NOT a joint credit rather than as a one-sided one: "& Foo" must not make
+    everything compatible with "Foo". The emptiness test is on the STRIPPED RAW part, deliberately
+    NOT on `_normalize`d text: `_normalize` keeps only `[a-z0-9]`, so the live lexicon's
+    "Wesley Burt & コーヘー" has a second component that normalizes to the empty string while being
+    a perfectly real collaborator. Testing the normalized form there would silently classify that
+    row as non-joint and leave its half of this defect unfixed. A component that normalizes to
+    nothing simply never matches anything in the compatible set, which is the correct outcome
+    without needing to reject the whole credit."""
+    if not artist_name or "&" not in artist_name:
+        return ()
+    components = tuple(part.strip() for part in JOINT_CREDIT_SEPARATOR_RE.split(artist_name))
+    if sum(1 for part in components if part) < 2:
+        return ()
+    return components
 
 
 @dataclass(frozen=True)
@@ -345,11 +487,25 @@ class RecoveredArtist:
         that ever drifts in casing/punctuation ("rk post" vs "RK Post") can't manufacture a
         spurious contradiction. An empty/None-ish `artist_name` is never a contradiction: absent
         data is not evidence, the same rule `local_calculate_verdicts._apply_agreement_checks`
-        already applies to every one of its own agreement checks."""
+        already applies to every one of its own agreement checks.
+
+        JOINT CREDITS (2026-07-29, module docstring's own section): a printing credited to
+        "Greg Hildebrandt & Tim Hildebrandt" is NOT contradicted by a reading of
+        "Greg Hildebrandt", because the crop clips the card's right edge and the second component
+        of a joint credit is precisely what it eats. The ARGUMENT is decomposed, never
+        `compatible_names`, which is what keeps this one-way: a joint credit is explained by any
+        ONE OF ITS OWN components, but two artists never become compatible with EACH OTHER just
+        because some joint entry somewhere names both of them. Component matching is exact
+        normalized equality - no fuzzy ratio is introduced here, so a near-miss name cannot slip
+        in through the joint path that could not already match directly."""
         if not artist_name:
             return True
-        normalized = _normalize(artist_name)
-        return any(_normalize(name) == normalized for name in self.compatible_names)
+        compatible_normalized = {_normalize(name) for name in self.compatible_names}
+        if _normalize(artist_name) in compatible_normalized:
+            return True
+        return any(
+            _normalize(component) in compatible_normalized for component in _joint_credit_components(artist_name)
+        )
 
 
 def _candidate_windows(tokens: list[str]) -> list[tuple[str, int, bool]]:
@@ -688,6 +844,7 @@ __all__ = [
     "MAX_COMPATIBLE",
     "MAX_DROPPABLE_PREFIX_LEN",
     "CANDIDATE_STOPWORDS",
+    "JOINT_CREDIT_SEPARATOR_RE",
     "ArtistLexicon",
     "build_artist_lexicon",
     "RecoveredArtist",

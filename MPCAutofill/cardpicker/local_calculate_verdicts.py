@@ -127,7 +127,14 @@ control flow (no new eligible-card population, no new `anonymous_id`, no new vot
     Measured read-only against 6,000 production rows (2026-07-29): 49.5% of set+number-resolvable
     evidence rows yield a confident artist reading, and 10.7% of those contradict.
     `is_compatible_with` (not string equality) is the criterion, so a truncated read that fits
-    several real artists at once only ever abstains when it fits NONE of them.
+    several real artists at once only ever abstains when it fits NONE of them. JOINT CREDITS
+    (2026-07-29): a printing credited to "Greg Hildebrandt & Tim Hildebrandt" is NOT contradicted
+    by a reading of either component alone - the crop clips the card's right edge, so the second
+    half of a collaborative credit is exactly what it eats. That fix restored 43 votes this veto
+    was suppressing, measured over the full 41,129-vote positive population; see
+    `collector_line_artist`'s own JOINT / COLLABORATIVE ARTIST CREDITS section for the separator
+    census and the one-way direction that keeps two artists from becoming compatible with each
+    other merely because some joint entry names both.
   - Quality/integrity gating (issue #150's `image_is_truncated`): a hard veto
     (`truncated-image` named skip) - a genuinely truncated download's partial pixel data makes any
     OCR/phash reading over it untrustworthy as evidence for anything, the same "checked before
