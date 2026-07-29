@@ -246,9 +246,12 @@ class TestOtherModelsAndTargetFields:
             source=VoteSource.OCR,
         )
 
-        # same identity AND same family, so the purge deletes `existing` first - the insert then
-        # succeeds. The conflict path is exercised by the second call below, where the row this
-        # call wrote is re-offered under a family the purge does not match.
+        # First call: a DIFFERENT family from `existing`, so the purge deletes nothing and the
+        # insert has no constraint to hit - `existing` survives untouched, and this is just the
+        # setup that puts a `some-other-engine-v1` row in the table. The conflict path is the
+        # SECOND call below, which re-offers that exact row while purging under a family that
+        # doesn't match it, so the insert genuinely collides and `ignore_conflicts` has to
+        # swallow it.
         purge_and_write_votes(
             CardTagVote,
             [
