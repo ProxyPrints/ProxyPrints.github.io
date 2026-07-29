@@ -553,6 +553,77 @@ describe("QuestionFeed", () => {
     expect(screen.queryByTestId("question-feed-rate-limited")).toBeNull();
   });
 
+  // The seam ParticipationGraph.test.tsx's own in-session green-dot tests can't see: those
+  // dispatch `recordSessionContribution()` directly and prove the homepage dot responds to it,
+  // but never prove a real vote is what fires that dispatch. THIS test is the other half - it
+  // proves `bumpSessionCount()` (the single choke point every successful vote in this feed
+  // already flows through) actually dispatches `recordSessionContribution()` into the real
+  // store, via a real vote-casting call (`APISubmitPrintingTag`), not a mocked one. If a future
+  // refactor drops that dispatch, or `bumpSessionCount` stops being the choke point, this is the
+  // test that fails - and its name says what broke.
+  it("casting a vote turns the homepage's in-session 'you contributed' dot green - a successful printing-tag vote dispatches recordSessionContribution", async () => {
+    server.use(questionFeedOnce());
+    let submittedIsNoMatch: boolean | undefined;
+    server.use(
+      http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
+        const body = (await request.json()) as { isNoMatch?: boolean };
+        submittedIsNoMatch = body.isNoMatch;
+        return HttpResponse.json(
+          { resolvedPrinting: null, isNoMatch: true, voteTally: [] },
+          { status: 200 }
+        );
+      })
+    );
+    const store = renderFeed();
+    await revealCard();
+
+    expect(store.getState().sessionContribution.hasContributedThisSession).toBe(
+      false
+    );
+
+    fireEvent.click(await screen.findByTestId("question-feed-no-match"));
+    await waitFor(() => expect(submittedIsNoMatch).toBe(true));
+
+    await waitFor(() =>
+      expect(
+        store.getState().sessionContribution.hasContributedThisSession
+      ).toBe(true)
+    );
+  });
+
+  it("a FAILED printing-tag vote does NOT turn the homepage's in-session dot green - recordSessionContribution is only dispatched on success", async () => {
+    server.use(questionFeedOnce());
+    server.use(submitTagVoteResolvesToApply);
+    server.use(
+      http.post(buildRoute("2/submitPrintingTag/"), () =>
+        HttpResponse.json(
+          {
+            name: "Bad Request",
+            message: "This card has already been resolved.",
+          },
+          { status: 400 }
+        )
+      )
+    );
+    const store = renderFeed();
+    await revealCard();
+
+    const noMatchButton = await screen.findByTestId("question-feed-no-match");
+    fireEvent.click(noMatchButton);
+
+    // Wait on the failure's own observable side-effect (the existing toast assertion pattern
+    // above) so this assertion isn't racing the rejected promise.
+    await waitFor(() => {
+      const notifications = Object.values(
+        store.getState().toasts.notifications
+      );
+      expect(notifications).toHaveLength(1);
+    });
+    expect(store.getState().sessionContribution.hasContributedThisSession).toBe(
+      false
+    );
+  });
+
   it("clears a stale rate-limit banner once the next item loads", async () => {
     let feedFetchCount = 0;
     server.use(
