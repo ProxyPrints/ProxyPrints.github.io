@@ -55,6 +55,22 @@ from cardpicker.tests.factories import (
 STREAMING_ON = override_settings(STAGE_E_STREAMING_ENABLED=True)
 
 
+def _exit_code(*argv: Any, **kwargs: Any) -> int:
+    """Run the command and return THE EXIT CODE a supervisor would actually observe.
+
+    `call_command` raises `CommandError` rather than exiting, so this reproduces what Django's own
+    `BaseCommand.run_from_argv` does with one (`sys.exit(exc.returncode)`) - which is the only
+    thing the systemd unit / wrapper script reading this command's status ever sees. Exit 0 is the
+    absence of a `CommandError`, exactly as in the real process.
+    """
+    try:
+        call_command("stream_full_catalog", *argv, **kwargs)
+    except CommandError as exc:
+        assert exc.returncode != 0, "a CommandError that exits 0 would report a failure as a success"
+        return int(exc.returncode)
+    return 0
+
+
 class _FakeBulkEntry:
     """Stands in for `printing_metadata_import.BulkDataEntry` - stage 0 only ever reads
     `updated_at` off it."""
@@ -316,7 +332,9 @@ class TestResume:
         cards = _cards(6)
 
         first = _install_recording_dispatch(monkeypatch)
-        call_command("stream_full_catalog", "--batch-size", "2", "--max-batches", "2")
+        # --max-batches with cards still left is an INCOMPLETE pass, so it exits 5 - the resume
+        # behaviour this test is about is unchanged by that.
+        assert _exit_code("--batch-size", "2", "--max-batches", "2") == 5
         assert first.dispatched_ids == [c.pk for c in cards[:4]]
 
         second = _install_recording_dispatch(monkeypatch)
@@ -336,7 +354,7 @@ class TestResume:
                 DispatchOutcome(status="halted-new-trip", trip_id="envtrip-test"),
             ],
         )
-        call_command("stream_full_catalog", "--batch-size", "2")
+        assert _exit_code("--batch-size", "2") == 3  # an envelope halt leaves work: non-zero
         assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == cards[1].pk
 
         resumed = _install_recording_dispatch(monkeypatch)
@@ -379,7 +397,7 @@ class TestResume:
                 DispatchOutcome(status="halted-new-trip", trip_id="envtrip-test"),
             ],
         )
-        call_command("stream_full_catalog", "--batch-size", "2")
+        assert _exit_code("--batch-size", "2") == 3
         output = capsys.readouterr().out
 
         assert f"RESUME scope=full-catalog resume_pk={cards[1].pk}" in output
@@ -454,7 +472,8 @@ class TestSample:
         StageEFullCatalogCursor.reset_to(FULL_CATALOG_SCOPE, cards[0].pk)
 
         recorder = _install_recording_dispatch(monkeypatch)
-        call_command("stream_full_catalog", "--sample", "8", "--batch-size", "8")
+        # a sample that finishes its own draw is a COMPLETE pass over that cohort: exit 0.
+        assert _exit_code("--sample", "8", "--batch-size", "8") == 0
 
         # the stored mark is unchanged...
         assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == cards[0].pk
@@ -591,7 +610,7 @@ class TestStopConditions:
             lambda google_lockout=False: stage_e_dispatch.EnvelopeSignals(load_avg=9.0),
         )
 
-        call_command("stream_full_catalog", "--batch-size", "1")
+        assert _exit_code("--batch-size", "1") == 3
         output = capsys.readouterr().out
 
         assert EnvelopeTrip.objects.filter(bar=EnvelopeTrip.Bar.HOST_LOAD).count() == 1
@@ -619,7 +638,7 @@ class TestStopConditions:
         )
         _install_ok_stage_c_stub(monkeypatch)
 
-        call_command("stream_full_catalog", "--batch-size", "1")
+        assert _exit_code("--batch-size", "1") == 3
         output = capsys.readouterr().out
 
         assert "halted=halted-open-trip" in output
@@ -642,7 +661,7 @@ class TestStopConditions:
             monkeypatch, outcomes=[DispatchOutcome(status="halted-open-trip", trip_id="envtrip-test")]
         )
 
-        call_command("stream_full_catalog", "--batch-size", "1", "--max-throttle-retries", "20")
+        assert _exit_code("--batch-size", "1", "--max-throttle-retries", "20") == 3
         output = capsys.readouterr().out
 
         assert waits == []  # no backoff, ever, on the halt path
@@ -704,9 +723,8 @@ class TestThrottleBackoffAndRetry:
         waits = _install_sleep_recorder(monkeypatch)
         _install_recording_dispatch(monkeypatch, outcomes=[DispatchOutcome(status="throttled-concurrency-cap")] * 5)
 
-        with pytest.raises(CommandError):
-            call_command(
-                "stream_full_catalog",
+        assert (
+            _exit_code(
                 "--max-throttle-retries",
                 "4",
                 "--throttle-backoff-initial",
@@ -714,6 +732,8 @@ class TestThrottleBackoffAndRetry:
                 "--throttle-backoff-max",
                 "3",
             )
+            == 4
+        )
 
         assert waits == [1.0, 2.0, 3.0, 3.0]  # doubling, then pinned at the ceiling
 
@@ -730,7 +750,7 @@ class TestThrottleBackoffAndRetry:
             monkeypatch, outcomes=[DispatchOutcome(status="throttled-concurrency-cap")] * 20
         )
 
-        with pytest.raises(CommandError, match="concurrency cap did not clear"):
+        with pytest.raises(CommandError, match="concurrency cap did not clear") as exc_info:
             call_command(
                 "stream_full_catalog",
                 "--batch-size",
@@ -742,6 +762,9 @@ class TestThrottleBackoffAndRetry:
                 "--throttle-backoff-max",
                 "0.01",
             )
+        # code 4 specifically, not just "non-zero": a supervisor may safely relaunch THIS one
+        # unattended once the cap frees up, which it must never do for an envelope halt (3).
+        assert exc_info.value.returncode == 4
         output = capsys.readouterr().out
 
         # the first attempt plus exactly 3 retries - bounded, never unbounded.
@@ -808,20 +831,19 @@ class TestThrottleBackoffAndRetry:
             (acquired,) = cursor.fetchone()
             assert acquired is True, "test setup failed to claim the only slot"
         try:
-            with pytest.raises(CommandError):
-                call_command(
-                    "stream_full_catalog",
-                    "--batch-size",
-                    "1",
-                    "--max-throttle-retries",
-                    "2",
-                    "--throttle-backoff-initial",
-                    "0.01",
-                    "--throttle-backoff-max",
-                    "0.01",
-                )
+            code = _exit_code(
+                "--batch-size",
+                "1",
+                "--max-throttle-retries",
+                "2",
+                "--throttle-backoff-initial",
+                "0.01",
+                "--throttle-backoff-max",
+                "0.01",
+            )
         finally:
             raw.close()
+        assert code == 4
 
         output = capsys.readouterr().out
         assert len(waits) == 2
@@ -914,7 +936,8 @@ class TestProgressOutput:
         _cards(10)
         recorder = _install_recording_dispatch(monkeypatch)
 
-        call_command("stream_full_catalog", "--batch-size", "2", "--max-batches", "3")
+        # 10 cards, 3 batches of 2 -> 4 cards left over, so the bound truncated the pass: exit 5.
+        assert _exit_code("--batch-size", "2", "--max-batches", "3") == 5
         output = capsys.readouterr().out
 
         assert len(recorder.calls) == 3
@@ -924,7 +947,9 @@ class TestProgressOutput:
         CardFactory(content_phash=1)
         recorder = _install_recording_dispatch(monkeypatch)
 
-        call_command("stream_full_catalog")
+        # NON-ZERO (code 6): the whole cohort is left unprocessed, so a supervisor must not read
+        # this as a completed pass. It is still a no-op in every other sense.
+        assert _exit_code() == 6
         output = capsys.readouterr().out
 
         assert "no-op" in output
@@ -940,9 +965,11 @@ class TestDryRun:
         _cards(7)
         recorder = _install_recording_dispatch(monkeypatch)
 
-        call_command("stream_full_catalog", "--batch-size", "3", "--dry-run")
+        # EXIT ZERO: a dry run did exactly what was asked of it - it is not an interrupted pass.
+        assert _exit_code("--batch-size", "3", "--dry-run") == 0
         output = capsys.readouterr().out
 
+        assert "PASS COMPLETE exit_code=0 reason=dry-run-plan-only" in output
         assert "Cohort: 7 cards remaining" in output
         assert "planned_batches=3" in output
         assert "DRY RUN" in output
@@ -973,8 +1000,10 @@ class TestArgumentValidation:
     def test_non_positive_values_are_command_errors(self, db: Any, argv: List[str]) -> None:
         """Validated BEFORE the streaming-enabled gate (stage_e_shakedown's own convention) - a bad
         invocation must never look like a silent, successful no-op."""
-        with pytest.raises(CommandError):
+        with pytest.raises(CommandError) as exc_info:
             call_command("stream_full_catalog", *argv)
+        # code 1 - Django's own CommandError default: the INVOCATION was rejected, nothing ran.
+        assert exc_info.value.returncode == 1
 
 
 class TestFullCatalogCursorModel:
@@ -1060,8 +1089,9 @@ class TestStageZeroFreshness:
         recorder = _install_recording_dispatch(monkeypatch)
         monkeypatch.setattr(stream_full_catalog, "_is_fresh", lambda path, entry: False)
 
-        with pytest.raises(CommandError, match="STAGE 0 FAILED"):
+        with pytest.raises(CommandError, match="STAGE 0 FAILED") as exc_info:
             call_command("stream_full_catalog", "--require-fresh")
+        assert exc_info.value.returncode == 2  # "did not start", distinct from every mid-pass stop
 
         # verify-only: nothing refreshed (the autouse fixture would fail the test), nothing
         # dispatched.
@@ -1081,9 +1111,10 @@ class TestStageZeroFreshness:
 
         monkeypatch.setattr(stream_full_catalog, "_get_default_cards_entry", _boom)
 
-        with pytest.raises(CommandError, match="could not read Scryfall's /bulk-data entry"):
+        with pytest.raises(CommandError, match="could not read Scryfall's /bulk-data entry") as exc_info:
             call_command("stream_full_catalog")
 
+        assert exc_info.value.returncode == 2
         assert recorder.calls == []
         assert PilotRunLedger.objects.count() == 0
         assert StageEFullCatalogCursor.objects.count() == 0
@@ -1099,9 +1130,10 @@ class TestStageZeroFreshness:
 
         monkeypatch.setattr(stream_full_catalog, "import_scryfall_printing_metadata", _boom)
 
-        with pytest.raises(CommandError, match="half-imported"):
+        with pytest.raises(CommandError, match="half-imported") as exc_info:
             call_command("stream_full_catalog")
 
+        assert exc_info.value.returncode == 2
         assert recorder.calls == []
         assert PilotRunLedger.objects.count() == 0
 
@@ -1181,7 +1213,7 @@ class TestStageZeroFreshness:
 
         monkeypatch.setattr(stream_full_catalog, "_get_default_cards_entry", _boom)
 
-        call_command("stream_full_catalog")
+        assert _exit_code() == 6  # the gate is still checked BEFORE stage 0, it just reports honestly now
 
 
 class TestSourceScoping:
@@ -1239,8 +1271,9 @@ class TestSourceScoping:
         CardFactory(content_phash=1, source=Source.objects.get(key="real_drive"))
         recorder = _install_recording_dispatch(monkeypatch)
 
-        with pytest.raises(CommandError, match="unknown source key"):
+        with pytest.raises(CommandError, match="unknown source key") as exc_info:
             call_command("stream_full_catalog", "--source", "typo_drive")
+        assert exc_info.value.returncode == 1
 
         assert recorder.calls == []
         assert StageEFullCatalogCursor.objects.count() == 0
@@ -1354,11 +1387,12 @@ class TestResumeMarkIsKeyedByScope:
         b_cards = [CardFactory(content_phash=i, source=source_b) for i in (5, 6, 7, 8)]
 
         first = _install_recording_dispatch(monkeypatch)
-        call_command("stream_full_catalog", "--source", "a", "--batch-size", "2", "--max-batches", "1")
+        # both bounded runs stop with cards left in their own scope, hence exit 5 apiece
+        assert _exit_code("--source", "a", "--batch-size", "2", "--max-batches", "1") == 5
         assert first.dispatched_ids == [c.pk for c in a_cards[:2]]
 
         second = _install_recording_dispatch(monkeypatch)
-        call_command("stream_full_catalog", "--source", "b", "--batch-size", "2", "--max-batches", "1")
+        assert _exit_code("--source", "b", "--batch-size", "2", "--max-batches", "1") == 5
         assert second.dispatched_ids == [c.pk for c in b_cards[:2]]
 
         # each scope picks up its OWN remainder, neither confused by the other.
@@ -1400,3 +1434,273 @@ class TestResumeMarkIsKeyedByScope:
         assert parse_source_keys(["a,b"]) == ["a", "b"]
         assert parse_source_keys(["a, b", "c"]) == ["a", "b", "c"]
         assert parse_source_keys([" , "]) is None
+
+
+def _verdict_line(output: str) -> str:
+    """The command's own final verdict line (`PASS COMPLETE ...` / `PASS STOPPED EARLY ...`),
+    which is required to be the LAST thing every terminating path writes to stdout."""
+    lines = [line for line in output.splitlines() if line.strip()]
+    assert lines, "no stdout at all"
+    return lines[-1]
+
+
+class TestExitCodeContract:
+    """OWNER RULING (2026-07-29): ANY termination that leaves work in the cohort exits NON-ZERO;
+    exit zero is reserved for genuine cohort exhaustion.
+
+    This command runs UNATTENDED across ~230k cards and a supervisor decides whether the pass
+    finished by reading its exit status - so an envelope halt exiting 0 (which is what it used to
+    do) told that supervisor the opposite of the truth. These tests pin the whole table down,
+    including the two directions that are easy to get subtly wrong: the SAME stop condition can be
+    complete or incomplete depending only on whether work is left (`--max-batches`), and the
+    human-readable verdict line must never contradict the number.
+
+    The stop CONDITIONS themselves are untouched by any of this - `TestStopConditions` and
+    `TestThrottleBackoffAndRetry` above still own those, and still prove the halt hard-stops with
+    no backoff and the throttle retries within its budget.
+    """
+
+    @STREAMING_ON
+    def test_a_genuinely_exhausted_cohort_is_the_completed_case(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        _cards(4)
+        _install_recording_dispatch(monkeypatch)
+
+        assert _exit_code("--batch-size", "2") == 0
+        output = capsys.readouterr().out
+
+        assert "stopped_reason=cohort-exhausted" in output
+        assert _verdict_line(output).startswith("PASS COMPLETE exit_code=0 reason=cohort-exhausted")
+
+    @STREAMING_ON
+    def test_a_pass_that_already_finished_still_exits_zero(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The bare relaunch after a completed pass - nothing remains, so nothing was left
+        undone."""
+        _cards(2)
+        _install_recording_dispatch(monkeypatch)
+        assert _exit_code("--batch-size", "10") == 0
+        capsys.readouterr()
+
+        recorder = _install_recording_dispatch(monkeypatch)
+        assert _exit_code("--batch-size", "10") == 0
+        output = capsys.readouterr().out
+
+        assert recorder.calls == []
+        assert "Nothing to do." in output
+        assert _verdict_line(output).startswith("PASS COMPLETE exit_code=0 reason=cohort-exhausted")
+        assert "is EMPTY" not in output  # it FINISHED; it was never empty
+
+    @STREAMING_ON
+    def test_an_empty_scope_exits_zero_but_says_so_loudly(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """A `--source` key that EXISTS but whose drive has no indexed cards yet:
+        complete-but-vacuous. Zero work remains, which is the ruling's own definition of complete,
+        so it exits 0 - but the operator situation is real (the catalog import for that drive has
+        not run), so it gets a loud warning rather than a fake failure. The other reading of this
+        case, a MISSPELLED key, is caught far earlier and far more precisely as a code-1
+        unknown-key error, so nothing is lost by exiting 0 here."""
+        SourceFactory(key="empty_drive", name="Empty Drive")
+        other = SourceFactory(key="stocked_drive", name="Stocked Drive")
+        CardFactory(content_phash=1, source=other)
+        recorder = _install_recording_dispatch(monkeypatch)
+
+        assert _exit_code("--source", "empty_drive") == 0
+        output = capsys.readouterr().out
+
+        assert recorder.calls == []
+        assert "is EMPTY" in output
+        assert "no indexed cards with a content_phash yet" in output
+        assert _verdict_line(output).startswith("PASS COMPLETE exit_code=0 reason=cohort-empty")
+
+    @STREAMING_ON
+    def test_max_batches_landing_exactly_on_exhaustion_is_complete(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The check is "is any work left", never "was the bound hit" - 4 cards in 2 batches of 2
+        under --max-batches 2 is a finished pass, and exiting 5 there would send a supervisor
+        chasing a run that had actually completed."""
+        _cards(4)
+        _install_recording_dispatch(monkeypatch)
+
+        assert _exit_code("--batch-size", "2", "--max-batches", "2") == 0
+        output = capsys.readouterr().out
+
+        assert "reached exactly as the cohort ran out" in output
+        assert _verdict_line(output).startswith("PASS COMPLETE exit_code=0 reason=cohort-exhausted")
+
+    @STREAMING_ON
+    def test_max_batches_with_cards_left_is_incomplete(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """A deliberate operator bound, NOT a fault - but still an incomplete pass, and a
+        supervisor cannot otherwise tell "you asked me to stop" from "I finished". Its own code
+        (5) is what keeps that distinction available to one."""
+        cards = _cards(6)
+        _install_recording_dispatch(monkeypatch)
+
+        assert _exit_code("--batch-size", "2", "--max-batches", "2") == 5
+        output = capsys.readouterr().out
+
+        assert "stopped_reason=max-batches-reached" in output
+        assert "This is the bound you asked for, not a fault" in output
+        verdict = _verdict_line(output)
+        assert verdict.startswith("PASS STOPPED EARLY exit_code=5 reason=max-batches-reached")
+        assert f"resume_pk={cards[3].pk}" in verdict
+
+    @STREAMING_ON
+    def test_max_batches_truncating_a_sample_is_incomplete_too(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """A --sample run has no pk-walk left to probe, so "is any work left" is answered from the
+        sample offset instead - the same question, the same answer."""
+        _cards(40)
+        _install_recording_dispatch(monkeypatch)
+
+        assert _exit_code("--sample", "8", "--batch-size", "2", "--max-batches", "2") == 5
+        assert _verdict_line(capsys.readouterr().out).startswith("PASS STOPPED EARLY exit_code=5")
+
+    @STREAMING_ON
+    def test_a_sample_that_runs_out_exactly_on_the_bound_is_complete(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        _cards(40)
+        _install_recording_dispatch(monkeypatch)
+
+        assert _exit_code("--sample", "4", "--batch-size", "2", "--max-batches", "2") == 0
+        assert _verdict_line(capsys.readouterr().out).startswith("PASS COMPLETE exit_code=0")
+
+    @STREAMING_ON
+    @pytest.mark.parametrize("halt_status", ["halted-open-trip", "halted-new-trip"])
+    def test_both_envelope_halt_statuses_exit_three(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, halt_status: str
+    ) -> None:
+        """THE bug this change exists to fix: both halt statuses used to exit ZERO, so a supervisor
+        reading exit 0 on a trip recorded a full-catalog pass as complete with ~229k cards
+        untouched. The hard stop itself is unchanged - still immediate, still no retry, no backoff,
+        no self-resume (proved by TestStopConditions above); only the report changed."""
+        cards = _cards(6)
+        waits = _install_sleep_recorder(monkeypatch)
+        recorder = _install_recording_dispatch(
+            monkeypatch,
+            outcomes=[
+                DispatchOutcome(status="completed", card_ids=[cards[0].pk, cards[1].pk]),
+                DispatchOutcome(status=halt_status, trip_id="envtrip-test"),
+            ],
+        )
+
+        assert _exit_code("--batch-size", "2") == 3
+        output = capsys.readouterr().out
+
+        assert len(recorder.calls) == 2  # stopped AT the halt, no retry past it
+        assert waits == []  # and no backoff on the halt path, ever
+        verdict = _verdict_line(output)
+        assert verdict.startswith("PASS STOPPED EARLY exit_code=3 reason=envelope-halt")
+        assert f"resume_pk={cards[1].pk}" in verdict  # the halted batch's own pks are NOT claimed
+        assert "resolve_envelope_trip" in output
+
+    @STREAMING_ON
+    def test_the_throttle_budget_and_the_envelope_halt_have_different_codes(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The operationally expensive distinction: 4 is safe for a supervisor to relaunch
+        unattended once the cap frees up, 3 must NEVER be auto-relaunched because the trip needs a
+        human acknowledgement first and a relaunch would only re-trip."""
+        _cards(4)
+        _install_sleep_recorder(monkeypatch)
+        _install_recording_dispatch(monkeypatch, outcomes=[DispatchOutcome(status="throttled-concurrency-cap")] * 10)
+
+        assert (
+            _exit_code(
+                "--batch-size",
+                "2",
+                "--max-throttle-retries",
+                "1",
+                "--throttle-backoff-initial",
+                "0.01",
+                "--throttle-backoff-max",
+                "0.01",
+            )
+            == 4
+        )
+        assert _verdict_line(capsys.readouterr().out).startswith(
+            "PASS STOPPED EARLY exit_code=4 reason=throttle-retries-exhausted"
+        )
+
+    @STREAMING_ON
+    def test_a_stage_zero_failure_exits_two_and_says_the_pass_never_started(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        _cards(4)
+        recorder = _install_recording_dispatch(monkeypatch)
+        monkeypatch.setattr(stream_full_catalog, "_is_fresh", lambda path, entry: False)
+
+        assert _exit_code("--require-fresh") == 2
+        output = capsys.readouterr().out
+
+        assert recorder.calls == []
+        assert _verdict_line(output).startswith("PASS STOPPED EARLY exit_code=2 reason=stage-0-freshness-failed")
+
+    def test_the_streaming_gate_exits_six_with_the_whole_cohort_left(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """`stream_backstop_sweep`/`stage_e_shakedown` may exit 0 here - they are cron-invoked and
+        have a next scheduled run. THIS COMMAND HAS NO NEXT INVOCATION, so a silent zero would
+        record a full-catalog pass as complete having dispatched nothing at all."""
+        _cards(3)
+        recorder = _install_recording_dispatch(monkeypatch)
+
+        assert _exit_code() == 6
+        output = capsys.readouterr().out
+
+        assert recorder.calls == []
+        assert _verdict_line(output).startswith("PASS STOPPED EARLY exit_code=6 reason=streaming-disabled")
+
+    @STREAMING_ON
+    def test_a_stopped_early_verdict_always_carries_a_resume_pk_and_a_relaunch_argument(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Requirement 4 of the ruling, as its own test: the verdict line is what an operator
+        reading a truncated multi-hour log looks for, so a stopped-early one has to be actionable
+        on its own."""
+        source = SourceFactory(key="d", name="D")
+        cards = [CardFactory(content_phash=i, source=source) for i in (1, 2, 3, 4)]
+        _install_recording_dispatch(monkeypatch)
+
+        assert _exit_code("--source", "d", "--batch-size", "2", "--max-batches", "1") == 5
+        verdict = _verdict_line(capsys.readouterr().out)
+
+        assert "scope=source:d" in verdict
+        assert f"resume_pk={cards[1].pk}" in verdict
+        assert f"--start-pk {cards[1].pk}" in verdict
+
+    @STREAMING_ON
+    def test_the_verdict_line_never_disagrees_with_the_exit_code(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The invariant behind the whole table, checked across a completed pass, a halt and an
+        operator bound in one go: whatever the code is, the words agree with it, and the number in
+        the words IS the number the process exits with. Each scenario gets its OWN --source scope
+        so neither the cohort nor the resume mark leaks between them."""
+        scenarios = [
+            (["--batch-size", "10"], None, 0),
+            (["--batch-size", "1"], [DispatchOutcome(status="halted-new-trip", trip_id="t")], 3),
+            (["--batch-size", "1", "--max-batches", "1"], None, 5),
+        ]
+        for index, (argv, outcomes, expected) in enumerate(scenarios):
+            key = f"verdict{index}"
+            source = SourceFactory(key=key, name=key)
+            for phash in range(1, 5):
+                CardFactory(content_phash=phash, source=source)
+            _install_recording_dispatch(monkeypatch, outcomes=outcomes)
+            capsys.readouterr()
+
+            code = _exit_code("--source", key, *argv)
+            verdict = _verdict_line(capsys.readouterr().out)
+
+            assert code == expected, argv
+            assert f"exit_code={code}" in verdict, verdict
+            assert verdict.startswith("PASS COMPLETE" if code == 0 else "PASS STOPPED EARLY"), verdict

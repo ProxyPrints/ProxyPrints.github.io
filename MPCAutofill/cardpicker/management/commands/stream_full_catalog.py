@@ -51,9 +51,10 @@ not-this-change work.
     neither comparable across the run nor reproducible from it. Stage 0 therefore runs to
     completion before batch 0 dispatches, and never runs again for the lifetime of the invocation.
   * FAIL BEFORE ANY DISPATCH. Any stage-0 failure - network, partial download, import error -
-    aborts with a non-zero exit BEFORE a single batch is dispatched, and writes nothing. For a run
-    intended to complete unattended across ~230k cards the acceptable outcomes are "did not start"
-    and "ran to completion", never "started against stale or half-imported reference data".
+    aborts with a non-zero exit (code 2) BEFORE a single batch is dispatched, and writes
+    nothing. For a run intended to complete unattended across ~230k cards the acceptable outcomes
+    are "did not start" and "ran to completion", never "started against stale or half-imported
+    reference data".
   * REPORT WHAT IT DECIDED, including on a RESUME. The verdict (fresh-and-skipped vs
     stale-and-refreshed), the remote `updated_at` it compared against and the local cache's own
     age are all logged. A REFRESH ON A RESUMED RUN is called out loudly: it has exactly the same
@@ -128,7 +129,10 @@ is the system saying STOP.
     NO SELF-RESUME is a binding design gate (`stage_e_dispatch.py`'s own note): an envelope trip
     requires an explicit human acknowledgement via `resolve_envelope_trip`, and nothing in this
     command may retry past one, sleep and re-sample hoping it clears, or acknowledge it. The
-    resume pk is printed and the pass ends.
+    resume pk is printed and the pass ends - with EXIT CODE 3, because it ends with cards still
+    unprocessed. (It used to end with exit 0, which told a supervisor the opposite of the truth;
+    see the EXIT CODES section below. Only the reporting changed - the hard stop itself is
+    untouched and remains a binding design gate.)
   * `throttled-concurrency-cap` - BOUNDED EXPONENTIAL BACKOFF AND RETRY OF THE SAME CHUNK, not a
     stop. A throttle means every `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slot is currently
     held by another in-flight dispatch; it is transient and SELF-CLEARING as those dispatches
@@ -138,7 +142,7 @@ is the system saying STOP.
     `--max-throttle-retries` CONSECUTIVE throttled attempts; the consecutive counter resets to
     zero on any successful dispatch. Exhausting the budget is the genuine "the cap is not
     clearing, a human needs to look" signal: the command then stops, prints the resume pk, and
-    exits NON-ZERO.
+    exits NON-ZERO (code 4).
 
     THIS IS NOT A BREACH OF `stage_e_dispatch.py`'s OWN CONCERN, IT IS THE MITIGATION THAT CONCERN
     ASKS FOR. That module's docstring (and `stream_backstop_sweep.py`'s) warns specifically
@@ -151,6 +155,72 @@ is the system saying STOP.
     reading the log can tell a SATURATED pipeline from a STALLED one.
 
 The resume pk is printed on every exit path, whatever the reason.
+
+EXIT CODES - THE SUPERVISOR CONTRACT (owner ruling, 2026-07-29). This command is designed to run
+UNATTENDED to completion under a systemd unit or a wrapper script, and that supervisor decides
+whether the pass finished by reading the process's exit status. The BINDING RULE is therefore:
+
+    ANY TERMINATION THAT LEAVES WORK IN THE COHORT EXITS NON-ZERO.
+    EXIT ZERO IS RESERVED FOR GENUINE COHORT EXHAUSTION.
+
+This corrects an inconsistency the command shipped with: an envelope halt used to exit ZERO even
+though it stops the pass mid-cohort, so a supervisor reading exit 0 on a trip concluded the pass
+had completed when in fact ~229,000 cards were still unprocessed. Nothing about WHEN the command
+stops changed - only what it REPORTS on the way out. The envelope halt still hard-stops
+immediately with no retry, no backoff and no self-resume, and a throttle still backs off and
+retries within its budget.
+
+  code  meaning                                   what the supervisor should do
+  ----  ----------------------------------------  ---------------------------------------------
+  0     COMPLETE. Genuine cohort exhaustion -     Nothing. The pass finished. (Also: `--dry-run`
+        every card in this pass's cohort was      reported its plan; an empty cohort had nothing
+        dispatched and nothing remains.           to dispatch. Both did exactly what was asked.)
+  1     INVOCATION REJECTED before anything ran   Fix the command line. Never retry verbatim.
+        - a bad flag value or an unknown
+        `--source` key. Django's own default
+        `CommandError` code.
+  2     STAGE 0 FAILED - Scryfall reference data  Fix the network / the cache, then relaunch.
+        could not be verified or refreshed.       Nothing was dispatched and nothing was written.
+  3     ENVELOPE HALT (`halted-open-trip` /       STOP. Do NOT auto-relaunch. A human must
+        `halted-new-trip`). Work REMAINS.         acknowledge the trip via `resolve_envelope_trip`
+                                                  (docs/features/stage-e-operations.md) first.
+  4     THROTTLE-RETRY BUDGET EXHAUSTED - the     Safe to relaunch later, unattended, once the
+        concurrency cap never cleared. Work       cap is free. If it recurs, a human should look
+        REMAINS.                                  for wedged dispatches.
+  5     `--max-batches` BOUND REACHED with cards  Expected if the operator passed the flag on
+        still in the cohort. Work REMAINS.        purpose. Relaunch to continue from the printed
+                                                  resume pk.
+  6     STREAMING DISABLED                        Flip the setting, then relaunch. The pass never
+        (`settings.STAGE_E_STREAMING_ENABLED`     started.
+        is False). The WHOLE cohort remains.
+
+WHY DISTINCT CODES RATHER THAN A SINGLE 1: each one maps to a DIFFERENT supervisor action, and
+the differences are the operationally expensive kind. 3 must never be auto-relaunched (the trip
+needs a human acknowledgement, and relaunching just re-trips); 4 is safe to auto-relaunch and
+usually resolves itself; 5 is not a fault at all; 2 and 6 never dispatched anything so there is
+nothing to reconcile. A supervisor that could only see "non-zero" would either page a human for a
+deliberate `--max-batches` bound or, worse, hammer a tripped envelope.
+
+WHY `--dry-run` IS ZERO: it did precisely what was asked of it (report the plan, write nothing).
+It is not an interrupted pass, so treating it as a failure would make "check the plan first" an
+operation a supervisor cannot script.
+
+WHY `--max-batches` IS NON-ZERO: it IS a deliberate operator bound rather than a fault, but it
+still ends the invocation with cards unprocessed, and a supervisor cannot otherwise tell "you
+asked me to stop" from "I finished". Its own code (5) is what keeps the distinction available.
+The bound reached EXACTLY as the cohort ran out is exit 0 - the check is "is any work left", not
+"was the bound hit".
+
+WHY AN EMPTY COHORT IS ZERO: nothing remains in it, which is the definition the ruling uses. The
+false-success this could mask - a typo'd `--source` key "completing" a zero-card pass - is
+already caught upstream and much more precisely, as a code-1 `CommandError` on the unknown key. A
+key that EXISTS but whose drive has no indexed cards yet is a real operator situation, so it gets
+a loud warning line rather than a fake failure.
+
+THE EXIT CODE AND THE HUMAN-READABLE OUTPUT MAY NEVER DISAGREE. Every terminating path writes one
+final verdict line - `PASS COMPLETE exit_code=0 ...` or `PASS STOPPED EARLY exit_code=N ...` -
+carrying the reason, the resume scope and the resume pk. That line, not the `DONE`/`PROGRESS`
+counters above it, is what an operator reading a truncated log should look for.
 
 `--reextract` AND `--short-circuit`/`--no-short-circuit` ARE INDEPENDENT. They used to be one
 setting inside the conveyor (`force_stage_c_reextract=True` hardcoded `short_circuit=False`) -
@@ -165,7 +235,10 @@ the operator overrides it on the command line.
 DEFAULT-OFF, same gate as every other streaming entry point (`settings.STAGE_E_STREAMING_ENABLED`)
 - this command exits immediately, doing nothing, whenever that flag is False, matching
 `stream_backstop_sweep`/`stage_e_shakedown`'s own explicit early-exit convention rather than
-relying on `dispatch_micro_batch`'s own `"disabled"` status to no-op silently mid-loop.
+relying on `dispatch_micro_batch`'s own `"disabled"` status to no-op silently mid-loop. It exits
+NON-ZERO (code 6) when it does, unlike those two cron-invoked drivers: the whole cohort is left
+unprocessed, and a supervisor that read exit 0 here would record a full-catalog pass as complete
+when it never dispatched a single batch.
 
 PROGRESS OUTPUT IS BUILT FOR AN UNATTENDED RUN - assume nobody is watching most of the time. The
 PER-BATCH line is debug-level (emitted to `logger.debug` always, and to stdout only at
@@ -262,6 +335,24 @@ DEFAULT_PROGRESS_EVERY_SECONDS = 300.0
 
 
 FULL_CATALOG_SCOPE = "full-catalog"
+
+
+# THE SUPERVISOR CONTRACT (module docstring's own EXIT CODES table - keep the two in step). Owner
+# ruling 2026-07-29: any termination that leaves work in the cohort exits NON-ZERO; exit zero is
+# reserved for genuine cohort exhaustion. Every non-zero code below is raised as a
+# `CommandError(..., returncode=...)`, which is this file's single existing idiom for a non-zero
+# exit (stage 0 and the throttle budget both already used it) - Django's `run_from_argv` turns that
+# into `sys.exit(returncode)`, so there is no `sys.exit` anywhere in this module to mix styles with.
+EXIT_OK = 0
+# 1 is Django's own `CommandError` default and is never passed explicitly: it is what an argument
+# validation failure or an unknown `--source` key already exits with, i.e. "the invocation itself
+# was rejected, nothing ran".
+EXIT_INVOCATION_REJECTED = 1
+EXIT_STAGE_ZERO_FAILED = 2
+EXIT_ENVELOPE_HALT = 3
+EXIT_THROTTLE_BUDGET_EXHAUSTED = 4
+EXIT_MAX_BATCHES_REACHED = 5
+EXIT_STREAMING_DISABLED = 6
 
 
 def resume_scope_for(source_keys: Optional[List[str]]) -> str:
@@ -453,7 +544,7 @@ class Command(BaseCommand):
             default=DEFAULT_MAX_THROTTLE_RETRIES,
             help="How many CONSECUTIVE throttled dispatch attempts to ride out (with exponential "
             "backoff between them) before concluding the concurrency cap is not clearing and "
-            "stopping with a non-zero exit. The counter resets on any successful dispatch. "
+            "stopping with a non-zero exit (code 4). The counter resets on any successful dispatch. "
             f"Default {DEFAULT_MAX_THROTTLE_RETRIES}. A throttle is transient and self-clearing, "
             "so this is a retry budget, not a stop condition - see this command's own module "
             "docstring for why it does not conflict with stage_e_dispatch.py's 'hot, backoff-free "
@@ -545,13 +636,35 @@ class Command(BaseCommand):
         require_fresh: bool = options["require_fresh"]
         verbosity: int = options.get("verbosity", 1)
 
+        # The resume point a relaunch would use, known BEFORE the cohort is sized - so the two
+        # paths that end the run before that point (the streaming gate and a stage-0 failure) can
+        # still print a valid one on their own verdict line.
+        pre_dispatch_resume_pk = (
+            start_pk if start_pk is not None else StageEFullCatalogCursor.get_position(resume_scope)
+        )
+
         # Same explicit early-exit convention stream_backstop_sweep.py/stage_e_shakedown.py use -
         # never rely on dispatch_micro_batch's own "disabled" status to no-op silently mid-loop
         # (that status is in neither _HALT_STATUSES nor _THROTTLED_STATUS, so a loop that didn't
         # guard this would count every chunk as a "completed" batch that did nothing).
         if not getattr(settings, "STAGE_E_STREAMING_ENABLED", False):
+            # NON-ZERO (module docstring's EXIT CODES table), unlike the cron-invoked drivers this
+            # convention is borrowed from: those have a next scheduled invocation, this one does
+            # not, and the whole cohort is left unprocessed. A supervisor reading exit 0 here would
+            # record a full-catalog pass as complete having dispatched nothing at all.
             self.stdout.write("STAGE_E_STREAMING_ENABLED is False - stream_full_catalog is a no-op.")
-            return
+            self._write_verdict(
+                exit_code=EXIT_STREAMING_DISABLED,
+                reason="streaming-disabled",
+                detail="nothing was dispatched; the ENTIRE cohort remains unprocessed",
+                resume_scope=resume_scope,
+                resume_pk=pre_dispatch_resume_pk,
+            )
+            raise CommandError(
+                "STAGE_E_STREAMING_ENABLED is False - stream_full_catalog dispatched nothing and "
+                "the whole cohort remains. Enable the setting and relaunch.",
+                returncode=EXIT_STREAMING_DISABLED,
+            )
 
         # STAGE 0 (issue #513 item 2, module docstring): runs to completion HERE - before the
         # cohort is even sized, let alone dispatched - and never again for this invocation.
@@ -560,12 +673,25 @@ class Command(BaseCommand):
         elif dry_run:
             self.stdout.write("STAGE 0 skipped (--dry-run writes nothing, and a refresh is a real download + import).")
         else:
-            self._run_stage_zero_freshness(
-                require_fresh=require_fresh,
-                # A stored mark means a PRIOR invocation already dispatched batches against
-                # whatever reference data was current then - see _run_stage_zero_freshness.
-                is_resume=StageEFullCatalogCursor.get_position(resume_scope) > 0,
-            )
+            try:
+                self._run_stage_zero_freshness(
+                    require_fresh=require_fresh,
+                    # A stored mark means a PRIOR invocation already dispatched batches against
+                    # whatever reference data was current then - see _run_stage_zero_freshness.
+                    is_resume=StageEFullCatalogCursor.get_position(resume_scope) > 0,
+                )
+            except CommandError:
+                # Every stage-0 failure already carries returncode=EXIT_STAGE_ZERO_FAILED; this
+                # only adds the verdict line before the exception continues on out, so that the
+                # stdout log and the exit status say the same thing on this path too.
+                self._write_verdict(
+                    exit_code=EXIT_STAGE_ZERO_FAILED,
+                    reason="stage-0-freshness-failed",
+                    detail="nothing was dispatched and nothing was written; the ENTIRE cohort remains",
+                    resume_scope=resume_scope,
+                    resume_pk=pre_dispatch_resume_pk,
+                )
+                raise
 
         # A --sample run is a measurement, not catalog progress: it neither reads nor writes the
         # stored high-water mark (model docstring). --dry-run writes nothing either way.
@@ -623,10 +749,46 @@ class Command(BaseCommand):
                 f"covering {min(remaining, planned_batches * batch_size)} cards, starting at "
                 f"pk>{resume_pk}."
             )
+            # EXIT ZERO (module docstring's "WHY --dry-run IS ZERO"): a dry run did exactly what
+            # was asked of it. It is not an interrupted pass, and a supervisor must be able to
+            # script "check the plan first" without treating the check itself as a failure.
+            self._write_verdict(
+                exit_code=EXIT_OK,
+                reason="dry-run-plan-only",
+                detail=f"the plan for {planned_batches} batches was reported and nothing was dispatched or written",
+                resume_scope=resume_scope,
+                resume_pk=resume_pk,
+            )
             return
 
         if not remaining:
+            # EXIT ZERO (module docstring's "WHY AN EMPTY COHORT IS ZERO"): no work remains in the
+            # cohort, which is the ruling's own definition of complete. Either the pass already
+            # finished (the stored mark is past the last pk) or the scope genuinely holds nothing.
             self.stdout.write(f"Nothing to do. resume_pk={resume_pk}")
+            empty_reason = "cohort-exhausted"
+            if not full_catalog_pk_queryset(source_keys).exists():
+                empty_reason = "cohort-empty"
+                # The second case, called out LOUDLY rather than faked into a failure: the scope
+                # has no cards AT ALL, which for a `--source` run usually means a real drive whose
+                # cards are not indexed yet (a MISSPELLED key is caught far earlier and far more
+                # precisely, as an unknown-key CommandError).
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"WARNING: the cohort for scope={resume_scope} is EMPTY - not "
+                        "already-finished, but containing no cards at all. If this was a --source "
+                        "run, that drive has no indexed cards with a content_phash yet; check that "
+                        "the catalog import for it has run. Exiting 0: there is no work to leave "
+                        "undone."
+                    )
+                )
+            self._write_verdict(
+                exit_code=EXIT_OK,
+                reason=empty_reason,
+                detail="there was nothing left to dispatch",
+                resume_scope=resume_scope,
+                resume_pk=resume_pk,
+            )
             return
 
         run_id_prefix = f"stage-e-fullcat-b{batch_size}-{timezone.now().strftime(RUN_ID_TIMESTAMP_FORMAT)}"
@@ -687,6 +849,7 @@ class Command(BaseCommand):
                 # `resolve_envelope_trip`. The batch did no work, so its pks are NOT recorded as
                 # done - the relaunch re-dispatches exactly this chunk.
                 halted_status = outcome.status
+                stopped_reason = "envelope-halt"
                 self.stdout.write(
                     f"[batch {batch_num}] Envelope halt ({outcome.status}, trip_id={outcome.trip_id}) "
                     "- stopping (do not retry, never self-resume). Resolve the trip with "
@@ -791,6 +954,31 @@ class Command(BaseCommand):
                 last_summary_cards = cards_done
                 last_summary_batches = batches_dispatched
 
+        if stopped_reason is None:
+            # The loop's own `while` condition ended it, which can only be the `--max-batches`
+            # bound. Whether that is a COMPLETE or an INCOMPLETE pass depends solely on whether any
+            # work is left - the bound reached exactly as the cohort ran out is a genuine
+            # exhaustion, not a truncation - so ask, with one bounded query rather than an
+            # assumption. (`sample_offset` is the same question for a --sample run, already in
+            # hand.)
+            if sampled_pks is not None:
+                work_remains = sample_offset < len(sampled_pks)
+            else:
+                work_remains = bool(next_chunk_after(resume_pk, 1, source_keys))
+            if work_remains:
+                stopped_reason = "max-batches-reached"
+                self.stdout.write(
+                    f"--max-batches={max_batches} reached with cards still in the cohort - "
+                    "stopping. This is the bound you asked for, not a fault, but the pass is "
+                    "INCOMPLETE: relaunch to continue from the resume pk below."
+                )
+            else:
+                stopped_reason = "cohort-exhausted"
+                self.stdout.write(
+                    f"--max-batches={max_batches} reached exactly as the cohort ran out - every "
+                    "card in this pass has been dispatched."
+                )
+
         # Always one final summary, however the loop ended - so the last thing in the log is a
         # complete, current picture including a valid resume pk.
         final_now = time.monotonic()
@@ -820,23 +1008,95 @@ class Command(BaseCommand):
             f"(relaunch with the SAME --source flags to continue, or --start-pk {resume_pk})"
         )
 
+        # THE SUPERVISOR CONTRACT (module docstring's EXIT CODES table). One decision, made in one
+        # place from `stopped_reason`, so the verdict line below and the exit status are derived
+        # from the SAME value and cannot drift apart. Nothing here changes when the loop stops -
+        # only what leaving it is reported as.
         if throttle_budget_exhausted:
-            # NON-ZERO EXIT, after the summary and the resume pk are already on stdout: an
-            # unattended run that gave up on a cap that never cleared is a genuine failure a
-            # supervisor/cron wrapper must be able to detect, unlike an ordinary completion.
-            raise CommandError(
+            exit_code = EXIT_THROTTLE_BUDGET_EXHAUSTED
+            failure = (
                 f"Stopped after {total_throttle_retries} throttled dispatch attempts "
                 f"({consecutive_throttles} consecutive) - the concurrency cap did not clear. "
                 f"Resume with --start-pk {resume_pk} once dispatch slots are free."
             )
+            detail = "the concurrency cap never cleared; work REMAINS in the cohort"
+        elif halted_status is not None:
+            # Used to exit ZERO - the inconsistency this change exists to fix. An envelope trip
+            # stops the pass mid-cohort, so it is an INCOMPLETE run by the ruling's own definition
+            # and must be as detectable by a supervisor as an exhausted throttle budget is. The
+            # STOP ITSELF is untouched: still immediate, still no retry, no backoff, no
+            # self-resume.
+            exit_code = EXIT_ENVELOPE_HALT
+            failure = (
+                f"Stopped on an envelope halt ({halted_status}) with cards still unprocessed. Do "
+                "NOT relaunch until a human has acknowledged the trip with resolve_envelope_trip "
+                f"(docs/features/stage-e-operations.md); then resume with --start-pk {resume_pk}."
+            )
+            detail = f"envelope trip {halted_status} hard-stopped the pass; work REMAINS in the cohort"
+        elif stopped_reason == "max-batches-reached":
+            exit_code = EXIT_MAX_BATCHES_REACHED
+            failure = (
+                f"Stopped on the --max-batches={max_batches} bound with cards still in the cohort. "
+                "This is the bound you asked for, not a fault - but the pass is INCOMPLETE, so it "
+                f"cannot exit 0. Relaunch to continue, or resume with --start-pk {resume_pk}."
+            )
+            detail = "the operator's --max-batches bound ended the invocation; work REMAINS in the cohort"
+        else:
+            exit_code = EXIT_OK
+            failure = None
+            detail = "the whole cohort was dispatched; no work remains"
+
+        self._write_verdict(
+            exit_code=exit_code,
+            reason=stopped_reason or "cohort-exhausted",
+            detail=detail,
+            resume_scope=resume_scope,
+            resume_pk=resume_pk,
+        )
+        if failure is not None:
+            # NON-ZERO EXIT, after the summary, the resume pk and the verdict line are already on
+            # stdout: an unattended run that stopped with work left is a state a supervisor must be
+            # able to detect, and must be able to tell apart from the others (hence the code).
+            raise CommandError(failure, returncode=exit_code)
+
+    def _write_verdict(
+        self,
+        *,
+        exit_code: int,
+        reason: str,
+        detail: str,
+        resume_scope: str,
+        resume_pk: int,
+    ) -> None:
+        """THE final stdout line of every terminating path (module docstring's EXIT CODES section).
+
+        It exists because the exit code and the human-readable output MAY NEVER DISAGREE: the
+        `DONE`/`PROGRESS` counters above it report what happened, but only this line states in
+        words whether the pass COMPLETED or STOPPED EARLY, and it carries the numeric code it was
+        derived from so the two cannot be read differently. Deliberately unstyled and
+        fixed-prefixed (`PASS COMPLETE` / `PASS STOPPED EARLY`) so it stays greppable out of a
+        truncated multi-hour log.
+        """
+        if exit_code == EXIT_OK:
+            self.stdout.write(
+                f"PASS COMPLETE exit_code={exit_code} reason={reason} - {detail}. "
+                f"scope={resume_scope} resume_pk={resume_pk}"
+            )
+            return
+        self.stdout.write(
+            f"PASS STOPPED EARLY exit_code={exit_code} reason={reason} - {detail}. "
+            f"scope={resume_scope} resume_pk={resume_pk} "
+            f"(relaunch with the SAME --source flags to continue, or --start-pk {resume_pk})"
+        )
 
     def _run_stage_zero_freshness(self, *, require_fresh: bool, is_resume: bool) -> None:
         """
         STAGE 0 (GitHub issue #513 item 2) - verify Scryfall printing-metadata freshness and
         refresh it if stale, ONCE, before any batch is dispatched. See this module's own docstring
         for the three binding properties (once-only and why, fail-before-any-dispatch, report what
-        it decided). Every failure path below raises `CommandError`, i.e. a non-zero exit with no
-        batch dispatched and nothing written.
+        it decided). Every failure path below raises `CommandError` with
+        `returncode=EXIT_STAGE_ZERO_FAILED` (2, the module docstring's EXIT CODES table), i.e. a
+        non-zero exit with no batch dispatched and nothing written.
 
         Calls `printing_metadata_import`'s own entry points, never a reimplementation of them.
         `_get_default_cards_entry` is what makes the remote comparison possible at all (it returns
@@ -850,7 +1110,8 @@ class Command(BaseCommand):
             raise CommandError(
                 f"STAGE 0 FAILED: could not read Scryfall's /bulk-data entry ({exc!r}). Refusing "
                 "to start a full-catalog pass against reference data of unknown age. Nothing was "
-                "dispatched and nothing was written."
+                "dispatched and nothing was written.",
+                returncode=EXIT_STAGE_ZERO_FAILED,
             )
 
         cache_path = _cache_path()
@@ -872,7 +1133,8 @@ class Command(BaseCommand):
                 f"STAGE 0 FAILED: Scryfall printing metadata is STALE and --require-fresh was "
                 f"passed (remote updated_at={entry.updated_at}, {age_text}, path={cache_path}). "
                 "Refresh it first, or drop --require-fresh to let stage 0 refresh it. Nothing was "
-                "dispatched and nothing was written."
+                "dispatched and nothing was written.",
+                returncode=EXIT_STAGE_ZERO_FAILED,
             )
 
         self.stdout.write(
@@ -903,7 +1165,8 @@ class Command(BaseCommand):
             raise CommandError(
                 f"STAGE 0 FAILED: Scryfall printing-metadata refresh raised {exc!r}. Refusing to "
                 "start a full-catalog pass against half-imported reference data. Nothing was "
-                "dispatched."
+                "dispatched.",
+                returncode=EXIT_STAGE_ZERO_FAILED,
             )
         self.stdout.write(
             f"STAGE 0: refresh complete - created={stats.get('created')} "
