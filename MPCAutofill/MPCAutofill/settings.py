@@ -303,6 +303,93 @@ DATABASES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
+# Caches
+# https://docs.djangoproject.com/en/4.2/topics/cache/
+#
+# ---------------------------------------------------------------------------
+# WHICH CACHE DO I USE?  (read this before adding a `cache.get`/`cache.set`)
+# ---------------------------------------------------------------------------
+# * Written and read WITHIN ONE REQUEST PATH (compute-on-miss inside the same
+#   view, per-process rate-limit counters, memoised work that is cheap to
+#   redo) -> `default`. Fast, no database round trip.
+#
+# * Written in ONE PROCESS and read in ANOTHER (a cron-invoked management
+#   command that warms a blob for the web tier; a django-q task whose output
+#   an endpoint serves; anything at all where the writer is not the process
+#   that answers the request) -> `caches["shared"]`, named explicitly:
+#
+#       from django.core.cache import caches
+#       caches["shared"].set("my-blob-v1", payload, 3600)
+#
+#   `default` is `LocMemCache`, which is a per-process dict. A management
+#   command populates its OWN process's memory and exits; the gunicorn
+#   process serving requests never observes the write, so a "cron warms,
+#   endpoint reads cache-only" design misses 100% of the time while both
+#   ends report success. That is issue #538. Reaching for `default` from a
+#   management command is the bug; `caches["shared"]` is the fix.
+#
+# WHY `default` IS STILL LocMemCache (do not "simplify" this to one entry):
+#
+# * `django_ratelimit` (imported in `cardpicker/views.py`) uses the DEFAULT
+#   cache, because no `RATELIMIT_*` setting redirects it. Moving it onto a
+#   database cache would make every rate-limited request a database read plus
+#   a write - i.e. it would add load through the very mechanism that exists
+#   to shed load.
+#
+# * `cardpicker/review_clusters.py` caches a `list[ReviewCluster]` built over
+#   a ~135,000-row review queue. On a database cache every read of that is a
+#   pickle round trip through Postgres.
+#
+# Neither of those is incorrect today (both write and read inside a single
+# gunicorn worker - `docker/django/Dockerfile`'s CMD passes no `--workers`),
+# so neither needs to move. Making `default` itself shared is the separate,
+# larger change that must land before that CMD can ever gain `--workers`;
+# see issue #538. Do not do it as a drive-by here.
+# ---------------------------------------------------------------------------
+
+# Table backing the "shared" cache. The migration that creates it
+# (`cardpicker/migrations/0092_shared_cache_table.py`) hardcodes this same
+# literal, deliberately - a migration must not read mutable settings. The two
+# are pinned together by a test (`cardpicker/tests/test_shared_cache.py`).
+SHARED_CACHE_TABLE = "shared_cache"
+
+CACHES = {
+    # Written out explicitly rather than left implicit. This is exactly what
+    # Django falls back to when `CACHES` is absent, so behaviour is unchanged.
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "",  # Django's own default for an unnamed LocMemCache.
+    },
+    # Cross-process cache. Backed by a table on the existing Postgres, so it
+    # needs no new service in the compose stack and it is created by `migrate`
+    # (which `docker/django/entrypoint.sh` already runs) rather than by an
+    # operator remembering to run `createcachetable` by hand.
+    "shared": {
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": SHARED_CACHE_TABLE,
+        "OPTIONS": {
+            # Stated, not inherited. Django's default is 300 entries; the
+            # expected load here is a handful of warmed blobs, so 1000 is
+            # ~100x headroom and culling should never fire. That matters
+            # because a silent cull of a warmed blob presents exactly like
+            # the bug this cache exists to fix: the endpoint misses, the
+            # warmer reports success, and nothing logs anything.
+            "MAX_ENTRIES": 1000,
+            # Cull 1/3 of entries if MAX_ENTRIES is ever reached - Django's
+            # default ratio, restated so it is a decision rather than an
+            # inheritance. Explicitly NOT 0, which would flush the entire
+            # table in one statement.
+            "CULL_FREQUENCY": 3,
+        },
+        # Django's default, restated. Writers should pass an explicit TTL
+        # anyway (`caches["shared"].set(key, value, 3600)`); a warmer that
+        # forgets gets a 5-minute entry and finds out quickly, which is the
+        # preferable failure over a stale blob that never expires.
+        "TIMEOUT": 300,
+    },
+}
+
+
 # Password validation
 # https://docs.djangoproject.com/en/3.0/ref/settings/#auth-password-validators
 
