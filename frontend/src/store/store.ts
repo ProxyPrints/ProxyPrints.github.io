@@ -7,6 +7,9 @@ import {
 } from "@reduxjs/toolkit";
 
 import { clientSearchService } from "@/features/clientSearch/clientSearchService";
+// Homepage participation graph's in-session "you contributed" state - see
+// features/stats/sessionContributionSlice.ts's own module comment.
+import sessionContributionReducer from "@/features/stats/sessionContributionSlice";
 import { api } from "@/store/api";
 import { listenerMiddleware } from "@/store/listenerMiddleware";
 import backendReducer, {
@@ -48,6 +51,9 @@ const rootReducer = combineReducers({
   fileDownloads: fileDownloadsReducer,
   favorites: favoritesReducer,
   savedDeckSession: savedDeckSessionReducer,
+  // Homepage participation graph's in-session "you contributed" state - see
+  // features/stats/sessionContributionSlice.ts's own module comment.
+  sessionContribution: sessionContributionReducer,
 });
 
 //# region middleware

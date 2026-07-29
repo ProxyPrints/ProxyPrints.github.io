@@ -82,6 +82,7 @@ import {
   ZoomableThumbnail,
 } from "@/features/printingTags/cardPanel";
 import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
+import { recordSessionContribution } from "@/features/stats/sessionContributionSlice";
 import {
   APIGetQuestionFeed,
   APISubmitIllustrationVote,
@@ -712,8 +713,15 @@ export function QuestionFeed() {
   // same as every other piece of in-flight feed state here), never meant to survive a "clear
   // site data" test the way persisted state would need to.
   const [sessionTaggedCount, setSessionTaggedCount] = useState<number>(0);
-  const bumpSessionCount = () =>
+  const bumpSessionCount = () => {
     setSessionTaggedCount((previous) => previous + 1);
+    // 2026-07-29 directive item 4 - the homepage's dashed "you would be the Nth" dot turns into
+    // a filled, green thank-you once THIS client has cast a vote. This is the single place every
+    // successful vote in this feed already funnels through, so it's also the single place that
+    // in-session fact gets recorded - see sessionContributionSlice.ts's own module comment for
+    // why this is a Redux dispatch (not localStorage, not a new endpoint).
+    dispatch(recordSessionContribution());
+  };
   // ANNEX C's "confirm-lands" micro-feedback - a brief fade-in on a successful cast, shown
   // while the next item's fetch is already in flight (advance() below never adds an artificial
   // delay of its own - the interaction contract's "advance immediately" behavior is unchanged;
