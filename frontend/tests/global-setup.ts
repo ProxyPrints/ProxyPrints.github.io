@@ -26,7 +26,11 @@ async function globalSetup(config: FullConfig) {
   const context = await browser.newContext();
   await context.storageState({ path: STORAGE_STATE_PATH });
 
-  const baseURL = config.projects[0]?.use?.baseURL ?? "http://localhost:3000";
+  // Fallback mirrors playwright.config.ts's `resolvePort`: this process is the one that resolved
+  // the port, so `PLAYWRIGHT_PORT` is always set by the time global setup runs.
+  const baseURL =
+    config.projects[0]?.use?.baseURL ??
+    `http://localhost:${process.env.PLAYWRIGHT_PORT ?? 3000}`;
   const page = await context.newPage();
   for (const route of ROUTES_TO_WARM) {
     try {

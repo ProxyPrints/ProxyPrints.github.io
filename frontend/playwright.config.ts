@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { execFileSync } from "child_process";
 
 /**
  * Read environment variables from file.
@@ -7,6 +8,58 @@ import { defineConfig, devices } from "@playwright/test";
 // import dotenv from 'dotenv';
 // import path from 'path';
 // dotenv.config({ path: path.resolve(__dirname, '.env') });
+
+/**
+ * The port this run's `next dev` server binds, and the port every `baseURL` in it points at.
+ *
+ * This used to be a hardcoded 3000 in both `use.baseURL` and `webServer.url`, which made two
+ * concurrent E2E runs on one machine collide - the same bug class #571 fixed for the Python
+ * test harness's Docker containers. Locally (`reuseExistingServer: !process.env.CI`) the second
+ * run silently attached to the FIRST run's dev server, so it tested the first worktree's code
+ * and then died mid-run when that server was torn down; the failures pointed at whatever change
+ * happened to be under test rather than at the port.
+ *
+ * Resolution order:
+ *   1. `PLAYWRIGHT_PORT`, if set. Set it to 3000 to get the old behaviour back - i.e. to reuse a
+ *      `npm run dev` you already have running, skipping the dev-server boot. Pin it to distinct
+ *      values if you want deterministic ports for two runs you are deliberately overlapping.
+ *   2. Otherwise a free port from the kernel (bind :: port 0, read the assignment back, release),
+ *      exported into the environment so Playwright's worker processes - which re-load this file
+ *      in their own process - inherit the SAME port instead of each drawing a new one.
+ *
+ * Honest limit, deliberately not papered over: the kernel's assignment is released before
+ * `next dev` binds it, so a foreign process can take the port inside that window (~seconds,
+ * since it spans `npm run dev` + Next's boot). Playwright's `webServer.url` has no port-0
+ * read-back equivalent, so unlike #571 there is nothing holding the binding across that gap.
+ * What the window CANNOT produce is a wrong-but-passing run: `next dev` is now given an explicit
+ * `--port`, and Next only auto-increments away from a busy port when it picked the port itself.
+ * Given one explicitly it fails hard with `EADDRINUSE`, so losing the race aborts the run
+ * loudly at webServer startup rather than quietly serving somebody else's app. See
+ * `docs/troubleshooting.md`'s "Two concurrent frontend E2E runs" entry.
+ */
+function resolvePort(): string {
+  const pinned = process.env.PLAYWRIGHT_PORT;
+  if (pinned) {
+    return pinned;
+  }
+  // Playwright configs are loaded synchronously, and `net`'s bind is not - so the probe runs in a
+  // throwaway `node -e` child, whose exit is the synchronisation point. Bound without a host, to
+  // match the dual-stack `::` bind `next dev` itself does (a port free only on 127.0.0.1 is not
+  // good enough). While two concurrent probes are open the kernel cannot hand both the same port.
+  const port = execFileSync(
+    process.execPath,
+    [
+      "-e",
+      "const s = require('net').createServer(); s.listen(0, () => { process.stdout.write(String(s.address().port)); s.close(); });",
+    ],
+    { encoding: "utf8" }
+  ).trim();
+  process.env.PLAYWRIGHT_PORT = port;
+  return port;
+}
+
+const PORT = resolvePort();
+const BASE_URL = `http://localhost:${PORT}`;
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -32,7 +85,7 @@ export default defineConfig({
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('')`. */
-    baseURL: "http://localhost:3000",
+    baseURL: BASE_URL,
 
     /* Reuse the opted-out cookie consent state so tests don't have to dismiss the toast. */
     storageState: "playwright/.auth/cookies.json",
@@ -77,8 +130,12 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: "npm run dev",
-    url: "http://localhost:3000",
+    // Explicit `--port`, not the `next dev` default: Next only walks to the next free port when
+    // it chose the port itself, so passing it explicitly turns a lost port race into an
+    // immediate `EADDRINUSE` exit instead of a server quietly listening somewhere this run's
+    // `baseURL` does not point (see `resolvePort` above).
+    command: `npm run dev -- --port ${PORT}`,
+    url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     env: {
       NEXT_PUBLIC_IMAGE_WORKER_URL: "https://cdn.proxyprints.ca",

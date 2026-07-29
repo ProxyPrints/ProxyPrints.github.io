@@ -1229,6 +1229,75 @@ nobody wants — but they do still consume memory, so `docker rm -f` is
 worth doing on containers you recognise as your own leftovers. Never
 remove one you don't recognise: it may belong to a live session mid-test.
 
+## Two concurrent frontend E2E runs — the second one tests the FIRST one's code, then dies mid-run (FIXED 2026-07-29)
+
+**Status**: FIXED for the default path. Kept searchable because the
+symptom is indistinguishable from a real regression, and because a run
+against a branch based before this fix still behaves the old way.
+
+**Symptom (historical, pre-fix)**: you start `npx playwright test` (or
+`npm run test-e2e`) in one worktree while another worktree's E2E run is
+already going. Your run's first specs pass, then a block of unrelated
+specs fails all at once — typically `page.goto` failures out of
+`tests/test-utils.ts`'s `loadPageWithDefaultBackend`, or assertions about
+UI that your branch did not touch. Reproduced on unmodified `master`
+(2026-07-29): two overlapping runs of the same four spec files, the second
+started three seconds after the first — the first passed 1/1, the second
+failed **8 of 10** with navigation errors, and every failure pointed at
+application code rather than at the port.
+
+**Cause (historical)**: `frontend/playwright.config.ts` hardcoded
+`http://localhost:3000` in both `use.baseURL` and `webServer.url`. Off CI
+(`reuseExistingServer: !process.env.CI`) Playwright does not start a
+second dev server when something already answers on that URL — it
+**reuses** it. So the second run silently pointed at the first run's
+`next dev`, i.e. tested the first worktree's checkout, and then lost the
+server outright the moment the first run finished and tore it down. Same
+bug class as the fixed test-container host ports in the entry above
+(#571), with a nastier failure mode: containers failed loudly at bind
+time, this one produced quiet wrong-tree results first.
+
+**How the port is chosen now**: `playwright.config.ts`'s `resolvePort()`
+asks the kernel for a free port (bind port 0, read the assignment back,
+release) unless `PLAYWRIGHT_PORT` is set, and exports the result into the
+environment so Playwright's worker processes — which each re-load the
+config in their own process — inherit the same port instead of drawing
+their own. `baseURL`, `webServer.url` and the `webServer` command all
+derive from that one value, and `playwright.perf.config.ts` inherits it by
+spreading the base config. Verified 2026-07-29 by re-running the exact
+scenario above against the fix: two `next-server` processes listening on
+different ports for the whole overlap, 10/10 and 10/10 passing, four
+workers each.
+
+**Set `PLAYWRIGHT_PORT` when you want a fixed port.** `PLAYWRIGHT_PORT=3000`
+restores the old behaviour, including reusing a `npm run dev` you already
+have running — worth it for a fast edit-run loop, since it skips the
+dev-server boot on every invocation. Any pinned value re-introduces the
+collision for that run, by design.
+
+**What is NOT closed by this** — read before assuming a port can never
+collide again:
+
+- The kernel's assignment is released before `next dev` binds it, and
+  that gap spans `npm run dev` plus Next's boot (seconds, not
+  microseconds). Playwright's `webServer.url` has no port-0 read-back
+  equivalent, so unlike #571 nothing holds the binding across the gap. A
+  foreign process taking the port inside that window is possible.
+  What it can no longer do is pass wrongly: `next dev` is invoked with an
+  explicit `--port`, and Next only walks to the next free port when it
+  chose the port itself — given one explicitly it exits with
+  `EADDRINUSE`, so the run aborts at webServer startup with
+  `Error: Process from config.webServer exited early`. If you see that,
+  just re-run; you drew an unlucky port.
+- **Two runs in the SAME directory still collide**, port or no port. Both
+  `next dev` servers write `frontend/.next`, and Playwright writes
+  `playwright/.auth/`, `test-results/` and the HTML report there too.
+  Concurrency is safe **across worktrees**, which is how this box actually
+  runs; it is not safe across two shells `cd`'d to one checkout.
+- General resource contention is unchanged — several dev servers plus
+  browser pools at once still compete for CPU and memory, and can time out
+  on their own.
+
 ## A per-instance `viewBox` crop on an inlined SVG shows the _entire_ source art instead of just its own band
 
 **Symptom**: three separate `<svg viewBox="...">` elements, each meant to

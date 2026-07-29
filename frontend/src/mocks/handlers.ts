@@ -61,10 +61,20 @@ function buildRoute(route: string) {
 }
 
 /**
- * Re-route ping.js favicon request to frontend for E2E tests
+ * Re-route ping.js favicon request to frontend for E2E tests.
+ *
+ * `@msw/playwright` runs this handler in the Playwright NODE process, not in the page, so it
+ * cannot use an origin-relative URL and cannot assume a fixed port either: since the E2E dev
+ * server takes a per-run port (`playwright.config.ts`'s `resolvePort`), the port has to be read
+ * back out of the environment that resolved it. The literal 3000 stays only as the fallback for
+ * a caller that never went through that config (jest), matching the previous behaviour exactly.
  */
+function frontendOrigin(): string {
+  return `http://localhost:${process.env.PLAYWRIGHT_PORT ?? 3000}`;
+}
+
 export const favicon = http.get(buildRoute("favicon.ico"), async () => {
-  const image = await fetch("http://localhost:3000/favicon.ico").then((res) =>
+  const image = await fetch(`${frontendOrigin()}/favicon.ico`).then((res) =>
     res.arrayBuffer()
   );
   return HttpResponse.arrayBuffer(image, {
