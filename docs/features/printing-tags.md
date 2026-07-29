@@ -35,7 +35,7 @@ printings, artists, tags, and moderation from one screen.
   importer as a `Counter` over our own table. It says nothing about how
   many printings Scryfall publishes, and cannot detect that our catalogue
   is missing printings, because it is derived from the catalogue itself.
-  It was called `printings_count` until 2026-07-29 (migration 0098), and
+  It was called `printings_count` until 2026-07-29 (migration 0099), and
   this document described it as Scryfall printing data — that was false.
   `CardPrintingTag.printing` FKs directly to `CanonicalCard`.
 - **Card payload — machine-suggested printing + tag vote status** (Proposal H

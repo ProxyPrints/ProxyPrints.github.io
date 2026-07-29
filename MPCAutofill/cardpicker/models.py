@@ -203,7 +203,7 @@ class CanonicalPrintingMetadata(models.Model):
     # group size here; rows whose `canonical_id` is NULL (81 in production on 2026-07-29) are
     # stored as 1 by fiat, because there is no oracle group to count.
     #
-    # RENAMED FROM `printings_count` 2026-07-29 (migration 0098). The old name, and the docs
+    # RENAMED FROM `printings_count` 2026-07-29 (migration 0099). The old name, and the docs
     # written against it, asserted this was Scryfall's own printing total for the oracle card.
     # It never was, and the difference is not academic: this number cannot detect that our
     # catalogue holds fewer printings than Scryfall publishes, because it is derived entirely

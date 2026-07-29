@@ -30,11 +30,23 @@ anyone who opens a psql shell keeps the defect exactly where it did its damage.
 
 MIGRATION-GRAPH NOTE
 --------------------
-Leaf at the time of writing is `0097_freeze_deductive_backfill_zero_weight_cohort` (master at
-6bc3e166, which linearised an earlier 0096 fork). **PR #573 also adds an 0098**
-(`0098_card_illustration_consensus_fields`). Whichever of the two merges second must renumber to
-0099 and repoint its dependency, or the graph forks again. This migration is a pure rename with
-no dependency on anything 0098+ touches, so renumbering it costs nothing.
+This was written as `0098_rename_printings_count_catalogued` on top of
+`0097_freeze_deductive_backfill_zero_weight_cohort` (master at 6bc3e166, which linearised an
+earlier 0096 fork). **PR #573's own 0098 merged first** - `0098_card_illustration_consensus_fields`,
+also depending on 0097 - so this one is the second to arrive and has been renumbered to 0099 and
+repointed onto #573's migration, exactly as the note here originally said whichever merged second
+must do.
+
+Why it matters that this is not left forked: two 0098s both depending on 0097 give `cardpicker`
+two leaf nodes, and `pytest-django` builds its test database by running `migrate`, so the fork
+errors at test-database SETUP on *every* branch in the repo - not only the branch that introduced
+it. That is the outage #576 had to repair at 0096. This migration is a pure rename with no
+dependency on anything 0098 touches, so renumbering cost nothing.
+
+A CI guard that fails a PR whose migration graph, MERGED WITH ITS BASE BRANCH, has more than one
+leaf per app is in flight separately (branch `fix/migration-leaf-guard`). Checking a branch in
+isolation cannot catch this: on this branch alone, before the renumber, the graph had exactly one
+leaf and every check was green.
 """
 
 from django.db import migrations
@@ -42,7 +54,7 @@ from django.db import migrations
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("cardpicker", "0097_freeze_deductive_backfill_zero_weight_cohort"),
+        ("cardpicker", "0098_card_illustration_consensus_fields"),
     ]
 
     operations = [

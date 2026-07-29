@@ -14,7 +14,7 @@ D1 IS NOT CROSS-VERIFIED AGAINST SCRYFALL (corrected 2026-07-29). This docstring
 comment below and `docs/features/printing-tags.md` all used to say D1's uniqueness was confirmed
 against "Scryfall's own printings_count". No such check exists, or ever existed. The column that
 check reads - `CanonicalPrintingMetadata.catalogued_printings_count`, renamed from the misleading
-`printings_count` in migration 0098 - is a COUNT of OUR OWN `CanonicalCard` rows per oracle id,
+`printings_count` in migration 0099 - is a COUNT of OUR OWN `CanonicalCard` rows per oracle id,
 computed by `printing_metadata_import` from our own table. The check therefore restates the
 name-uniqueness test that ran one line above it and excludes nothing: measured against the live
 catalogue on 2026-07-29, 137 D1 candidates before the check and 137 after. See
