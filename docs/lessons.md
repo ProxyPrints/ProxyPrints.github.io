@@ -988,3 +988,36 @@ trap precisely because it does no fetch, no OCR and no hashing, so every cost he
 step stays a whole-catalog tail pass, and rewriting it to count catalog-wide while writing
 batch-scoped is a correctness change needing ratification, not a wiring fix. Full classification
 and the measured numbers: `docs/theory.md` §10a.
+
+## A test that builds its fixture from the vocabulary a COMMENT claims can pass while the production predicate is inverted
+
+`stage-d-illustration-v1` cast 3 illustration votes in its entire existence against 230,753
+catalog cards. Its gate read `ImageEvidence.layout_class` as faced-ness ("a multi-faced card has
+a non-empty layout_class from OCR"), but that column's only writer is
+`local_fallback.classify_border_color` and it holds a BORDER COLOUR - live distribution black
+138,728 / borderless 72,603 / white 7,475 / '' 1,455 / silver 408, i.e. non-blank on 99.34% of
+rows. The gate therefore discarded 99.28% of every population handed to the calculator, logging
+3,409 `multi-faced-v1` skips out of 3,426 rows scanned.
+
+The test that shipped it - `test_skips_multi_faced_cards` - built its evidence with
+`layout_class="split"`, a value the field's only writer can never emit. It asserted the skip
+fired, and it did: `"split"` is non-blank, so the production predicate agreed for entirely the
+wrong reason. **The fixture was constructed from the comment's claimed taxonomy rather than from
+the field's real one, so the test and the code shared the same false premise and green meant
+nothing.** Four other consumers in the same codebase read the column correctly as a border
+colour; the misread was a single stale comment nobody re-derived.
+
+The habit that catches this: when a test pins a predicate over a field's VALUES, source the
+parametrisation from what actually writes the field - the writer's own vocabulary, or a measured
+production distribution - never from prose next to the reader. If you cannot name the writer, you
+cannot yet write the test. A useful sharpening question at review time is "which function
+produces this value, and can it produce the one in this fixture?"; here the answer was no, and it
+was answerable statically.
+
+The same run also produced the corollary about version strings: a calculator's version lives
+INSIDE its `anonymous_id`, and `_eligible_*_queryset` excludes cards carrying a non-rescannable
+`CardScanLog` row for that same id. Repairing a gate in place therefore fixes nothing for the
+cards the broken gate already logged - they stay excluded forever. The fix has to travel with a
+`-vN` bump (family-keyed behaviour follows automatically via `models.calculator_family`), which
+makes "is this repair reachable by the population it is for?" a standing question for any Stage D
+predicate change, not an afterthought.

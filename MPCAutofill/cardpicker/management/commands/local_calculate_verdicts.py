@@ -267,7 +267,7 @@ class Command(BaseCommand):
                     "resolved machine-only."
                 )
 
-            # Illustration deduction calculator (issue #507, stage-d-illustration-v1): runs
+            # Illustration deduction calculator (issue #507, stage-d-illustration-v2): runs
             # AFTER the fallback calculator above in the SAME invocation/run_id — uses
             # illustration_id relationships to deduce printing identity from artist-OCR hits.
             # Sequenced before slow-path routing below: a card this calculator resolves must not
@@ -275,13 +275,16 @@ class Command(BaseCommand):
             # would need an additional exclusion for this identity's votes, similar to the
             # fallback-voted-card exclusion it already carries).
             illustration_result = run_illustration_calculator(
-                run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"], audit_sample_size=audit_sample_size
+                run_id=run_id,
+                dry_run=dry_run,
+                chunk_size=kwargs["chunk_size"],
+                audit_sample_size=audit_sample_size,
             )
             votes_written += illustration_result.votes_written
             would_cast += illustration_result.votes_would_cast
             print(
                 f"[illustration] considered={illustration_result.cards_considered} "
-                f"multi_faced_skipped={illustration_result.multi_faced_skipped} "
+                f"back_face_resolved={illustration_result.back_face_resolved} "
                 f"votes={'written=' + str(illustration_result.votes_written) if not dry_run else 'would_cast=' + str(illustration_result.votes_would_cast)} "
                 f"already_voted={illustration_result.already_voted} "
                 f"skip_counts={dict(illustration_result.skip_counts)}"
@@ -363,7 +366,7 @@ class Command(BaseCommand):
                         "would_cast": illustration_result.votes_would_cast,
                         "votes_written": illustration_result.votes_written,
                         "already_voted": illustration_result.already_voted,
-                        "multi_faced_skipped": illustration_result.multi_faced_skipped,
+                        "back_face_resolved": illustration_result.back_face_resolved,
                         "skip_counts": dict(illustration_result.skip_counts),
                     },
                     "slow_path": {

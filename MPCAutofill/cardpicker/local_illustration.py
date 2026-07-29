@@ -1,17 +1,52 @@
 """
-Stage D illustration deduction calculator (public issue #507, ``stage-d-illustration-v1``) — a
+Stage D illustration deduction calculator (public issue #507, ``stage-d-illustration-v2``) — a
 new calculator in the Stage D framework that uses the ``illustration_id`` field imported from
 Scryfall (issue #506) to deduce printing identity. When an artist-OCR hit identifies the artist,
 and that artist's printings of this card name narrow to exactly ONE printing, we vote for it.
 
-Anonymous ID: ``stage-d-illustration-v1``
+Anonymous ID: ``stage-d-illustration-v2``
 Source: ``VoteSource.DEDUCTION``
 Base confidence: ``BASE_CONFIDENCE = 0.85``
+
+THE v1 → v2 BUMP, AND WHY IT IS PART OF A BUG FIX RATHER THAN A NEW METHOD (2026-07-29). v1
+carried a gate that skipped every card whose ``ImageEvidence.layout_class`` was non-blank, on the
+stated premise that ``layout_class`` records faced-ness. It does not: its only writer is
+``local_fallback.classify_border_color`` and it holds a BORDER COLOUR (live distribution: black
+138,728 / borderless 72,603 / white 7,475 / '' 1,455 / silver 408). Non-blank on 99.34% of rows,
+so the gate discarded 99.28% of every population handed to the calculator — 3,409 of its 3,426
+scanned rows logged ``multi-faced-v1``, and the calculator cast 3 illustration votes in its whole
+existence against 230,753 catalog cards. The gate is DELETED (not repaired) — see "PER-FACE
+ILLUSTRATIONS" below for why there is no longer anything for it to guard.
+
+The version bump is what makes the fix take effect at all: ``multi-faced-v1`` is not in
+``RESCANNABLE_SKIP_REASONS`` (which holds only ``no-evidence``) and
+``_eligible_illustration_cards_queryset`` excludes any card carrying a non-rescannable
+``CardScanLog`` row for its OWN ``anonymous_id``, so a repaired v1 would never re-examine the
+3,409 cards it wrongly skipped. Renaming to v2 sidesteps that exclusion without deleting evidence
+and without making genuine skips permanently re-runnable. ``models.calculator_family`` strips the
+``-vN`` suffix, so every family-keyed behaviour (``purge_stale_machine_votes``' family-scoped
+DELETE, ``printing_consensus.agent_dedupe_key``'s one-agent-one-vote pooling, and
+``vote_consensus.resolve_vote_weight``'s zero-weight override — which is scoped to the
+``deductive-backfill`` family and has never matched this one) follows the bump automatically:
+family stays ``stage-d-illustration`` across v1/v2, so v1 rows are still purged by a v2 run and
+still pool as the same agent.
+
+PER-FACE ILLUSTRATIONS — WHY THE SINGLE-FACED GUARD IS GONE RATHER THAN FIXED. The guard's
+STATED concern was real: ``CanonicalPrintingMetadata.illustration_id`` is populated from
+``PrintingMetadataRow.resolved_illustration_id``, which returns ``card_faces[0].illustration_id``
+— the FRONT face — so a back-face scan would have been voted with the front's artwork id. That is
+now solved by better data rather than by refusing to look: ``CanonicalPrintingMetadata.
+face_illustrations`` retains EVERY face's own ``illustration_id`` (populated only for genuine
+double-faced layouts — see that field and ``PrintingMetadataRow.face_illustrations``), and
+``IllustrationIndex`` keys each face's illustration under that FACE's own name. A back-face-named
+upload therefore matches the back face's own artwork, which is the correct answer, so there is no
+wrong-vote exposure left for a gate to guard.
 
 Logic:
   1. Build an in-memory index ``(artist_pk, searchable_card_name) → {illustration_id → [printing_pk]}``
      from ``CanonicalCard``/``CanonicalPrintingMetadata`` pairs where ``illustration_id`` is
-     non-null, using ``to_searchable`` normalization.
+     non-null, using ``to_searchable`` normalization. For a genuine double-faced printing, EACH
+     face additionally contributes an entry under that face's own name.
   2. For each eligible card, use ``match_artist`` to fuzzy-match the OCR-extracted artist name
      against the card's candidate artists.
   3. For each surviving artist, look up the illustration index by ``(artist_pk, searchable_name)``.
@@ -75,7 +110,7 @@ of one human click. The input is and must remain ``ImageEvidence.artist_ocr_name
 
 Wired into ``local_calculate_verdicts.py`` (management command) after the fallback calculator,
 before slow-path routing. Reuses ``_eligible_cards_queryset`` from that module for the base
-eligibility query, with additional single-faced and artist-ocr filters. Gate: ``verify_zero_resolutions``
+eligibility query, with an additional artist-ocr filter. Gate: ``verify_zero_resolutions``
 after writes (human-backed consensus prevents machine-only resolution).
 """
 
@@ -83,6 +118,7 @@ import logging
 import uuid as uuid_module
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from django.db import transaction
@@ -115,7 +151,7 @@ logger = logging.getLogger(__name__)
 
 # Own anonymous_id — distinct from every other Stage D engine's identity for
 # independent purge/re-run via ``purge_machine_votes --run-id``.
-ILLUSTRATION_ANONYMOUS_ID = "stage-d-illustration-v1"
+ILLUSTRATION_ANONYMOUS_ID = "stage-d-illustration-v2"
 
 # Owner-ratified base confidence (issue #507 spec). Informational-only — does
 # NOT flow into ``resolve_vote_weight``; the human-backed consensus gate
@@ -131,7 +167,11 @@ EXCLUDED_RESOLVED_TAGS = ["custom-art", "non-english"]
 # Skip reasons
 NO_EVIDENCE_SKIP_REASON = "no-evidence"
 NO_ARTIST_OCR_SKIP_REASON = "no-artist-ocr"
-SINGLE_FACED_ONLY_SKIP_REASON = "multi-faced-v1"
+# DELETED, DELIBERATELY NOT REPLACED: v1's `SINGLE_FACED_ONLY_SKIP_REASON = "multi-faced-v1"`.
+# It gated on `ImageEvidence.layout_class`, which holds a BORDER COLOUR, never faced-ness (see
+# the module docstring's v1 → v2 section). The 3,409 existing `multi-faced-v1` CardScanLog rows
+# are left in place as evidence of what v1 did; they no longer exclude anything, because the
+# eligibility query matches scan logs by `anonymous_id` and this calculator's id is now `-v2`.
 NO_CANDIDATE_MATCH_SKIP_REASON = "no-candidate-match"
 NO_ILLUSTRATION_INDEX_ENTRY_SKIP_REASON = "no-illustration-index-entry"
 
@@ -180,7 +220,31 @@ class IllustrationIndex:
     In-memory index mapping ``(artist_pk, searchable_card_name) → {illustration_id_str → [printing_pk]}``.
 
     Built from ``CanonicalCard`` rows that have ``CanonicalPrintingMetadata.illustration_id``
-    non-null. Also exposes:
+    non-null. TWO KINDS OF KEY are written per row:
+
+      - the printing's own ``CanonicalCard.name`` → its scalar ``illustration_id``. For a
+        double-faced printing that name is Scryfall's combined ``"{front} // {back}"`` string and
+        that id is the FRONT face's, exactly as before — unchanged, and relied on by four other
+        consumers of the scalar column.
+      - for a genuine double-faced printing ONLY (``CanonicalPrintingMetadata.
+        face_illustrations`` non-empty), one key per FACE: that face's own name → that face's own
+        ``illustration_id``. This is what lets a back-face-named upload resolve to the artwork
+        actually printed on the side that was scanned, instead of to the front's; it is why v1's
+        single-faced gate could be deleted rather than repaired. Split/adventure/flip rows never
+        reach here — ``face_illustrations`` is empty for them by construction, so a second MODE
+        printed on the same physical face never becomes a second scannable artwork.
+
+    A face whose ``illustration_id`` is null (Scryfall omits it for faces without art) is skipped:
+    a missing artwork must not become an index entry keyed on the string ``"None"``.
+
+    Both kinds of key map to the SAME printing pk, which is correct — the vote is for a printing,
+    and a double-faced printing is one printing however many sides it has. Where a face name
+    collides with a differently-illustrated card of the same name by the same artist (basic lands
+    on ``reversible_card`` printings are the real instance), the key simply accumulates both
+    illustrations and the calculator abstains with ``multiple-illustrations`` — the safe
+    direction, and the honest one: such a scan genuinely does not say which artwork it is.
+
+    Also exposes:
       - ``artist_by_pk``: ``{card_pk → artist_name}`` for ``match_artist``
       - ``card_pk_to_artist_pk``: ``{canonical_card_pk → artist_pk}`` for post-match lookups
 
@@ -214,15 +278,38 @@ class IllustrationIndex:
             "artist__name",
             "printing_metadata__pk",
             "printing_metadata__illustration_id",
+            "printing_metadata__face_illustrations",
         )
 
-        for card_pk, card_name, artist_pk, artist_name, printing_pk, illustration_id in rows:
+        for (
+            card_pk,
+            card_name,
+            artist_pk,
+            artist_name,
+            printing_pk,
+            illustration_id,
+            face_illustrations,
+        ) in rows:
             if artist_pk is None:
                 continue  # type: ignore[unreachable]
             searchable_name = to_searchable(card_name)
             key = (artist_pk, searchable_name)
             illustration_str = str(illustration_id)
             self._index[key][illustration_str].append(printing_pk)
+
+            # Per-face keys — genuine double-faced printings only (see the class docstring).
+            for face in face_illustrations or []:
+                face_name = face.get("name") or ""
+                face_illustration_id = face.get("illustration_id")
+                if not face_name or face_illustration_id is None:
+                    continue
+                face_key = (artist_pk, to_searchable(face_name))
+                if face_key == key:
+                    # A face whose own name normalises to the combined name — no real Scryfall
+                    # row does this, but a hand-built fixture can, and re-appending the same
+                    # printing pk under the same key would read as ambiguity that isn't there.
+                    continue
+                self._index[face_key][str(face_illustration_id)].append(printing_pk)
 
         # Populate artist_by_pk and card_pk_to_artist_pk from ALL canonical cards (not just
         # those with illustration metadata) so match_artist can identify artists even when
@@ -272,8 +359,18 @@ def printings_for_illustration(
     Returns a LAZY queryset (never a list), so a caller that only wants ``.count()``,
     ``.exists()``, or a ``values_list`` of pks never hydrates model instances, and so this
     composes into a larger query as a subquery rather than a materialised ``IN`` list.
+
+    MATCHES BACK-FACE ILLUSTRATIONS TOO (2026-07-29). The scalar ``illustration_id`` column only
+    ever holds the FRONT face's artwork, so an illustration vote naming a BACK face's artwork —
+    which this calculator can now cast — would narrow to zero printings under a scalar-only
+    filter, silently reading as "no printing carries this artwork" when the truth is "the column
+    we looked in never stores that side". The ``face_illustrations`` containment term is the same
+    claim asked of the per-face column; a printing matching on either term carries the artwork.
     """
-    queryset = CanonicalCard.objects.filter(printing_metadata__illustration_id=illustration_id)
+    queryset = CanonicalCard.objects.filter(
+        Q(printing_metadata__illustration_id=illustration_id)
+        | Q(printing_metadata__face_illustrations__contains=[{"illustration_id": str(illustration_id)}])
+    ).distinct()
     if candidate_printing_pks is not None:
         queryset = queryset.filter(pk__in=candidate_printing_pks)
     return queryset
@@ -293,14 +390,16 @@ def printings_for_illustration(
 # Invalidation is a cheap version-stamp CHECK per call, not a write-time hook — the same
 # "no soundness implication" trade ``_candidate_name_index_version_stamp`` documents. The stamp
 # is ``(CanonicalCard max pk, CanonicalCard count, CanonicalPrintingMetadata max pk,
-# CanonicalPrintingMetadata count, count of NON-NULL illustration_id)``. The first four catch any
-# INSERT (a fresh max pk) or DELETE (count moves even when max pk doesn't) in either table; the
-# fifth exists because this index's whole input is a column that is BACKFILLED IN PLACE —
-# ``import_scryfall_printing_metadata`` populates ``illustration_id`` on rows that already exist,
-# an UPDATE that moves neither max pk nor row count. Without that fifth term a worker process
-# that built the index before an illustration backfill would serve a stale, under-populated index
-# for its whole lifetime. ``illustration_id`` is ``db_index=True``, so the extra term is an
-# index-only count, not a table scan.
+# CanonicalPrintingMetadata count, count of NON-NULL illustration_id, count of NON-EMPTY
+# face_illustrations)``. The first four catch any INSERT (a fresh max pk) or DELETE (count moves
+# even when max pk doesn't) in either table; the fifth and sixth exist because this index's whole
+# input is TWO columns that are BACKFILLED IN PLACE — ``import_scryfall_printing_metadata``
+# populates ``illustration_id`` and ``face_illustrations`` on rows that already exist, an UPDATE
+# that moves neither max pk nor row count. Without those terms a worker process that built the
+# index before a backfill would serve a stale, under-populated index for its whole lifetime.
+# ``illustration_id`` is ``db_index=True`` and ``face_illustrations`` has a PARTIAL index whose
+# predicate is exactly the sixth term's ``WHERE`` (``cpm_face_illustrations_present``, see the
+# model), so both extra terms are index-only counts, not table scans.
 #
 # STILL NOT DETECTED (accepted, same reasoning as the CandidateNameIndex cache's own comment): an
 # in-place rename of a ``CanonicalCard.name`` or ``CanonicalArtist.name``, or an in-place change
@@ -310,7 +409,7 @@ def printings_for_illustration(
 # performance change.
 # ---------------------------------------------------------------------------------------------
 
-IllustrationIndexVersionStamp = tuple[int, int, int, int, int]
+IllustrationIndexVersionStamp = tuple[int, int, int, int, int, int]
 
 _illustration_index_cache: Optional[tuple[IllustrationIndexVersionStamp, "IllustrationIndex"]] = None
 
@@ -326,12 +425,14 @@ def _illustration_index_version_stamp() -> IllustrationIndexVersionStamp:
     canonical_card_agg = CanonicalCard.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
     printing_metadata_agg = CanonicalPrintingMetadata.objects.aggregate(max_pk=Max("pk"), count=Count("pk"))
     illustration_id_count = CanonicalPrintingMetadata.objects.filter(illustration_id__isnull=False).count()
+    face_illustrations_count = CanonicalPrintingMetadata.objects.exclude(face_illustrations=[]).count()
     return (
         canonical_card_agg["max_pk"] or 0,
         canonical_card_agg["count"] or 0,
         printing_metadata_agg["max_pk"] or 0,
         printing_metadata_agg["count"] or 0,
         illustration_id_count,
+        face_illustrations_count,
     )
 
 
@@ -413,8 +514,14 @@ class IllustrationCalculatorResult:
     dry_run: bool = False
     run_id: str = ""
     cards_considered: int = 0
-    multi_faced_skipped: int = 0
+    # `multi_faced_skipped` DELETED with v1's gate — it only ever counted the border-colour
+    # misread (see the module docstring's v1 → v2 section). Nothing replaces it: there is no
+    # faced-ness skip in v2, so a counter for one would be permanently zero.
     votes_would_cast: int = 0
+    # Cards whose candidate list was resolved by widening a back-face name to its combined DFC
+    # name (see `_resolve_illustration_candidates`). Counted, not asserted, so the population v1's
+    # gate structurally could never reach is measurable from a dry run.
+    back_face_resolved: int = 0
     votes_written: int = 0
     already_voted: int = 0
     skip_counts: dict[str, int] = field(default_factory=dict)
@@ -455,13 +562,13 @@ def _eligible_illustration_cards_queryset(
     eligibility filters as every other Stage D calculator (via a fresh queryset matching
     ``_eligible_cards_queryset``'s exact shape).
 
-    Additional v1 constraints:
+    Additional constraint:
       - Current ``ImageEvidence`` with non-null ``artist_ocr_name`` (checked per-card in the
         loop, not in the queryset, since ImageEvidence is keyed by content_phash).
-      - Single-faced layouts only (``layout_class`` empty or not set — single-faced cards have
-        no DFC layout_class reading; multi-faced cards have ``layout_class`` in
-        {"split", "transform", "meld", "double_faced"}).  Multi-faced cards are counted and
-        skipped (logged), not errored — v1 scope limitation.
+
+    v1's "single-faced layouts only" constraint is GONE (see the module docstring): it read
+    ``ImageEvidence.layout_class`` as faced-ness when that column holds a border colour, and the
+    concern it stood for is now answered by per-face illustration data instead.
 
     ``card_ids`` (Stage E micro-batch scoping) mirrors
     ``local_calculate_verdicts._eligible_cards_queryset``'s own parameter exactly — a pure scope
@@ -643,6 +750,56 @@ class _CandidateAdapter:
     pk: int
 
 
+def _resolve_illustration_candidates(
+    name: str,
+    candidate_name_index: "CandidateNameIndex",
+    default_cards_path: "Optional[Path]" = None,
+) -> tuple[list[_CandidateAdapter], str, bool]:
+    """
+    Back-face-aware candidate selection for this calculator, returning
+    ``(candidates, illustration_index_name, widened)``.
+
+    THE TWO NAMES ARE DELIBERATELY DIFFERENT, and that difference is the whole point.
+    ``CanonicalCard.name`` for a genuine double-faced card is Scryfall's combined
+    ``"{front} // {back}"`` string, so a back-face-named upload can never match
+    ``CandidateNameIndex.candidates_for(name)`` directly — structurally, however good the OCR is.
+    ``local_calculate_verdicts._resolve_candidates_for_card`` already solved that for the join-key
+    engine by widening to the combined name via the ``DFCPair`` table, and this reuses the same
+    two-step, same ``is_back_face`` guard, same "return the (empty) direct result rather than
+    guessing" failure mode.
+
+    What it does NOT reuse is which name the illustration lookup is keyed on. The CANDIDATES must
+    be found under the combined name (that is where the ``CanonicalCard`` rows live), but the
+    ILLUSTRATION must be looked up under the BACK-FACE name — because
+    ``IllustrationIndex`` now files each face's own artwork under that face's own name, and the
+    combined-name key still resolves to the FRONT face's scalar ``illustration_id``. Keying the
+    illustration lookup on the widened name would hand a back-face scan the front's artwork,
+    which is precisely the wrong-vote exposure v1's deleted gate was standing in for.
+
+    The direct (single-faced, front-named, or combined-named upload) path is byte-identical to
+    what this calculator did before: same candidates, same ``to_searchable(card.name)`` key. The
+    ``DFCPair``/``is_back_face`` lookups are only paid by names the direct lookup missed, which is
+    the same "only pay for what you use" shape ``_resolve_candidates_for_card`` established.
+    """
+    direct = candidate_name_index.candidates_for(name)
+    if direct:
+        return [_CandidateAdapter(pk=c.pk) for c in direct], to_searchable(name), False
+
+    from cardpicker.models import DFCPair
+    from cardpicker.printing_metadata_import import is_back_face
+
+    if not is_back_face(name, default_cards_path=default_cards_path):
+        return [], to_searchable(name), False
+    front_name = DFCPair.objects.filter(back=name).values_list("front", flat=True).first()
+    if front_name is None:
+        return [], to_searchable(name), False
+    widened = candidate_name_index.candidates_for(f"{front_name} // {name}")
+    if not widened:
+        return [], to_searchable(name), False
+    # Candidates from the COMBINED name; illustration key from the BACK-FACE name.
+    return [_CandidateAdapter(pk=c.pk) for c in widened], to_searchable(name), True
+
+
 # ---------------------------------------------------------------------------------------------
 # CardIllustrationVote write path (issue #524)
 #
@@ -797,6 +954,7 @@ def run_illustration_calculator(
     chunk_size: int = 500,
     audit_sample_size: int = 20,
     card_ids: Optional[Iterable[int]] = None,
+    default_cards_path: Optional[Path] = None,
 ) -> IllustrationCalculatorResult:
     """
     Batch runner for the illustration deduction calculator (issue #507).
@@ -805,6 +963,9 @@ def run_illustration_calculator(
     batches ``CardPrintingTag`` writes, calls ``resolve_and_persist_printing`` per touched card.
     ``dry_run=True`` (default) computes and counts everything without writing.
     ``card_ids`` is forwarded to the eligibility queryset for Stage E micro-batch scoping.
+    ``default_cards_path`` is passed straight through to ``_resolve_illustration_candidates``'
+    own ``is_back_face`` call — ``None`` (the default, used in production) resolves to the real
+    on-disk Scryfall cache; only ever overridden by a test.
 
     TWO INDEPENDENT WRITE GRAINS (issue #524). A run now produces up to two kinds of vote per
     card, on DIFFERENT conditions, and they must not be conflated:
@@ -872,8 +1033,6 @@ def run_illustration_calculator(
         card_ids=card_ids,
     )
 
-    multi_faced_skipped = 0
-
     for card in queryset.iterator(chunk_size=chunk_size):
         if card.content_phash is None:
             continue  # no stable hash to key ImageEvidence lookup
@@ -903,24 +1062,6 @@ def run_illustration_calculator(
                 )
             continue
 
-        # v1 constraint: single-faced only. A multi-faced card has a non-empty
-        # layout_class from OCR; single-faced cards leave it empty.
-        if evidence.layout_class and evidence.layout_class.strip():
-            multi_faced_skipped += 1
-            result.skip_counts[SINGLE_FACED_ONLY_SKIP_REASON] = (
-                result.skip_counts.get(SINGLE_FACED_ONLY_SKIP_REASON, 0) + 1
-            )
-            if not dry_run:
-                scan_log_batch.append(
-                    CardScanLog(
-                        card_id=card.pk,
-                        anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
-                        run_id=run_id,
-                        skip_reason=SINGLE_FACED_ONLY_SKIP_REASON,
-                    )
-                )
-            continue
-
         if not evidence.artist_ocr_name or not evidence.artist_ocr_name.strip():
             result.skip_counts[NO_ARTIST_OCR_SKIP_REASON] = result.skip_counts.get(NO_ARTIST_OCR_SKIP_REASON, 0) + 1
             if not dry_run:
@@ -945,11 +1086,14 @@ def run_illustration_calculator(
         if candidate_name_index is None:
             candidate_name_index = _get_cached_candidate_name_index()
 
-        # Build candidate list for match_artist — adapter objects with .pk.
-        raw_candidates = candidate_name_index.candidates_for(card.name)
-        candidates = [_CandidateAdapter(pk=c.pk) for c in raw_candidates]
-
-        searchable_card_name = to_searchable(card.name)
+        # Build candidate list for match_artist — adapter objects with .pk — AND the name the
+        # illustration index is keyed on. The two diverge for a back-face-named upload: see
+        # `_resolve_illustration_candidates`.
+        candidates, searchable_card_name, widened = _resolve_illustration_candidates(
+            card.name, candidate_name_index, default_cards_path=default_cards_path
+        )
+        if widened:
+            result.back_face_resolved += 1
 
         verdict = calculate_illustration_verdict(
             card_id=card.pk,
@@ -1057,8 +1201,6 @@ def run_illustration_calculator(
                     )
                 )
             touched_card_ids.append(card.pk)
-
-    result.multi_faced_skipped = multi_faced_skipped
 
     if not dry_run:
         from cardpicker.local_calculate_verdicts import (

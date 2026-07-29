@@ -653,3 +653,164 @@ class TestRemoteFreshness:
 
         with pytest.raises(AssertionError):
             import_scryfall_printing_metadata()
+
+
+# =============================================================================================
+# Per-face illustration ids (2026-07-29)
+#
+# `resolved_illustration_id` returns `card_faces[0].illustration_id` for a multi-faced row - the
+# FRONT face - and the other faces' artwork was discarded entirely. That flattening is why a
+# back-face scan had no artwork of its own to be attributed to, which is what
+# `local_illustration`'s deleted `multi-faced-v1` gate was standing in for. These tests pin BOTH
+# halves of the replacement: every face is retained for a genuine double-faced card, and NO face
+# entry is invented for a layout whose "faces" are modes printed on one physical side.
+# =============================================================================================
+
+
+class TestFaceIllustrations:
+    def test_a_transform_card_retains_both_faces_own_illustration_ids(self, db):
+        front, back = str(uuid.uuid4()), str(uuid.uuid4())
+        row = printing_metadata_import.PrintingMetadataRow.model_validate(
+            _record(
+                layout="transform",
+                card_faces=[
+                    {"name": "Invasion of Tolvada", "illustration_id": front},
+                    {"name": "The Broken Sky", "illustration_id": back},
+                ],
+            )
+        )
+
+        assert row.face_illustrations == [
+            {"name": "Invasion of Tolvada", "illustration_id": front},
+            {"name": "The Broken Sky", "illustration_id": back},
+        ]
+
+    def test_the_scalar_illustration_id_is_still_the_front_face(self, db):
+        """Four consumers read the scalar column; the per-face list is ADDITIVE, and must not
+        change what `resolved_illustration_id` has always returned."""
+        front, back = str(uuid.uuid4()), str(uuid.uuid4())
+        row = printing_metadata_import.PrintingMetadataRow.model_validate(
+            _record(
+                layout="transform",
+                card_faces=[
+                    {"name": "Invasion of Tolvada", "illustration_id": front},
+                    {"name": "The Broken Sky", "illustration_id": back},
+                ],
+            )
+        )
+
+        assert str(row.resolved_illustration_id) == front
+
+    @pytest.mark.parametrize("layout", ["split", "adventure", "flip", "aftermath", "mutate", "prototype"])
+    def test_a_second_MODE_on_one_printed_face_gains_no_face_entry(self, db, layout):
+        """`split`/`adventure`/`flip`/... also nest multiple named modes under `card_faces`, but
+        those modes share ONE physical face. Giving "Stomp" its own entry would assert a second
+        scannable side of "Bonecrusher Giant" that does not exist - and would let a scan of the
+        creature be attributed to the adventure's artwork."""
+        row = printing_metadata_import.PrintingMetadataRow.model_validate(
+            _record(
+                layout=layout,
+                card_faces=[
+                    {"name": "Bonecrusher Giant", "illustration_id": str(uuid.uuid4())},
+                    {"name": "Stomp", "illustration_id": str(uuid.uuid4())},
+                ],
+            )
+        )
+
+        assert row.face_illustrations == []
+
+    @pytest.mark.parametrize("layout", ["transform", "modal_dfc", "double_faced_token", "battle", "reversible_card"])
+    def test_every_genuine_double_faced_layout_is_covered(self, db, layout):
+        row = printing_metadata_import.PrintingMetadataRow.model_validate(
+            _record(
+                layout=layout,
+                card_faces=[
+                    {"name": "A Front", "illustration_id": str(uuid.uuid4())},
+                    {"name": "A Back", "illustration_id": str(uuid.uuid4())},
+                ],
+            )
+        )
+
+        assert [face["name"] for face in row.face_illustrations] == ["A Front", "A Back"]
+
+    def test_a_single_faced_card_has_no_face_entries(self, db):
+        row = printing_metadata_import.PrintingMetadataRow.model_validate(
+            _record(layout="normal", illustration_id=str(uuid.uuid4()))
+        )
+
+        assert row.face_illustrations == []
+
+    def test_a_face_without_art_records_none_rather_than_shifting_the_list(self, db):
+        """Scryfall omits `illustration_id` on faces with no art of their own. Dropping such a
+        face would silently renumber the list, so index 1 would stop meaning "the back"."""
+        back = str(uuid.uuid4())
+        row = printing_metadata_import.PrintingMetadataRow.model_validate(
+            _record(
+                layout="transform",
+                card_faces=[{"name": "Artless Front"}, {"name": "A Back", "illustration_id": back}],
+            )
+        )
+
+        assert row.face_illustrations == [
+            {"name": "Artless Front", "illustration_id": None},
+            {"name": "A Back", "illustration_id": back},
+        ]
+
+    def test_the_import_persists_face_illustrations_to_the_database(self, db, tmp_path):
+        card = CanonicalCardFactory()
+        front, back = str(uuid.uuid4()), str(uuid.uuid4())
+        path = _write_bulk_data_file(
+            tmp_path,
+            [
+                _record(
+                    id=str(card.identifier),
+                    layout="transform",
+                    card_faces=[
+                        {"name": "Delver of Secrets", "illustration_id": front},
+                        {"name": "Insectile Aberration", "illustration_id": back},
+                    ],
+                )
+            ],
+        )
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=card)
+        assert str(metadata.illustration_id) == front
+        assert metadata.face_illustrations == [
+            {"name": "Delver of Secrets", "illustration_id": front},
+            {"name": "Insectile Aberration", "illustration_id": back},
+        ]
+
+    def test_a_face_illustration_change_alone_is_a_detected_diff(self, db, tmp_path):
+        """`face_illustrations` is in `_METADATA_SYNC_FIELDS`, so a row whose ONLY change is a
+        face's artwork must be UPDATEd rather than counted as unchanged and skipped - the same
+        property every other synced column has."""
+        card = CanonicalCardFactory()
+        front, old_back, new_back = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+
+        def _run(back: str) -> dict[str, Any]:
+            path = _write_bulk_data_file(
+                tmp_path / back,
+                [
+                    _record(
+                        id=str(card.identifier),
+                        layout="transform",
+                        card_faces=[
+                            {"name": "Front", "illustration_id": front},
+                            {"name": "Back", "illustration_id": back},
+                        ],
+                    )
+                ],
+            )
+            return import_scryfall_printing_metadata(default_cards_path=path)
+
+        (tmp_path / old_back).mkdir()
+        (tmp_path / new_back).mkdir()
+        _run(old_back)
+        stats = _run(new_back)
+
+        assert stats["updated"] == 1
+        assert stats["skipped"] == 0
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=card)
+        assert metadata.face_illustrations[1]["illustration_id"] == new_back

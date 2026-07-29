@@ -85,6 +85,43 @@ class PrintingMetadataRow(BaseModel):
         return None
 
     @property
+    def face_illustrations(self) -> list[dict[str, Any]]:
+        """
+        EVERY face's own `illustration_id`, paired with that face's own name, in `card_faces`
+        order (index 0 is the front) - the data `resolved_illustration_id` above flattens away.
+        Persisted to `CanonicalPrintingMetadata.face_illustrations`; see that field's own comment
+        for the storage-shape reasoning.
+
+        RETURNS `[]` FOR ANYTHING THAT IS NOT A GENUINE DOUBLE-FACED CARD, gated on the SAME
+        `DOUBLE_FACED_LAYOUTS` allowlist `get_back_face_names` uses (see that constant's own
+        comment). `split`/`adventure`/`flip`/`aftermath`/`mutate`/`prototype` rows also nest
+        multiple named modes under `card_faces`, but those modes share ONE printed face - emitting
+        an entry per mode would assert a second scannable side that does not physically exist,
+        and would let a scan of "Bonecrusher Giant" be attributed to the "Stomp" artwork. Rows
+        with fewer than two faces return `[]` for the same reason: there is no second side to
+        record, and the scalar `illustration_id` already covers the only artwork present.
+
+        A face with no `illustration_id` of its own (Scryfall omits it for faces without art)
+        records `None` rather than being dropped, so the list's INDEX still corresponds to the
+        face's position - a consumer that walks `card_faces[1]` must not have the list silently
+        shift under it.
+        """
+        if self.layout not in DOUBLE_FACED_LAYOUTS:
+            return []
+        if not self.card_faces or len(self.card_faces) < 2:
+            return []
+        faces: list[dict[str, Any]] = []
+        for face in self.card_faces:
+            raw = face.get("illustration_id")
+            faces.append(
+                {
+                    "name": face.get("name") or "",
+                    "illustration_id": str(raw) if raw is not None else None,
+                }
+            )
+        return faces
+
+    @property
     def art_crop_url(self) -> str:
         if self.image_uris is not None:
             return self.image_uris.get("art_crop", "")
@@ -313,6 +350,7 @@ _METADATA_SYNC_FIELDS = [
     "lang",
     "art_crop_url",
     "illustration_id",
+    "face_illustrations",
 ]
 
 # Read/write chunk sizes for `_sync_printing_metadata`. The read side streams existing rows so
@@ -461,6 +499,7 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
                 lang=row.lang,
                 art_crop_url=row.art_crop_url,
                 illustration_id=row.resolved_illustration_id,
+                face_illustrations=row.face_illustrations,
             )
         )
 

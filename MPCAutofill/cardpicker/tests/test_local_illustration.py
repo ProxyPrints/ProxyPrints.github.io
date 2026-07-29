@@ -1,11 +1,14 @@
 """
 Tests for cardpicker.local_illustration (Stage D illustration deduction calculator, issue #507).
 
-Covers: IllustrationIndex construction, 0/1/N vote shapes, confidence division, single-faced
-filtering, dry-run no-writes, live gate (verify_zero_resolutions), purgeability via run_id,
-and eligibility constraints (no join-key vote, no artist-ocr, no evidence, multi-faced skip).
+Covers: IllustrationIndex construction (including per-face keys), 0/1/N vote shapes, confidence
+division, dry-run no-writes, live gate (verify_zero_resolutions), purgeability via run_id,
+eligibility constraints (no join-key vote, no artist-ocr, no evidence), the deleted border-colour
+misread that v1 called a faced-ness gate, back-face-named uploads end to end, and the v1 -> v2
+version bump.
 """
 
+import json
 import uuid
 
 import pytest
@@ -38,17 +41,22 @@ from cardpicker.models import (
     CardIllustrationVote,
     CardPrintingTag,
     CardScanLog,
+    DFCPair,
     PrintingTagStatus,
     VoteSource,
+    calculator_family,
 )
+from cardpicker.printing_consensus import agent_dedupe_key
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
+    DFCPairFactory,
     ImageEvidenceFactory,
 )
+from cardpicker.vote_consensus import resolve_vote_weight
 
 
 def _make_evidence(card, **overrides):
@@ -370,21 +378,6 @@ class TestRunIllustrationCalculator:
         vote = votes.first()
         assert vote.source == VoteSource.DEDUCTION
         assert vote.confidence == BASE_CONFIDENCE
-
-    def test_skips_multi_faced_cards(self, db):
-        artist = CanonicalArtistFactory(name="Christopher Rush")
-        expansion = CanonicalExpansionFactory(code="lea")
-        cc = CanonicalCardFactory(name="Lightning Bolt", artist=artist, expansion=expansion)
-        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
-
-        card = _eligible_card(name="Lightning Bolt")
-        _join_key_no_hit_card(card)
-        _make_evidence(card, artist_ocr_name="Christopher Rush", layout_class="split")
-
-        result = run_illustration_calculator(dry_run=True)
-
-        assert result.multi_faced_skipped >= 1
-        assert result.cards_considered == 0
 
     def test_skips_no_artist_ocr(self, db):
         artist = CanonicalArtistFactory(name="Christopher Rush")
@@ -1268,16 +1261,16 @@ class TestIllustrationVoteWriter:
         assert result.illustration_votes_written == 0
         assert CardIllustrationVote.objects.count() == 0
 
-    def test_the_anonymous_id_is_not_bumped(self, db):
-        """No version string moves as part of #524 (#525's own instruction: a bump is unsafe
-        pending separate backend investigation). Both grains share the one identity."""
+    def test_both_grains_share_the_one_identity(self, db):
+        """#524's property: the printing grain and the illustration grain are written under ONE
+        `anonymous_id`, not two. (The v1 → v2 bump that landed later moves that single string;
+        it does not split it - see `TestCalculatorVersionBump`.)"""
         artist, expansion, card = self._artist_and_card()
         cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
         CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=uuid.uuid4())
 
         run_illustration_calculator(dry_run=False)
 
-        assert ILLUSTRATION_ANONYMOUS_ID == "stage-d-illustration-v1"
         assert CardIllustrationVote.objects.get(card=card).anonymous_id == ILLUSTRATION_ANONYMOUS_ID
 
     def test_illustration_votes_carry_the_run_id(self, db):
@@ -1683,3 +1676,417 @@ class TestArtistInputIsOcrDerivedNotVoteDerived:
 
         offending = [q["sql"] for q in captured.captured_queries if CardArtistVote._meta.db_table in q["sql"]]
         assert offending == [], f"artist input must never be vote-derived (issue #523); saw: {offending}"
+
+
+# =============================================================================================
+# THE BORDER-COLOUR MISREAD, AND THE PER-FACE DATA THAT REPLACED THE GATE (2026-07-29)
+#
+# v1 skipped every card whose `ImageEvidence.layout_class` was non-blank, on the stated premise
+# that the column records faced-ness. It does not: its only writer is
+# `local_fallback.classify_border_color` and it holds a BORDER COLOUR. Measured live distribution
+# at the time of the fix: black 138,728 / borderless 72,603 / white 7,475 / '' 1,455 /
+# silver 408 - non-blank on 99.34% of rows, so the gate discarded 99.28% of every population
+# handed to the calculator (3,409 `multi-faced-v1` scan-log rows out of 3,426 scanned; 3
+# illustration votes cast in the calculator's entire existence against 230,753 catalog cards).
+#
+# WHY THE TEST THAT SHIPPED THIS WAS VACUOUS, stated here so it is not re-derived: the deleted
+# `test_skips_multi_faced_cards` built its fixture with `layout_class="split"` - a value the
+# field's only writer can never emit. It invented the taxonomy the production comment claimed,
+# so it passed green while asserting behaviour the production predicate inverted. Every test
+# below is parametrised over, or fixtured with, values `classify_border_color` ACTUALLY emits.
+# =============================================================================================
+
+
+# The live `ImageEvidence.layout_class` vocabulary, measured 2026-07-29 (counts above). Every
+# non-blank one of these was a skip under v1.
+_REAL_LAYOUT_CLASS_VALUES = ["black", "borderless", "white", "silver", ""]
+
+
+class TestLayoutClassIsNotFacedness:
+    def _single_faced_setup(self, layout_class):
+        artist = CanonicalArtistFactory(name="Christopher Rush")
+        expansion = CanonicalExpansionFactory(code="lea")
+        cc = CanonicalCardFactory(name="Lightning Bolt", artist=artist, expansion=expansion)
+        illustration = uuid.uuid4()
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=illustration)
+        card = _eligible_card(name="Lightning Bolt")
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name="Christopher Rush", layout_class=layout_class)
+        reset_illustration_index_cache_for_tests()
+        return card, cc, illustration
+
+    @pytest.mark.parametrize("layout_class", _REAL_LAYOUT_CLASS_VALUES)
+    def test_a_border_colour_no_longer_skips_a_single_faced_card(self, db, layout_class):
+        """THE defect, directly: an ordinary single-faced Lightning Bolt with a black border was
+        skipped as "multi-faced". Under v1 every non-blank parametrisation of this test produces
+        `cards_considered == 0` and no vote."""
+        card, cc, illustration = self._single_faced_setup(layout_class)
+
+        result = run_illustration_calculator(dry_run=True)
+
+        assert result.cards_considered == 1
+        assert result.votes_would_cast == 1
+        assert result.illustration_votes_would_cast == 1
+        assert result.skip_counts == {}
+
+    @pytest.mark.parametrize("layout_class", _REAL_LAYOUT_CLASS_VALUES)
+    def test_the_vote_actually_lands_for_every_border_colour(self, db, layout_class):
+        card, cc, illustration = self._single_faced_setup(layout_class)
+
+        run_illustration_calculator(dry_run=False)
+
+        assert CardPrintingTag.objects.get(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID).printing_id == cc.pk
+        assert CardIllustrationVote.objects.get(card=card).illustration_id == illustration
+
+    def test_no_skip_reason_records_facedness_at_all(self, db):
+        """The gate is DELETED, not renamed or relocated. Nothing in this module may reintroduce
+        a faced-ness skip under any spelling, because faced-ness is now answered by per-face
+        data rather than by refusing to look."""
+        import cardpicker.local_illustration as module
+
+        skip_reasons = [
+            value for name, value in vars(module).items() if name.endswith("_SKIP_REASON") and isinstance(value, str)
+        ]
+
+        assert "multi-faced-v1" not in skip_reasons
+        assert not [reason for reason in skip_reasons if "face" in reason]
+        assert not hasattr(module.IllustrationCalculatorResult(), "multi_faced_skipped")
+
+
+# =============================================================================================
+# Per-face illustration ids in the index
+# =============================================================================================
+
+
+def _dfc_metadata(canonical_card, front_illustration, back_illustration, front_name, back_name):
+    """A `CanonicalPrintingMetadata` row shaped exactly as `import_scryfall_printing_metadata`
+    writes one for a genuine double-faced printing: scalar `illustration_id` = the FRONT face
+    (backwards compatibility for the four consumers of that column), plus every face's own id
+    under `face_illustrations` in `card_faces` order."""
+    return CanonicalPrintingMetadataFactory(
+        canonical_card=canonical_card,
+        illustration_id=front_illustration,
+        face_illustrations=[
+            {"name": front_name, "illustration_id": str(front_illustration)},
+            {"name": back_name, "illustration_id": str(back_illustration)},
+        ],
+    )
+
+
+class TestIllustrationIndexPerFaceKeys:
+    def _dfc(self):
+        artist = CanonicalArtistFactory(name="Nils Hamm")
+        expansion = CanonicalExpansionFactory(code="isd")
+        cc = CanonicalCardFactory(name="Delver of Secrets // Insectile Aberration", artist=artist, expansion=expansion)
+        front, back = uuid.uuid4(), uuid.uuid4()
+        _dfc_metadata(cc, front, back, "Delver of Secrets", "Insectile Aberration")
+        return artist, cc, front, back
+
+    def test_the_back_faces_own_illustration_is_filed_under_the_back_faces_name(self, db):
+        """The whole point of storing per-face ids: a back-face scan resolves to the artwork
+        printed on the side that was scanned. Under the pre-fix index the only key for this
+        printing was the combined name, carrying the FRONT face's id."""
+        artist, cc, front, back = self._dfc()
+
+        index = IllustrationIndex()
+
+        assert index.illustration_printings(artist.pk, "insectile aberration") == {str(back): [cc.pk]}
+
+    def test_the_front_faces_own_illustration_is_filed_under_the_front_faces_name(self, db):
+        artist, cc, front, back = self._dfc()
+
+        index = IllustrationIndex()
+
+        assert index.illustration_printings(artist.pk, "delver of secrets") == {str(front): [cc.pk]}
+
+    def test_the_combined_name_key_is_unchanged_and_still_the_front_face(self, db):
+        """Four consumers read the scalar column and this key is what the pre-fix index built
+        from it. The per-face keys are ADDITIVE; this one must not move."""
+        artist, cc, front, back = self._dfc()
+
+        index = IllustrationIndex()
+
+        assert index.illustration_printings(artist.pk, "delver of secrets insectile aberration") == {
+            str(front): [cc.pk]
+        }
+
+    def test_a_printing_with_no_face_illustrations_contributes_only_its_own_name_key(self, db):
+        """The single-faced case, and the shape a split/adventure row is imported as
+        (`face_illustrations == []`) - so no second MODE can become a second scannable artwork."""
+        artist = CanonicalArtistFactory(name="Artist S")
+        expansion = CanonicalExpansionFactory(code="eld")
+        cc = CanonicalCardFactory(name="Bonecrusher Giant // Stomp", artist=artist, expansion=expansion)
+        illustration = uuid.uuid4()
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=illustration, face_illustrations=[])
+
+        index = IllustrationIndex()
+
+        assert index.illustration_printings(artist.pk, "bonecrusher giant stomp") == {str(illustration): [cc.pk]}
+        assert index.illustration_printings(artist.pk, "stomp") == {}
+        assert index.illustration_printings(artist.pk, "bonecrusher giant") == {}
+
+    def test_a_face_with_no_artwork_of_its_own_is_not_indexed_as_the_string_none(self, db):
+        artist = CanonicalArtistFactory(name="Artist T")
+        expansion = CanonicalExpansionFactory(code="mid")
+        cc = CanonicalCardFactory(name="A Front // A Back", artist=artist, expansion=expansion)
+        front = uuid.uuid4()
+        CanonicalPrintingMetadataFactory(
+            canonical_card=cc,
+            illustration_id=front,
+            face_illustrations=[
+                {"name": "A Front", "illustration_id": str(front)},
+                {"name": "A Back", "illustration_id": None},
+            ],
+        )
+
+        index = IllustrationIndex()
+
+        assert index.illustration_printings(artist.pk, "a back") == {}
+        assert "None" not in index.illustration_printings(artist.pk, "a front")
+
+    def test_a_face_name_colliding_with_a_differently_illustrated_card_reads_as_ambiguous(self, db):
+        """`reversible_card` basic lands are the real instance: the same artist can have both a
+        single-faced "Island" and a reversible "Island" face with different art. The key
+        accumulates both artworks and the calculator abstains - the safe AND honest direction,
+        since such a scan genuinely does not say which artwork it is."""
+        artist = CanonicalArtistFactory(name="John Avon")
+        expansion = CanonicalExpansionFactory(code="sld")
+        plain = CanonicalCardFactory(name="Island", artist=artist, expansion=expansion)
+        plain_illustration = uuid.uuid4()
+        CanonicalPrintingMetadataFactory(canonical_card=plain, illustration_id=plain_illustration)
+        reversible = CanonicalCardFactory(name="Island // Island", artist=artist, expansion=expansion)
+        _dfc_metadata(reversible, uuid.uuid4(), uuid.uuid4(), "Island", "Island")
+
+        index = IllustrationIndex()
+
+        assert len(index.illustration_printings(artist.pk, "island")) == 3
+
+
+class TestIllustrationIndexCacheSeesFaceBackfill:
+    def test_populating_face_illustrations_in_place_invalidates_the_cached_index(self, db):
+        """`face_illustrations` is BACKFILLED BY UPDATE - `import_scryfall_printing_metadata`
+        populates it on rows that already exist, moving neither max pk nor row count nor the
+        non-null `illustration_id` count. Without its own version-stamp term a worker process
+        that built the index before the backfill would serve a stale, face-less index for its
+        whole lifetime."""
+        artist = CanonicalArtistFactory(name="Nils Hamm")
+        expansion = CanonicalExpansionFactory(code="isd")
+        cc = CanonicalCardFactory(name="Delver of Secrets // Insectile Aberration", artist=artist, expansion=expansion)
+        front, back = uuid.uuid4(), uuid.uuid4()
+        metadata = CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=front, face_illustrations=[])
+        reset_illustration_index_cache_for_tests()
+
+        assert _get_cached_illustration_index().illustration_printings(artist.pk, "insectile aberration") == {}
+
+        metadata.face_illustrations = [
+            {"name": "Delver of Secrets", "illustration_id": str(front)},
+            {"name": "Insectile Aberration", "illustration_id": str(back)},
+        ]
+        metadata.save(update_fields=["face_illustrations"])
+
+        assert _get_cached_illustration_index().illustration_printings(artist.pk, "insectile aberration") == {
+            str(back): [cc.pk]
+        }
+
+
+class TestPrintingsForIllustrationCoversBackFaces:
+    def test_a_back_face_artwork_narrows_to_the_printing_that_carries_it(self, db):
+        """The scalar column only ever holds the FRONT face's artwork, so a back-face
+        illustration vote - which this calculator can now cast - would narrow to zero printings
+        under a scalar-only filter: silently "no printing carries this artwork" when the truth is
+        "the column we looked in never stores that side"."""
+        artist = CanonicalArtistFactory(name="Nils Hamm")
+        expansion = CanonicalExpansionFactory(code="isd")
+        cc = CanonicalCardFactory(name="Delver of Secrets // Insectile Aberration", artist=artist, expansion=expansion)
+        front, back = uuid.uuid4(), uuid.uuid4()
+        _dfc_metadata(cc, front, back, "Delver of Secrets", "Insectile Aberration")
+
+        assert list(printings_for_illustration(back).values_list("pk", flat=True)) == [cc.pk]
+        assert list(printings_for_illustration(front).values_list("pk", flat=True)) == [cc.pk]
+
+    def test_an_unrelated_artwork_still_narrows_to_nothing(self, db):
+        artist = CanonicalArtistFactory(name="Nils Hamm")
+        expansion = CanonicalExpansionFactory(code="isd")
+        cc = CanonicalCardFactory(name="Delver of Secrets // Insectile Aberration", artist=artist, expansion=expansion)
+        _dfc_metadata(cc, uuid.uuid4(), uuid.uuid4(), "Delver of Secrets", "Insectile Aberration")
+
+        assert printings_for_illustration(uuid.uuid4()).count() == 0
+
+
+# =============================================================================================
+# End to end: a back-face-named upload votes the BACK face's own artwork
+# =============================================================================================
+
+
+def _write_bulk_data_file(tmp_path, records):
+    """Same shape as `test_local_calculate_verdicts.py`'s own helper - deliberately duplicated
+    (not imported cross-module) matching this test suite's per-module small-helper convention."""
+    path = tmp_path / "default_cards.json"
+    path.write_text("[\n" + "\n".join(json.dumps(record) + "," for record in records) + "\n]")
+    return path
+
+
+class TestBackFaceNamedUploadEndToEnd:
+    """The cohort v1's gate could never reach, and the reason the gate could be DELETED rather
+    than repaired. A source that splits a double-faced card into two image files names the second
+    one after the BACK face; `CanonicalCard.name` is Scryfall's combined "{front} // {back}", so
+    the candidate lookup has to widen - but the ILLUSTRATION lookup must NOT, or the scan gets
+    attributed to the front's artwork, which is exactly the wrong-vote exposure the gate stood
+    in for."""
+
+    def _setup(self, tmp_path, upload_name="Insectile Aberration"):
+        artist = CanonicalArtistFactory(name="Nils Hamm")
+        expansion = CanonicalExpansionFactory(code="isd")
+        cc = CanonicalCardFactory(name="Delver of Secrets // Insectile Aberration", artist=artist, expansion=expansion)
+        front, back = uuid.uuid4(), uuid.uuid4()
+        _dfc_metadata(cc, front, back, "Delver of Secrets", "Insectile Aberration")
+        DFCPairFactory(front="Delver of Secrets", back="Insectile Aberration")
+        path = _write_bulk_data_file(
+            tmp_path,
+            [
+                {
+                    "id": str(uuid.uuid4()),
+                    "layout": "transform",
+                    "card_faces": [{"name": "Delver of Secrets"}, {"name": "Insectile Aberration"}],
+                }
+            ],
+        )
+        card = _eligible_card(name=upload_name)
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name="Nils Hamm", layout_class="black")
+        reset_illustration_index_cache_for_tests()
+        return card, cc, front, back, path
+
+    def test_the_vote_is_the_back_faces_artwork_not_the_fronts(self, db, tmp_path):
+        card, cc, front, back, path = self._setup(tmp_path)
+
+        result = run_illustration_calculator(dry_run=False, default_cards_path=path)
+
+        assert result.back_face_resolved == 1
+        vote = CardIllustrationVote.objects.get(card=card)
+        assert vote.illustration_id == back
+        assert vote.illustration_id != front
+
+    def test_the_printing_vote_is_cast_for_the_one_double_faced_printing(self, db, tmp_path):
+        card, cc, front, back, path = self._setup(tmp_path)
+
+        run_illustration_calculator(dry_run=False, default_cards_path=path)
+
+        assert CardPrintingTag.objects.get(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID).printing_id == cc.pk
+
+    def test_a_front_named_upload_still_takes_the_direct_path_unwidened(self, db, tmp_path):
+        """`Card.name` matching a `CanonicalCard.name` directly must behave byte-identically to
+        before: same candidates, same `to_searchable(card.name)` illustration key, no DFCPair
+        lookup."""
+        card, cc, front, back, path = self._setup(tmp_path, upload_name="Delver of Secrets // Insectile Aberration")
+
+        result = run_illustration_calculator(dry_run=False, default_cards_path=path)
+
+        assert result.back_face_resolved == 0
+        assert CardIllustrationVote.objects.get(card=card).illustration_id == front
+
+    def test_a_back_face_with_no_synced_dfc_pair_row_abstains_rather_than_guessing(self, db, tmp_path):
+        card, cc, front, back, path = self._setup(tmp_path)
+        DFCPair.objects.all().delete()
+        reset_illustration_index_cache_for_tests()
+
+        result = run_illustration_calculator(dry_run=False, default_cards_path=path)
+
+        assert result.skip_counts.get(NO_CANDIDATE_MATCH_SKIP_REASON) == 1
+        assert CardIllustrationVote.objects.count() == 0
+
+    def test_an_unknown_name_that_is_not_a_back_face_abstains(self, db, tmp_path):
+        card, cc, front, back, path = self._setup(tmp_path, upload_name="Some Totally Unknown Card")
+
+        result = run_illustration_calculator(dry_run=False, default_cards_path=path)
+
+        assert result.back_face_resolved == 0
+        assert result.skip_counts.get(NO_CANDIDATE_MATCH_SKIP_REASON) == 1
+        assert CardPrintingTag.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).count() == 0
+
+
+# =============================================================================================
+# The v1 -> v2 calculator version bump (required for the fix to have any effect at all)
+# =============================================================================================
+
+
+class TestCalculatorVersionBump:
+    def test_the_anonymous_id_is_v2(self, db):
+        assert ILLUSTRATION_ANONYMOUS_ID == "stage-d-illustration-v2"
+
+    def test_the_calculator_family_is_unchanged_by_the_bump(self, db):
+        """`models.calculator_family` strips the `-vN` suffix, so every family-keyed behaviour
+        (`purge_stale_machine_votes`' family-scoped DELETE, `printing_consensus.agent_dedupe_key`
+        one-agent-one-vote pooling, `vote_consensus.resolve_vote_weight`'s zero-weight override)
+        follows the bump automatically rather than needing its own edit."""
+        assert calculator_family(ILLUSTRATION_ANONYMOUS_ID) == "stage-d-illustration"
+        assert calculator_family("stage-d-illustration-v1") == calculator_family(ILLUSTRATION_ANONYMOUS_ID)
+        assert agent_dedupe_key("stage-d-illustration-v1") == agent_dedupe_key(ILLUSTRATION_ANONYMOUS_ID)
+        assert resolve_vote_weight(VoteSource.DEDUCTION, ILLUSTRATION_ANONYMOUS_ID) == resolve_vote_weight(
+            VoteSource.DEDUCTION, "stage-d-illustration-v1"
+        )
+
+    def test_a_v1_multi_faced_scan_log_no_longer_excludes_the_card(self, db):
+        """THE reason the bump is load-bearing rather than cosmetic: 3,409 cards carry a
+        `multi-faced-v1` `CardScanLog` row, that reason is NOT in `RESCANNABLE_SKIP_REASONS`
+        (which holds only `no-evidence`), and `_eligible_illustration_cards_queryset` excludes
+        cards with a non-rescannable scan log for its OWN `anonymous_id`. A repaired v1 would
+        never re-examine them."""
+        card = _eligible_card(name="Lightning Bolt")
+        _join_key_no_hit_card(card)
+        CardScanLog.objects.create(card=card, anonymous_id="stage-d-illustration-v1", skip_reason="multi-faced-v1")
+
+        eligible = _eligible_illustration_cards_queryset(
+            join_key_voted_card_ids=CardPrintingTag.objects.filter(
+                anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
+            ).values_list("card_id", flat=True),
+            join_key_scanned_card_ids=[],
+        )
+
+        assert card.pk in set(eligible.values_list("pk", flat=True))
+        assert "multi-faced-v1" not in RESCANNABLE_SKIP_REASONS
+
+    def test_a_v2_scan_log_still_excludes_the_card(self, db):
+        """The bump must not make genuine skips permanently re-runnable - the exclusion still
+        works, it is just keyed on the NEW identity."""
+        card = _eligible_card(name="Lightning Bolt")
+        _join_key_no_hit_card(card)
+        CardScanLog.objects.create(
+            card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID, skip_reason=NO_CANDIDATE_MATCH_SKIP_REASON
+        )
+
+        eligible = _eligible_illustration_cards_queryset(
+            join_key_voted_card_ids=CardPrintingTag.objects.filter(
+                anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=True
+            ).values_list("card_id", flat=True),
+            join_key_scanned_card_ids=[],
+        )
+
+        assert card.pk not in set(eligible.values_list("pk", flat=True))
+
+    def test_a_v1_illustration_vote_is_overwritten_by_a_v2_run_not_left_beside_it(self, db):
+        """Version self-overwrite (#519/#520) via the family-scoped purge - a stale `-v1` row for
+        the same card is DELETED, not left to compete with the `-v2` answer."""
+        artist = CanonicalArtistFactory(name="Christopher Rush")
+        expansion = CanonicalExpansionFactory(code="lea")
+        cc = CanonicalCardFactory(name="Lightning Bolt", artist=artist, expansion=expansion)
+        illustration = uuid.uuid4()
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=illustration)
+        card = _eligible_card(name="Lightning Bolt")
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name="Christopher Rush", layout_class="black")
+        CardIllustrationVote.objects.create(
+            card=card,
+            illustration_id=uuid.uuid4(),
+            is_unknown=False,
+            anonymous_id="stage-d-illustration-v1",
+            source=VoteSource.DEDUCTION,
+        )
+        reset_illustration_index_cache_for_tests()
+
+        run_illustration_calculator(dry_run=False)
+
+        votes = CardIllustrationVote.objects.filter(card=card)
+        assert votes.count() == 1
+        assert votes.get().anonymous_id == ILLUSTRATION_ANONYMOUS_ID
+        assert votes.get().illustration_id == illustration
