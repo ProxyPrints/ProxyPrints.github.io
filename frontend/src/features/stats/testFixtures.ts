@@ -69,6 +69,14 @@ export const participationPostSweep: Participation = {
 
 // 237 / 2_370 = exactly 10% - see this file's own module comment for why the denominator is
 // pinned to a literal rather than derived from the live HUMAN_VOTE_REVEAL_PERCENT export.
+//
+// distinctCardsWithHumanVotes/distinctCardsRoutedToReview/distinctCardsRoutedToReviewWithHumanVotes
+// are pinned to exactly 10% on BOTH ratios this fixture can back - the current votes-over-cards
+// one (humanVotes.total / total = 237 / 2_370) AND the card-denominated one the deferred consumer
+// swap will move the gate onto (distinctCardsRoutedToReviewWithHumanVotes /
+// distinctCardsRoutedToReview = 100 / 1_000). A future editor changing one set of numbers to
+// retarget this fixture at a different percentage must keep the other consistent, or this
+// fixture stops meaning "exactly at the reveal boundary" under one of the two ratios.
 export const participationAtRevealThreshold: Participation = {
   total: 2_370,
   confirmable: 1_400,
@@ -76,6 +84,9 @@ export const participationAtRevealThreshold: Participation = {
   fresh: 670,
   humanVotes: { printingTag: 125, artist: 6, tag: 106, total: 237 },
   distinctHumanVoters: 11,
+  distinctCardsWithHumanVotes: 218, // <= humanVotes.total (237)
+  distinctCardsRoutedToReview: 1_000, // <= total (2_370)
+  distinctCardsRoutedToReviewWithHumanVotes: 100, // 100 / 1_000 = exactly 10%
   md5Groups: {
     groupsWithMultipleCards: 169,
     cardsInMultiCardGroups: 340,
