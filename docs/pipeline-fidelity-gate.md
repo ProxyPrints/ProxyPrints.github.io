@@ -1225,6 +1225,27 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   votes and ~3,233 printing votes** catalog-wide — but no `-v2` run has
   written a row. Do not read `-v1`'s near-zero vote count as a measured
   statement about illustration matching's yield.
+- **`art-edge-continuity-v1`** (`ART_EDGE_ANONYMOUS_ID`,
+  [`MPCAutofill/cardpicker/local_art_edge.py`](../MPCAutofill/cardpicker/local_art_edge.py)) —
+  **DECLARED, NOT YET LIVE. Zero votes, zero `CardScanLog` rows, and no
+  runner calls it — by design, not by dormancy.** It is the extended-art
+  channel: a two-sample-point pixel comparison (card edge vs. the band
+  adjacent to the art crop) that classifies a card image as
+  `framed`/`extended`/`open` and would cast the pre-existing "Extended"
+  attribute tag. It is listed here because this roster's whole purpose is
+  that a calculator producing no output "reads as clean by being
+  invisible" — so the identity is declared and recorded BEFORE it can
+  write anything, the same reasoning `local_fallback`'s skip-reason block
+  gives for declaring its constants ahead of first write.
+  **The gate it has not yet cleared**: the classifier is validated against
+  constructed images only, never against real card images. Before it votes,
+  run it over the `ImageEvidence` rows whose confirmed printing carries
+  Scryfall's own `frame_effects` `extendedart` (1,129 such rows in the
+  2026-07-28 join) and report agreement against that imported fact, plus
+  the false-positive rate over a same-sized sample of confirmed
+  non-extended black-bordered cards. That labelling is free and needs no
+  human pass. Do not read its zero vote count as a measured statement
+  about extended-art detection's yield — nothing has been measured yet.
 - **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —
   **ZERO output of any kind. Under diagnosis; may be retired.** The
