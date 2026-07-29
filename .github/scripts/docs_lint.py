@@ -403,6 +403,54 @@ def check_extractable_primitives_tether() -> list[str]:
 FIDELITY_GATE_DOC_REL = "pipeline-fidelity-gate.md"
 CALCULATOR_SOURCE_DIR_REL = "MPCAutofill/cardpicker"
 
+# Directory names excluded from BOTH roster scans. Everything else under
+# CALCULATOR_SOURCE_DIR_REL is scanned RECURSIVELY — see
+# `_roster_source_files()` for why that is not the same as the old
+# non-recursive glob.
+ROSTER_SCAN_EXCLUDED_DIRS = frozenset({"tests", "__pycache__"})
+
+
+def _roster_source_files(src_dir):
+    """
+    Every Python file whose module-level constants participate in a roster,
+    RECURSIVELY, excluding `tests/`.
+
+    Both roster tethers originally globbed `*.py` non-recursively. That was
+    not a scoping decision, it was an accident with a live consequence:
+    `MPCAutofill/cardpicker/management/commands/` was never scanned, so
+    `SCRYFALL_TAGGER_ANONYMOUS_ID = "scryfall-tagger-v1"` — a real
+    vote-casting identity that writes `PrintingTagVote` rows with
+    `source=DEDUCTION` — was invisible to the derivation. It was therefore
+    absent from the derived set, absent from the fidelity-gate doc, absent
+    from the allowlist, and dormant in production (zero rows), with nothing
+    anywhere that would say so. That is exactly the configuration the
+    roster tether exists to make impossible, surviving one directory below
+    where the tether happened to look.
+
+    `tests/` is excluded DELIBERATELY, not incidentally. Fixture modules
+    declare identity-shaped and skip-reason-shaped literals
+    (`some-other-engine-v1`, `unrelated-family-v1`) that are not production
+    roster members; the old non-recursive glob excluded them by accident,
+    so widening the scan has to exclude them on purpose — otherwise the
+    tether starts demanding doc entries for test fixtures, which is a rule
+    firing on honest content, and a rule that cries wolf is worse than no
+    rule.
+
+    `migrations/` is deliberately INCLUDED. A migration that pins an
+    identity (`0097_freeze_deductive_backfill_zero_weight_cohort.py` pins
+    `deductive-backfill-v1`) is operating on real rows keyed by that
+    identity, and an identity with historical rows is one a reader of the
+    roster still needs documented even after the live code that cast them
+    is gone — precisely the case a "current modules only" scan drops
+    silently.
+    """
+    if not src_dir.is_dir():
+        return []
+    return sorted(
+        py for py in src_dir.rglob("*.py") if not (ROSTER_SCAN_EXCLUDED_DIRS & set(py.relative_to(src_dir).parts[:-1]))
+    )
+
+
 # Key on the DECLARED CONSTANT NAME, not on a regex over string literals.
 # Calculator identities share the `<name>-vN` shape with things that are not
 # calculators at all — test fixtures (`some-other-engine-v1`,
@@ -444,12 +492,9 @@ def _declared_calculator_identities() -> dict:
     prevent — it would just move the stale list from the doc into the check.
     """
     identities: dict = {}
-    src_dir = REPO_ROOT / CALCULATOR_SOURCE_DIR_REL
-    if not src_dir.is_dir():
-        return identities
-    # Non-recursive glob: `cardpicker/tests/` declares fixture identities that
-    # are not part of the production roster.
-    for py in sorted(src_dir.glob("*.py")):
+    # Recursive, minus `tests/` — see `_roster_source_files()` for the
+    # management-commands hole the old non-recursive glob left open.
+    for py in _roster_source_files(REPO_ROOT / CALCULATOR_SOURCE_DIR_REL):
         text = py.read_text()
         for m in CALCULATOR_ID_DECL_RE.finditer(text):
             site = f"{py.relative_to(REPO_ROOT)}:{line_of(text, m.start())} ({m.group(1)})"
@@ -571,12 +616,11 @@ def _declared_skip_reasons() -> dict:
     of them are reported as sites for that one value.
     """
     reasons: dict = {}
-    src_dir = REPO_ROOT / CALCULATOR_SOURCE_DIR_REL
-    if not src_dir.is_dir():
-        return reasons
-    # Non-recursive glob, same as the calculator roster: `cardpicker/tests/`
-    # declares fixture reasons that are not part of the production roster.
-    for py in sorted(src_dir.glob("*.py")):
+    # Recursive, minus `tests/` — same scan as the calculator roster, and
+    # widened for the same reason. No `*_SKIP_REASON` is declared outside the
+    # top level TODAY, so this changes nothing right now; it is the hole
+    # being closed before something falls into it, not after.
+    for py in _roster_source_files(REPO_ROOT / CALCULATOR_SOURCE_DIR_REL):
         text = py.read_text()
         for m in SKIP_REASON_DECL_RE.finditer(text):
             site = f"{py.relative_to(REPO_ROOT)}:{line_of(text, m.start())} ({m.group(1)})"
@@ -853,6 +897,12 @@ def check_proposal_crossrefs() -> list:
     if not prop_dir.is_dir():
         return findings
     groups = {}
+    # Non-recursive DELIBERATELY, audited 2026-07-29 alongside the roster-scan
+    # recursion fix. `docs/proposals/` does have a subdirectory (`mockups/`),
+    # but it is an ARCHIVE_PREFIXES bucket and none of its files match
+    # PROPOSAL_SUBJECT_RE's `proposal-<letter>-` naming, so rglob would find
+    # nothing new. Stated so the next reader knows this glob was checked
+    # rather than overlooked.
     for path in sorted(prop_dir.glob("*.md")):
         m = PROPOSAL_SUBJECT_RE.match(path.name)
         if m:

@@ -1184,10 +1184,13 @@ DEAD in production, which is exactly the failure a coverage-based audit
 cannot surface on its own: a calculator that produces no output produces
 no divergence to explain, so it reads as clean by being invisible. The
 list is now tethered to code by `.github/scripts/docs_lint.py`'s
-`check_calculator_roster_tether()` — every `*_ANONYMOUS_ID` declared in
+`check_calculator_roster_tether()` — every `*_ANONYMOUS_ID` declared under
 `MPCAutofill/cardpicker/` must have an entry here, and CI fails if one
 does not. See [`documentation-process.md`](documentation-process.md)'s
 "Roster tethers" section for the general rule.
+
+**The tether itself then had the same defect one directory down** — see
+"Calculator roster — the identity the tether itself could not see" below.
 
 - **`stage-d-slow-path-v1`** (`SLOW_PATH_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_calculate_verdicts.py`](../MPCAutofill/cardpicker/local_calculate_verdicts.py)) —
@@ -1235,6 +1238,53 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   is not merely abstaining, it is not being reached. Whether it gets
   fixed or deleted is undecided; it is recorded here as a known hole
   rather than left off the page.
+
+### Calculator roster — the identity the tether itself could not see (2026-07-29)
+
+The roster tether above was built to make "a vote-casting calculator
+nobody documented" impossible. It then failed on exactly that, one
+directory below where it looked: `_declared_calculator_identities()`
+scanned `MPCAutofill/cardpicker/*.py` with a **non-recursive** glob, so
+`MPCAutofill/cardpicker/management/commands/` was never read. The
+non-recursion was not a scoping decision — it was there to keep
+`cardpicker/tests/` fixture literals out of the roster, and it took the
+whole subtree with it as a side effect. The scan is now recursive with an
+**explicit** `tests/` exclusion (`.github/scripts/docs_lint.py`'s
+`_roster_source_files()`), which is the same exclusion stated as a
+decision rather than obtained as an accident.
+
+- **`scryfall-tagger-v1`** (`SCRYFALL_TAGGER_ANONYMOUS_ID`,
+  [`MPCAutofill/cardpicker/management/commands/import_external_ip_tags.py`](../MPCAutofill/cardpicker/management/commands/import_external_ip_tags.py)) —
+  **DORMANT: zero rows written to date.** It imports Scryfall Tagger's
+  `art:external-ip` community art tag (Universes Beyond illustrations —
+  Lord of the Rings, Doctor Who, Warhammer 40K) and casts machine
+  `PrintingTagVote` rows against the `external-ip` tag, at the PRINTING
+  level (`CanonicalCard`), not the catalog-image level. It writes BOTH
+  polarities: `APPLY` for positive Tagger matches, `NOT_APPLICABLE` for
+  confirmed printings absent from the positive set; a printing with no
+  data at all abstains rather than voting. `source=DEDUCTION` with its own
+  `anonymous_id` per the machine-caster convention — pure logical
+  inference over already-trusted structured data, zero image inspection.
+  Weight resolves to `PRINTING_TAG_MACHINE_WEIGHT` (0.5); the 2026-07-23
+  zero-weight override does NOT touch it (that override is scoped to
+  source + the `deductive-backfill` family + one frozen `run_id`, all
+  three together). Re-runs are idempotent via the
+  `(printing, tag, anonymous_id)` uniqueness constraint; retraction is the
+  ordinary `purge_machine_votes --run-id` mechanism. Full behavioural
+  writeup: [`features/printing-tags.md`](features/printing-tags.md) — this
+  entry is the ROSTER entry, recording what the gate can and cannot say
+  about it, and the answer today is **nothing, because it has produced
+  nothing**. Do not read its absence from every vote count on this page as
+  evidence it is working correctly; it has never run against production.
+
+**Open, and an owner call rather than a lint fix**: `PrintingTagVote`
+(`models.py`, added by PR #497) is a **third vote family** alongside
+`CardPrintingTag` and `CardTagVote`, and it appears **zero times** on this
+page and zero times in [`theory.md`](theory.md). Every vote-population
+figure above — the topline counts, the FIG-2 funnel, the recompute
+dry-runs — is silent about it. Whether `PrintingTagVote` belongs inside
+this gate's scope, or is deliberately outside it, has never been decided;
+it is recorded here as an open question, not answered.
 
 ### Operational notes
 
