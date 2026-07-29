@@ -8,6 +8,9 @@ fetch_card_image/run_ocr_for_card.
 
 import pytest
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
 import cardpicker.local_residual_classify as module
 from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID, FallbackOutcome
 from cardpicker.local_identify_printing_tags import (
@@ -356,3 +359,200 @@ class TestPurgeWriteAtomicity:
             run_d0_sibling_artist_propagation(dry_run=False)
 
         assert CardArtistVote.objects.filter(pk=stale.pk).exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-batch hot-path contract (issues #458/#460, via #533's first blocking
+# prerequisite: anything a per-micro-batch caller invokes must cost O(batch),
+# never O(catalog))
+# ---------------------------------------------------------------------------
+
+
+class TestFrameMismatchRecoveryCardIdScoping:
+    """`run_frame_mismatch_recovery` gained a `card_ids` parameter. Its single catalog-scale read
+    is the `CardScanLog` frame-mismatch scan, whose result it materialises into Python `set`s -
+    so scoping has to reach the SQL, not the sets. `_frame_mismatch_scan_log_queryset` exists as
+    the assertable seam for exactly that; a result-set assertion alone cannot distinguish "scoped
+    in SQL" from "read catalog-wide and intersected in Python afterwards"."""
+
+    def test_card_ids_narrows_the_scan_log_read_itself(self, db):
+        card_a = CardFactory(name="Scope A")
+        card_b = CardFactory(name="Scope B")
+
+        scoped_sql = str(module._frame_mismatch_scan_log_queryset([card_a.pk, card_b.pk]).query)
+
+        assert f'"cardpicker_cardscanlog"."card_id" IN ({card_a.pk}, {card_b.pk})' in scoped_sql
+        assert '"cardpicker_cardscanlog"."skip_reason" = frame-mismatch' in scoped_sql
+
+    def test_card_ids_none_leaves_bulk_mode_untouched(self, db):
+        """BULK mode (the management command's only calling shape) reads the whole table exactly
+        as it did before."""
+        bulk_sql = str(module._frame_mismatch_scan_log_queryset().query)
+
+        assert '"cardpicker_cardscanlog"."card_id" IN' not in bulk_sql
+        assert '"cardpicker_cardscanlog"."skip_reason" = frame-mismatch' in bulk_sql
+
+    def test_scoped_and_unscoped_flagged_sets_agree(self, db):
+        flagged = CardFactory(name="Forest")
+        CardScanLog.objects.create(card=flagged, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+        unflagged = CardFactory(name="Island")
+        CardScanLog.objects.create(card=unflagged, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="unfetchable-image")
+        scope = [flagged.pk, unflagged.pk]
+
+        unscoped = set(module._frame_mismatch_scan_log_queryset().filter(card_id__in=scope).values_list("card_id"))
+        scoped = set(module._frame_mismatch_scan_log_queryset(scope).values_list("card_id"))
+
+        assert unscoped == scoped == {(flagged.pk,)}
+
+    def test_a_scoped_run_only_recovers_cards_inside_the_scope(self, db):
+        artist = CanonicalArtistFactory()
+        CanonicalCardFactory(name="Forest", image_hash=100, artist=artist)
+        TagFactory(name=ALTERED_FRAME_TAG_NAME)
+        in_scope = CardFactory(name="Forest", content_phash=100)
+        CardScanLog.objects.create(card=in_scope, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+        out_of_scope = CardFactory(name="Forest", content_phash=100)
+        CardScanLog.objects.create(card=out_of_scope, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+
+        result = run_frame_mismatch_recovery(dry_run=False, card_ids=[in_scope.pk])
+
+        assert result.cards_considered == 1
+        assert result.phash_recovered == 1
+        assert list(CardArtistVote.objects.values_list("card_id", flat=True)) == [in_scope.pk]
+
+    def test_card_ids_none_still_recovers_the_whole_catalog(self, db):
+        artist = CanonicalArtistFactory()
+        CanonicalCardFactory(name="Forest", image_hash=100, artist=artist)
+        TagFactory(name=ALTERED_FRAME_TAG_NAME)
+        card_a = CardFactory(name="Forest", content_phash=100)
+        CardScanLog.objects.create(card=card_a, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+        card_b = CardFactory(name="Forest", content_phash=100)
+        CardScanLog.objects.create(card=card_b, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+
+        result = run_frame_mismatch_recovery(dry_run=False)
+
+        assert result.cards_considered == 2
+        assert set(CardArtistVote.objects.values_list("card_id", flat=True)) == {card_a.pk, card_b.pk}
+
+    def test_scoping_does_not_relax_the_fetch_budget_defaults(self, db, monkeypatch):
+        """Scoping is not a fetch decision (issue #533): the OCR/fallback refetch budgets still
+        default to 0, so a scoped run reaches the network exactly as never as an unscoped one."""
+        CanonicalCardFactory(name="Forest", image_hash=100)
+        card = CardFactory(name="Forest", content_phash=100)
+        CardScanLog.objects.create(card=card, anonymous_id=OCR_ANONYMOUS_ID, skip_reason="frame-mismatch")
+
+        def _unexpected_fetch(*args, **kwargs):
+            raise AssertionError("a scoped run must not fetch at the default budget of 0")
+
+        monkeypatch.setattr(module, "fetch_card_image", _unexpected_fetch)
+
+        result = run_frame_mismatch_recovery(dry_run=True, card_ids=[card.pk])
+
+        assert result.ocr_refetch_attempted == 0
+
+
+class TestD0SiblingPropagationCardIdScoping:
+    """`run_d0_sibling_artist_propagation` gained a `card_ids` parameter. Three reads had to be
+    narrowed, not one: the `CardArtistVote` idempotence read, the target queryset, and - the one
+    that would otherwise have left the pass O(catalog) while looking scoped - the artist-resolved
+    SOURCE scan that builds the `phash_to_artist_id` index."""
+
+    def test_card_ids_narrows_the_already_voted_cardartistvote_read(self, db):
+        card_a = CardFactory(name="Scope A")
+        card_b = CardFactory(name="Scope B")
+
+        scoped_sql = str(module._art_hash_artist_voted_queryset([card_a.pk, card_b.pk]).query)
+
+        assert f'"cardpicker_cardartistvote"."card_id" IN ({card_a.pk}, {card_b.pk})' in scoped_sql
+        assert f'"cardpicker_cardartistvote"."anonymous_id" = {ART_HASH_ARTIST_ANONYMOUS_ID}' in scoped_sql
+
+    def test_card_ids_none_leaves_the_already_voted_read_untouched(self, db):
+        bulk_sql = str(module._art_hash_artist_voted_queryset().query)
+
+        assert '"cardpicker_cardartistvote"."card_id" IN' not in bulk_sql
+        assert f'"cardpicker_cardartistvote"."anonymous_id" = {ART_HASH_ARTIST_ANONYMOUS_ID}' in bulk_sql
+
+    def test_the_source_index_scan_is_narrowed_by_a_subquery_over_the_batchs_hashes(self, db):
+        """The one that matters most, asserted on the SQL Django actually EXECUTED rather than on
+        a queryset built in the test: without this narrowing the source scan iterates every
+        artist-resolved card in the catalog to build `phash_to_artist_id`, so the pass stays
+        O(catalog) no matter how tightly the target query is scoped. `content_phash IN (SELECT
+        ...)` proves the batch's hashes were pushed in as a subquery, not pulled through Python
+        first."""
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        CardFactory(content_phash=555, canonical_card=printing)
+        sibling = CardFactory(content_phash=555)
+
+        with CaptureQueriesContext(connection) as captured:
+            run_d0_sibling_artist_propagation(dry_run=True, card_ids=[sibling.pk])
+
+        source_scans = [
+            query["sql"]
+            for query in captured.captured_queries
+            if 'FROM "cardpicker_card"' in query["sql"] and '"content_phash" IN (SELECT' in query["sql"]
+        ]
+        assert (
+            source_scans
+        ), f"no phash-subquery-narrowed source scan in: {[q['sql'] for q in captured.captured_queries]}"
+
+    def test_card_ids_none_leaves_the_source_index_scan_unnarrowed(self, db):
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        CardFactory(content_phash=555, canonical_card=printing)
+        CardFactory(content_phash=555)
+
+        with CaptureQueriesContext(connection) as captured:
+            run_d0_sibling_artist_propagation(dry_run=True)
+
+        assert not [query for query in captured.captured_queries if '"content_phash" IN (SELECT' in query["sql"]]
+
+    def test_a_scoped_run_only_votes_on_cards_inside_the_scope(self, db):
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        CardFactory(content_phash=555, canonical_card=printing)
+        in_scope = CardFactory(content_phash=555)
+        out_of_scope = CardFactory(content_phash=555)
+
+        result = run_d0_sibling_artist_propagation(dry_run=False, card_ids=[in_scope.pk])
+
+        assert result.votes_written == 1
+        assert list(CardArtistVote.objects.values_list("card_id", flat=True)) == [in_scope.pk]
+        assert not CardArtistVote.objects.filter(card_id=out_of_scope.pk).exists()
+
+    def test_a_source_card_outside_the_scope_still_propagates_into_it(self, db):
+        """Narrowing the SOURCE index by the batch's own hashes is result-equivalent, not an
+        approximation: the entailment a scoped batch needs is "some card anywhere shares my
+        hash and has an artist", and that source card is emphatically NOT required to be inside
+        the batch. This is the assertion that would fail if the narrowing had been done by
+        `pk__in=card_ids` on the source scan instead of by shared `content_phash`."""
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        CardFactory(content_phash=555, canonical_card=printing)  # deliberately outside the scope
+        sibling = CardFactory(content_phash=555)
+
+        result = run_d0_sibling_artist_propagation(dry_run=False, card_ids=[sibling.pk])
+
+        assert result.votes_written == 1
+        assert CardArtistVote.objects.get().artist_id == artist.pk
+
+    def test_scoped_and_unscoped_runs_agree_on_the_scoped_card(self, db):
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        CardFactory(content_phash=555, canonical_card=printing)
+        sibling = CardFactory(content_phash=555)
+
+        scoped = run_d0_sibling_artist_propagation(dry_run=True, card_ids=[sibling.pk])
+        unscoped = run_d0_sibling_artist_propagation(dry_run=True)
+
+        assert scoped.votes_would_cast == unscoped.votes_would_cast == 1
+
+    def test_an_already_voted_card_inside_the_scope_stays_excluded(self, db):
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        CardFactory(content_phash=555, canonical_card=printing)
+        sibling = CardFactory(content_phash=555)
+        CardArtistVoteFactory(card=sibling, artist=artist, anonymous_id=ART_HASH_ARTIST_ANONYMOUS_ID)
+
+        result = run_d0_sibling_artist_propagation(dry_run=True, card_ids=[sibling.pk])
+
+        assert result.votes_would_cast == 0

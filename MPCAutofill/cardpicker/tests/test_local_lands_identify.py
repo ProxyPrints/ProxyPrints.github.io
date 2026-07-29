@@ -24,6 +24,7 @@ from cardpicker.local_identify_printing_tags import (
     EngineVote,
     OcrCardResult,
     SelectedCard,
+    _eligible_base_queryset,
 )
 from cardpicker.local_lands_identify import (
     BASIC_LAND_NAMES,
@@ -838,3 +839,151 @@ class TestPurgeWriteOrderingAndAtomicity:
             run_lands_identify(dry_run=False, sample_size=300, fetch_budget=10)
 
         assert CardPrintingTag.objects.filter(pk=stale.pk).exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-batch hot-path contract (issues #458/#460, via #533's first blocking
+# prerequisite: anything a per-micro-batch caller invokes must cost O(batch),
+# never O(catalog))
+# ---------------------------------------------------------------------------
+
+
+class TestLandsEligibleBaseQuerysetCardIdScoping:
+    """`run_lands_identify`/`_land_pool_selected_cards` gained a `card_ids` parameter, which they
+    pass THROUGH to `local_identify_printing_tags._eligible_base_queryset` - the shared eligibility
+    query, which grew the same optional parameter in this change. The compiled-SQL assertions live
+    here rather than in `test_local_identify_printing_tags.py` because this module is the caller
+    that needs the scoping: `_land_pool_selected_cards` materialises one `SelectedCard` per
+    surviving row, so a caller-side `.filter(pk__in=...)` applied to the returned queryset would
+    have narrowed the outer query while leaving the `CardScanLog` exclusion subquery scanning a
+    2,093,147-row, append-only table on every micro-batch. Result-set equivalence cannot tell the
+    two apart, which is why these assert on SQL."""
+
+    @staticmethod
+    def _scan_log_subquery(sql: str) -> str:
+        """The `CardScanLog` exclusion subquery, sliced out by balanced parentheses. `U0` is
+        Django's alias for exactly this subquery (`U1` is the pair of correlated `printing_tags`
+        EXISTS clauses), so slicing keeps the assertions from being satisfied by the OUTER
+        `card.id IN (...)`, which the scoped and pre-fix shapes carry identically."""
+        start = sql.index('(SELECT U0."card_id" FROM "cardpicker_cardscanlog"')
+        depth = 0
+        for offset, char in enumerate(sql[start:], start=start):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return sql[start : offset + 1]
+        raise AssertionError("unbalanced CardScanLog subquery in compiled SQL")
+
+    def test_card_ids_narrows_the_cardscanlog_subquery_itself_not_just_the_outer_query(self, db):
+        card_a = CardFactory(name="Plains")
+        card_b = CardFactory(name="Island")
+
+        scoped_sql = str(_eligible_base_queryset(LANDS_ANONYMOUS_ID, card_ids=[card_a.pk, card_b.pk]).query)
+        # the pre-fix shape: function unscoped, caller filters afterwards.
+        pre_fix_sql = str(_eligible_base_queryset(LANDS_ANONYMOUS_ID).filter(pk__in=[card_a.pk, card_b.pk]).query)
+
+        assert f'U0."card_id" IN ({card_a.pk}, {card_b.pk})' in self._scan_log_subquery(scoped_sql)
+        assert 'U0."card_id" IN' not in self._scan_log_subquery(pre_fix_sql)
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in scoped_sql
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in pre_fix_sql
+
+    def test_card_ids_none_leaves_bulk_mode_untouched(self, db):
+        """BULK mode - every existing caller (`run_pilot`, `run_name_frequency_elimination`,
+        `select_candidates`, `count_below_resolution_floor`, and the lands command) - must never
+        take the `card_id__in` branch."""
+        bulk_sql = str(_eligible_base_queryset(LANDS_ANONYMOUS_ID).query)
+
+        assert 'U0."card_id" IN' not in self._scan_log_subquery(bulk_sql)
+
+    def test_the_exclude_source_pks_knob_still_composes_with_card_ids(self, db):
+        """`exclude_source_pks` is positionally second; `card_ids` was appended third so no
+        existing positional call site shifts. Both narrowings must survive together."""
+        card = CardFactory(name="Plains")
+
+        sql = str(_eligible_base_queryset(LANDS_ANONYMOUS_ID, [card.source_id], card_ids=[card.pk]).query)
+
+        assert f'"cardpicker_card"."source_id" IN ({card.source_id})' in sql
+        assert f'"cardpicker_card"."id" IN ({card.pk})' in sql
+
+    def test_scoped_and_unscoped_eligible_sets_agree(self, db):
+        excluded_card = CardFactory(name="Plains")
+        # any skip reason OUTSIDE RESCANNABLE_SKIP_REASONS permanently excludes the card.
+        CardScanLog.objects.create(
+            card=excluded_card, anonymous_id=LANDS_ANONYMOUS_ID, skip_reason="no-candidate-match"
+        )
+        eligible_card = CardFactory(name="Island")
+        scope = [excluded_card.pk, eligible_card.pk]
+
+        unscoped = set(_eligible_base_queryset(LANDS_ANONYMOUS_ID).filter(pk__in=scope).values_list("pk", flat=True))
+        scoped = set(_eligible_base_queryset(LANDS_ANONYMOUS_ID, card_ids=scope).values_list("pk", flat=True))
+
+        assert unscoped == scoped == {eligible_card.pk}
+
+
+class TestRunLandsIdentifyCardIdScoping:
+    def test_a_scoped_run_only_considers_cards_inside_the_scope(self, db, monkeypatch):
+        CanonicalCardFactory(name="Plains")
+        in_scope = CardFactory(name="Plains")
+        CardFactory(name="Plains")  # out of scope
+
+        def _unexpected_fetch(card, dpi=None):
+            raise AssertionError("fetch_card_image should never be called at fetch_budget=0")
+
+        monkeypatch.setattr(module, "fetch_card_image", _unexpected_fetch)
+
+        result = run_lands_identify(dry_run=True, sample_size=300, fetch_budget=0, card_ids=[in_scope.pk])
+
+        # land_pool_size is "the full pool WITHIN THE SCOPE" - computing it catalog-wide would
+        # reintroduce the O(catalog) pass the scope exists to remove (see run_lands_identify's
+        # own docstring).
+        assert result.land_pool_size == 1
+        assert result.sampled == 1
+
+    def test_card_ids_none_still_sees_the_whole_pool(self, db, monkeypatch):
+        CanonicalCardFactory(name="Plains")
+        CardFactory(name="Plains")
+        CardFactory(name="Plains")
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = run_lands_identify(dry_run=True, sample_size=300, fetch_budget=0)
+
+        assert result.land_pool_size == 2
+
+    def test_a_scoped_run_only_votes_on_cards_inside_the_scope(self, db, monkeypatch):
+        printing = CanonicalCardFactory(name="Plains")
+        in_scope = CardFactory(name="Plains")
+        out_of_scope = CardFactory(name="Plains")
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: object())
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image: OcrCardResult(
+                vote=EngineVote(engine="ocr", printing_pk=printing.pk, confidence=OCR_CONFIDENCE_BOTH, detail="")
+            ),
+        )
+
+        result = run_lands_identify(dry_run=False, sample_size=300, fetch_budget=10, card_ids=[in_scope.pk])
+
+        assert result.ocr_resolved == 1
+        assert list(CardPrintingTag.objects.values_list("card_id", flat=True)) == [in_scope.pk]
+        assert not CardPrintingTag.objects.filter(card_id=out_of_scope.pk).exists()
+
+    def test_scoping_does_not_relax_the_fetch_budget_default(self, db, monkeypatch):
+        """Scoping is not a fetch decision (issue #533): `fetch_budget` still defaults to 0, so a
+        scoped run with no stored evidence reaches the network exactly as never as an unscoped
+        one. The default is unchanged by this work."""
+        CanonicalCardFactory(name="Plains")
+        card = CardFactory(name="Plains")
+
+        def _unexpected_fetch(card, dpi=None):
+            raise AssertionError("a scoped run must not fetch at the default budget of 0")
+
+        monkeypatch.setattr(module, "fetch_card_image", _unexpected_fetch)
+
+        result = run_lands_identify(dry_run=True, card_ids=[card.pk])
+
+        assert result.fetch_attempted == 0

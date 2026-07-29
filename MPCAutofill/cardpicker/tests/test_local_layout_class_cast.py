@@ -17,6 +17,7 @@ from cardpicker.local_fallback import (
 )
 from cardpicker.local_layout_class_cast import (
     LAYOUT_CLASS_CAST_ANONYMOUS_ID,
+    _eligible_cards_queryset,
     calculate_layout_class_verdict,
     run_layout_class_cast,
 )
@@ -343,3 +344,116 @@ class TestPurgeWriteAtomicity:
             run_layout_class_cast(dry_run=False)
 
         assert CardTagVote.objects.filter(pk=stale.pk).exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-batch hot-path contract (issues #458/#460, via #533's first blocking
+# prerequisite: anything a per-micro-batch caller invokes must cost O(batch),
+# never O(catalog))
+# ---------------------------------------------------------------------------
+
+
+class TestEligibleCardsQuerysetCardIdScoping:
+    """`_eligible_cards_queryset`/`run_layout_class_cast` gained a `card_ids` parameter, mirroring
+    `local_calculate_verdicts._eligible_cards_queryset`'s issue-#469 fix and
+    `local_illustration._eligible_illustration_cards_queryset`'s PR-#526 one. These tests pin BOTH
+    halves, because only the first can tell the two apart: that the `CardScanLog` exclusion
+    subquery is genuinely narrowed in the COMPILED SQL (a result-set assertion cannot distinguish
+    "scoped in SQL" from "materialised catalog-wide and filtered in Python afterwards", which is
+    the whole defect class), and that the eligible SET is identical either way."""
+
+    @staticmethod
+    def _scan_log_subquery(sql: str) -> str:
+        """The `CardScanLog` exclusion subquery, sliced out of the compiled SQL by balanced
+        parentheses. `U0` is Django's alias for exactly this subquery (`U1` is the correlated
+        `tag_votes` EXISTS), so slicing keeps the assertions below from being satisfied by a
+        literal appearing elsewhere in the statement - notably the OUTER `card.id IN (...)`,
+        which the scoped and the pre-fix shape carry identically."""
+        start = sql.index('(SELECT U0."card_id" FROM "cardpicker_cardscanlog"')
+        depth = 0
+        for offset, char in enumerate(sql[start:], start=start):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return sql[start : offset + 1]
+        raise AssertionError("unbalanced CardScanLog subquery in compiled SQL")
+
+    def test_card_ids_narrows_the_cardscanlog_subquery_itself_not_just_the_outer_query(self, db):
+        """The structural proof. Before this parameter existed the only way to scope this
+        calculator was to filter the returned queryset, which narrows the outer `Card` query and
+        leaves the `CardScanLog` subquery compiling to an unbounded scan of a 2,093,147-row,
+        append-only, still-growing table on every 25-card micro-batch."""
+        card_a = CardFactory(name="Scope A")
+        card_b = CardFactory(name="Scope B")
+
+        scoped_sql = str(_eligible_cards_queryset(card_ids=[card_a.pk, card_b.pk]).query)
+        # the pre-fix shape: function unscoped, caller filters afterwards.
+        pre_fix_sql = str(_eligible_cards_queryset().filter(pk__in=[card_a.pk, card_b.pk]).query)
+
+        assert f'U0."card_id" IN ({card_a.pk}, {card_b.pk})' in self._scan_log_subquery(scoped_sql)
+        assert 'U0."card_id" IN' not in self._scan_log_subquery(pre_fix_sql)
+        # both shapes still bound the OUTER query identically - a narrowing of cost, not a change
+        # of which cards are considered.
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in scoped_sql
+        assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in pre_fix_sql
+
+    def test_card_ids_none_leaves_bulk_mode_untouched(self, db):
+        """BULK mode (the management command's only calling shape) must never take the
+        `card_id__in` branch - the subquery stays exactly as unscoped as it was before."""
+        assert 'U0."card_id" IN' not in self._scan_log_subquery(str(_eligible_cards_queryset().query))
+
+    def test_scoped_and_unscoped_eligible_sets_agree(self, db):
+        """Pure cost narrowing, not a behaviour change."""
+        excluded_card = CardFactory(name="Excluded Card")
+        # any skip reason OUTSIDE LAYOUT_CLASS_RESCANNABLE_SKIP_REASONS permanently excludes it.
+        CardScanLog.objects.create(
+            card=excluded_card, anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID, skip_reason="ambiguous"
+        )
+        eligible_card = CardFactory(name="Eligible Card")
+        scope = [excluded_card.pk, eligible_card.pk]
+
+        unscoped = set(_eligible_cards_queryset().filter(pk__in=scope).values_list("pk", flat=True))
+        scoped = set(_eligible_cards_queryset(card_ids=scope).values_list("pk", flat=True))
+
+        assert unscoped == scoped == {eligible_card.pk}
+
+    def test_a_rescannable_scan_log_row_inside_the_scope_stays_eligible(self, db):
+        card = CardFactory(name="Rescannable Card")
+        CardScanLog.objects.create(card=card, anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID, skip_reason="no-evidence")
+
+        assert set(_eligible_cards_queryset(card_ids=[card.pk]).values_list("pk", flat=True)) == {card.pk}
+
+    def test_bulk_mode_eligible_set_is_unchanged(self, db):
+        """The other half of the contract: `card_ids=None` still selects the whole catalog."""
+        card_a = CardFactory(name="Bulk A")
+        card_b = CardFactory(name="Bulk B")
+
+        assert set(_eligible_cards_queryset().values_list("pk", flat=True)) == {card_a.pk, card_b.pk}
+
+
+class TestRunLayoutClassCastCardIdScoping:
+    def test_a_scoped_run_only_votes_on_cards_inside_the_scope(self, db):
+        _seed_tags()
+        in_scope = CardFactory(name="In Scope", content_phash=42)
+        _evidence(in_scope, layout_class="borderless")
+        out_of_scope = CardFactory(name="Out Of Scope", content_phash=43)
+        _evidence(out_of_scope, layout_class="borderless")
+
+        result = run_layout_class_cast(dry_run=False, card_ids=[in_scope.pk])
+
+        assert result.votes_written == 1
+        assert list(CardTagVote.objects.values_list("card_id", flat=True)) == [in_scope.pk]
+
+    def test_card_ids_none_still_votes_on_the_whole_catalog(self, db):
+        _seed_tags()
+        card_a = CardFactory(name="Bulk A", content_phash=42)
+        _evidence(card_a, layout_class="borderless")
+        card_b = CardFactory(name="Bulk B", content_phash=43)
+        _evidence(card_b, layout_class="black")
+
+        result = run_layout_class_cast(dry_run=False)
+
+        assert result.votes_written == 2
+        assert set(CardTagVote.objects.values_list("card_id", flat=True)) == {card_a.pk, card_b.pk}

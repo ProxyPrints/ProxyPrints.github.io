@@ -72,7 +72,7 @@ module.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Optional
 
 from django.db.models import QuerySet
 
@@ -165,7 +165,7 @@ class LayoutClassCastResult:
     audit: list[dict[str, object]] = field(default_factory=list)
 
 
-def _eligible_cards_queryset() -> "QuerySet[Card]":
+def _eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
     """Every card NOT already voted on by this calculator's own anonymous_id (at most one tag is
     ever cast per card by this identity - a card has exactly one `layout_class` reading - so a
     single `tag_votes__anonymous_id` exclude, with no per-tag qualifier needed, correctly covers
@@ -176,17 +176,38 @@ def _eligible_cards_queryset() -> "QuerySet[Card]":
     Deliberately unrestricted by `card_type`/`printing_tag_status` - border-color classification
     is orthogonal to printing identification (a token or an unresolved card's border is just as
     plausibly black/white/silver/borderless as any other card's), same reasoning
-    `local_detect_ai_art._eligible_cards_queryset`'s own docstring gives for AI-art detection."""
-    non_rescannable_scanned_card_ids = (
-        CardScanLog.objects.filter(anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID)
-        .exclude(skip_reason__in=LAYOUT_CLASS_RESCANNABLE_SKIP_REASONS)
-        .values_list("card_id", flat=True)
-    )
-    return (
+    `local_detect_ai_art._eligible_cards_queryset`'s own docstring gives for AI-art detection.
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite): mirrors
+    `local_calculate_verdicts._eligible_cards_queryset`'s own issue-#469 fix exactly. When a
+    per-batch caller has already narrowed the population to a set of card pks, that narrowing is
+    pushed INTO this queryset - both onto the outer `Card` query AND into the `CardScanLog`
+    exclusion subquery, which Django compiles as an UNCORRELATED `IN (SELECT U0."card_id" FROM
+    "cardpicker_cardscanlog" U0 WHERE ...)`: unscoped, that is a full pass over a 2,093,147-row,
+    append-only, still-growing table on every 25-card micro-batch. Applying `card_ids` AFTER this
+    function returns (the pre-#469/#526 shape) narrows only the outer query and leaves that
+    subquery unbounded - which is the exact defect this scoping exists to prevent, and why the
+    tests assert on the COMPILED SQL rather than on result-set equivalence alone. Purely a cost
+    narrowing, never a behaviour change: a scan-log row found outside `card_ids` could never
+    survive the outer `.filter(pk__in=card_ids)` regardless. The `tag_votes__anonymous_id`
+    exclusion needs no such push - Django already compiles it as a CORRELATED `NOT EXISTS(...
+    U1."card_id" = "cardpicker_card"."id" ...)`, so the outer scope bounds it for free.
+    `card_ids=None` (BULK mode - the management command's only calling shape) leaves this
+    byte-identical to before."""
+    non_rescannable_scanned_card_ids_qs = CardScanLog.objects.filter(
+        anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID
+    ).exclude(skip_reason__in=LAYOUT_CLASS_RESCANNABLE_SKIP_REASONS)
+    if card_ids is not None:
+        non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(card_id__in=card_ids)
+    non_rescannable_scanned_card_ids = non_rescannable_scanned_card_ids_qs.values_list("card_id", flat=True)
+    queryset = (
         Card.objects.exclude(tag_votes__anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID)
         .exclude(pk__in=non_rescannable_scanned_card_ids)
         .distinct()
     )
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
+    return queryset
 
 
 def run_layout_class_cast(
@@ -194,6 +215,7 @@ def run_layout_class_cast(
     dry_run: bool = True,
     chunk_size: int = 500,
     audit_sample_size: int = 20,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> LayoutClassCastResult:
     """Batch runner over every currently-eligible card with a CURRENT `ImageEvidence` row (its
     `content_hash` matching the card's own live `content_phash` - an evidence row from a prior
@@ -208,6 +230,18 @@ def run_layout_class_cast(
     gate check + `CommandError` on top, reusing
     `cardpicker.management.commands.purge_machine_votes.verify_no_machine_only_resolutions`
     rather than re-deriving an equivalent check).
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite): when given, restricts
+    this whole pass to that set of card pks, pushed INTO `_eligible_cards_queryset` (see that
+    function's own docstring for what that buys and why it is not the same as filtering the
+    returned queryset afterwards) rather than applied here. Everything downstream of the
+    eligibility query is already strictly per-card (`current_evidence_queryset` is keyed on the
+    card, the write batches carry only the cards this invocation touched), so scoping the
+    eligibility query is sufficient to make the whole runner O(batch). ZERO image fetches on any
+    path (module docstring), so a per-batch caller has no fetch-budget decision to make here -
+    unlike `local_lands_identify.run_lands_identify`/`local_residual_classify.
+    run_frame_mismatch_recovery`. `card_ids=None` (the management command's only calling shape)
+    is byte-identical to before.
     """
     run_id = run_id or generate_run_id()
     result = LayoutClassCastResult(dry_run=dry_run, run_id=run_id)
@@ -223,7 +257,7 @@ def run_layout_class_cast(
     votes_batch: list[CardTagVote] = []
     scan_log_batch: list[CardScanLog] = []
 
-    for card in _eligible_cards_queryset().iterator(chunk_size=chunk_size):
+    for card in _eligible_cards_queryset(card_ids=card_ids).iterator(chunk_size=chunk_size):
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 

@@ -377,7 +377,11 @@ class SelectedCard:
 RESOLUTION_FLOOR_DPI = 200
 
 
-def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
+def _eligible_base_queryset(
+    anonymous_id: str,
+    exclude_source_pks: Optional[Iterable[int]] = None,
+    card_ids: Optional[Iterable[int]] = None,
+) -> "QuerySet[Card]":
     """
     unresolved, no confirmed indexing match, no existing vote from this engine's own
     anonymous_id (the idempotence/checkpoint mechanism - see module docstring and
@@ -420,12 +424,29 @@ def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iter
     incorrectly stay eligible under the Q-object formulation - caught by
     TestScanLog::test_a_later_non_rescannable_reason_overrides_an_earlier_rescannable_one before
     this shipped, not assumed correct from the query reading right at a glance.
+
+    BATCH SCOPING (`card_ids`, issue #533's first blocking prerequisite - the same shape issue
+    #469 applied to `local_calculate_verdicts._eligible_cards_queryset` and PR #526 applied to
+    `local_illustration._eligible_illustration_cards_queryset`): when a per-batch caller has
+    already narrowed the population to a specific set of card pks, that narrowing is pushed INTO
+    this queryset rather than applied by the caller afterwards - both onto the outer `Card` query
+    AND into the `CardScanLog` exclusion subquery, which Django compiles as an UNCORRELATED
+    `IN (SELECT U0."card_id" FROM "cardpicker_cardscanlog" U0 WHERE ...)` and which therefore
+    scans that whole 2,093,147-row, append-only table on every invocation unless it is scoped
+    too. Purely a cost narrowing, never a behaviour change: a scan-log row this subquery would
+    find OUTSIDE `card_ids` could never survive the outer `.filter(pk__in=card_ids)` anyway. The
+    other two exclusions (`printing_tags__anonymous_id`) already compile as CORRELATED
+    `NOT EXISTS(... U1."card_id" = "cardpicker_card"."id" ...)` subqueries, so the outer scope
+    already bounds them - nothing to push in there. `card_ids=None` (BULK mode - every
+    management-command caller, `run_pilot`, `run_name_frequency_elimination`,
+    `count_below_resolution_floor`, `select_candidates`) leaves this byte-identical to before.
     """
-    non_rescannable_scanned_card_ids = (
-        CardScanLog.objects.filter(anonymous_id=anonymous_id)
-        .exclude(skip_reason__in=RESCANNABLE_SKIP_REASONS)
-        .values_list("card_id", flat=True)
+    non_rescannable_scanned_card_ids_qs = CardScanLog.objects.filter(anonymous_id=anonymous_id).exclude(
+        skip_reason__in=RESCANNABLE_SKIP_REASONS
     )
+    if card_ids is not None:
+        non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(card_id__in=card_ids)
+    non_rescannable_scanned_card_ids = non_rescannable_scanned_card_ids_qs.values_list("card_id", flat=True)
     queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED, canonical_card__isnull=True, card_type=CardTypes.CARD
@@ -440,6 +461,8 @@ def _eligible_base_queryset(anonymous_id: str, exclude_source_pks: Optional[Iter
     )
     if exclude_source_pks:
         queryset = queryset.exclude(source_id__in=exclude_source_pks)
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
     return queryset
 
 
