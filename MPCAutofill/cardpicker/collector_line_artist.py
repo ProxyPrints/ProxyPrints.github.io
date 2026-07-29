@@ -217,10 +217,12 @@ the same "built once per batch, passed through explicitly" convention
 
 import difflib
 import re
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterable, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 if TYPE_CHECKING:
+    from django.db.models import QuerySet
+
     from cardpicker.local_identify_printing_tags import CandidateNameIndex
 
 # A "word" for this module's purposes. Deliberately allows a ONE-character token (unlike
@@ -676,6 +678,192 @@ class PrintingArtistLookup:
         return loaded
 
 
+# ---------------------------------------------------------------------------------------------
+# BACKFILL LAYER (2026-07-29, PR #569's own recorded open item).
+#
+# WHY THIS EXISTS. Everything above recovers an artist DURING a Stage C extraction, so it only
+# ever reaches a card that is being re-extracted for some other reason. At the moment it landed,
+# 206,719 of 220,669 `ImageEvidence` rows (93.7%) carried a blank `artist_ocr_name`, and every one
+# of them would have stayed blank until something re-extracted it - a ~220k-card fetch+OCR pass
+# whose whole cost buys pixels this repository has already read.
+#
+# It does not need those pixels. `recover_artist_from_card_text` consumes two STRINGS, and both
+# are already persisted on the row: `collector_line_raw_text` (the winning collector-line OCR
+# attempt) and `legal_line_raw_text` (the full-width read of the same y band). So this layer is a
+# pure re-read of stored evidence: NO image fetch, NO tesseract call, NO network access of any
+# kind - the same posture `modern_artist_credit.run_modern_artist_credit_backfill` already
+# established for its own re-read of `artist_ocr_raw_text`, and the reason both can run against a
+# 200k-row population in minutes rather than days.
+#
+# THE TWO INVARIANTS IT MUST NOT BREAK, both inherited rather than re-decided here:
+#   * THE `Illus.` ANCHOR ALWAYS WINS (PR #563's rule). The anchor's own reading is never
+#     overwritten - this fills a BLANK `artist_ocr_name` and nothing else. Enforced twice: the
+#     eligibility queryset selects only `artist_ocr_name=""`, and the writer re-checks the same
+#     condition on the in-memory row immediately before staging a write.
+#   * FUZZY MATCHING YES, FUZZY STORAGE NO (owner ruling, 2026-07-29). The stored value is always
+#     `RecoveredArtist.canonical_name`, which is a verbatim `CanonicalArtist.name` and is `None`
+#     unless exactly ONE canonical artist is compatible with the reading. An ambiguous reading is
+#     counted (`ambiguous`) and skipped, never resolved by picking a best guess.
+# ---------------------------------------------------------------------------------------------
+
+
+@dataclass
+class CollectorLineArtistBackfillResult:
+    """Aggregate outcome of one backfill pass, plus a capped audit sample - the same shape
+    `modern_artist_credit.BackfillResult` uses, extended with the one distinction that matters
+    for THIS recovery: a row can fail either because no reading cleared the bars at all
+    (`no_reading`) or because a reading was found but fits more than one canonical artist
+    (`ambiguous`). Collapsing the two would hide whether a disappointing yield came from
+    illegible text or from a lexicon full of near-identical names, which are different problems
+    with different fixes."""
+
+    dry_run: bool = False
+    run_id: str = ""
+    considered: int = 0
+    no_reading: int = 0
+    ambiguous: int = 0
+    would_fill: int = 0
+    filled: int = 0
+    audit: list[dict[str, Any]] = field(default_factory=list)
+
+
+def backfill_eligible_evidence_queryset() -> "QuerySet[Any]":
+    """Every `ImageEvidence` row this backfill may consider: (a) `artist_ocr_name` currently
+    blank - the `Illus.`-anchor invariant, applied in SQL so an ineligible row is never even
+    loaded; (b) at least one of the two source strings non-blank, since a row with neither has
+    nothing to re-read; (c) CURRENT for its card (`content_hash` matches the card's own live
+    `content_phash`), the "never trust a stale evidence row from a prior image version" rule every
+    Stage C/D reader in this codebase applies; and (d) not md5-contradicted
+    (`evidence_transfer.md5_currency_q`, null-tolerant by design).
+
+    Conditions (c) and (d) are lifted verbatim from `modern_artist_credit.
+    eligible_evidence_queryset` rather than restated in this module's own words - the two
+    backfills re-read different stored strings off the SAME table under the same currency rule,
+    and a currency rule that drifted between them would be a silent correctness bug in whichever
+    one was updated second.
+
+    `select_related("card")` is load-bearing, not an optimisation: the card-name narrowing below
+    needs `evidence.card.name` on every row, and a lazy FK would turn one query into 207k.
+    Ordered by pk so a run is reproducible and so an interrupted run's progress is describable.
+    """
+    from django.db.models import F
+
+    from cardpicker.evidence_transfer import md5_currency_q
+    from cardpicker.models import ImageEvidence
+
+    return (
+        ImageEvidence.objects.filter(artist_ocr_name="", content_hash=F("card__content_phash"))
+        .exclude(collector_line_raw_text="", legal_line_raw_text="")
+        .filter(md5_currency_q())
+        .select_related("card")
+        .order_by("pk")
+    )
+
+
+def run_collector_line_artist_backfill(
+    run_id: str,
+    dry_run: bool = True,
+    chunk_size: int = 500,
+    audit_sample_size: int = 20,
+    limit: Optional[int] = None,
+    lexicon: Optional[ArtistLexicon] = None,
+    name_artist_lookup: Optional["NameArtistLookup"] = None,
+) -> CollectorLineArtistBackfillResult:
+    """The batch runner. Walks `backfill_eligible_evidence_queryset()`, re-reads each row's two
+    stored strings through `recover_artist_from_card_text`, and - only when `dry_run=False` -
+    writes the single unambiguous canonical artist onto `ImageEvidence.artist_ocr_name`.
+
+    `run_id`/`extractor_versions` are deliberately NOT touched on any row written here, matching
+    `run_modern_artist_credit_backfill`/`reparse_collector_evidence`'s own convention: this is a
+    downstream re-parse of already-extracted evidence, not a Stage C extraction pass, and stamping
+    it as one would both misrepresent the row's provenance and (via `extractor_versions`) change
+    what `run_image_evidence_cohort`'s resume filter believes about that card. The pass's own
+    identity lives on its `PilotRunLedger` row instead - see the command wrapper.
+
+    BOTH PER-RUN RESOLVERS ARE BUILT ONCE, HERE, AND THREADED THROUGH - never per row. `lexicon`
+    is one query; `name_artist_lookup` is backed by `local_calculate_verdicts.
+    _get_cached_candidate_name_index()`, the single process-cached entry point every
+    batch-reachable caller in this codebase is required to use (~1.6 s / ~100 MB to build, once).
+    Both are injectable so a test can drive this against a tiny in-memory lexicon.
+
+    WRITES ARE BATCHED (`bulk_update` every `chunk_size` staged rows), not per row: the live
+    population is ~207k rows, where one `UPDATE` per row is ~207k round trips for a single
+    narrow column. Reads use `.iterator(chunk_size=...)` so the whole population is never
+    materialised in memory at once. `filled` is incremented only after the batch it belongs to
+    has actually been flushed, so a crash mid-pass can never leave the counter claiming writes
+    that did not commit.
+
+    `limit` (optional) caps how many eligible rows are CONSIDERED - the read-only measurement
+    handle: a `--dry-run --limit N` pass reports the real yield on a real sample without
+    committing to a full walk.
+    """
+    from cardpicker.models import ImageEvidence
+
+    lexicon = lexicon or load_artist_lexicon()
+    if name_artist_lookup is None:
+        name_artist_lookup = build_name_artist_lookup()
+    result = CollectorLineArtistBackfillResult(dry_run=dry_run, run_id=run_id)
+
+    pending: list[Any] = []
+
+    def _flush() -> None:
+        if not pending:
+            return
+        ImageEvidence.objects.bulk_update(pending, ["artist_ocr_name"])
+        result.filled += len(pending)
+        pending.clear()
+
+    queryset = backfill_eligible_evidence_queryset()
+    if limit is not None:
+        queryset = queryset[:limit]
+
+    for evidence in queryset.iterator(chunk_size=chunk_size):
+        result.considered += 1
+        if evidence.artist_ocr_name:
+            # Defence in depth behind the queryset's own filter - the `Illus.` anchor's reading is
+            # never overwritten, and this second check makes that true of the in-memory row too.
+            continue
+
+        recovered = recover_artist_from_card_text(
+            evidence.collector_line_raw_text,
+            evidence.legal_line_raw_text,
+            lexicon,
+            allowed_artist_names=name_artist_lookup(evidence.card.name),
+        )
+        if recovered is None:
+            result.no_reading += 1
+            continue
+        if recovered.canonical_name is None:
+            # A real reading, but compatible with more than one canonical artist. Fuzzy matching
+            # is permitted, fuzzy storage is not (owner ruling) - so this row stays blank.
+            result.ambiguous += 1
+            continue
+
+        result.would_fill += 1
+        if len(result.audit) < audit_sample_size:
+            result.audit.append(
+                {
+                    "evidence_id": evidence.pk,
+                    "card_id": evidence.card_id,
+                    "card_name": evidence.card.name,
+                    "candidate": recovered.candidate,
+                    "matched_name": recovered.canonical_name,
+                    "ratio": round(recovered.ratio, 3),
+                }
+            )
+
+        if not dry_run:
+            evidence.artist_ocr_name = recovered.canonical_name
+            pending.append(evidence)
+            if len(pending) >= chunk_size:
+                _flush()
+
+    if not dry_run:
+        _flush()
+
+    return result
+
+
 __all__ = [
     "TOKEN_RE",
     "MAX_CANDIDATE_WORDS",
@@ -698,4 +886,7 @@ __all__ = [
     "build_name_artist_lookup",
     "PrintingArtistLookup",
     "build_printing_artist_lookup",
+    "CollectorLineArtistBackfillResult",
+    "backfill_eligible_evidence_queryset",
+    "run_collector_line_artist_backfill",
 ]
