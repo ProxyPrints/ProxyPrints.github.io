@@ -83,6 +83,16 @@ a `detail` object read only when the summary signals it's needed.
   pilot-era value's current home, 3 confirmed MISSING items, 3 open
   items. Cited by [`../pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md),
   the gate's canonical status page.
+- `2026-07-29-external-ip-vs-promo-types-delta.md` — characterisation of
+  the Scryfall Tagger `art:external-ip` vs. `promo_types=universesbeyond`
+  delta left open by PR #599. Both join paths reconciled (agree to within
+  2 rows); the delta is 2,820 printings, not the reported ~2,759, plus a
+  reverse delta of 61 the subtraction had hidden. 83.4% is D&D /
+  Forgotten Realms and 12.3% Portal Three Kingdoms — neither Universes
+  Beyond; 39 of the genuinely-licensed remainder are already marked by
+  `godzillaseries`/`draculaseries` in the same column. Recommends dropping
+  the Tagger dependency, with the definitional question that would
+  invert that recommendation stated explicitly.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
