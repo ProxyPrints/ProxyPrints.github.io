@@ -18,6 +18,14 @@ for why). `_shared_cache_configured` (autouse) provisions a real `"shared"` LocM
 every test in this file by default - the state this feature actually runs under once issue #538's
 infrastructure PR lands. `TestSharedCacheNotConfigured` overrides this per-test with its own
 `override_settings(CACHES=...)` that omits `"shared"` entirely, to cover the pre-#538 state.
+
+Opt-in setup: `settings.MTGAC_BULK_URL` defaults to empty in `MPCAutofill/settings.py` (owner
+requirement, 2026-07-29 - see `cardpicker.artist_external_links`'s own "Opt-in, per instance"
+docstring section) - empty means the whole integration is off. `_bulk_url_configured` (autouse)
+sets it to a dummy configured value for every test in this file by default, so the pre-existing
+fetch/cache/command/endpoint tests below keep exercising the CONFIGURED state they were written
+for. `TestBulkUrlNotConfigured` and `TestWarmArtistExternalLinksCommandNotConfigured` override it
+back to empty per-test to cover the opt-out state instead.
 """
 
 from unittest.mock import patch
@@ -32,6 +40,7 @@ from django.urls import reverse
 from cardpicker.artist_external_links import (
     CACHE_KEY,
     SHARED_CACHE_ALIAS,
+    bulk_url_configured,
     compute_artist_external_links_blob,
     fetch_bulk_export,
     get_cached_artist_external_links,
@@ -76,6 +85,25 @@ def _shared_cache_configured():
         yield
         caches["default"].clear()
         caches[SHARED_CACHE_ALIAS].clear()
+
+
+# A dummy, deliberately non-real URL - opting these tests into the CONFIGURED state without ever
+# risking a real request landing on MTGAC's actual endpoint (every outbound call in this file is
+# mocked/patched regardless, but this is a second line of defence).
+_TEST_BULK_URL = "https://mtgac-bulk.example.invalid/api/public/artists"
+
+
+@pytest.fixture(autouse=True)
+def _bulk_url_configured(settings):
+    """
+    `settings.MTGAC_BULK_URL` defaults to empty (owner requirement - see
+    cardpicker.artist_external_links's "Opt-in, per instance" docstring section), which would make
+    every pre-existing fetch/cache/command/endpoint test below fail immediately with the new
+    "not configured" guard. This autouse fixture opts every test in this file into the CONFIGURED
+    state by default; tests that specifically cover the opt-out state set it back to "" themselves
+    (pytest-django's `settings` fixture restores the real value after each test either way).
+    """
+    settings.MTGAC_BULK_URL = _TEST_BULK_URL
 
 
 def _link_types(record: dict) -> list[str]:
@@ -380,6 +408,30 @@ class TestSharedCacheNotConfigured:
                 call_command("warm_artist_external_links")
 
 
+class TestBulkUrlConfigured:
+    """
+    `bulk_url_configured()` is the single knob gating the whole MTGAC integration - see
+    `cardpicker.artist_external_links`'s "Opt-in, per instance" docstring section. One knob, not
+    two: there is no separate enable flag, only whether `MTGAC_BULK_URL` is set.
+    """
+
+    def test_false_when_unset(self, settings):
+        settings.MTGAC_BULK_URL = ""
+        assert bulk_url_configured() is False
+
+    def test_true_when_set(self, settings):
+        settings.MTGAC_BULK_URL = _TEST_BULK_URL
+        assert bulk_url_configured() is True
+
+    def test_reflects_settings_changes_immediately(self, settings):
+        # Read at call time, not cached at import time - an operator flipping the env var (or a
+        # test using override_settings/the `settings` fixture) must see the new state right away.
+        settings.MTGAC_BULK_URL = ""
+        assert bulk_url_configured() is False
+        settings.MTGAC_BULK_URL = _TEST_BULK_URL
+        assert bulk_url_configured() is True
+
+
 class TestFetchBulkExport:
     """
     MTGAC's own disclosed limit on this endpoint is 12 requests/hour (2026-07-29). The tests
@@ -387,6 +439,14 @@ class TestFetchBulkExport:
     "helpful" retry loop added to this function would fail these tests immediately, not just
     the docstring's own warning.
     """
+
+    def test_calls_the_url_from_settings(self, settings):
+        settings.MTGAC_BULK_URL = _TEST_BULK_URL
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            mock_get.return_value.json.return_value = [CLEAN_RECORD]
+            mock_get.return_value.raise_for_status.return_value = None
+            fetch_bulk_export()
+            assert mock_get.call_args.args[0] == _TEST_BULK_URL
 
     def test_raises_on_non_list_json(self):
         with patch("cardpicker.artist_external_links.requests.get") as mock_get:
@@ -471,6 +531,30 @@ class TestWarmArtistExternalLinksCache:
             mock_get.assert_called_once()
 
 
+class TestWarmArtistExternalLinksCacheNotConfigured:
+    """
+    `warm_artist_external_links_cache`'s own opt-in guard (defense in depth - the management
+    command checks `bulk_url_configured()` itself first and normally never reaches this function
+    at all on an unconfigured instance, see `TestWarmArtistExternalLinksCommandNotConfigured`).
+    """
+
+    def test_raises_runtime_error_before_any_outbound_call(self, settings):
+        settings.MTGAC_BULK_URL = ""
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            with pytest.raises(RuntimeError, match="not configured"):
+                warm_artist_external_links_cache()
+            mock_get.assert_not_called()
+
+    def test_does_not_touch_the_shared_cache_backend_at_all(self, settings):
+        # Checked even before resolving the shared cache backend, so an unconfigured instance
+        # can't fail this a different, more confusing way (e.g. issue #538's error) instead.
+        settings.MTGAC_BULK_URL = ""
+        with patch("cardpicker.artist_external_links._shared_cache_for_write") as mock_shared:
+            with pytest.raises(RuntimeError, match="not configured"):
+                warm_artist_external_links_cache()
+            mock_shared.assert_not_called()
+
+
 class TestWarmArtistExternalLinksCommand:
     def test_success_prints_a_summary(self, capsys):
         with patch("cardpicker.artist_external_links.fetch_bulk_export", return_value=[CLEAN_RECORD]):
@@ -508,6 +592,48 @@ class TestWarmArtistExternalLinksCommand:
             with pytest.raises(CommandError):
                 call_command("warm_artist_external_links")
             mock_get.assert_called_once()
+
+
+class TestWarmArtistExternalLinksCommandNotConfigured:
+    """
+    THE safety story for a fresh/non-opted-in instance running this command on the weekly
+    schedule (migration 0093) forever: it must no-op cleanly, not fail. See the command's own
+    module docstring and `cardpicker.artist_external_links`'s "Opt-in, per instance" section.
+    """
+
+    def test_exits_zero_no_exception(self, settings):
+        settings.MTGAC_BULK_URL = ""
+        # `call_command` re-raises on non-zero/`CommandError` - this simply must not raise.
+        call_command("warm_artist_external_links")
+
+    def test_prints_a_clear_skip_message(self, settings, capsys):
+        settings.MTGAC_BULK_URL = ""
+        call_command("warm_artist_external_links")
+        output = capsys.readouterr().out
+        assert "not configured" in output
+        assert "skipping" in output
+
+    def test_makes_no_outbound_call(self, settings):
+        settings.MTGAC_BULK_URL = ""
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            call_command("warm_artist_external_links")
+            mock_get.assert_not_called()
+
+    def test_does_not_touch_the_cache(self, settings):
+        settings.MTGAC_BULK_URL = ""
+        call_command("warm_artist_external_links")
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) is None
+
+    def test_configured_instance_behaviour_is_unchanged(self, settings, capsys):
+        # Negative control: flipping MTGAC_BULK_URL back on must restore the pre-existing
+        # success-path behaviour exactly (TestWarmArtistExternalLinksCommand's own coverage),
+        # proving the opt-in check doesn't leak into the configured path.
+        settings.MTGAC_BULK_URL = _TEST_BULK_URL
+        with patch("cardpicker.artist_external_links.fetch_bulk_export", return_value=[CLEAN_RECORD]):
+            call_command("warm_artist_external_links")
+        output = capsys.readouterr().out
+        assert "1 artists" in output
+        assert CLEAN_RECORD["name"] in caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
 
 
 class TestGetArtistExternalLinksView:
@@ -564,3 +690,38 @@ class TestGetArtistExternalLinksView:
 
         assert first.status_code == 200
         assert second.status_code == 429
+
+
+class TestGetArtistExternalLinksViewOnAnUnconfiguredInstance:
+    """
+    THE whole safety story for a fresh/non-opted-in instance (owner requirement, 2026-07-29): with
+    `MTGAC_BULK_URL` unset, the cache is simply never warmed (the weekly command no-ops, see
+    `TestWarmArtistExternalLinksCommandNotConfigured`), so this read endpoint - which never calls
+    upstream on its own, configured or not - must degrade to its ordinary not-found response
+    exactly like any other cold cache, never raise, and the frontend's existing fallback to
+    `buildArtistSupportURL` (`ArtistSupportLink.tsx`) takes over unchanged.
+    """
+
+    def test_returns_not_found_shape_not_an_error(self, client, django_settings, settings):
+        settings.MTGAC_BULK_URL = ""
+        artist = CanonicalArtistFactory(name=CLEAN_RECORD["name"])
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) is None  # never warmed
+
+        response = client.get(reverse("get_artist_external_links"), {"name": artist.name})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "found": False,
+            "pageUrl": None,
+            "location": None,
+            "links": [],
+            "hasSignatureService": False,
+        }
+
+    def test_makes_no_outbound_call(self, client, django_settings, settings):
+        settings.MTGAC_BULK_URL = ""
+        artist = CanonicalArtistFactory(name=CLEAN_RECORD["name"])
+
+        with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+            client.get(reverse("get_artist_external_links"), {"name": artist.name})
+            mock_get.assert_not_called()
