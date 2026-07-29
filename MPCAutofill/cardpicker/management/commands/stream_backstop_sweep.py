@@ -99,8 +99,8 @@ from cardpicker.local_calculate_verdicts import (
     _eligible_cards_queryset as _stage_d_eligible_cards_queryset,
 )
 from cardpicker.models import StageESweepCursor
+from cardpicker.stage_e_batch_sizing import MODE_INCREMENTAL, resolve_micro_batch_size
 from cardpicker.stage_e_dispatch import (
-    DEFAULT_MICRO_BATCH_SIZE,
     SweepLapTracker,
     _cursor_chunk_walk,
     dispatch_micro_batch,
@@ -159,7 +159,10 @@ class Command(BaseCommand):
             "--batch-size",
             type=int,
             default=None,
-            help="Override settings.STAGE_E_MICRO_BATCH_SIZE for this invocation only.",
+            help="Pin the micro-batch size for this invocation only, overriding both "
+            "settings.STAGE_E_MICRO_BATCH_SIZE and the autoscale rule. Omitted, this sweep uses "
+            "cardpicker.stage_e_batch_sizing's INCREMENTAL size - see this command's own handle() "
+            "for why a cron sweep does not take the bulk pass's autoscaled size.",
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
@@ -168,9 +171,14 @@ class Command(BaseCommand):
             return
 
         max_batches: int = options["max_batches"]
-        batch_size: int = options["batch_size"] or getattr(
-            settings, "STAGE_E_MICRO_BATCH_SIZE", DEFAULT_MICRO_BATCH_SIZE
-        )
+        # MODE_INCREMENTAL, not MODE_BULK (2026-07-29 - `cardpicker.stage_e_batch_sizing`'s own
+        # "TWO MODES" section has the general reasoning; this is the specific one). This sweep's
+        # per-invocation footprint is `--max-batches` x batch size and `--max-batches` defaults to
+        # 1000, so handing it the bulk pass's autoscaled size would silently turn one cron sweep
+        # from a 25,000-card job into a 250,000-card one - a materially different job than the one
+        # that was scheduled, decided by a rule this command's operator never opted into.
+        # INCREMENTAL keeps it on exactly the size it runs today; `--batch-size` still overrides.
+        batch_size: int = resolve_micro_batch_size(explicit=options["batch_size"], mode=MODE_INCREMENTAL).batch_size
         run_id_prefix = f"stage-e-backstop-{timezone.now().strftime('%Y%m%dT%H%M%SZ')}"
 
         batches_dispatched = 0

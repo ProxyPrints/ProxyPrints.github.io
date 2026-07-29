@@ -20,6 +20,7 @@ from django.core.management.base import CommandError
 from django.db import connection
 from django.test import override_settings
 
+from cardpicker import stage_e_batch_sizing as batch_sizing
 from cardpicker import stage_e_dispatch
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.management.commands import stream_full_catalog
@@ -1707,3 +1708,107 @@ class TestExitCodeContract:
             assert code == expected, argv
             assert f"exit_code={code}" in verdict, verdict
             assert verdict.startswith("PASS COMPLETE" if code == 0 else "PASS STOPPED EARLY"), verdict
+
+
+class TestBatchSizeAutoscaling:
+    """2026-07-29 - `--batch-size` defaults to `auto`, which hands the decision to
+    `cardpicker.stage_e_batch_sizing`. The rule itself is tested in
+    `test_stage_e_batch_sizing.py`; what is tested HERE is the plumbing: that this driver asks in
+    BULK mode, that the flag and a pinned setting still win, and that the decision is visible in
+    the log."""
+
+    @STREAMING_ON
+    def test_the_default_invocation_asks_for_a_bulk_size(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The whole-catalogue pass is the case the owner directive is about. If this driver ever
+        # started asking for the INCREMENTAL size the pass would silently run at 25 again, which is
+        # exactly the regression this change exists to prevent - and it would be invisible, because
+        # a 25-card batch is not wrong, just slow.
+        asked: List[dict] = []
+        # The REAL callable captured before the patch - re-reading the module attribute inside the
+        # spy would call the spy, which is an infinite recursion rather than a passthrough.
+        real = stream_full_catalog.resolve_micro_batch_size
+
+        def _spy(**kwargs: Any) -> Any:
+            asked.append(kwargs)
+            return real(**kwargs)
+
+        monkeypatch.setattr(stream_full_catalog, "resolve_micro_batch_size", _spy)
+        _cards(1)
+        _install_recording_dispatch(monkeypatch)
+
+        with override_settings(STAGE_E_MICRO_BATCH_SIZE=None):
+            call_command("stream_full_catalog")
+
+        assert asked and asked[0]["mode"] == batch_sizing.MODE_BULK
+        assert asked[0]["explicit"] is None
+
+    @STREAMING_ON
+    def test_an_explicit_flag_still_wins_over_the_rule(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The binding design property of this command: changing a setting must cost a kill and a
+        # relaunch, never a rebuild. Autoscaling must not take the flag away.
+        cards = _cards(4)
+        recorder = _install_recording_dispatch(monkeypatch)
+
+        with override_settings(STAGE_E_MICRO_BATCH_SIZE=None):
+            call_command("stream_full_catalog", "--batch-size", "2")
+
+        assert [call["card_ids"] for call in recorder.calls] == [
+            [cards[0].pk, cards[1].pk],
+            [cards[2].pk, cards[3].pk],
+        ]
+
+    @STREAMING_ON
+    def test_a_pinned_setting_wins_over_the_rule(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        cards = _cards(3)
+        recorder = _install_recording_dispatch(monkeypatch)
+
+        with override_settings(STAGE_E_MICRO_BATCH_SIZE=3):
+            call_command("stream_full_catalog")
+
+        assert [call["card_ids"] for call in recorder.calls] == [[c.pk for c in cards]]
+
+    @STREAMING_ON
+    def test_the_chosen_size_and_its_derivation_are_printed_before_batch_zero(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        _cards(1)
+        _install_recording_dispatch(monkeypatch)
+
+        with override_settings(STAGE_E_MICRO_BATCH_SIZE=None):
+            call_command("stream_full_catalog")
+
+        out = capsys.readouterr().out
+        assert "Batch sizing:" in out
+        assert "source=autoscale" in out
+        assert "bound_by=" in out
+
+    @STREAMING_ON
+    def test_dry_run_reports_the_sizing_it_would_have_used(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        _cards(1)
+        _install_recording_dispatch(monkeypatch)
+
+        with override_settings(STAGE_E_MICRO_BATCH_SIZE=None):
+            call_command("stream_full_catalog", "--dry-run")
+
+        assert "Batch sizing:" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("spelling", ["auto", "AUTO", " auto "])
+    def test_auto_is_accepted_in_any_case(self, spelling: str) -> None:
+        assert stream_full_catalog.parse_batch_size_option(spelling) is None
+
+    @pytest.mark.parametrize("spelling", ["0", "-1", "1.5", "big", "", "twenty-five"])
+    def test_every_other_non_integer_spelling_is_rejected(self, spelling: str) -> None:
+        # `auto` must be the ONLY word that means anything - a typo'd size has to be a loud error,
+        # not a silent fallback to the rule, or an operator who meant `--batch-size 250` and typed
+        # `--batch-size 25O` would never find out.
+        with pytest.raises(CommandError):
+            stream_full_catalog.parse_batch_size_option(spelling)
+
+    def test_an_omitted_flag_parses_as_auto(self) -> None:
+        assert stream_full_catalog.parse_batch_size_option(None) is None
+
+    @pytest.mark.parametrize("spelling", ["1", "250", 250])
+    def test_a_positive_size_parses_to_itself(self, spelling: Any) -> None:
+        assert stream_full_catalog.parse_batch_size_option(spelling) == int(spelling)

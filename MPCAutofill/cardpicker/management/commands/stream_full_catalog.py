@@ -82,8 +82,23 @@ command, and it is a deliberate constraint on how it may grow: the operator's wo
 launch, watch, kill, change a setting, relaunch - so changing ANY setting must cost a kill and a
 relaunch, never a rebuild and a redeploy. Nothing this command decides may come from
 `settings.py`, an env var, or a constant in this file that an operator would plausibly want to
-change mid-campaign. (`--batch-size`'s DEFAULT reads `settings.STAGE_E_MICRO_BATCH_SIZE`, which is
-different: the flag always wins when passed.)
+change mid-campaign.
+
+  `--batch-size` IS THE ONE THAT LOOKS LIKE AN EXCEPTION AND IS NOT (2026-07-29). Its default is
+  no longer a settings read but `auto`, which hands the decision to
+  `cardpicker/stage_e_batch_sizing.py` - a rule that measures this host's CPU count and available
+  memory at runtime and sizes the batch against the measured fetch-saturation limit (that module's
+  own docstring carries the rule, the measurement table it was read off, and why the limit is a
+  property of `harvest_fetch_limiter.GOOGLE_IMAGE` rather than of the box). That does not weaken
+  the property above, and the two reasons why are the ones to check if this ever grows further:
+  `--batch-size N` still wins outright, so the operator's kill-change-relaunch loop reaches the
+  same number it always did; and the rule PRINTS its whole derivation before batch 0 - the chosen
+  size, whether it came from the flag, from a pinned `settings.STAGE_E_MICRO_BATCH_SIZE`, or from
+  the rule, and which of the rule's three terms bound it - so nothing about the decision is
+  invisible to the operator watching the log. Deliberately NO new flags were added for the rule's
+  own internals (its saturation cap, its duration target): an operator who disagrees with the
+  answer passes the number they want, which is the mechanism that already existed, and a flag per
+  constant would be a second way to say the same thing.
 
 SCOPING TO ONE SOURCE (`--source <key>`, 2026-07-28): narrows the cohort to the cards of one or
 more `Source`s (by their `key` field) instead of the whole catalog - for pushing a newly-added
@@ -296,7 +311,8 @@ from cardpicker.printing_metadata_import import (
     _is_fresh,
     import_scryfall_printing_metadata,
 )
-from cardpicker.stage_e_dispatch import DEFAULT_MICRO_BATCH_SIZE, dispatch_micro_batch
+from cardpicker.stage_e_batch_sizing import MODE_BULK, resolve_micro_batch_size
+from cardpicker.stage_e_dispatch import dispatch_micro_batch
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +349,12 @@ DEFAULT_THROTTLE_BACKOFF_MAX_S = 60.0
 DEFAULT_PROGRESS_EVERY_BATCHES = 25
 DEFAULT_PROGRESS_EVERY_SECONDS = 300.0
 
+# The `--batch-size` spelling that names the autoscale rule explicitly (2026-07-29). A WORD rather
+# than a sentinel number, and the flag's `type` is `str` rather than `int` because of it: "0" and
+# "-1" must stay hard errors, and an int-typed flag has no spelling left for "decide it for me"
+# that is not also a plausible typo for a real size.
+AUTO_BATCH_SIZE = "auto"
+
 
 FULL_CATALOG_SCOPE = "full-catalog"
 
@@ -366,6 +388,33 @@ def resume_scope_for(source_keys: Optional[List[str]]) -> str:
     if not source_keys:
         return FULL_CATALOG_SCOPE
     return "source:" + ",".join(sorted(set(source_keys)))
+
+
+def parse_batch_size_option(raw: Any) -> Optional[int]:
+    """
+    `--batch-size`'s own parser: returns an explicit positive int, or `None` for `auto` (which
+    hands the decision to `cardpicker.stage_e_batch_sizing`). Every other spelling - `0`, a
+    negative, a float, a word that is not `auto` - is a `CommandError` raised BEFORE any dispatch.
+
+    Written as a module-level function rather than an argparse `type=` callable deliberately:
+    argparse turns an exception raised inside a `type=` callable into its own SystemExit-with-usage
+    path, which bypasses this command's own "a bad invocation is a CommandError, checked before the
+    streaming gate" convention and produces a different exit code than every other validation
+    failure here. `None` (the argparse default is the `auto` STRING, so `None` only reaches here
+    from a programmatic `call_command(batch_size=None)`) is treated as `auto` too, since that is
+    the pre-autoscale meaning of omitting the flag.
+    """
+    if raw is None or (isinstance(raw, str) and raw.strip().lower() == AUTO_BATCH_SIZE):
+        return None
+    if isinstance(raw, bool):
+        raise CommandError(f"--batch-size must be a positive integer or '{AUTO_BATCH_SIZE}'.")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise CommandError(f"--batch-size must be a positive integer or '{AUTO_BATCH_SIZE}'.")
+    if value <= 0:
+        raise CommandError("--batch-size must be a positive integer.")
+    return value
 
 
 def full_catalog_pk_queryset(source_keys: Optional[List[str]] = None) -> Any:
@@ -452,13 +501,19 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--batch-size",
-            type=int,
-            default=None,
+            type=str,
+            default=AUTO_BATCH_SIZE,
+            metavar="N|auto",
             help="Micro-batch chunk size - both the chunk size the cohort is sliced into AND the "
             "explicit batch_size passed to dispatch_micro_batch for each chunk (the two being "
             "equal is what keeps _select_micro_batch off the sweep-cursor path entirely - see this "
-            "command's own module docstring). Default: settings.STAGE_E_MICRO_BATCH_SIZE "
-            f"({DEFAULT_MICRO_BATCH_SIZE} if unset).",
+            "command's own module docstring). A positive integer PINS it for this invocation and "
+            f"always wins. '{AUTO_BATCH_SIZE}' (the default) sizes it from the measured "
+            "fetch-saturation limit and this host's own discovered CPU count and available memory "
+            "- see cardpicker/stage_e_batch_sizing.py's module docstring for the rule and the "
+            "measurements behind it. Either way the chosen size, its source and the term that "
+            "bound it are printed before batch 0 and repeated in --dry-run's batch plan, so a run "
+            "never leaves the operator guessing which number it picked.",
         )
         parser.add_argument(
             "--source",
@@ -585,14 +640,13 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         # Argument validation happens BEFORE the streaming-enabled gate below (stage_e_shakedown's
         # own convention): a bad invocation must never look like a silent, successful no-op.
-        # Explicit `is None` rather than the `or` idiom the older drivers use: `--batch-size 0` is
-        # falsy, so `or` would silently swallow it into the settings default instead of rejecting
-        # it, and a driver whose whole interface is flags must never silently reinterpret one.
-        batch_size: Optional[int] = options["batch_size"]
-        if batch_size is None:
-            batch_size = getattr(settings, "STAGE_E_MICRO_BATCH_SIZE", DEFAULT_MICRO_BATCH_SIZE)
-        elif batch_size <= 0:
-            raise CommandError("--batch-size must be a positive integer.")
+        # `--batch-size` parses to an explicit int or to None ("auto"), and every non-auto,
+        # non-positive-integer spelling is a CommandError rather than a silent reinterpretation -
+        # the same bar the pre-autoscale `is None` check was written to hold (`--batch-size 0` is
+        # falsy, so the `or` idiom the older drivers use would have swallowed it into the default).
+        explicit_batch_size = parse_batch_size_option(options["batch_size"])
+        batch_decision = resolve_micro_batch_size(explicit=explicit_batch_size, mode=MODE_BULK)
+        batch_size: int = batch_decision.batch_size
         sample_size: Optional[int] = options["sample"]
         if sample_size is not None and sample_size <= 0:
             raise CommandError("--sample must be a positive integer.")
@@ -738,6 +792,13 @@ class Command(BaseCommand):
             f"planned_batches={planned_batches}"
             + (f" (bounded by --max-batches={max_batches})" if max_batches is not None else "")
         )
+        # WHY THIS SIZE - printed unconditionally, before batch 0 and inside --dry-run's plan alike
+        # (2026-07-29). An autoscaled tunable that only reported its ANSWER would be exactly the
+        # kind of thing this command's "every tunable is a flag" property exists to prevent: the
+        # operator's method is watch, kill, change, relaunch, and they cannot decide whether to
+        # override a number whose derivation they cannot see. `describe()` carries the source, the
+        # binding term, and every discovered input.
+        self.stdout.write(f"Batch sizing: {batch_decision.describe()}")
         self.stdout.write(
             f"Stage C: reextract={reextract} short_circuit="
             f"{'inherit-env' if short_circuit is None else short_circuit}"

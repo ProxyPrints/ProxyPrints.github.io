@@ -573,14 +573,25 @@ STAGE_E_STREAMING_ENABLED = env.bool("STAGE_E_STREAMING_ENABLED", default=False)
 # or redeploy needed.
 STAGE_C_EVIDENCE_TRANSFER_ENABLED = env.bool("STAGE_C_EVIDENCE_TRANSFER_ENABLED", default=True)
 
-# Micro-batch size (docs/proposals/stage-e-streaming.md §3 decision (2), sharpened by §10(c)): NOT
-# a value this brief or this change invents precision for - §10(c) ratifies that the real number
-# ships as a MEASURED OUTPUT of the Bug-A tail shakedown's own instrumentation (phase 3, not yet
-# run). This default is a placeholder sized to the brief's own "roughly 10-100 cards per batch"
-# sanity range (§3 decision (2)) - a mid-range, conservative starting point pending that
-# measurement, not a considered answer. Tunable without a code change (env var) precisely so the
-# shakedown can adjust it without a redeploy.
-STAGE_E_MICRO_BATCH_SIZE = env.int("STAGE_E_MICRO_BATCH_SIZE", default=25)
+# Micro-batch size OVERRIDE - `None` (the default) means AUTOSCALE (2026-07-29, owner directive
+# "regarding batch size we have to follow the data. i want it to scale with available hardware up
+# to the fetch saturation limit while keeping the mem overhead low and fastest bulk timing").
+# `cardpicker/stage_e_batch_sizing.py`'s own module docstring carries the whole rule, the
+# measurement table it was read off, and the precedence order; nothing about the decision lives
+# here any more.
+#
+# The §10(c) placeholder this used to hold (a mid-range 25, explicitly "not a considered answer"
+# pending the shakedown's own measurement) is now RETIRED: that measurement exists, and its answer
+# is not a constant. What survives is the reason the placeholder was env-tunable in the first
+# place - an operator must be able to pin a size without a code change - so a non-`None` value
+# here still outranks the rule entirely. It is now genuinely an OVERRIDE rather than the default
+# path, which is why it defaults to `None` instead of a number: with a number here there is no way
+# for the rule to tell "an operator chose 25" apart from "nobody has chosen anything".
+#
+# DEPLOYMENT NOTE: an environment that exports `STAGE_E_MICRO_BATCH_SIZE` at all (the deployed
+# container currently exports `25`) is PINNED and will not autoscale. Unset the variable to let
+# the rule run.
+STAGE_E_MICRO_BATCH_SIZE = env.int("STAGE_E_MICRO_BATCH_SIZE", default=None)
 
 # Streaming concurrency cap (companion to the 2026-07-24 shakedown's vote-collision fix, PR #448 -
 # see cardpicker/stage_e_concurrency.py's own module docstring for the full incident/mechanism
