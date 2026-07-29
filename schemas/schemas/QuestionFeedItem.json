@@ -18,6 +18,7 @@
       "additionalProperties": { "type": "number" }
     },
     "confidentlyKnownArtistName": { "type": ["string", "null"] },
+    "scryfallIllustrationUrl": { "type": ["string", "null"] },
     "tagName": { "type": "string" }
   },
   "required": ["type", "card"],

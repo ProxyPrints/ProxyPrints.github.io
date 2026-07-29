@@ -14,6 +14,7 @@ import {
   defaultHandlers,
   questionFeedArtist,
   questionFeedArtistConfidentlyKnown,
+  questionFeedArtistWithIllustration,
   questionFeedConfirmSuggestion,
   questionFeedConfirmSuggestionSingleton,
   questionFeedIdentifyPrinting,
@@ -442,6 +443,51 @@ test.describe("question feed - artist question type", () => {
     await expect(
       page.getByPlaceholder("Search for an artist...")
     ).toBeVisible();
+  });
+
+  // WTC artist question re-frame: the subject image substitutes the canonical printing's
+  // Scryfall art-crop URL when the backend surfaces one, so the voter judges the art itself
+  // rather than the scanned card. See QuestionFeed.tsx's subjectImageSrc.
+  test("renders the Scryfall art crop as the subject image when the item carries one", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedArtistWithIllustration,
+      artistCandidatesTwoResults,
+      artistConsensusUnresolved,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await expect(page.getByTestId("question-feed-artist-art")).toHaveAttribute(
+      "src",
+      "https://cards.scryfall.io/art_crop/front/a/b/ab000000-0000-0000-0000-000000000000.jpg"
+    );
+  });
+
+  // Same re-frame, opposite branch: no harvested art crop (no canonical printing, or its
+  // metadata carries no art_crop_url) falls back to the plain card image rather than the
+  // Scryfall URL.
+  test("falls back to the plain card image when the artist item carries no art crop", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedArtist,
+      artistCandidatesTwoResults,
+      artistConsensusUnresolved,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    // cardDocument8 has no mediumThumbnailUrl, so the fallback heroImageSrc is "" - the
+    // point under test is that it is NOT the Scryfall art-crop URL, matching
+    // questionFeedArtist's scryfallIllustrationUrl: null.
+    await expect(page.getByTestId("question-feed-artist-art")).toHaveAttribute(
+      "src",
+      ""
+    );
   });
 
   test("a confidently-known artist collapses behind a 'wrong?' link", async ({
