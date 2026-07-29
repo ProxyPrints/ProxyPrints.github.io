@@ -88,3 +88,13 @@ coverage-ack: frontend/tests/WhatsThatWordsAnimation.spec.ts::What's That Card? 
 # taking this file from 4 tests to 6.
 coverage-ack: frontend/tests/NoMatchReasonStrip.spec.ts::NoMatchReasonStrip tests > No match is disabled until a chip is set, then shows the reason strip (not the general attribute panel) — renamed to "No match is disabled until a chip is set, then shows the reason strip split into two labelled groups (not the general attribute panel)" when the strip was split into two axes; test still present and extended with per-group assertions.
 coverage-ack: frontend/tests/NoMatchReasonStrip.spec.ts::NoMatchReasonStrip tests > hides chips for reason tags that don't exist server-side yet — renamed to "hides chips for reason tags that don't exist server-side yet, in both groups" when the strip was split into two axes; test still present and extended to assert the unseeded-tag filter applies inside a still-rendered group, not just across whole groups.
+
+# MTGAC artist-links M2 applet round (docs/features/artist-support-links.md) - ArtistSupportLink
+# became a self-contained applet (RTK Query fetch, commerce-link buttons, Mark's Signature
+# Service badge, MTGAC page link, MTGAC credit line) rather than a single caller-styled `<a>`
+# wrapping caller-supplied children/className. The rail's page-link button now names the artist
+# (was "Support on MTG Artist Connection") and reads as a solid btn-primary button (was the
+# caller-supplied btn-outline-primary) - the destination-naming credit moved into the applet's
+# own "Source: MTG Artist Connection" line, asserted separately in the renamed test below. Test
+# still present, still covers the same surface, extended with the new credit-line assertion.
+coverage-ack: frontend/tests/DisplayPage.spec.ts::DisplayPage (Proposal H, Step 1) > the promoted artist line shows a plain credit + a support button naming MTG Artist Connection for a card with a known canonical artist (E2 - promoted, no longer a collapsed accordion; SPEC-display-left-rail.md §5/§8) — renamed to "the promoted artist line shows a plain credit + the MTG Artist Connection applet (page-link button, credit line) for a card with a known canonical artist (M2 applet round, docs/features/artist-support-links.md)" when ArtistSupportLink became a self-contained applet; the button now names the artist instead of the destination (the applet's own credit line names the destination instead, newly asserted), and its class changed from caller-supplied btn-outline-primary to the applet's own btn-primary. Test still present, same surface, extended not dropped.

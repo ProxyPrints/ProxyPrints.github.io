@@ -2827,6 +2827,68 @@ class RetractImplicitVoteRequest(BaseModel):
         return result
 
 
+class ArtistExternalLink(BaseModel):
+    """
+    One external link for an artist (MTG Artist Connection integration - see
+    cardpicker.artist_external_links's module docstring). `type` is one of the fixed allowlist
+    field names, in fixed priority order (website/artstation/inprnt/mountainmage/omalink/
+    instagram - instagram is a deliberate last-resort exception, not a commerce field, see that
+    module's own docstring) - the parent response's `links` list is never re-sorted per-artist.
+    """
+
+    type: str
+    url: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistExternalLink":
+        assert isinstance(obj, dict)
+        type_ = from_str(obj.get("type"))
+        url = from_str(obj.get("url"))
+        return ArtistExternalLink(type_, url)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["type"] = from_str(self.type)
+        result["url"] = from_str(self.url)
+        return result
+
+
+class ArtistExternalLinksResponse(BaseModel):
+    """
+    2/artistExternalLinks/ - hand-maintained, NOT quicktype-generated, same provenance/reasoning
+    as CastImplicitVoteRequest/RetractImplicitVoteRequest below: `npm run build` in schemas/ is
+    destructive to those two hand-added types (issue #332), so this addition was hand-integrated
+    to match the generated style instead of triggering a regeneration. A JSON schema source DOES
+    exist for this one (schemas/schemas/endpoints/ArtistExternalLinksResponse.json, for
+    documentation and any future safe regeneration) but was not run through quicktype here.
+    """
+
+    found: bool
+    pageUrl: Optional[str] = None
+    location: Optional[str] = None
+    links: List[ArtistExternalLink]
+    hasSignatureService: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistExternalLinksResponse":
+        assert isinstance(obj, dict)
+        found = from_bool(obj.get("found"))
+        pageUrl = from_union([from_none, from_str], obj.get("pageUrl"))
+        location = from_union([from_none, from_str], obj.get("location"))
+        links = from_list(ArtistExternalLink.from_dict, obj.get("links"))
+        hasSignatureService = from_bool(obj.get("hasSignatureService"))
+        return ArtistExternalLinksResponse(found, pageUrl, location, links, hasSignatureService)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["found"] = from_bool(self.found)
+        result["pageUrl"] = from_union([from_none, from_str], self.pageUrl)
+        result["location"] = from_union([from_none, from_str], self.location)
+        result["links"] = from_list(lambda x: to_class(ArtistExternalLink, x), self.links)
+        result["hasSignatureService"] = from_bool(self.hasSignatureService)
+        return result
+
+
 class TagVoteTallyEntry(BaseModel):
     count: int
     polarity: int

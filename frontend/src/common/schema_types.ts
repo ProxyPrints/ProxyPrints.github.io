@@ -1061,6 +1061,37 @@ export interface RetractImplicitVoteRequest {
   tagName: string;
 }
 
+/**
+ * One external link for an artist (MTG Artist Connection integration - see
+ * MPCAutofill/cardpicker/artist_external_links.py's module docstring). `type` is one of the
+ * fixed allowlist field names, in fixed priority order (website/artstation/inprnt/mountainmage/
+ * omalink/instagram - instagram is a deliberate last-resort exception, not a commerce field, see
+ * that module's own docstring) - the parent response's `links` array is never re-sorted
+ * per-artist.
+ */
+export interface ArtistExternalLink {
+  type: string;
+  url: string;
+}
+
+/**
+ * 2/artistExternalLinks/ - hand-maintained, mirroring MPCAutofill/cardpicker/schema_types.py's
+ * ArtistExternalLinksResponse (same provenance as CastImplicitVoteRequest above: a JSON schema
+ * source exists at schemas/schemas/endpoints/ArtistExternalLinksResponse.json, but `npm run
+ * build` was not re-run for this addition since it is destructive to the two hand-added request
+ * types already in this file - issue #332 - so this is typed by hand against the real Python
+ * pydantic model instead). Cache-only, cannot enumerate MTGAC's directory - see the backend
+ * view's own docstring. M2 (frontend consumption) is not built yet; this type has no `Convert`
+ * wiring below, added by whichever session builds that consumer.
+ */
+export interface ArtistExternalLinksResponse {
+  found: boolean;
+  pageUrl?: null | string;
+  location?: null | string;
+  links: ArtistExternalLink[];
+  hasSignatureService: boolean;
+}
+
 export interface TagConsensusRequest {
   identifier: string;
 }

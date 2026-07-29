@@ -1028,6 +1028,175 @@ export const backendInfoServerError = http.get(buildRoute("2/info/"), () =>
 
 //# endregion
 
+//# region artist external links (M2 applet - ArtistSupportLink.tsx)
+
+// SYNTHETIC DATA ONLY - same rule and reason as cardpicker.tests.mtgac_synthetic_fixtures on the
+// backend: MTGAC's real export contains named artists' personal email addresses, which MTGAC
+// cannot license away on those individuals' behalf, so no value here is copied from a real
+// export. Every artist name/URL below is invented.
+
+const artistExternalLinksNotFoundResponse = {
+  found: false,
+  pageUrl: null,
+  location: null,
+  links: [],
+  hasSignatureService: false,
+};
+
+// The default, catch-all response for this route: `found: false` for ANY artist name - this is
+// the applet's fallback-to-deterministic-URL path, and the correct default for every existing
+// test that doesn't care about this feature (added to defaultHandlers below).
+export const artistExternalLinksNotFound = http.get(
+  buildRoute("2/artistExternalLinks/"),
+  () => HttpResponse.json(artistExternalLinksNotFoundResponse, { status: 200 })
+);
+
+// Named synthetic artists, one per test scenario the M2 applet needs coverage for - each
+// handler below only responds to ITS OWN artist name (falling back to the not-found shape for
+// any other name), so a test can compose exactly the ONE handler its own artist needs without
+// the others interfering.
+export const ArtistExternalLinksTestArtists = {
+  zeroLinks: "Wisteria Hallowell",
+  oneLink: "Cormac Windemere",
+  fullRow: "Seraphina Duskwood",
+  instagramOnly: "Percival Ashgrove",
+  signatureService: "Odalys Ferngrove",
+  // A name whose deterministic construction (buildArtistSupportURL) would NOT match MTGAC's
+  // real slug - the 8.2% divergence class (accents folded, periods dropped, case normalised,
+  // truncation - see docs/features/artist-support-links.md). The synthetic pageUrl below is
+  // deliberately NOT `buildArtistSupportURL("Aurélien D. Vasseur")`, so a test asserting
+  // pageUrl-preference actually proves preference rather than coincidental equality.
+  divergentSlug: "Aurélien D. Vasseur",
+};
+
+function buildArtistExternalLinksHandler(
+  artistName: string,
+  response: {
+    pageUrl: string;
+    location: string | null;
+    links: Array<{ type: string; url: string }>;
+    hasSignatureService: boolean;
+  }
+) {
+  return http.get(buildRoute("2/artistExternalLinks/"), ({ request }) => {
+    const url = new URL(request.url);
+    if (url.searchParams.get("name") !== artistName) {
+      return HttpResponse.json(artistExternalLinksNotFoundResponse, {
+        status: 200,
+      });
+    }
+    return HttpResponse.json({ found: true, ...response }, { status: 200 });
+  });
+}
+
+// 812 of 2,389 real artists have zero commerce links under the allowlist - the applet must still
+// show the MTGAC page link and the credit, never an empty box.
+export const artistExternalLinksZeroLinks = buildArtistExternalLinksHandler(
+  ArtistExternalLinksTestArtists.zeroLinks,
+  {
+    pageUrl: `https://www.mtgartistconnection.example/artist/${encodeURIComponent(
+      ArtistExternalLinksTestArtists.zeroLinks
+    )}`,
+    location: "Testland",
+    links: [],
+    hasSignatureService: false,
+  }
+);
+
+// 818 of 2,389 real artists have exactly one commerce link - the second-most-common case.
+export const artistExternalLinksOneLink = buildArtistExternalLinksHandler(
+  ArtistExternalLinksTestArtists.oneLink,
+  {
+    pageUrl: `https://www.mtgartistconnection.example/artist/${encodeURIComponent(
+      ArtistExternalLinksTestArtists.oneLink
+    )}`,
+    location: "Testland",
+    links: [{ type: "website", url: "https://cormacwindemere.example/" }],
+    hasSignatureService: false,
+  }
+);
+
+// All 5 commerce links, in the backend's fixed priority order (only 13 of 2,389 real artists
+// have all five) - proves the priority order/5-cap render correctly at the applet level.
+export const artistExternalLinksFullRow = buildArtistExternalLinksHandler(
+  ArtistExternalLinksTestArtists.fullRow,
+  {
+    pageUrl: `https://www.mtgartistconnection.example/artist/${encodeURIComponent(
+      ArtistExternalLinksTestArtists.fullRow
+    )}`,
+    location: "Testland",
+    links: [
+      { type: "website", url: "https://seraphinaduskwood.example/" },
+      {
+        type: "artstation",
+        url: "https://www.artstation.example/seraphinaduskwood",
+      },
+      {
+        type: "inprnt",
+        url: "https://www.inprnt.example/gallery/seraphinaduskwood/",
+      },
+      {
+        type: "mountainmage",
+        url: "https://mountainmagesigs.example/products/seraphina-duskwood",
+      },
+      {
+        type: "omalink",
+        url: "https://original-art.example/collections/seraphina-duskwood",
+      },
+    ],
+    hasSignatureService: false,
+  }
+);
+
+// The 157-artist rescue scenario `instagram`'s last-resort allowlisting exists for (owner
+// ruling): no commerce link at all, instagram is this artist's ONLY link.
+export const artistExternalLinksInstagramOnly = buildArtistExternalLinksHandler(
+  ArtistExternalLinksTestArtists.instagramOnly,
+  {
+    pageUrl: `https://www.mtgartistconnection.example/artist/${encodeURIComponent(
+      ArtistExternalLinksTestArtists.instagramOnly
+    )}`,
+    location: null,
+    links: [
+      {
+        type: "instagram",
+        url: "https://www.instagram.example/percivalashgrove/",
+      },
+    ],
+    hasSignatureService: false,
+  }
+);
+
+// Mark's Signature Service badge (true on 227 of 2,389 real artists) - a badge, never a link.
+export const artistExternalLinksWithSignatureBadge =
+  buildArtistExternalLinksHandler(
+    ArtistExternalLinksTestArtists.signatureService,
+    {
+      pageUrl: `https://www.mtgartistconnection.example/artist/${encodeURIComponent(
+        ArtistExternalLinksTestArtists.signatureService
+      )}`,
+      location: "Testland",
+      links: [{ type: "website", url: "https://odalysferngrove.example/" }],
+      hasSignatureService: true,
+    }
+  );
+
+// MTGAC's real pageUrl deliberately does NOT match this project's deterministic
+// buildArtistSupportURL construction - the 8.2% slug-divergence class this whole M2 applet
+// exists to fix (see docs/features/artist-support-links.md and this file's own module comment).
+export const artistExternalLinksDivergentSlug = buildArtistExternalLinksHandler(
+  ArtistExternalLinksTestArtists.divergentSlug,
+  {
+    pageUrl:
+      "https://www.mtgartistconnection.example/artist/Aurelien%20D%20Vasseur",
+    location: "Testland",
+    links: [],
+    hasSignatureService: false,
+  }
+);
+
+//# endregion
+
 //# region health
 
 export const searchEngineHealthy = http.get(
@@ -1661,6 +1830,7 @@ export const defaultHandlers = [
   sampleCards,
   backendInfo,
   patreon,
+  artistExternalLinksNotFound,
   searchEngineHealthy,
   whoamiAnonymous,
 ];
