@@ -230,6 +230,18 @@ def pool_group_votes(votes: Iterable[VoteTuple]) -> list[VoteTuple]:
     Ordering: the retained set is a function of the votes, not of the order they arrive in
     (agreement is order-insensitive, and a contradicting agent is dropped wholesale), so a
     caller's row ordering cannot influence any outcome.
+
+    COMPLETENESS IS THE CALLER'S TO GUARANTEE, and it is not optional. `votes` must be the WHOLE
+    group's votes: rule 2 is a statement about an agent's behaviour ACROSS THE GROUP, so an agent
+    that contradicts itself on a member the caller left out looks perfectly consistent here and
+    is counted, where the complete set withholds it. A subset therefore yields a DIFFERENT tally
+    rather than a weaker one, and can select a different winner - silently, since nothing in a
+    list of `VoteTuple`s says which group it came from or whether any of it is missing. This
+    function has no `Card` and no group identity, so it cannot check that itself; the guarantee
+    is established at the point the group is read (`printing_consensus.group_printing_votes`,
+    whose `_require_full_md5_group` check rejects a caller-supplied partial group) and must be
+    preserved by every caller in between - in particular, do not narrow the vote set by a batch's
+    `card_ids` on the way here (#533/#541).
     """
     votes = list(votes)
     outcomes_by_dedupe_key: dict[Hashable, set[Hashable]] = defaultdict(set)
