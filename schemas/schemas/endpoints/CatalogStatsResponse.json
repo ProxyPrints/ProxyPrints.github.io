@@ -1,0 +1,181 @@
+{
+  "title": "Catalog Stats Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "description": "1/catalogStats/ - Proposal F's cache-only public stats aggregate (docs/proposals/proposal-f-public-stats-page.md; MPCAutofill/cardpicker/catalog_stats.py's own module docstring). Cache-only on the read path: a cache miss returns every field at its zero/empty value, never a 500. Ships five of Proposal F's seven charts this pass - resolutionProgress (chart 1) and hashCoverage (chart 5) are deliberately deferred, see that module's own docstring.",
+  "properties": {
+    "generatedAt": {
+      "type": ["string", "null"],
+      "description": "ISO-8601 timestamp of the warm run that produced this blob, or null on a cache miss (never warmed, or the shared cache backend isn't configured yet)."
+    },
+    "contributionsOverTime": {
+      "type": "object",
+      "description": "Proposal F chart 2 - human confirmations bucketed by week, split by vote_surface, across CardPrintingTag/CardArtistVote/CardTagVote. Human-only by construction (vote_surface plus a HUMAN_SOURCES source filter - see catalog_stats.py's own docstring for why both are needed).",
+      "properties": {
+        "bucketDays": { "type": "integer" },
+        "series": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "weekStart": {
+                "type": "string",
+                "description": "ISO date (Monday) this bucket starts on."
+              },
+              "bySurface": {
+                "type": "object",
+                "additionalProperties": { "type": "integer" },
+                "description": "vote_surface value -> human confirmation count for this week."
+              }
+            },
+            "required": ["weekStart", "bySurface"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["bucketDays", "series"],
+      "additionalProperties": false
+    },
+    "skipBreakdown": {
+      "type": "object",
+      "description": "Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine (anonymous_id).",
+      "properties": {
+        "byReason": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "reason": { "type": "string" },
+              "count": { "type": "integer" }
+            },
+            "required": ["reason", "count"],
+            "additionalProperties": false
+          }
+        },
+        "byReasonAndEngine": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "reason": { "type": "string" },
+              "engine": { "type": "string" },
+              "count": { "type": "integer" }
+            },
+            "required": ["reason", "engine", "count"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["byReason", "byReasonAndEngine"],
+      "additionalProperties": false
+    },
+    "runHistory": {
+      "type": "object",
+      "description": "Proposal F chart 6 - the most recent PilotRunLedger rows. See catalog_stats.py's compute_run_history docstring for the stage_d_*_already_voted caveat (deliberately never surfaced here) and why votes_written is safe to surface as-is (but null for stage_e_streaming_dispatch rows specifically).",
+      "properties": {
+        "recent": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "runId": { "type": "string" },
+              "command": { "type": "string" },
+              "status": { "type": "string" },
+              "startedAt": { "type": "string" },
+              "finishedAt": { "type": ["string", "null"] },
+              "durationSeconds": { "type": ["number", "null"] },
+              "votesWritten": { "type": ["integer", "null"] }
+            },
+            "required": [
+              "runId",
+              "command",
+              "status",
+              "startedAt",
+              "finishedAt",
+              "durationSeconds",
+              "votesWritten"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["recent"],
+      "additionalProperties": false
+    },
+    "catalogComposition": {
+      "type": "object",
+      "description": "Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved onto this cache instead of GET 2/contributions/'s live query.",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "../SourceContribution.json" }
+        },
+        "cardCountByType": {
+          "type": "object",
+          "propertyNames": { "$ref": "../CardType.json" },
+          "patternProperties": {
+            ".*": { "type": "integer" }
+          }
+        },
+        "totalDatabaseSize": { "type": "integer" }
+      },
+      "required": ["sources", "cardCountByType", "totalDatabaseSize"],
+      "additionalProperties": false
+    },
+    "participation": {
+      "type": "object",
+      "description": "The call-to-action panel. Emits raw counts only, deliberately no 'percent complete' field - see compute_participation's own docstring.",
+      "properties": {
+        "total": { "type": "integer" },
+        "confirmable": { "type": "integer" },
+        "contested": { "type": "integer" },
+        "fresh": { "type": "integer" },
+        "humanVotes": {
+          "type": "object",
+          "properties": {
+            "printingTag": { "type": "integer" },
+            "artist": { "type": "integer" },
+            "tag": { "type": "integer" },
+            "total": { "type": "integer" }
+          },
+          "required": ["printingTag", "artist", "tag", "total"],
+          "additionalProperties": false
+        },
+        "distinctHumanVoters": { "type": "integer" },
+        "md5Groups": {
+          "type": "object",
+          "properties": {
+            "groupsWithMultipleCards": { "type": "integer" },
+            "cardsInMultiCardGroups": { "type": "integer" },
+            "largestGroupSize": { "type": "integer" }
+          },
+          "required": [
+            "groupsWithMultipleCards",
+            "cardsInMultiCardGroups",
+            "largestGroupSize"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "total",
+        "confirmable",
+        "contested",
+        "fresh",
+        "humanVotes",
+        "distinctHumanVoters",
+        "md5Groups"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "generatedAt",
+    "contributionsOverTime",
+    "skipBreakdown",
+    "runHistory",
+    "catalogComposition",
+    "participation"
+  ],
+  "additionalProperties": false
+}

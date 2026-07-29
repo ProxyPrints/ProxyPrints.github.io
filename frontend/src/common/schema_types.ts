@@ -1120,6 +1120,117 @@ export interface ArtistExternalLinksResponse {
   hasSignatureService: boolean;
 }
 
+/**
+ * One week's bucket of Proposal F chart 2 (MPCAutofill/cardpicker/catalog_stats.py's
+ * compute_contributions_over_time) - human confirmations that week, keyed by vote_surface.
+ */
+export interface ContributionsOverTimeWeek {
+  weekStart: string;
+  bySurface: { [key: string]: number };
+}
+
+export interface ContributionsOverTime {
+  bucketDays: number;
+  series: ContributionsOverTimeWeek[];
+}
+
+export interface SkipReasonCount {
+  reason: string;
+  count: number;
+}
+
+export interface SkipReasonEngineCount {
+  reason: string;
+  engine: string;
+  count: number;
+}
+
+/** Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine. */
+export interface SkipBreakdown {
+  byReason: SkipReasonCount[];
+  byReasonAndEngine: SkipReasonEngineCount[];
+}
+
+/**
+ * One PilotRunLedger row (Proposal F chart 6). `votesWritten` is null for
+ * command="stage_e_streaming_dispatch" rows specifically (a separate, unrelated observability
+ * gap - see MPCAutofill/cardpicker/catalog_stats.py's compute_run_history docstring) - never
+ * treat null here as "zero votes written".
+ */
+export interface PilotRunHistoryEntry {
+  runId: string;
+  command: string;
+  status: string;
+  startedAt: string;
+  finishedAt: null | string;
+  durationSeconds: null | number;
+  votesWritten: null | number;
+}
+
+export interface RunHistory {
+  recent: PilotRunHistoryEntry[];
+}
+
+/**
+ * Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved onto
+ * this cache instead of GET 2/contributions/'s live query. `sources` reuses the existing
+ * SourceContribution shape (see ContributionsResponse above).
+ */
+export interface CatalogComposition {
+  sources: SourceContribution[];
+  cardCountByType: { [key: string]: number };
+  totalDatabaseSize: number;
+}
+
+export interface HumanVoteCounts {
+  printingTag: number;
+  artist: number;
+  tag: number;
+  total: number;
+}
+
+export interface Md5GroupStats {
+  groupsWithMultipleCards: number;
+  cardsInMultiCardGroups: number;
+  largestGroupSize: number;
+}
+
+/**
+ * The call-to-action panel - deliberately carries no "percent complete" field (owner ruling, see
+ * MPCAutofill/cardpicker/catalog_stats.py's compute_participation docstring): raw counts only,
+ * the page decides the framing.
+ */
+export interface Participation {
+  total: number;
+  confirmable: number;
+  contested: number;
+  fresh: number;
+  humanVotes: HumanVoteCounts;
+  distinctHumanVoters: number;
+  md5Groups: Md5GroupStats;
+}
+
+/**
+ * 1/catalogStats/ - hand-maintained, mirroring MPCAutofill/cardpicker/schema_types.py's
+ * CatalogStatsResponse (same provenance as ArtistExternalLinksResponse above: a JSON schema
+ * source exists at schemas/schemas/endpoints/CatalogStatsResponse.json, but `npm run build` was
+ * not re-run for this addition since it is destructive to the two hand-added request types
+ * already in this file - issue #332 - so this is typed by hand against the real Python pydantic
+ * model instead). Cache-only - a cache miss returns every field at its zero/empty value
+ * (generatedAt: null), never a 500. Proposal F charts 1 (resolutionProgress) and 5
+ * (hashCoverage) are deliberately absent from this shape this pass - see catalog_stats.py's own
+ * module docstring. This type has no `Convert` wiring below, added by whichever session builds
+ * the /stats page consumer.
+ */
+export interface CatalogStatsResponse {
+  generatedAt: null | string;
+  contributionsOverTime: ContributionsOverTime;
+  skipBreakdown: SkipBreakdown;
+  runHistory: RunHistory;
+  catalogComposition: CatalogComposition;
+  participation: Participation;
+}
+
 export interface TagConsensusRequest {
   identifier: string;
 }

@@ -4,6 +4,36 @@ HOLD — build not started. Queued after Proposal E, per the approved order —
 and, per Proposal G's Decision 1 (`docs/proposals/proposal-g-user-accounts-saved-decks.md`),
 also now behind Proposal G, B, C, and E-3 in the current unified build queue.
 
+## HOLD LIFTED (2026-07-29) — backend pass 1 shipped
+
+Owner ruling on issue #233, 2026-07-29: **the HOLD above is lifted.** This proposal is no
+longer queued behind Proposals G, B, C, and E-3 (all shipped since the HOLD was written). See
+issue #233's own ruling comment for the full constraints that came with the lift (still binding:
+7 charts not 1, aggregate-only/no visitor tracking, static/cached artifact with zero live
+aggregate queries from public traffic, mobile-first solid-colour, no new charting dependency).
+
+**Backend pass 1 (this change) ships the aggregates behind charts 2, 4, 6, 7, plus the
+call-to-action panel** (`participation` — not one of the numbered 7, the "N cards resolved, here's
+how to help" strip the mock above shows). See `docs/features/catalog-stats.md` for the shipped
+shape, cache key, schedule, and per-panel data source.
+
+**Charts 1 (catalog resolution progress) and 5 (backfill/hash coverage) are DELIBERATELY
+DEFERRED**, not merely unbuilt: measured 2026-07-29, resolved printings sit at 3 of ~230,770 cards
+(chart 1 would render essentially empty) and `content_phash` coverage sits at ~218k of ~230,770
+(≈95%, chart 5 would render essentially full) — both would be misleading single-bar charts at
+today's real values, in opposite directions. A future pass revisits both once the underlying
+numbers move enough to be informative.
+
+**The frontend `/stats` page itself is a separate, not-yet-dispatched piece of work.** Nothing in
+this backend pass renders anywhere — the endpoint (`GET 1/catalogStats/`) exists and is
+cache-only, but nothing in prod calls it until (a) the frontend page is built and (b) this change
+is deployed. The vote-category-stats snapshot mentioned in issue #233's ruling comment (an
+off-repo `vote_stats.py`/`warm_vote_stats`/`1/voteStats/` draft that predates the HOLD lift) was
+**not** revived or ported — this pass's `cardpicker.catalog_stats` module, `warm_catalog_stats`
+command, and `GET 1/catalogStats/` endpoint are written fresh, on the named `caches["shared"]`
+alias (PR #543/#538 — the snapshot's `default`-cache design could not have worked, see that
+ruling comment), with this proposal's own field names.
+
 ## Summary
 
 Every number this page would show already has a real, populated field to draw from — the gap everywhere is aggregation, not data. **No existing code currently computes any of the 7 aggregates below**; each is a genuinely new query, small in every case (the model fields, indexes, and enums already exist). One existing endpoint (`GET 2/contributions/`) already does the closest live equivalent of what the whole page should become: a periodic, cached artifact instead of a live query.

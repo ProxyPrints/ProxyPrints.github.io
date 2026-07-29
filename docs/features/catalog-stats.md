@@ -1,0 +1,193 @@
+# Catalog Stats
+
+## What this is
+
+The backend for Proposal F's public `/stats` transparency page
+(`docs/proposals/proposal-f-public-stats-page.md`) - a periodic, cached
+aggregate of catalog/moderation state, served from `GET 1/catalogStats/`.
+Issue #233's owner ruling (2026-07-29) lifted the proposal's HOLD; this is
+**backend pass 1** - the aggregate generator, the warm command, its hourly
+schedule, and the cache-only endpoint. **The frontend `/stats` page itself is
+a separate, not-yet-dispatched piece of work** - nothing renders anywhere
+until that page is built, and nothing in this change does anything in
+production until it's deployed.
+
+**Status: five of Proposal F's seven charts, plus the call-to-action
+panel.** Charts 2, 4, 6, 7 ship this pass; charts 1 (catalog resolution
+progress) and 5 (hash coverage) are deliberately deferred - see "Deferred
+charts" below.
+
+## Architecture: compute / warm / cache-only-read
+
+Follows `cardpicker.artist_external_links`'s pattern exactly (see that
+module's own docstring for the fully-worked-out rationale this reuses
+rather than re-derives):
+
+- `cardpicker/catalog_stats.py` - pure aggregation functions
+  (`compute_contributions_over_time`, `compute_skip_breakdown`,
+  `compute_run_history`, `compute_catalog_composition`,
+  `compute_participation`), plus `compute_catalog_stats()` (all five, one
+  call), `warm_catalog_stats_cache()` (compute + write), and
+  `get_cached_catalog_stats()` (cache-only read, never computes).
+- `management/commands/warm_catalog_stats.py` - the command an hourly
+  django-q2 schedule invokes. Idempotent; on any failure leaves the
+  existing cache untouched and exits non-zero.
+- `migrations/0094_warm_catalog_stats_hourly_schedule.py` - hand-written,
+  creates the `django_q.Schedule` row (`get_or_create`, `next_run` pinned
+  to the next top-of-the-hour UTC at apply-time), same idiom as
+  `0093_warm_artist_external_links_weekly_schedule.py`.
+- `views.get_catalog_stats` (`GET 1/catalogStats/`) - cache-only, never
+  computes on request. A cache miss returns the zeroed skeleton, never a 500.
+
+**Cache: `caches["shared"]` (`DatabaseCache`, PR #543/#538) - never
+`caches["default"]`.** Same cross-process gap as the MTGAC integration:
+`warm_catalog_stats` runs as a separate `manage.py` process from the web
+server, so a `default`-cached (per-process `LocMemCache`) blob would never
+be visible to the process serving `1/catalogStats/`. `default` stays
+`LocMemCache` on purpose (django-ratelimit + `cardpicker.review_clusters`
+depend on that). Graceful degradation: if `"shared"` isn't configured yet,
+the read path returns the zeroed skeleton (never a 500); the warm command
+raises loudly instead (a warm run that silently writes nowhere while
+reporting success is exactly the bug issue #538 exists to prevent).
+
+**Cache key**: `catalog-stats-v1`, no TTL (refreshed by the hourly warm
+run, not by expiry - see `cardpicker.catalog_stats`'s own module
+docstring for why an expiring TTL would be worse than staleness here).
+
+**Schedule: hourly, unconditional.** Unlike the MTGAC integration, this
+reads only the project's own database - no third-party rate limit, no
+opt-in gate. All five aggregates move slowly by nature (vote counts,
+skip-log rows, and pilot-run ledger rows accumulate at most a few dozen
+new rows an hour even during an active tagging push), so hourly is
+generous headroom, not a tuned-to-the-edge number.
+
+## HUMAN_SOURCES - a stats-page-specific human/machine split
+
+`cardpicker.catalog_stats.HUMAN_SOURCES = [VoteSource.USER, VoteSource.ADMIN, VoteSource.FEDERATED]` - deliberately **not**
+`vote_consensus._MACHINE_DERIVED_SOURCES` (which also includes
+`FEDERATED` as machine-derived). Issue #233's owner ruling: "the snapshot
+groups USER/ADMIN/FEDERATED as human and DEDUCTION/OCR/IMPLICIT as
+machine ... the consensus set answers 'can this vote resolve a card
+unattended', while a public stats page answers 'who is doing the tagging
+work'." Every "human vote"/"human voter" count in this module filters on
+`HUMAN_SOURCES`, never on `vote_consensus.is_human_backed_source`.
+
+`VoteSource.IMPLICIT` (the passive filter-chip signal,
+`post_cast_implicit_vote`) is excluded from `HUMAN_SOURCES` even though it
+DOES write `vote_surface` (`IMPLICIT_VOTE_SURFACE = "display-editor-filter"`) - it's a tiny-weight by-product of a card
+selection, "never human-backed" per `VoteSource.IMPLICIT`'s own docstring,
+not tagging work a person chose to do. `compute_contributions_over_time`
+filters on both `vote_surface__isnull=False` (excludes DEDUCTION/OCR,
+which never set `vote_surface` at all) **and** `source__in=HUMAN_SOURCES`
+(excludes IMPLICIT specifically) - relying on the `vote_surface` filter
+alone would let implicit votes leak into a chart titled "human
+confirmations".
+
+## The five shipped panels
+
+| Panel                   | Proposal F chart | Data source                                                                        | Notes                                                                                                               |
+| ----------------------- | ---------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `contributionsOverTime` | 2                | `CardPrintingTag`/`CardArtistVote`/`CardTagVote`, weekly `vote_surface` buckets    | Human-only by two independent filters (`vote_surface` non-null/non-blank AND `source in HUMAN_SOURCES`) - see above |
+| `skipBreakdown`         | 4                | `CardScanLog.skip_reason`, grouped by reason and by reason+`anonymous_id` (engine) | ~11 distinct reasons observed in production                                                                         |
+| `runHistory`            | 6                | `PilotRunLedger` - status/duration/`votes_written`, most recent 50                 | See "The already-voted caveat" below                                                                                |
+| `catalogComposition`    | 7                | `cardpicker.models.summarise_contributions()`, reused verbatim                     | The cheapest panel - moves an existing live query (`GET 2/contributions/`) onto this cache instead of adding one    |
+| `participation`         | (call to action) | `question_feed.get_remaining_estimate()` + human vote counts + md5-group figures   | Raw counts only - see "No percent-complete field" below                                                             |
+
+## The already-voted caveat (`runHistory`)
+
+Several `PilotRunLedger.counters` keys - `stage_d_join_key_already_voted`,
+`stage_d_fallback_already_voted`, `stage_d_illustration_already_voted` -
+are structurally `0` on every row written since 2026-07-28:
+`cardpicker.vote_write`'s purge-then-write primitive purges by calculator
+family (which includes the caller's own current `anonymous_id`) **before**
+the already-voted split ever runs, so the split counts against a table it
+just emptied. `compute_run_history` never surfaces any `counters` key at
+all, specifically to avoid shipping one of these.
+
+`votes_written` (the field this panel DOES surface) is a different, TOP-LEVEL
+column and is **not** affected by that bug - verified by tracing every
+call site that sets it: each one derives it from a `result.votes_written`/
+`len(new_votes)` value computed by the SPLIT step, which
+`cardpicker.vote_write`'s own docstring establishes runs BEFORE the purge.
+It is `None` for `command="stage_e_streaming_dispatch"` rows specifically -
+a separate, unrelated gap (that dispatcher's own ledger update writes only
+`counters` keys, never the top-level `votes_written` column) - and this
+panel passes that `None` through rather than backfilling it.
+
+## No percent-complete field (`participation`)
+
+Measured 2026-07-29: total human votes across all three vote tables is
+237 (`CardPrintingTag` 125 + `CardArtistVote` 6 + `CardTagVote` 106)
+against a `total` (from `get_remaining_estimate()`) of 230,770 - roughly
+0.1%. `compute_participation` deliberately emits **only raw counts** -
+`confirmable`/`contested`/`fresh`/`total`, `humanVotes` (by table and
+summed), `distinctHumanVoters`, and the md5-group figures
+(`groupsWithMultipleCards`/`cardsInMultiCardGroups`/`largestGroupSize`) -
+never a single computed ratio. A meter pinned to 0.1% reads as "this
+project failed" rather than "this project needs you" - the page decides
+how to frame the numbers; the backend never pre-computes that choice away.
+
+## Deferred charts (1 and 5)
+
+Not built this pass, and not merely unbuilt - both would render as a
+single, uninformative bar at today's measured values:
+
+- **Chart 1 (catalog resolution progress)**: resolved printings sit at 3
+  of ~230,770 cards (2026-07-29) - would render essentially empty.
+- **Chart 5 (backfill/hash coverage)**: `content_phash` coverage sits at
+  ~218k of ~230,770 (≈95%) - would render essentially full.
+
+Both are the OPPOSITE failure mode from `participation`'s own "don't
+understate progress" concern - shipping either now would be misleading in
+the other direction. A future pass revisits both once the underlying
+numbers move enough to be worth a chart.
+
+## Endpoint
+
+`GET 1/catalogStats/` (`views.get_catalog_stats`) - no parameters, always
+the same shape (`CatalogStatsResponse`, `cardpicker/schema_types.py`).
+Cache-only: **never computes on request**, on a hit or a miss - Proposal
+F's own explicit constraint ("zero live aggregate queries from public
+traffic"). A miss (cold cache, or `"shared"` not configured) returns
+`zeroed_catalog_stats()` - every field at its zero/empty value,
+`generatedAt: null` - so the page always has something to render and the
+endpoint never 500s because an optional piece of infrastructure isn't
+wired up yet.
+
+## Warming the cache
+
+`python manage.py warm_catalog_stats` recomputes all five panels and
+overwrites the cache blob in one call. Idempotent - safe to re-run any
+number of times, each run a full recomputation from the live database
+(never a merge/diff against the previous blob). On any failure it changes
+nothing and exits non-zero (`CommandError`) - the previous cache entry
+(an earlier run's good blob, or nothing at all on a first run) is left
+untouched, since `compute_catalog_stats()` is a pure read and only its
+return value is ever written.
+
+## Schema
+
+`schemas/schemas/endpoints/CatalogStatsResponse.json` is the JSON schema
+source, for documentation and any future safe regeneration - **not run
+through `npm run build`** for this addition, since that generator is
+destructive to the two hand-added implicit-vote request types already in
+`schema_types.py`/`schema_types.ts` (issue #332, four PRs have hit this).
+`CatalogStatsResponse` and its nested types
+(`ContributionsOverTime`/`SkipBreakdown`/`RunHistory`/
+`CatalogComposition`/`Participation` and their children) were
+hand-integrated into both generated files instead, matching quicktype's
+own generated style (same provenance as `ArtistExternalLinksResponse`).
+
+## Tests
+
+`MPCAutofill/cardpicker/tests/test_catalog_stats.py` - each aggregation
+against fixtures with known values (including the `HUMAN_SOURCES`/
+`VoteSource.IMPLICIT` exclusion, the md5-group edge cases, and the
+`votes_written`/duration edge cases in `runHistory`); the cache-only
+endpoint guarantee (cache hit returns the blob, a cache miss makes no
+aggregate query - asserted by patching `compute_catalog_stats` to raise
+if called); the `"shared"`-not-configured graceful-degradation suite
+(mirrors `test_artist_external_links.py`'s own); the warm command's
+idempotency and cache-preservation-on-failure behaviour; and the
+migration (schedule row created once, `HOURLY`, reverses/reapplies
+cleanly).

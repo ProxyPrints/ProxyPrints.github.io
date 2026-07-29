@@ -156,6 +156,12 @@ The methodology and the systems it governs.
   catalog has never indexed) from text/XML import, direct-from-Google
   fetch with tiered sizing, the invalidation-listener root-cause fix,
   round-trip export, and what's deferred to Phase 2.
+- [`features/catalog-stats.md`](features/catalog-stats.md) — Proposal F
+  backend pass 1 (issue #233's HOLD-lifted ruling): the `cardpicker. catalog_stats` compute/warm/cache-only-read aggregate (mirroring
+  `artist_external_links.py`), the hourly `warm_catalog_stats` schedule,
+  and the cache-only `GET 1/catalogStats/` endpoint — five of Proposal
+  F's seven charts plus the call-to-action panel; the frontend `/stats`
+  page itself is a separate, not-yet-built piece.
 
 ## Using it
 
