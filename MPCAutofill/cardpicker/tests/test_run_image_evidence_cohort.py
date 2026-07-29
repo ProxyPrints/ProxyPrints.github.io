@@ -79,7 +79,13 @@ class _SyncPoolStub:
     (untouched, real stdlib) work unmodified against them. No forking, no real threads, no
     `initializer=` call."""
 
-    def __init__(self, max_workers: Optional[int] = None, initializer: Any = None) -> None:
+    def __init__(
+        self, max_workers: Optional[int] = None, initializer: Any = None, initargs: tuple[Any, ...] = ()
+    ) -> None:
+        # `initargs` (2026-07-29) is accepted and DELIBERATELY not applied: this stub is documented
+        # above as never calling `initializer=`, and the tests that care about the worker-side
+        # artist context (`TestComputeOneCardArtistWiring`) call `_init_worker` themselves so the
+        # process state under test is explicit rather than a side effect of pool construction.
         pass
 
     def __enter__(self) -> "_SyncPoolStub":
@@ -123,6 +129,7 @@ def _stub_compute_ok(
     known_set_codes: Optional[frozenset[str]] = None,
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
+    card_artist_names: tuple[str, ...] = (),
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Replaces the real compute-stage step - no PIL decode, no extractors, no persist_evidence
     call, just the (card_id, outcome, profile, short_circuited) tuple `_run_cohort` consumes.
@@ -351,6 +358,7 @@ class TestPilotRunLedger:
             known_set_codes: Optional[frozenset[str]] = None,
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
+            card_artist_names: tuple[str, ...] = (),
         ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             return card_id, "ok", None, True
 
@@ -547,6 +555,10 @@ class TestFetchOneCard:
         assert result.content_hash == 42
         assert result.image_bytes == b"raw-bytes"
         assert result.fetch_latency_ms >= 0.0
+        # 2026-07-29 (COLLECTOR-LINE ARTIST WIRING item 3): the name this step already loaded is
+        # carried back so `_run_cohort` can resolve the card's artist-narrowing tuple in the
+        # parent, off the one shared `CandidateNameIndex`, instead of in each compute worker.
+        assert result.card_name == card.name
 
     @pytest.mark.django_db
     def test_md5_sibling_transfers_without_ever_fetching(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -634,6 +646,9 @@ class TestComputeOneCard:
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
             known_set_codes: Optional[frozenset[str]] = None,
+            artist_lexicon: Any = None,
+            printing_artist_lookup: Any = None,
+            card_artist_names: tuple[str, ...] = (),
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
         ) -> Any:
@@ -678,6 +693,9 @@ class TestComputeOneCard:
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
             known_set_codes: Optional[frozenset[str]] = None,
+            artist_lexicon: Any = None,
+            printing_artist_lookup: Any = None,
+            card_artist_names: tuple[str, ...] = (),
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
         ) -> Any:
@@ -742,6 +760,9 @@ class TestComputeOneCard:
             profile: Optional[dict[str, float]] = None,
             short_circuit: Optional[bool] = None,
             known_set_codes: Optional[frozenset[str]] = None,
+            artist_lexicon: Any = None,
+            printing_artist_lookup: Any = None,
+            card_artist_names: tuple[str, ...] = (),
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
         ) -> Any:
@@ -853,6 +874,7 @@ class TestRunCohortProfileOutput:
             known_set_codes: Optional[frozenset[str]] = None,
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
+            card_artist_names: tuple[str, ...] = (),
         ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             profile_dict = {"fetch_ms": fetch_latency_ms, "wall_ms": 1.0} if profile else None
             return card_id, "ok", profile_dict, False
@@ -938,7 +960,9 @@ class TestRunCohortBackpressure:
             hands back a fresh, unresolved `Future` and records it. The test resolves each one
             explicitly, in its own time, to control exactly how many are ever left outstanding."""
 
-            def __init__(self, max_workers: Optional[int] = None, initializer: Any = None) -> None:
+            def __init__(
+                self, max_workers: Optional[int] = None, initializer: Any = None, initargs: tuple[Any, ...] = ()
+            ) -> None:
                 self.live: list[tuple[Future, tuple[Any, ...]]] = []
                 self.lock = threading.Lock()
                 constructed.append(self)
@@ -1077,7 +1101,9 @@ class TestRunCohortFetchMemoryBound:
             than keeping the parent's own object reference resident) - the assertion below must
             measure the property under test, not an artifact of the stub."""
 
-            def __init__(self, max_workers: Optional[int] = None, initializer: Any = None) -> None:
+            def __init__(
+                self, max_workers: Optional[int] = None, initializer: Any = None, initargs: tuple[Any, ...] = ()
+            ) -> None:
                 self.live: list[tuple[Future, int]] = []
                 self.lock = threading.Lock()
                 constructed.append(self)
@@ -1504,3 +1530,391 @@ class TestDryRunGuard:
         ledger = PilotRunLedger.objects.get(run_id="guard-broken-pipe")
         assert ledger.status == PilotRunLedger.Status.COMPLETED
         assert ledger.finished_at is not None
+
+
+# ---------------------------------------------------------------------------------------------
+# COLLECTOR-LINE ARTIST WIRING (2026-07-29 - see the command's own module docstring section of the
+# same name). `compute_card_evidence` gained three artist-aware inputs which drive BOTH the
+# collector-line escalation gate and the `artist_ocr_name` storage fallback;
+# `stage_e_dispatch._run_stage_c` (the conveyor Stage C path) threaded all three from the day they
+# landed and this command - the pooled path - did not, so a card extracted here stored a blank
+# `artist_ocr_name` where the conveyor stored a real one. These classes pin the wiring, and the
+# parity test at the end pins the ONLY claim that actually matters: the same card, the same texts,
+# produces the same stored fields down either path.
+# ---------------------------------------------------------------------------------------------
+
+_ARTIST_LEXICON_NAMES = ["Alessandra Pisano", "Lindsey Look", "Ron Spears"]
+# The two printings the misread/correct collector-number pair below resolve to - same fixture
+# shape `test_image_evidence.TestExtractCardEvidenceCollectorLineArtistGate` uses, so a divergence
+# between the two suites is a real divergence and not a fixture difference.
+_PRINTING_ARTISTS = {("mom", "158"): "Alessandra Pisano", ("mom", "159"): "Lindsey Look"}
+
+
+def _printing_artist_stub(set_code: Optional[str], collector_number: Optional[str]) -> Optional[str]:
+    return _PRINTING_ARTISTS.get((set_code, collector_number))
+
+
+def _white_card_image_bytes() -> bytes:
+    """A real, decodable bleed-aspect-ratio PNG. Every OCR call in these tests is stubbed, so the
+    pixels carry no text - the image exists only because `compute_card_evidence` genuinely decodes
+    it and runs its geometry/phash/quality extractors over it."""
+    from PIL import Image
+
+    from cardpicker.local_fallback import BLEED_ASPECT_RATIO
+
+    height = 1300
+    image = Image.new("RGB", (round(height * BLEED_ASPECT_RATIO), height), "white")
+    buf = BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _install_worker_artist_context(monkeypatch: pytest.MonkeyPatch, lexicon: Any, lookup: Any = None) -> None:
+    """Put a compute worker's process globals in the state `_init_worker` would have left them in,
+    WITHOUT calling `_init_worker` itself.
+
+    `_init_worker` legitimately calls `connections.close_all()` - a fork-inherited connection is
+    not safe to reuse, so a real worker process must drop it. Inside a `django_db` test there is
+    no fork and only one connection, the test transaction's own, and closing it detonates every
+    later ORM call in that test. `_init_worker`'s own behaviour is covered directly by
+    `TestInitWorkerArtistContext`; the tests below are about what `_compute_one_card` does with
+    the result, so they install the result and skip the close. `monkeypatch.setattr` restores both
+    globals at teardown, so nothing leaks into the rest of the session."""
+    monkeypatch.setattr(cohort_command, "_WORKER_ARTIST_LEXICON", lexicon)
+    monkeypatch.setattr(cohort_command, "_WORKER_PRINTING_ARTIST_LOOKUP", lookup)
+
+
+class TestInitWorkerArtistContext:
+    """`_init_worker` is the compute pool's `initializer=`, and the only place the two
+    per-worker-process halves of the artist context are ever set."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_worker_globals(self, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+        """`_init_worker` writes PROCESS globals and closes the process's DB connections - both
+        entirely correct in a freshly forked worker, both hostile in a single-process test
+        session. The globals are monkeypatched (auto-restored at teardown) and `close_all` is
+        replaced with a recorder the jobs test below asserts on."""
+        from django.db import connections
+
+        closed: list[bool] = []
+        monkeypatch.setattr(cohort_command, "_WORKER_ARTIST_LEXICON", None)
+        monkeypatch.setattr(cohort_command, "_WORKER_PRINTING_ARTIST_LOOKUP", None)
+        monkeypatch.setattr(connections, "close_all", lambda: closed.append(True))
+        return closed
+
+    def test_installs_the_lexicon_and_builds_a_printing_artist_lookup(self) -> None:
+        from cardpicker.collector_line_artist import (
+            PrintingArtistLookup,
+            build_artist_lexicon,
+        )
+
+        lexicon = build_artist_lexicon(_ARTIST_LEXICON_NAMES)
+
+        cohort_command._init_worker(lexicon)
+
+        assert cohort_command._WORKER_ARTIST_LEXICON is lexicon
+        assert isinstance(cohort_command._WORKER_PRINTING_ARTIST_LOOKUP, PrintingArtistLookup)
+
+    def test_no_lexicon_leaves_the_whole_gate_unwired(self) -> None:
+        """The pre-2026-07-29 posture, kept reachable on purpose: a pool built without initargs
+        (or a direct unit call into `_compute_one_card`) must degrade to "gate off", never to a
+        half-wired read - `_parse_artist_is_contradicted` needs BOTH halves, so shipping one
+        without the other would be dead weight that also reads as wired."""
+        from cardpicker.collector_line_artist import build_artist_lexicon
+
+        cohort_command._init_worker(build_artist_lexicon(_ARTIST_LEXICON_NAMES))  # install first...
+        cohort_command._init_worker()  # ...then re-init the way a no-initargs pool would
+
+        assert cohort_command._WORKER_ARTIST_LEXICON is None
+        assert cohort_command._WORKER_PRINTING_ARTIST_LOOKUP is None
+
+    def test_still_does_its_two_pre_existing_jobs(self, _isolated_worker_globals: list[bool]) -> None:
+        """The artist context is job 3 - jobs 1 and 2 (OpenMP nest-oversubscription and the
+        inherited-DB-connection close) are what this initializer already existed for, and adding
+        job 3 must not have displaced either."""
+        import os
+
+        cohort_command._init_worker(None)
+
+        assert os.environ["OMP_THREAD_LIMIT"] == "1"
+        assert _isolated_worker_globals == [True]
+
+
+class TestComputeOneCardArtistWiring:
+    """`_compute_one_card` is the pooled compute work unit. It reads `artist_lexicon`/
+    `printing_artist_lookup` off the process globals `_init_worker` set, and takes
+    `card_artist_names` as an already-resolved tuple (never a callable - `compute_card_evidence`'s
+    own docstring requires every argument crossing the pool boundary to be picklable plain data)."""
+
+    @pytest.mark.django_db
+    def test_forwards_the_worker_context_and_the_resolved_card_artist_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from cardpicker.collector_line_artist import build_artist_lexicon
+
+        lexicon = build_artist_lexicon(_ARTIST_LEXICON_NAMES)
+        _install_worker_artist_context(monkeypatch, lexicon, _printing_artist_stub)
+
+        captured: dict[str, Any] = {}
+
+        def _stub_compute_card_evidence(*args: Any, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+
+            class _Result:
+                fields = {"fetch_ok": True}
+                short_circuited = False
+
+            return _Result()
+
+        import cardpicker.image_evidence as image_evidence_module
+
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _stub_compute_card_evidence)
+        monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
+
+        cohort_command._compute_one_card(
+            card_id=7,
+            content_hash=1,
+            image_bytes=None,
+            fetch_latency_ms=0.0,
+            dry_run=True,
+            run_id="r",
+            card_artist_names=("Lindsey Look",),
+        )
+
+        assert captured["artist_lexicon"] is lexicon
+        assert captured["printing_artist_lookup"] is cohort_command._WORKER_PRINTING_ARTIST_LOOKUP
+        assert captured["printing_artist_lookup"] is not None
+        assert captured["card_artist_names"] == ("Lindsey Look",)
+
+    @pytest.mark.django_db
+    def test_an_uninitialised_worker_forwards_none_rather_than_raising(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control for the test above: no `_init_worker` call at all (a direct unit call, or a
+        pool built without the initializer) leaves both `None`, which `compute_card_evidence`
+        documents as "gate entirely off" - the exact pre-2026-07-29 behaviour."""
+        _install_worker_artist_context(monkeypatch, None, None)
+
+        captured: dict[str, Any] = {}
+
+        def _stub_compute_card_evidence(*args: Any, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+
+            class _Result:
+                fields = {"fetch_ok": True}
+                short_circuited = False
+
+            return _Result()
+
+        import cardpicker.image_evidence as image_evidence_module
+
+        monkeypatch.setattr(image_evidence_module, "compute_card_evidence", _stub_compute_card_evidence)
+        monkeypatch.setattr(image_evidence_module, "persist_evidence", lambda result, run_id=None: None)
+
+        cohort_command._compute_one_card(
+            card_id=7, content_hash=1, image_bytes=None, fetch_latency_ms=0.0, dry_run=True, run_id="r"
+        )
+
+        assert captured["artist_lexicon"] is None
+        assert captured["printing_artist_lookup"] is None
+        assert captured["card_artist_names"] == ()
+
+    @pytest.mark.django_db
+    def test_pooled_extraction_stores_a_recovered_artist_ocr_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """END TO END through the REAL `compute_card_evidence` + `persist_evidence`, with only
+        tesseract stubbed: the "Illus." anchor finds nothing (as it does on 93.7% of production
+        rows), the collector line plainly reads LINDSEY L, and the pooled path must now store the
+        canonical `Lindsey Look`. Before this wiring it stored `""`."""
+        from cardpicker.collector_line_artist import build_artist_lexicon
+
+        card = CardFactory(content_phash=1)
+        _install_worker_artist_context(monkeypatch, build_artist_lexicon(_ARTIST_LEXICON_NAMES), _printing_artist_stub)
+
+        import cardpicker.image_evidence as image_evidence_module
+
+        monkeypatch.setattr(image_evidence_module, "run_tesseract", lambda variant, **kwargs: "")
+        monkeypatch.setattr(
+            image_evidence_module,
+            "run_tesseract_text_and_words",
+            lambda image_arg, config: ("159/281R\nMOM ¢ EN LINDSEY L", []),
+        )
+
+        cohort_command._compute_one_card(
+            card_id=card.pk,
+            content_hash=1,
+            image_bytes=_white_card_image_bytes(),
+            fetch_latency_ms=1.0,
+            dry_run=False,
+            run_id="r",
+            known_set_codes=frozenset({"mom"}),
+            card_artist_names=("Lindsey Look",),
+        )
+
+        evidence = ImageEvidence.objects.get(card=card)
+        assert evidence.artist_ocr_name == "Lindsey Look"
+        # The recovery fills a BLANK value only and never rewrites the artist_ocr extractor's own
+        # verdict - the same invariant the conveyor path holds.
+        assert evidence.illus_anchor_fired is False
+
+    @pytest.mark.django_db
+    def test_pooled_and_conveyor_paths_store_identical_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """THE PARITY CLAIM, and the reason this wiring is a wiring change rather than a
+        behaviour change: `stage_e_dispatch._run_stage_c` calls `compute_card_evidence` with the
+        three artist arguments built per batch; this command now calls it with the same three
+        built per run. Same card, same texts, same stored fields - asserted over the WHOLE
+        `fields` dict, not a hand-picked subset, so a future argument that only one path threads
+        fails here.
+
+        The collector texts are the misread-number sequence: attempts 1-2 read `158` (lexicon-
+        valid, but that printing is by Alessandra Pisano while the line reads LINDSEY L), attempt
+        3 reads the correct `159`. A path with the gate wired stores `159`; a path without it
+        stores `158` and stops at attempt 1 - so this fixture separates the two paths on the
+        escalation half of the feature as well as the storage half."""
+        from cardpicker.collector_line_artist import build_artist_lexicon
+        from cardpicker.image_evidence import compute_card_evidence
+
+        card = CardFactory(content_phash=1)
+        lexicon = build_artist_lexicon(_ARTIST_LEXICON_NAMES)
+        image_bytes = _white_card_image_bytes()
+        texts = [
+            "158/281R\nMOM ¢ EN LINDSEY L",
+            "158/281R\nMOM ¢ EN LINDSEY L",
+            "159/281R\nMOM ¢ EN LINDSEY L",
+        ]
+
+        import cardpicker.image_evidence as image_evidence_module
+
+        def _install_ocr_stubs() -> None:
+            remaining = iter(texts)
+            monkeypatch.setattr(image_evidence_module, "run_tesseract", lambda variant, **kwargs: "")
+            monkeypatch.setattr(
+                image_evidence_module,
+                "run_tesseract_text_and_words",
+                lambda image_arg, config: (next(remaining, texts[-1]), []),
+            )
+
+        # CONVEYOR: exactly the call `stage_e_dispatch._run_stage_c` makes.
+        from PIL import Image
+
+        _install_ocr_stubs()
+        conveyor = compute_card_evidence(
+            card.pk,
+            1,
+            Image.open(BytesIO(image_bytes)),
+            fetch_latency_ms=1.0,
+            short_circuit=None,
+            known_set_codes=frozenset({"mom"}),
+            artist_lexicon=lexicon,
+            printing_artist_lookup=_printing_artist_stub,
+            card_artist_names=("Lindsey Look",),
+            md5_checksum=None,
+            sha256_checksum=None,
+        )
+
+        # POOLED: the same card through this command's own work unit.
+        _install_worker_artist_context(monkeypatch, lexicon, _printing_artist_stub)
+        _install_ocr_stubs()
+        cohort_command._compute_one_card(
+            card_id=card.pk,
+            content_hash=1,
+            image_bytes=image_bytes,
+            fetch_latency_ms=1.0,
+            dry_run=False,
+            run_id="r",
+            known_set_codes=frozenset({"mom"}),
+            card_artist_names=("Lindsey Look",),
+        )
+
+        evidence = ImageEvidence.objects.get(card=card)
+        assert conveyor.fields["collector_line_collector_number"] == "159"  # the gate really fired
+        assert conveyor.fields["artist_ocr_name"] == "Lindsey Look"
+        for key, expected in conveyor.fields.items():
+            assert getattr(evidence, key) == expected, f"pooled/conveyor divergence on {key}"
+
+
+class TestRunCohortArtistWiring:
+    """The driver's two halves of the same wiring: the lexicon reaches worker PROCESSES through
+    `initargs`, and `card_artist_names` is resolved in the PARENT (one shared
+    `CandidateNameIndex`) and passed per card."""
+
+    @pytest.mark.django_db
+    def test_lexicon_travels_as_initargs_and_card_artist_names_are_resolved_per_card(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from cardpicker.collector_line_artist import build_artist_lexicon
+
+        lexicon = build_artist_lexicon(_ARTIST_LEXICON_NAMES)
+        constructed: list[dict[str, Any]] = []
+        submitted: list[tuple[Any, ...]] = []
+
+        class _RecordingPool(_SyncPoolStub):
+            def __init__(
+                self, max_workers: Optional[int] = None, initializer: Any = None, initargs: tuple[Any, ...] = ()
+            ) -> None:
+                constructed.append({"initializer": initializer, "initargs": initargs})
+
+            def submit(self, fn: Any, *args: Any) -> "Future[Any]":
+                submitted.append(args)
+                return super().submit(fn, *args)
+
+        monkeypatch.setattr(cohort_command, "ProcessPoolExecutor", _RecordingPool)
+        monkeypatch.setattr(
+            cohort_command,
+            "_fetch_one_card",
+            lambda card_id, stop_event, run_id="", dry_run=False: cohort_command._FetchOutcome(
+                card_id=card_id,
+                content_hash=1,
+                image_bytes=b"x",
+                fetch_latency_ms=0.0,
+                outcome=None,
+                card_name=f"card-{card_id}",
+            ),
+        )
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        cohort_command._run_cohort(
+            cohort_ids=[11, 22],
+            fetch_threads=1,
+            workers=1,
+            queue_depth=4,
+            dry_run=True,
+            run_id="r",
+            stdout_write=lambda _msg: None,
+            artist_lexicon=lexicon,
+            name_artist_lookup=lambda card_name: (f"artist-for-{card_name}",),
+        )
+
+        # The compute pool - and ONLY the compute pool - is initialised with the lexicon.
+        compute_pools = [pool for pool in constructed if pool["initializer"] is cohort_command._init_worker]
+        assert len(compute_pools) == 1
+        assert compute_pools[0]["initargs"] == (lexicon,)
+
+        # `card_artist_names` is the last positional argument of every submission, resolved from
+        # that card's own name in the parent process.
+        assert sorted(args[-1] for args in submitted) == [("artist-for-card-11",), ("artist-for-card-22",)]
+
+    @pytest.mark.django_db
+    def test_no_name_lookup_passes_an_empty_narrowing_tuple(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control: `_run_cohort`'s artist arguments both default to `None`, and every caller
+        that leaves them there (every pre-2026-07-29 test in this file) must keep submitting the
+        empty "don't narrow" tuple rather than crashing on a `None` call."""
+        submitted: list[tuple[Any, ...]] = []
+
+        class _RecordingPool(_SyncPoolStub):
+            def submit(self, fn: Any, *args: Any) -> "Future[Any]":
+                submitted.append(args)
+                return super().submit(fn, *args)
+
+        monkeypatch.setattr(cohort_command, "ProcessPoolExecutor", _RecordingPool)
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+
+        cohort_command._run_cohort(
+            cohort_ids=[11],
+            fetch_threads=1,
+            workers=1,
+            queue_depth=4,
+            dry_run=True,
+            run_id="r",
+            stdout_write=lambda _msg: None,
+        )
+
+        assert [args[-1] for args in submitted] == [()]
