@@ -13,6 +13,9 @@ regardless of data source" fixture the issue asks for.
 
 import pytest
 
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+
 import cardpicker.local_lands_identify as module
 from cardpicker import local_ocr
 from cardpicker.local_identify_printing_tags import (
@@ -953,23 +956,31 @@ class TestRunLandsIdentifyCardIdScoping:
         assert result.land_pool_size == 2
 
     def test_a_scoped_run_only_votes_on_cards_inside_the_scope(self, db, monkeypatch):
-        printing = CanonicalCardFactory(name="Plains")
-        in_scope = CardFactory(name="Plains")
-        out_of_scope = CardFactory(name="Plains")
+        """Driven off stored evidence rather than a live fetch, because that is the only shape a
+        scoped run can legally take: `card_ids` with a non-zero `fetch_budget` now raises (see
+        TestRunLandsIdentifyScopedFetchBudgetGuard). An evidence-backed card never touches
+        `fetch_card_image`, so the scoped path stays free - which is also how a per-batch caller
+        will really run."""
+        expansion = CanonicalExpansionFactory(code="tst")
+        printing = CanonicalCardFactory(name="Plains", expansion=expansion, collector_number="1")
+        in_scope = CardFactory(name="Plains", content_phash=5)
+        _evidence(in_scope, collector_line_set_code="tst", collector_line_collector_number="1")
+        out_of_scope = CardFactory(name="Plains", content_phash=6)
+        _evidence(out_of_scope, collector_line_set_code="tst", collector_line_collector_number="1")
 
-        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: object())
-        monkeypatch.setattr(
-            module,
-            "run_ocr_for_card",
-            lambda selected, image: OcrCardResult(
-                vote=EngineVote(engine="ocr", printing_pk=printing.pk, confidence=OCR_CONFIDENCE_BOTH, detail="")
-            ),
-        )
+        def _unexpected_fetch(card, dpi=None):
+            raise AssertionError("an evidence-backed scoped run must never fetch")
 
-        result = run_lands_identify(dry_run=False, sample_size=300, fetch_budget=10, card_ids=[in_scope.pk])
+        monkeypatch.setattr(module, "fetch_card_image", _unexpected_fetch)
 
+        result = run_lands_identify(dry_run=False, sample_size=300, fetch_budget=0, card_ids=[in_scope.pk])
+
+        assert result.evidence_backed == 1
+        assert result.fetch_attempted == 0
         assert result.ocr_resolved == 1
         assert list(CardPrintingTag.objects.values_list("card_id", flat=True)) == [in_scope.pk]
+        assert CardPrintingTag.objects.get().printing_id == printing.pk
+        assert not CardPrintingTag.objects.filter(card_id=out_of_scope.pk).exists()
         assert not CardPrintingTag.objects.filter(card_id=out_of_scope.pk).exists()
 
     def test_scoping_does_not_relax_the_fetch_budget_default(self, db, monkeypatch):
@@ -987,3 +998,70 @@ class TestRunLandsIdentifyCardIdScoping:
         result = run_lands_identify(dry_run=True, card_ids=[card.pk])
 
         assert result.fetch_attempted == 0
+
+
+class TestRunLandsIdentifyScopedFetchBudgetGuard:
+    """`fetch_budget` is a PER-INVOCATION ceiling. A whole-catalog run invokes this once, so a
+    budget of N means N fetches; a per-batch caller invokes it once per micro-batch, where N
+    becomes N x (number of batches) - roughly N x 5,400 at micro_batch_size=25 over a ~135,000-row
+    queue. The zero default is the only thing holding that today (0 x 5,400 = 0), which is exactly
+    why it would never announce itself. Nothing downstream caps total VOLUME
+    (`harvest_fetch_limiter` governs rate, 3 req/sec, and its own docstring records the CDN
+    Worker's limiter as empirically leaky), so this budget is the only volume cap in the system.
+    The combination is therefore rejected outright rather than documented - #533 owns the real
+    fix, a run-scoped budget needing state shared across invocations."""
+
+    def test_card_ids_with_a_non_zero_fetch_budget_raises(self, db):
+        card = CardFactory(name="Plains")
+
+        with pytest.raises(ValueError) as excinfo:
+            run_lands_identify(dry_run=True, card_ids=[card.pk], fetch_budget=10)
+
+        message = str(excinfo.value)
+        # the message has to explain WHY, not just refuse - a caller who reads only this should
+        # understand the multiplication and where the real fix lives.
+        assert "PER-INVOCATION" in message
+        assert "number of batches" in message
+        assert "#533" in message
+
+    def test_the_guard_fires_before_any_query_index_build_or_fetch(self, db, monkeypatch):
+        """It must reject the call outright, not part-way through - otherwise a rejected
+        invocation still pays `CandidateNameIndex()`'s catalog-wide read, and worse, could have
+        already issued fetches before noticing."""
+        card = CardFactory(name="Plains")
+
+        def _unexpected_fetch(card, dpi=None):
+            raise AssertionError("the guard must fire before any fetch")
+
+        monkeypatch.setattr(module, "fetch_card_image", _unexpected_fetch)
+
+        with CaptureQueriesContext(connection) as captured:
+            with pytest.raises(ValueError):
+                run_lands_identify(dry_run=True, card_ids=[card.pk], fetch_budget=10)
+
+        assert captured.captured_queries == []
+
+    def test_a_non_zero_budget_without_card_ids_is_still_allowed(self, db, monkeypatch):
+        """Whole-catalog behaviour is byte-identical: an unscoped run is invoked once, so its
+        budget still means exactly what it says. This is the calling shape every management
+        command uses and it must not have been narrowed by the guard."""
+        CanonicalCardFactory(name="Plains")
+        CardFactory(name="Plains")
+
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = run_lands_identify(dry_run=True, fetch_budget=10)
+
+        assert result.fetch_budget == 10
+        assert result.fetch_attempted == 1
+
+    def test_card_ids_with_budget_zero_is_still_allowed(self, db):
+        """The scoped, fetch-free path this PR exists to enable - explicitly NOT caught by the
+        guard."""
+        CanonicalCardFactory(name="Plains")
+        card = CardFactory(name="Plains")
+
+        result = run_lands_identify(dry_run=True, card_ids=[card.pk], fetch_budget=0)
+
+        assert result.fetch_attempted == 0
+        assert result.land_pool_size == 1

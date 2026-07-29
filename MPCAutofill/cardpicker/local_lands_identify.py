@@ -569,21 +569,45 @@ def run_lands_identify(
     reintroduce the O(catalog) pass the scope exists to remove. `card_ids=None` (the management
     command's only calling shape) is byte-identical to before, full pool included.
 
-    FETCH BUDGET IS A SEPARATE DECISION FROM SCOPING (issue #533, and the reason this note
-    exists): the live-fetch fallback branch still calls `fetch_card_image` +
-    `run_ocr_for_card`/`detect_illus_anchor` for any scoped card without CURRENT stored evidence.
-    Making this function scopeable does NOT make per-batch fetching safe - `fetch_budget` is
-    per-INVOCATION, so a per-batch caller invoking this once per micro-batch multiplies the
-    effective ceiling against a shared, rate-limited CDN by the number of batches. A per-batch
-    caller must consider `fetch_budget` EXPLICITLY: 0 (the default) keeps a scoped run entirely
-    free, serving only evidence-backed cards, unless #533's own separate fetch decision has
-    authorised otherwise. No default budget is changed by this scoping work.
+    A NON-ZERO `fetch_budget` TOGETHER WITH `card_ids` RAISES `ValueError` - GUARDED, not merely
+    warned about (issue #533). The live-fetch fallback branch calls `fetch_card_image` +
+    `run_ocr_for_card`/`detect_illus_anchor` for any scoped card without CURRENT stored evidence,
+    and `fetch_budget` is a per-INVOCATION ceiling. Today this calculator runs once over the whole
+    catalog, so a budget of N means N fetches; under `card_ids` it can be invoked once per
+    micro-batch, where N silently becomes N x (number of batches) - roughly N x 5,400 at
+    micro_batch_size=25 against a ~135,000-row queue. The zero default is the only reason that is
+    not already a live problem (0 x 5,400 = 0), which is exactly why it would never announce
+    itself: it detonates the first time somebody picks a sensible WHOLE-RUN number for a per-batch
+    caller. Nothing downstream catches it - `harvest_fetch_limiter` is per-destination RATE
+    governance (3 req/sec) and bounds rate, not volume, and its own docstring records the CDN
+    Worker's own limiter as empirically leaky, making the client-side limiter the sole real
+    enforcement. This budget is the only volume cap in the system. A run-scoped budget that means
+    the same thing however the work is sliced needs state shared across invocations; that is
+    #533's design decision, not this function's. So the unsafe combination is rejected rather than
+    documented. Still allowed and unchanged: `card_ids=None` with any budget (whole-catalog,
+    byte-identical to before), and `card_ids` with `fetch_budget=0` (the scoped path, serving
+    evidence-backed cards only, at zero network cost). No default budget is changed by this work.
 
     STILL O(CATALOG) ON ONE AXIS: `CandidateNameIndex()` below builds an in-memory index over
     CanonicalCard's 113k+ rows on every invocation. It is keyed by card NAME over a different
     table entirely, so `card_ids` cannot narrow it; it needs the process-cache-behind-a-version-
     stamp treatment PR #526 established for the illustration calculator, deliberately out of
     scope here (scoping queries is this change; caching indexes is the follow-up)."""
+    if card_ids is not None and fetch_budget:
+        # Raised BEFORE any query, index build or fetch - see the docstring section above for the
+        # full reasoning.
+        raise ValueError(
+            "run_lands_identify() was called with card_ids set and a non-zero fetch_budget. "
+            "fetch_budget is a PER-INVOCATION ceiling: a whole-catalog run invokes this once, so a "
+            "budget of N means N fetches, but a per-batch caller invokes it once per micro-batch and "
+            "N becomes N x (number of batches) - roughly N x 5,400 at micro_batch_size=25 over a "
+            "~135,000-row queue. Nothing downstream caps total volume (harvest_fetch_limiter governs "
+            "RATE, not volume), so this would issue every one of those fetches, politely paced. A "
+            "run-scoped budget that means the same thing however the work is sliced does not exist "
+            "yet - it is issue #533's decision. Pass card_ids with fetch_budget=0 for the scoped, "
+            "evidence-backed-only path, or card_ids=None to keep the whole-catalog behaviour a "
+            "non-zero budget was written for."
+        )
     run_id = run_id or generate_run_id()
     index = CandidateNameIndex()
 
