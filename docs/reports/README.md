@@ -104,8 +104,12 @@ a `detail` object read only when the summary signals it's needed.
   original auto-tagging design was unreachable at every grain;
   `promo_types` already carries `universesbeyond` on 10,407 of 113,224
   printings at 100% per-set recall; 0 of 50,828 illustrations straddle
-  the UB boundary; `import_external_ip_tags` was forgotten, not
-  abandoned. Ten numbered open questions.
+  the UB boundary. Leads with the governing constraint (owner-ratified:
+  a machine-only channel never resolving is the design, so any tag
+  expected to resolve from machine evidence alone is mis-specified — it
+  belongs as a derived attribute, not a vote) and answers what the
+  smallest mechanism delivering the UB filter actually is. Folds in three
+  owner rulings of 2026-07-29. Eleven numbered open questions.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc

@@ -26,7 +26,100 @@ quoted alongside their results in §9 so each figure can be re-derived.
 
 ---
 
-## 0. The short version
+**Owner rulings of 2026-07-29 are folded in and marked as such.** Three
+arrived while this was being written and settle questions the
+investigation had open; where a ruling and a measurement disagree, both
+are recorded rather than one being quietly dropped (§8.6).
+
+---
+
+## 0. The principle this all turns on
+
+Stated first because it decides everything below, and because it is the
+opposite of a defect report.
+
+**A machine-only vote channel can never resolve, at any volume. That is
+the design, not a bug in it.** Owner ruling, 2026-07-29: _"that is the
+entire theory in one sentence, we designed things like this on purpose."_
+
+The consequence, stated as the constraint it is:
+
+> **Any tag category that is expected to resolve from machine evidence
+> alone is mis-specified by construction.** The correct design either
+> routes it through human confirmation, or does not model it as a vote at
+> all.
+
+Votes exist for claims that can be _disputed_. A structured fact imported
+from Scryfall cannot be disputed by a voter — there is nothing to
+adjudicate — so modelling it as a vote buys nothing and costs a channel
+that can never fire. This single sentence explains the whole of
+`PrintingTagVote`'s history: it was built to carry an indisputable
+imported fact through a mechanism designed for disputable claims.
+
+The verification is in §2; the design's own weight math is untouched by
+any recommendation here.
+
+---
+
+## 0.1 The smallest thing that delivers the UB filter
+
+Answering the owner's framing directly — _"i am willing to not need the
+printing tag. i am happy to reduce things to the minimum that gives us
+our expected results. we don't need to reinvent the wheel everyday."_
+(ruling, 2026-07-29).
+
+**(a) Does the UB filter need a vote mechanism at all? For official
+printings: no.**
+
+`CanonicalPrintingMetadata.promo_types` already carries the Scryfall token
+`universesbeyond` on 10,407 of 113,224 printings, at 100% per-set recall
+(§4.2). It is deterministic, already ingested, and not disputable. It is a
+**derived attribute**, and the minimum mechanism is a read — optionally
+denormalised onto `Card.tags` so Elasticsearch can filter on it. **3,450
+catalogue images already resolve to a UB printing today** through the
+existing ingestion-time `Card.canonical_card` link, with no vote of any
+kind. No new model, no new table, no threshold, no gate.
+
+**(b) Where user-tagging is genuinely needed — card grain suffices; do not
+build illustration grain for it.**
+
+The owner's second case is users marking alternate-art cards as UB. Those
+are custom/proxy images with no Scryfall printing and no Scryfall
+`illustration_id` at all (§5.3) — so neither a printing-keyed nor an
+illustration-keyed Scryfall-derived tag can reach them by construction.
+The claim being made is about _this uploaded image_, and it is genuinely
+disputable, so it is genuinely a vote.
+
+**That channel already exists and works end to end**: `CardTagVote` →
+`tag_consensus.resolve_and_persist_tag_votes` → `Card.tags` →
+Elasticsearch. The no-match reason strip already routes to it. It shares a
+`Tag.name` with the machine path by deliberate design
+(`reason_tags.py`'s own stated rationale), so `tag:external-ip` is **one
+predicate over both populations** — exactly the stated goal.
+
+**Illustration grain would be correct but is not needed for this.** §5.1
+searched for its counterexample and found none, so the grain instinct is
+right; but a custom image's artwork has no illustration id to key on, so
+the grain that is theoretically better cannot serve the case that
+actually needs a human. Building it would be reinventing a wheel that
+`CardTagVote` already turns.
+
+**The minimum is therefore: one derived read for official printings, plus
+the `CardTagVote` channel that already exists for everything else.** The
+only thing standing between that and a working filter is that the
+`external-ip` `Tag` **does not exist in production** (§3.4) — one command.
+
+**(c) If `PrintingTagVote` goes, what is the migration? There isn't one.**
+
+**0 rows. 0 human votes.** The census is in §3.1 and it is the reason this
+is cheap: human votes are the one thing in this system that cannot be
+re-derived, and there are none here. Nothing to migrate, nothing to
+rescue, nothing that reads it. §8 is the full removal sketch; §8.3
+confirms it triggers no PROTECTED CORE review.
+
+---
+
+## 0.2 The short version
 
 Four findings, in descending order of consequence — then two more that
 arrived late and are recorded below them.
@@ -560,7 +653,10 @@ decision, not filling a gap.
 
 **Three separable claims. Do not treat them as one.**
 
-### 7.1 Retire `PrintingTagVote` — recommended
+### 7.1 Retire `PrintingTagVote` — recommended, and the owner is willing
+
+Owner ruling, 2026-07-29: _"i am willing to not need the printing tag."_
+The evidence supports taking that offer.
 
 It has 0 rows, 0 human votes, no resolver, no reader, no frontend, and its
 only machine writer has never run. It is not in the PROTECTED CORE list
@@ -600,16 +696,22 @@ than "don't build":
   channel would display nothing regardless of grain. A Scryfall-derived
   fact should be an _imported attribute_, not a vote — at whichever grain
   it is natural, which §5.1 says is the illustration.
-- **Do characterise the 2,759 before deciding whether a human channel is
-  wanted on top.** If they are genuine external-IP art the product line
-  misses, that is a real gap. If they are art-series and playtest noise,
-  it is not.
+- **Do characterise the 2,759 before deciding whether the `art_tags`
+  fetch is worth carrying into the unified importer at all** (§8.7). If
+  they are genuine external-IP art the product line misses, that is a real
+  gap. If they are art-series and playtest noise, `promo_types` alone is
+  the whole answer and the Tagger dependency can be dropped outright.
+- **If it is worth carrying, carry it as an illustration-keyed
+  _attribute_, not a vote.** §5.1 says the grain is the illustration; §0
+  says an imported Scryfall fact is not a vote. Those compose into "an
+  indexed column, not a channel."
 
 **What would still falsify the recommendation entirely:** the 2,759
 turning out to be substantially genuine external-IP art _and_ users
-actually wanting to vote on it — in which case the right build is an
-illustration-keyed attribute plus a human override, not a vote channel
-whose machine half can never fire.
+actually wanting to dispute it per-artwork — which would need an
+illustration-keyed attribute plus a human override path, and would run
+into the unsolved problem in §6 item 3 (a resolved illustration-grain
+status has nowhere to live).
 
 ### 7.3 Serve the actual user-facing goal from what exists — recommended
 
@@ -733,9 +835,31 @@ the order of **13k `APPLY` rows plus ~100k `NOT_APPLICABLE` rows — roughly
 late in PR #497 and has never been exercised. Whether it is wanted is not
 a settled question.
 
-### 8.6 Why it never ran — established
+### 8.6 Why it never ran — owner ruling, plus the measured record
 
-**Forgotten. Not abandoned, not blocked, not superseded.** The evidence:
+**Owner ruling, 2026-07-29 — this is the authoritative account and the
+question is closed:** it was never rebuilt after Scryfall changed their
+API process. Not abandoned on design grounds, not blocked on a decision.
+**Obsolete by API drift.** The owner's direction is that the external-IP
+import _"should be baked into our new unified Scryfall importer"_ rather
+than continue to exist as a standalone command — see §8.7 for what that
+importer would have to carry.
+
+**The measured record is recorded alongside it, because it does not
+perfectly match and suppressing that would be the exact failure mode this
+repo keeps a correction log about.** The API drift in question is the
+2026-07-20 bulk-data JSONL/gzip cutover. PR #555 (merged 2026-07-29T03:15Z)
+subsequently repaired the bulk-data path, and this file was named in that
+commit as _the one importer of three that had been hardened by hand and
+kept working_ through the cutover. Verified independently: the current
+live `art_tags` file parses, the `external-ip` slug is present, and every
+gate in `handle()` passes today (below). So the command appears to be
+functional _now_, whatever its state was when the drift stalled it.
+
+The two accounts compose rather than conflict: **API drift stalled the
+original attempt; the repair landed later; and the scheduled run of the
+repaired command then fell out of the handoff chain.** The evidence for
+that last step:
 
 - It was **owner-ratified and explicitly scheduled**. The 2026-07-28
   decision record ratifies "external-ip import before bulk + standing
@@ -768,11 +892,14 @@ a settled question.
   the grain is wrong is dated 2026-07-29, a day _after_ the run was
   already missed. It is not the cause.
 
-**This matters for the ruling.** The brief's own hypothesis — "if it was
-abandoned for a reason, that reason probably applies to the rebuild too" —
-does not apply. There was no reason. The printing-grain design was never
-tested against reality, so nothing about its dormancy is evidence for or
-against it.
+**Either way, the conclusion for the ruling is the same.** The
+printing-grain design was **never tested against reality** — it has
+produced zero rows and has never had a consumer. Nothing about its
+dormancy is evidence for or against the grain. And per the owner's
+assessment of the implementation itself — _"printingtag was half cooked by
+the same model that introduced all these bugs this weekend"_ — the
+existing code carries no accumulated design authority that a rebuild would
+be discarding.
 
 **Every prerequisite passes today**, checked read-only:
 `find_stale_applied_migrations()` returns `[]`; the 620 MB
@@ -780,11 +907,59 @@ against it.
 is present in the current live `art_tags` file; the Scryfall bulk-data
 index returns 200 with the post-cutover `jsonl_download_uri` shape; the
 deployed image contains both #497 and #555; the `Tag` is `get_or_create`d
-so its absence is not a blocker. **It would run successfully if invoked.**
+so its absence is not a blocker.
 
 _Not established:_ whether it was ever dry-run outside production (the
-ledger covers this database only), and whether the owner ever consciously
-held the run (no document says so either way).
+ledger covers this database only).
+
+### 8.7 What the unified Scryfall importer must carry
+
+Per the owner's direction that the external-IP import belongs inside the
+new unified Scryfall importer rather than as a standalone command. This is
+a specification of what to carry, not an implementation.
+
+**Carry these — they are the parts that earned their place:**
+
+1. **`promo_types` is already ingested; just read it.** `universesbeyond`
+   on 10,407 of 113,224 printings, 100% per-set recall (§4.2). This needs
+   no importer change at all — it is the existing
+   `import_scryfall_printing_metadata` output. The gap is a _consumer_,
+   not an ingestion step.
+2. **The `art_tags` fetch, if §10.3's characterisation justifies it.** The
+   reusable core is ~150 lines: `find_external_ip_subtree` (BFS from the
+   `external-ip` slug over `child_ids`; only leaf tags carry taggings),
+   `collect_illustration_ids`, and `build_illustration_index`. It fetches
+   the `art_tags` bulk entry's `jsonl_download_uri` (~12 MB gzipped) and
+   joins on `illustration_id`.
+3. **Join and store at illustration grain, not printing grain.** §5.1
+   found no counterexample: UB-ness is constant across every printing of
+   an illustration. `CanonicalPrintingMetadata.illustration_id` is already
+   stored and indexed. Fanning one artwork fact out to ~2.2 printings was
+   the redundancy the printing-grain design introduced; the unified
+   importer should not repeat it.
+4. **Store it as an attribute, not as votes.** This is §0's principle
+   applied: an imported Scryfall fact is not disputable, so it must not
+   enter the vote system. Whatever column or sidecar it lands in, it
+   should be readable directly, without a threshold or a resolver.
+5. **`face_illustrations` needs populating** (§4.1) — the column and its
+   partial index shipped in migration 0095 but production has 0 rows, so
+   back-face artwork is currently unattributable. Any illustration-keyed
+   join is incomplete until the metadata import is re-run.
+
+**Do not carry these:**
+
+- **The negative pass.** Voting `NOT_APPLICABLE` on every printing outside
+  the positive set (~100k rows) exists only because the old design needed
+  vote rows to express absence. An attribute expresses absence by being
+  absent.
+- **`source=DEDUCTION` / `anonymous_id="scryfall-tagger-v1"` / `run_id`
+  stamping / `purge_machine_votes` integration.** All of it is vote-system
+  plumbing for something that should not be a vote. It also means the
+  identity drops off the calculator roster entirely, which is correct — it
+  was never a calculator.
+- **`security_stamp` as a UB signal.** The deferred "triangle → APPLY" path
+  from PR #497 was already invalidated by the owner's own #437 Phase-1
+  research (§4.4). It was never implemented; it should not be revived.
 
 ---
 
@@ -865,11 +1040,14 @@ Static findings (grep / `git log --all` / `gh`):
 
 ## 10. Open questions for the owner
 
-Numbered and answerable.
+Numbered and answerable. **Three questions this document opened have
+already been ruled on (2026-07-29) and are recorded as closed at the end,
+not re-asked.**
 
 1. **Retire `PrintingTagVote`?** It has 0 rows, 0 human votes, no
    resolver, no reader, no frontend, and its only writer has never run.
-   Recommendation: yes. _(§7.1, §8)_
+   The owner has said they are willing; this asks for the go-ahead to
+   dispatch it. Recommendation: yes. _(§7.1, §8)_
 
 2. **Seed the `external-ip` Tag in production?** One command,
    `manage.py seed_no_match_reason_tags`. Until it runs, the human
@@ -938,3 +1116,26 @@ Numbered and answerable.
     merge first — the roster fix is correct independent of this ruling,
     and a row that is later deleted is cheaper than a tether that silently
     misses the next dormant identity. _(§8.4)_
+
+11. **Does the external-IP import survive into the unified Scryfall
+    importer, or is it dropped entirely?** The owner's direction is that
+    it should be baked in (§8.7). But item 3 may make it unnecessary: if
+    the ~2,759 delta is noise, `promo_types` is the whole answer and the
+    Tagger dependency — a second bulk download and a second join — buys
+    nothing. Recommendation: make this conditional on item 3, not
+    scheduled ahead of it. _(§8.7)_
+
+---
+
+### Already ruled on 2026-07-29 — recorded, not re-asked
+
+- **Why the import never ran.** Never rebuilt after Scryfall changed their
+  API process; it belongs in the new unified Scryfall importer. Closed.
+  The measured record that does not perfectly match this account is
+  preserved in §8.6 rather than dropped, and the two compose.
+- **Whether the machine-only-cannot-resolve gate is a defect.** It is not:
+  _"that is the entire theory in one sentence, we designed things like
+  this on purpose."_ This document treats it as the governing constraint
+  (§0), not as a finding against the vote system.
+- **Whether the owner would accept dropping `PrintingTagVote`.** Yes,
+  willing. Item 1 above asks only for the dispatch, not the principle.
