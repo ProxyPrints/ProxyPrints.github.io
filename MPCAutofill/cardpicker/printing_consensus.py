@@ -4,7 +4,13 @@ from typing import Hashable, Iterable, Literal, Sequence, TypedDict
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist
 
-from cardpicker.models import CanonicalCard, Card, CardPrintingTag, PrintingTagStatus
+from cardpicker.models import (
+    CanonicalCard,
+    Card,
+    CardPrintingTag,
+    PrintingTagStatus,
+    calculator_family,
+)
 from cardpicker.vote_consensus import (
     VoteTuple,
     contested_queryset,
@@ -203,18 +209,72 @@ def group_printing_votes(card: Card, group_card_ids: Sequence[int] | None = None
     return votes, True
 
 
+def agent_dedupe_key(anonymous_id: str) -> str:
+    """
+    The identity of the AGENT behind `anonymous_id`, for `pool_group_votes`' `dedupe_key`: the
+    versionless CALCULATOR FAMILY (`models.calculator_family` - "stage-d-join-key" for
+    "stage-d-join-key-v1") when the id follows the machine naming convention, and otherwise the
+    `anonymous_id` verbatim.
+
+    WHY THE FAMILY IS THE AGENT, and why this must not be "simplified" back to the raw id
+    ------------------------------------------------------------------------------------
+    A machine calculator carries its version INSIDE its identity string rather than beside it as
+    metadata, so bumping a calculator (`-v1` -> `-v2`) changes the string every one of its votes
+    is stamped with. Keying pooling on that raw string makes ONE calculator look like TWO
+    INDEPENDENT AGENTS the moment its version is bumped, because `pool_group_votes` compares
+    keys for equality and "x-v1" != "x-v2".
+
+    That is reachable in ordinary operation, not a hypothetical: a version bump re-votes cards
+    INCREMENTALLY, so an md5 identity group whose members straddle the migration holds some
+    members' votes under the old version and some under the new one. Under a raw-id key those
+    two rows sum, and one calculator on its own supplies the whole of `PRINTING_TAG_MIN_VOTES`
+    - exactly the "summed weight means distinct agents" invariant `pool_group_votes` exists to
+    enforce (see its docstring's soundness paragraph), defeated by a routine redeploy.
+
+    v1 and v2 of one calculator are the SAME agent holding an updated opinion, not two
+    independent observers: they run the same algorithm over the same evidence channel on the
+    same bytes, so their agreement is correlated by construction and carries no more information
+    than either alone. Keying on the family makes that structural fact mechanical - agreement
+    across a version bump collapses to one event, and a calculator that CONTRADICTS ITSELF
+    across a version bump (v1 said printing A, v2 says printing B - the normal shape of a
+    corrective re-vote) is withheld from the group's tally entirely, which is the correct
+    reading: it changed its mind about byte-identical bytes, so it is not evidence for either
+    outcome until the group is re-voted consistently.
+
+    HUMAN VOTERS ARE UNTOUCHED, structurally rather than by convention: human `anonymous_id`s
+    are client-generated UUIDs (`frontend/src/common/anonymousId.ts`), which can never match
+    `models.CALCULATOR_VERSION_RE`, so `calculator_family` returns None for every one of them
+    and they fall through to the raw-id branch and dedupe on their own UUID exactly as before
+    this function existed. The 2026-07-25 gate on PR #482 (condition 1) requires humans to be
+    keyed at all - that is unchanged here; only the KEY a machine id maps to changes. Pinned by
+    `test_md5_group_pooling.TestVersionedCalculatorIdentity`.
+
+    Do NOT collapse this back to `vote.anonymous_id`. It reads like an identity function with
+    extra steps only because the failure it prevents is invisible until a calculator is
+    versioned up, at which point it silently lowers the quorum bar for that calculator's whole
+    cohort with no error and no log line.
+    """
+    return calculator_family(anonymous_id) or anonymous_id
+
+
 def build_group_printing_vote_tuples(
     votes: Iterable[CardPrintingTag], pool: bool, printings_by_id: dict[int, CanonicalCard] | None = None
 ) -> list[VoteTuple]:
     """
     Translates `CardPrintingTag` rows into the `VoteTuple`s `resolve_weighted_consensus` reads,
     pooling them across an md5 identity group when `pool` is True (issue #473 ruling 1, applied
-    by `vote_consensus.pool_group_votes`): EVERY vote is keyed on the `anonymous_id` of the agent
-    that cast it - human-backed votes included - so one agent's agreeing votes about a set of
+    by `vote_consensus.pool_group_votes`): EVERY vote is keyed on the identity of the agent that
+    cast it - human-backed votes included - so one agent's agreeing votes about a set of
     byte-identical images are ONE event no matter how many members carry a copy, and one agent
     that contradicts itself across members is withheld from the tally entirely. Distinct agents
     still sum: two different people voting on two members are two votes, which is the point of
     tallying a group as one target.
+
+    That agent identity is `agent_dedupe_key(vote.anonymous_id)`, NOT `vote.anonymous_id` itself
+    - read that function's docstring before touching this line. In short: a machine calculator's
+    version lives inside its `anonymous_id`, so keying on the raw string counts one calculator
+    as two independent agents across a version bump; the versionless family is the stable agent
+    identity. Human voters' UUIDs have no family and key on themselves, unchanged.
 
     Human-backed votes were NOT keyed in this function's first form, on the reading that separate
     people are separate events regardless. That was wrong for the case that matters and was
@@ -256,7 +316,9 @@ def build_group_printing_vote_tuples(
                 outcome_key=key,
                 weight=resolve_vote_weight(vote.source, vote.anonymous_id),
                 is_human_backed=is_human_backed_source(vote.source),
-                dedupe_key=vote.anonymous_id if pool else None,
+                # agent identity, not the raw id - see `agent_dedupe_key`'s docstring for why a
+                # version bump must not turn one calculator into two agents.
+                dedupe_key=agent_dedupe_key(vote.anonymous_id) if pool else None,
             )
         )
     return pool_group_votes(vote_tuples) if pool else vote_tuples

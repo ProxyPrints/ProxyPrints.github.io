@@ -163,6 +163,7 @@ export interface PrintingCandidate {
   frame: string;
   fullArt: boolean;
   identifier: string;
+  illustrationId?: null | string;
   isBorderless: boolean;
   isEtched: boolean;
   isExtendedArt: boolean;
@@ -2702,6 +2703,11 @@ const typeMap: any = {
       { json: "frame", js: "frame", typ: "" },
       { json: "fullArt", js: "fullArt", typ: true },
       { json: "identifier", js: "identifier", typ: "" },
+      {
+        json: "illustrationId",
+        js: "illustrationId",
+        typ: u(undefined, u(null, "")),
+      },
       { json: "isBorderless", js: "isBorderless", typ: true },
       { json: "isEtched", js: "isEtched", typ: true },
       { json: "isExtendedArt", js: "isExtendedArt", typ: true },

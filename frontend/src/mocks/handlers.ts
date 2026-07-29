@@ -5,6 +5,7 @@ import { computeSearchQueryHashKey } from "@/common/processing";
 import {
   Campaign,
   CardType,
+  PrintingCandidate,
   QuestionFeedCounts,
   Supporter,
   SupporterTier,
@@ -1231,6 +1232,60 @@ export const questionFeedIdentifyPrinting = http.get(
           tagConfidence: { "Full Art": 0, Borderless: 0.6 },
         },
         remainingEstimate: questionFeedCounts({ total: 3, fresh: 3 }),
+      },
+      { status: 200 }
+    )
+);
+
+// Issue #503 (WTC phase C1) - a MIXED candidate set for the illustration-grouping regression
+// guard: `illustrationGroupCandidateA`/`B` share an illustration (a real 2+ cluster),
+// `illustrationGroupCandidateC` has its own distinct illustrationId (no sibling - stays
+// unclustered), and `illustrationGroupCandidateD` carries no illustrationId at all
+// (CanonicalPrintingMetadata.illustration_id is nullable and frequently absent - see
+// local_illustration.py:137). Built by spreading the existing printingCandidate1/2 fixtures
+// rather than editing test-constants.ts, which is out of this change's scope.
+export const illustrationGroupCandidateA: PrintingCandidate = {
+  ...printingCandidate1,
+  identifier: "illustration-group-candidate-a",
+  collectorNumber: "101",
+  illustrationId: "illustration-shared",
+};
+export const illustrationGroupCandidateB: PrintingCandidate = {
+  ...printingCandidate2,
+  identifier: "illustration-group-candidate-b",
+  collectorNumber: "102",
+  illustrationId: "illustration-shared",
+};
+export const illustrationGroupCandidateC: PrintingCandidate = {
+  ...printingCandidate1,
+  identifier: "illustration-group-candidate-c",
+  collectorNumber: "103",
+  illustrationId: "illustration-unique-to-c",
+};
+export const illustrationGroupCandidateD: PrintingCandidate = {
+  ...printingCandidate2,
+  identifier: "illustration-group-candidate-d",
+  collectorNumber: "104",
+  illustrationId: null,
+};
+
+export const questionFeedIdentifyPrintingGroupedByIllustration = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "identify_printing",
+          card: cardDocument1,
+          candidates: [
+            illustrationGroupCandidateA,
+            illustrationGroupCandidateB,
+            illustrationGroupCandidateC,
+            illustrationGroupCandidateD,
+          ],
+          tagConfidence: { "Full Art": 0, Borderless: 0.6 },
+        },
+        remainingEstimate: questionFeedCounts({ total: 4, fresh: 4 }),
       },
       { status: 200 }
     )

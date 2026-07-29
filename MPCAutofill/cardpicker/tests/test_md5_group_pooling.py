@@ -39,8 +39,15 @@ from cardpicker.local_calculate_verdicts import (
     run_join_key_calculator,
 )
 from cardpicker.management.commands.consensus_recompute import run_consensus_recompute
-from cardpicker.models import Card, CardPrintingTag, PrintingTagStatus, VoteSource
+from cardpicker.models import (
+    Card,
+    CardPrintingTag,
+    PrintingTagStatus,
+    VoteSource,
+    calculator_family,
+)
 from cardpicker.printing_consensus import (
+    agent_dedupe_key,
     build_group_printing_vote_tuples,
     group_printing_votes,
     md5_group_card_ids,
@@ -756,3 +763,146 @@ class TestTransferredEvidencePoolsWithItsSource:
 
         assert resolve_printing(card_source) == printing
         assert resolve_printing(card_transferred) == printing
+
+
+class TestVersionedCalculatorIdentity:
+    """
+    2026-07-28: `build_group_printing_vote_tuples` keyed pooling on the raw `anonymous_id`, which
+    embeds a machine calculator's VERSION ("stage-d-join-key-v1"). "x-v1" != "x-v2", so one
+    calculator counted as TWO INDEPENDENT AGENTS the moment its version was bumped - reachable
+    in normal operation, because a version bump re-votes cards incrementally and an md5 identity
+    group can straddle the migration. The key is now the versionless FAMILY
+    (`printing_consensus.agent_dedupe_key` -> `models.calculator_family`).
+
+    Human voters must be COMPLETELY unaffected: their `anonymous_id`s are UUIDs, which can never
+    match the machine naming convention, so `calculator_family` returns None for them and they
+    keep deduping on their own UUID. That property is VERIFIED here against real UUID strings,
+    not assumed.
+    """
+
+    # a real client-generated anonymous id shape (frontend/src/common/anonymousId.ts)
+    HUMAN_UUID_A = "3f2a9c1e-7b64-4a0d-9c88-1e5f2b3d4a60"
+    HUMAN_UUID_B = "b81d5e77-2c93-4f16-8a0b-6d7e9f014c25"
+
+    def test_agent_dedupe_key_is_the_family_for_a_versioned_calculator(self):
+        assert agent_dedupe_key("stage-d-join-key-v1") == "stage-d-join-key"
+        assert agent_dedupe_key("stage-d-join-key-v2") == "stage-d-join-key"
+        assert agent_dedupe_key("local-ocr-v1") == agent_dedupe_key("local-ocr-v17")
+
+    def test_agent_dedupe_key_is_the_raw_id_for_a_human_uuid(self):
+        # calculator_family() returns None for a UUID, so the raw id is used verbatim - this is
+        # the human-voter escape hatch, stated directly rather than inferred from behaviour.
+        assert calculator_family(self.HUMAN_UUID_A) is None
+        assert agent_dedupe_key(self.HUMAN_UUID_A) == self.HUMAN_UUID_A
+        assert agent_dedupe_key(self.HUMAN_UUID_B) == self.HUMAN_UUID_B
+        assert agent_dedupe_key(self.HUMAN_UUID_A) != agent_dedupe_key(self.HUMAN_UUID_B)
+
+    def test_group_straddling_a_version_bump_counts_the_calculator_once(self, db, md5_groups):
+        """
+        The bug, at the tuple level: two members of one md5 group, the same calculator voting the
+        same printing on each, one under -v1 and one under -v2 (exactly what an incremental
+        re-vote across a version bump produces). That is ONE agent, so ONE pooled event.
+        """
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        machine_vote(card_a, printing, "stage-d-join-key-v1")
+        machine_vote(card_b, printing, "stage-d-join-key-v2")
+
+        votes, is_group = group_printing_votes(card_a)
+        assert len(votes) == 2  # both rows are read...
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+
+        assert len(vote_tuples) == 1  # ...and pool to ONE event, not two
+        assert vote_tuples[0].dedupe_key == "stage-d-join-key"
+
+    def test_a_version_bump_cannot_supply_the_second_agent_a_resolution_needs(self, db, md5_groups):
+        """
+        The bug, at the outcome level, with the real default weights (min_weight=2.0, machine
+        0.5, human 1.0). One human vote plus ONE calculator that voted under two versions used to
+        sum to 1.0 + 0.5 + 0.5 = 2.0 and RESOLVE the whole group - a resolution reached by a
+        redeploy rather than by evidence. Pooled by family it is 1.0 + 0.5 = 1.5, short of quorum.
+        """
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, self.HUMAN_UUID_A)
+        machine_vote(card_a, printing, "stage-d-join-key-v1")
+        machine_vote(card_b, printing, "stage-d-join-key-v2")
+
+        assert resolve_printing(card_a) is None
+        assert resolve_printing(card_b) is None
+
+        # and a genuinely SECOND, distinct calculator still tips it - the fix removes correlated
+        # weight, it does not make the group unresolvable.
+        machine_vote(card_b, printing, "local-ocr-v1")
+        assert resolve_printing(card_a) == printing
+
+    def test_a_calculator_contradicting_itself_across_a_version_bump_is_withheld(self, db, md5_groups):
+        """
+        `pool_group_votes`' rule 2 must reach across a version boundary too: v1 said printing X,
+        v2 says printing Y (the normal shape of a corrective re-vote). Under the old raw-id key
+        those were two different agents, so BOTH claims stayed in the tally and the contradiction
+        was invisible. Under the family key it is one agent that contradicted itself about
+        byte-identical bytes, and it contributes nothing to either side.
+        """
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing_x, printing_y = CanonicalCardFactory(), CanonicalCardFactory()
+        machine_vote(card_a, printing_x, "stage-d-illustration-v1")
+        machine_vote(card_b, printing_y, "stage-d-illustration-v2")
+        human_vote(card_a, printing_x, self.HUMAN_UUID_A)
+
+        votes, is_group = group_printing_votes(card_a)
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+
+        # only the human survives - the self-contradicting calculator is withheld entirely
+        assert [(vote.outcome_key, vote.dedupe_key) for vote in vote_tuples] == [(printing_x.pk, self.HUMAN_UUID_A)]
+
+    def test_human_uuid_voters_dedupe_exactly_as_before(self, db, md5_groups):
+        """
+        The no-regression half. Two DIFFERENT humans on two members are two agents and still sum
+        (and here, resolve); ONE human answering both members is still one agent and still
+        collapses. Neither behaviour may change, because a UUID has no family.
+        """
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+
+        # one person, both members: ONE event, 1.0 - short of the 2.0 quorum
+        human_vote(card_a, printing, self.HUMAN_UUID_A)
+        human_vote(card_b, printing, self.HUMAN_UUID_A)
+        votes, is_group = group_printing_votes(card_a)
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+        assert [(vote.outcome_key, vote.dedupe_key) for vote in vote_tuples] == [(printing.pk, self.HUMAN_UUID_A)]
+        assert resolve_printing(card_a) is None
+
+        # a second, distinct person is a second agent: 2.0, resolves
+        human_vote(card_b, printing, self.HUMAN_UUID_B)
+        votes, is_group = group_printing_votes(card_a)
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+        assert sorted(vote.dedupe_key for vote in vote_tuples) == sorted([self.HUMAN_UUID_A, self.HUMAN_UUID_B])
+        assert resolve_printing(card_a) == printing
+
+    def test_a_human_uuid_is_never_pooled_with_a_calculator(self, db, md5_groups):
+        """Defensive: the family mapping must not create a collision between a human and a
+        machine agent - distinct key spaces, verified rather than assumed."""
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        human_vote(card_a, printing, self.HUMAN_UUID_A)
+        machine_vote(card_b, printing, "local-ocr-v3")
+
+        votes, is_group = group_printing_votes(card_a)
+        vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
+        assert sorted(str(vote.dedupe_key) for vote in vote_tuples) == sorted([self.HUMAN_UUID_A, "local-ocr"])
+
+    def test_singleton_groups_are_still_unkeyed_after_the_change(self, db):
+        """`pool=False` short-circuits before `agent_dedupe_key` is ever consulted, so a group of
+        one remains the byte-for-byte no-op ruling 3 requires - including for machine votes."""
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        machine_vote(card, printing, "stage-d-join-key-v1")
+        votes, is_group = group_printing_votes(card)
+        assert is_group is False
+        assert [vote.dedupe_key for vote in build_group_printing_vote_tuples(votes, pool=is_group)] == [None]
