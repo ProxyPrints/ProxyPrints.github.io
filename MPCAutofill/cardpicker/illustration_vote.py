@@ -61,6 +61,7 @@ from django.contrib.auth.models import User
 from django.db import transaction
 
 from cardpicker.artist_consensus import resolve_and_persist_artist
+from cardpicker.illustration_consensus import resolve_and_persist_illustration
 from cardpicker.models import (
     CanonicalCard,
     Card,
@@ -228,6 +229,17 @@ def cast_illustration_vote(
                 "vote_surface": vote_surface,
             },
         )
+        # Recompute illustration consensus immediately, inside the same transaction, right after
+        # the write that made it stale - the same placement the printing/artist channels below
+        # already use for their own recomputations. UNCONDITIONAL, unlike those two: this is the
+        # one write that ALWAYS happens here, so there is no "channel didn't write, nothing to
+        # recompute" branch to take.
+        #
+        # This is also the propagation seam. `resolve_and_persist_illustration` tallies and writes
+        # over `card`'s whole md5 identity group, so one human answer here can resolve - and
+        # persist to - a byte-identical sibling that the machine calculator abstained on with
+        # `no-candidate-match`. See `illustration_consensus`'s module docstring.
+        resolve_and_persist_illustration(card)
 
         if not is_unknown and illustration_id is not None:
             matching_printings = printings_for_card_and_illustration(card, illustration_id)

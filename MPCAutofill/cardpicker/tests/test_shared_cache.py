@@ -271,8 +271,28 @@ class TestSharedCacheTableMigration:
         """
         Drives the real migration executor backwards past 0092 and forwards again,
         asserting the table disappears and comes back. The `finally` guarantees the
-        table is restored even if an assertion fails, so a failure here cannot
+        schema is restored even if an assertion fails, so a failure here cannot
         cascade into unrelated tests later in the session.
+
+        THE `finally` MUST TARGET THE APP'S LEAF MIGRATION, NOT `MIGRATION_NAME`, and this
+        class is the one place in the suite where that distinction has teeth: it carries
+        `@pytest.mark.django_db(transaction=True)`, so every statement below REALLY COMMITS
+        and nothing is rolled back at teardown. `migrate([("cardpicker", "0092")])` restores
+        the state as of 0092 - and leaves EVERY LATER MIGRATION UNAPPLIED for the remainder
+        of the pytest session, in a database later tests go on using.
+
+        That was latent for a long time and cost nothing only by alphabetical luck: 0093/0094
+        are data-only `RunPython` migrations, and the one schema migration between here and the
+        leaf (0095's `CanonicalPrintingMetadata.face_illustrations`) happens to be read only by
+        test modules that sort BEFORE `test_shared_cache.py`. It stopped being free the moment a
+        migration added a column to `Card` (0098): `test_sources.py` and
+        `test_stage_e_dispatch.py` sort after this module and use `transactional_db`, so they
+        write real `Card` rows through a connection that cannot be saved by a rollback, and
+        failed with `column "inferred_illustration_id" ... does not exist` - a failure whose
+        message points at the new migration and whose cause is entirely here.
+
+        `graph.leaf_nodes("cardpicker")` is derived, never a hardcoded number, so this stays
+        correct for every future migration without anyone having to remember this file exists.
         """
         from django.db.migrations.executor import MigrationExecutor
 
@@ -290,7 +310,7 @@ class TestSharedCacheTableMigration:
         finally:
             executor = MigrationExecutor(connection)
             executor.loader.build_graph()
-            executor.migrate(forwards)
+            executor.migrate(executor.loader.graph.leaf_nodes("cardpicker"))
         assert table in connection.introspection.table_names()
 
     def test_reverse_is_idempotent_when_the_table_is_absent(self):

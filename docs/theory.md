@@ -284,7 +284,10 @@ turns out to be:
 3. **Identity-group pooling, i.e. one target gets one tally**
    (owner-ratified 2026-07-25; `vote_consensus.pool_group_votes`,
    `printing_consensus.build_group_printing_vote_tuples`,
-   `resolve_and_persist_printing`). Several catalog records can index the
+   `resolve_and_persist_printing`; and, group-scoped from its first line
+   rather than retrofitted onto a per-card resolver,
+   `illustration_consensus.build_group_illustration_vote_tuples` /
+   `resolve_and_persist_illustration`). Several catalog records can index the
    _same image file_ — different uploaders, same bytes, byte-equality
    established by the storage provider's own checksum, not by any
    similarity measure of ours. Such a set is **one identification
@@ -1054,16 +1057,32 @@ population, but it remains **window-independent**, because the
 neighbourhood is defined by a **join key** — an md5 checksum, a
 perceptual hash, a name — and not by the batch. The set of cards
 sharing a given checksum is the same set no matter which cards happen
-to be dispatched together. Four live instances:
+to be dispatched together. Five live instances:
 `printing_consensus.md5_group_card_ids` (every card indexing a
 byte-identical image file — §4 item 3's identity group);
 `evidence_transfer.find_transfer_source` (the md5-sibling
 `ImageEvidence` row eligible to be copied onto a card instead of
 re-fetching it); `local_residual_classify.run_d0_sibling_artist_propagation`
 (an artist propagated from a `content_phash`-sharing sibling); and
-consensus resolution itself — `printing_consensus.resolve_printing`
-reads a card's votes **pooled across its md5 group**, via
-`group_printing_votes`.
+consensus resolution itself, on two vote types —
+`printing_consensus.resolve_printing` reads a card's votes **pooled
+across its md5 group**, via `group_printing_votes`, and
+`illustration_consensus.resolve_illustration` does the same through
+`group_illustration_votes` (sharing this file's md5 primitives rather
+than reimplementing them, so there is one definition of a group).
+
+The illustration case also carries the propagation the other four make
+available: because the tally is defined over the group and
+`resolve_and_persist_illustration` writes the outcome to every member,
+a card whose own name failed candidate resolution — the calculator's
+`no-candidate-match` abstention, 367 of 2,350 considered cards in PR
+\#565's replay — still receives the artwork identity a byte-identical
+sibling established. That is sound **only** on md5 (byte) identity,
+never on `content_phash` proximity: identical bytes are necessarily the
+same artwork, with no threshold and no tolerance, whereas a shared
+perceptual hash can hold between genuinely different artworks at any
+radius. Propagating an identity across a phash match would assign one
+card's artwork to a merely similar-looking other card, silently.
 
 These are sound under any schedule, and they carry an implementation
 hazard worth naming precisely because nothing about it errors. A wiring
