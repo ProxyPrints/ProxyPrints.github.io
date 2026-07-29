@@ -191,6 +191,15 @@ class CandidatePrinting:
     # this specific printing (confirmed live: ~10.7% of CanonicalPrintingMetadata rows,
     # 2026-07-15) - see _demand_rank_for_candidates for how a name's candidates combine this.
     edhrec_rank: Optional[int] = None
+    # 2026-07-29 (`collector_line_artist`'s CARD-NAME NARROWING): the `CanonicalArtist.name` of
+    # THIS printing, carried so a name-scoped candidate list doubles as the "artists who
+    # illustrated a printing of this card's name" set - the narrowing Stage D applies to a
+    # collector-line artist reading - at ZERO extra query, since `CandidateNameIndex`'s own
+    # single `CanonicalCard` scan can join the row it already reads five other columns off.
+    # Empty string where the printing has no artist on record (never guessed), read as "nothing
+    # to contribute" by every consumer. Trailing position + default so every existing hand-built
+    # `CandidatePrinting(...)` in the test suite keeps constructing unchanged.
+    artist_name: str = ""
 
 
 # FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX (module docstring) - stripped from the RAW name BEFORE
@@ -303,16 +312,20 @@ class CandidateNameIndex:
 
     def __init__(self) -> None:
         by_name: dict[str, list[CandidatePrinting]] = collections.defaultdict(list)
-        rows = CanonicalCard.objects.select_related("expansion", "printing_metadata").values_list(
-            "pk", "name", "expansion__code", "collector_number", "printing_metadata__edhrec_rank"
+        rows = CanonicalCard.objects.select_related("expansion", "printing_metadata", "artist").values_list(
+            "pk", "name", "expansion__code", "collector_number", "printing_metadata__edhrec_rank", "artist__name"
         )
-        for pk, name, expansion_code, collector_number, edhrec_rank in rows:
+        for pk, name, expansion_code, collector_number, edhrec_rank, artist_name in rows:
             by_name[to_searchable(name)].append(
                 CandidatePrinting(
                     pk=pk,
                     expansion_code=expansion_code.lower(),
                     collector_number=collector_number,
                     edhrec_rank=edhrec_rank,
+                    # 2026-07-29: the SAME scan, one more joined column - see `CandidatePrinting.
+                    # artist_name`. `artist` is nullable, so a printing with no artist on record
+                    # yields None here and is normalised to "" rather than carried as None.
+                    artist_name=artist_name or "",
                 )
             )
         self._by_name = dict(by_name)

@@ -400,7 +400,7 @@ from django.db.models import Count, Max, Q, QuerySet, Sum
 from cardpicker.collector_line_artist import (
     ArtistLexicon,
     load_artist_lexicon,
-    recover_artist_from_collector_line,
+    recover_artist_from_card_text,
 )
 from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_fallback import (
@@ -641,6 +641,7 @@ def _apply_agreement_checks(
     detail: str,
     evidence: ImageEvidence,
     artist_lexicon: "Optional[ArtistLexicon]" = None,
+    card_artist_names: tuple[str, ...] = (),
 ) -> JoinKeyVerdict:
     """
     The agreement/corroboration layer (module docstring) - runs once a join-key match candidate
@@ -667,6 +668,15 @@ def _apply_agreement_checks(
     through explicitly - the same "caller builds it once, this function stays pure" shape
     `candidates`/`known_set_codes` already have. `None` (the default) disables check 6 entirely,
     which is every pre-2026-07-29 caller's own behavior, unchanged.
+
+    `card_artist_names` (2026-07-29, `collector_line_artist`'s CARD-NAME NARROWING) - every
+    distinct artist who illustrated a printing of THIS card's own name, read straight off the
+    already-name-scoped `candidates` list `calculate_join_key_verdict` was handed (see this
+    function's own call sites there). No query, no name normalisation, and no new source of truth:
+    `_resolve_candidates_for_card` already did the name resolution, and `CandidatePrinting.
+    artist_name` already carries the artist. Empty (the default, and the honest answer for a
+    decorated or genuinely custom name that resolves to no canonical printing) means "don't
+    narrow", leaving check 6 at its full-lexicon behaviour.
 
     WHY CHECK 6 IS A VETO WHILE CHECK 7 ONLY WEAKENS, even though both compare an artist. Check 7
     reads `evidence.artist_ocr_name`, whose provenance is a SEPARATE crop from the one that
@@ -779,8 +789,21 @@ def _apply_agreement_checks(
     # incompatible with EVERY plausible interpretation. Missing data is never a mismatch - no
     # lexicon threaded, no `CanonicalCard` row, or no confident reading all fall through to the
     # unchanged behaviour below, matching every other check in this function.
+    #
+    # READS BOTH BOTTOM-ROW STRINGS (2026-07-29, `collector_line_artist`'s WIDENING THE READ):
+    # `legal_line_raw_text` is the SAME y band as the collector line at the FULL card width, so it
+    # carries the artist credit whole where the collector crop clips it at 35% - already persisted
+    # on this very row by Stage C, no re-OCR and no extractor version bump. NARROWED BY CARD NAME
+    # (`card_artist_names`, from the name-scoped `candidates` list) so a truncated read that is
+    # globally ambiguous between several real artists resolves against the one or two who actually
+    # illustrated this card.
     if artist_lexicon is not None and canonical is not None:
-        recovered_artist = recover_artist_from_collector_line(evidence.collector_line_raw_text, artist_lexicon)
+        recovered_artist = recover_artist_from_card_text(
+            evidence.collector_line_raw_text,
+            evidence.legal_line_raw_text,
+            artist_lexicon,
+            allowed_artist_names=card_artist_names,
+        )
         if recovered_artist is not None and not recovered_artist.is_compatible_with(canonical.artist.name):
             return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON, detail=detail)
 
@@ -832,7 +855,10 @@ def calculate_join_key_verdict(
     verbatim to `_apply_agreement_checks` (see that function's own docstring for the veto it
     controls and why it withholds rather than weakens). Same "built once per batch by the caller"
     convention as `known_set_codes` immediately above; `None` (the default) disables the check, so
-    every existing caller and test is unaffected.
+    every existing caller and test is unaffected. The artist NARROWING that check applies is
+    derived here from `candidates` themselves (see the `card_artist_names` line below) - there is
+    no third argument to thread, because the name scoping this function already REQUIRES of
+    `candidates` is the same scoping the narrowing needs.
 
     INVARIANT (module docstring's collector-number-only ambiguity guard): `candidates` MUST
     already be narrowed to this card's own name - the only correct way to produce it is
@@ -855,11 +881,22 @@ def calculate_join_key_verdict(
         collector_number=evidence.collector_line_collector_number or None,
     )
     matched, reason = validate_against_candidates(parsed, candidates)
+    # CARD-NAME NARROWING (`collector_line_artist`'s own docstring section, 2026-07-29). Derived
+    # from the ALREADY-name-scoped `candidates` list this function's own INVARIANT below requires -
+    # so it inherits that scoping exactly, adds no query and no second name normaliser, and is
+    # empty (i.e. "don't narrow") precisely when the card's name resolved to no real printing.
+    card_artist_names = tuple(sorted({c.artist_name for c in candidates if c.artist_name}))
 
     if matched is not None:
         confidence = JOIN_KEY_CONFIDENCE_BOTH if parsed.set_code is not None else JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY
         return _apply_agreement_checks(
-            card_id, matched, confidence, parsed.raw_text, evidence, artist_lexicon=artist_lexicon
+            card_id,
+            matched,
+            confidence,
+            parsed.raw_text,
+            evidence,
+            artist_lexicon=artist_lexicon,
+            card_artist_names=card_artist_names,
         )
 
     if reason == "ambiguous":
@@ -873,6 +910,7 @@ def calculate_join_key_verdict(
                 f"{parsed.raw_text} + symbol_phash tiebreak",
                 evidence,
                 artist_lexicon=artist_lexicon,
+                card_artist_names=card_artist_names,
             )
         return JoinKeyVerdict(card_id=card_id, skip_reason="ambiguous", detail=parsed.raw_text)
 

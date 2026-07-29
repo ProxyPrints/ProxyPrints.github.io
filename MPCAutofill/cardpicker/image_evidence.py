@@ -245,7 +245,7 @@ from django.db.models import Q, QuerySet
 
 from cardpicker.collector_line_artist import (
     ArtistLexicon,
-    recover_artist_from_collector_line,
+    recover_artist_from_card_text,
 )
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
@@ -491,11 +491,81 @@ def _parse_is_lexicon_valid(parsed: Any, known_set_codes: Optional[frozenset[str
     return parsed.set_code is None or known_set_codes is None or parsed.set_code in known_set_codes
 
 
+@dataclass(frozen=True)
+class _LegalLineOutcome:
+    """One card's legal-line extraction result, held between the point it is COMPUTED and the
+    point its fields are STORED (2026-07-29 - see `_extract_legal_line` for why those are no
+    longer the same place)."""
+
+    crop_px: list[int]
+    raw_text: str
+    copyright_year: str
+    proxy_marker_detected: bool
+    found_something: bool
+
+
+def _extract_legal_line(image: Any, bleed_class: Optional[str], width: int, height: int) -> _LegalLineOutcome:
+    """The legal_line extractor's own compute (issue #151, task #159), factored out of
+    `compute_card_evidence`'s body UNCHANGED so it can run EARLIER than the point its results are
+    written (2026-07-29).
+
+    WHY IT HAD TO MOVE. `legal_line_crop_px` is the same y band as `collector_line_crop_px` at the
+    FULL card width (`local_ocr.LEGAL_LINE_CROP_BOX` vs `DEFAULT_CROP_BOX` - identical 0.90-0.965
+    vertical extent), so `legal_line_raw_text` holds the artist credit WHOLE where the collector
+    line holds a clipped prefix of it - see `collector_line_artist`'s own WIDENING THE READ
+    section. Both consumers of that recovery (the escalation gate's `_parse_artist_is_contradicted`
+    and the `artist_ocr_name` storage fallback) live in the OCR group, which used to run BEFORE
+    this extractor - so the better string existed but was not yet computed when it was needed.
+
+    NOTHING ELSE CHANGES. This extractor reads only `image`/`bleed_class`/`width`/`height`, all of
+    which are settled before the OCR group starts, and writes nothing outside its own return
+    value; `compute_card_evidence` still assigns `fields`/`skip_reasons`/`extractor_versions` at
+    the ORIGINAL position, so the stored JSON's own key order is byte-identical to pre-2026-07-29
+    and no extractor version moves. Its `profile["legal_line_ms"]` still measures exactly this
+    work, just at an earlier wall-clock moment.
+    """
+    crop_px = _crop_box_to_pixels(LEGAL_LINE_CROP_BOX, bleed_class, width, height)
+    legal_crop = image.crop(tuple(crop_px))
+    legal_variants = preprocess_variants(legal_crop)
+
+    # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md): lazily
+    # OCR each variant (run_tesseract, unchanged - no word boxes are stored for legal_line,
+    # so there's no TSV call to batch here the way collector_line_ocr's does above), stopping
+    # at the FIRST variant whose parse finds something (a year OR a proxy marker) rather than
+    # always running tesseract against every variant - same "first variant that produces
+    # something" precedence this selection already used, just applied to WHEN each variant
+    # gets OCR'd too.
+    legal_raw_texts: list[str] = []
+    selected_index = 0
+    legal_parsed = parse_legal_line("")
+    for i, variant in enumerate(legal_variants):
+        raw_text = run_tesseract(variant)
+        legal_raw_texts.append(raw_text)
+        legal_candidate_parse = parse_legal_line(raw_text)
+        if legal_candidate_parse.copyright_year is not None or legal_candidate_parse.proxy_marker_detected:
+            legal_parsed = legal_candidate_parse
+            selected_index = i
+            break
+    else:
+        if legal_raw_texts:
+            legal_parsed = parse_legal_line(legal_raw_texts[0])
+
+    return _LegalLineOutcome(
+        crop_px=crop_px,
+        raw_text=legal_raw_texts[selected_index] if legal_raw_texts else "",
+        copyright_year=legal_parsed.copyright_year or "",
+        proxy_marker_detected=legal_parsed.proxy_marker_detected,
+        found_something=legal_parsed.copyright_year is not None or legal_parsed.proxy_marker_detected,
+    )
+
+
 def _parse_artist_is_contradicted(
     parsed: Any,
     raw_text: str,
     artist_lexicon: "Optional[ArtistLexicon]",
     printing_artist_lookup: "Optional[Callable[[Optional[str], Optional[str]], Optional[str]]]",
+    legal_line_raw_text: str = "",
+    card_artist_names: tuple[str, ...] = (),
 ) -> bool:
     """COLLECTOR-LINE ARTIST GATE (2026-07-29 - see `compute_card_evidence`'s own `artist_lexicon`
     docstring paragraph for the full autopsy). The second half of the escalation loop's acceptance
@@ -515,12 +585,21 @@ def _parse_artist_is_contradicted(
         against - the same carve-out `_parse_is_lexicon_valid` itself makes);
       - the (set, number) pair resolves to no real printing (nothing to compare against);
       - the collector line yields no confident artist reading at all.
+
+    `legal_line_raw_text`/`card_artist_names` (2026-07-29 - see `collector_line_artist`'s own
+    WIDENING THE READ and CARD-NAME NARROWING sections): the full-width read of the SAME print row
+    this attempt's own `raw_text` clips, and the artists who illustrated a printing of this card's
+    name. Both are precision inputs to the reading only - neither can make this function decide
+    "contradicted" out of nothing, since an unreadable artist still returns False below. Both
+    default to "absent", which is byte-identical to pre-2026-07-29 behaviour.
     """
     if artist_lexicon is None or printing_artist_lookup is None:
         return False
     if parsed.set_code is None or parsed.collector_number is None:
         return False
-    recovered = recover_artist_from_collector_line(raw_text, artist_lexicon)
+    recovered = recover_artist_from_card_text(
+        raw_text, legal_line_raw_text, artist_lexicon, allowed_artist_names=card_artist_names
+    )
     if recovered is None:
         return False
     printing_artist = printing_artist_lookup(parsed.set_code, parsed.collector_number)
@@ -555,6 +634,7 @@ def extract_card_evidence(
     known_set_codes: Optional[frozenset[str]] = None,
     artist_lexicon: Optional[ArtistLexicon] = None,
     printing_artist_lookup: Optional[Callable[[Optional[str], Optional[str]], Optional[str]]] = None,
+    name_artist_lookup: Optional[Callable[[str], tuple[str, ...]]] = None,
 ) -> ExtractionResult:
     """
     The per-card callable work unit - fetch, then compute. `card.content_phash` (not recomputed
@@ -593,6 +673,15 @@ def extract_card_evidence(
     `compute_card_evidence` below - see that function's own docstring for the COLLECTOR-LINE
     ARTIST GATE they control. Both default to `None` (gate off, behavior identical to
     pre-2026-07-29).
+
+    `name_artist_lookup` (2026-07-29), if given, is `collector_line_artist.
+    build_name_artist_lookup()`'s resolver - built once per batch by the caller, the same
+    convention the two arguments above already follow. THIS function resolves it against
+    `card.name` and hands `compute_card_evidence` the resulting tuple rather than passing the
+    callable down: `compute_card_evidence` takes a plain `card_id` precisely so it can be the
+    picklable `ProcessPoolExecutor` entrypoint, and a resolver holding a 113k-row index is not
+    something to send across that boundary. `None` (the default) means no narrowing - every
+    pre-2026-07-29 caller's behaviour, unchanged.
     """
 
     fetch_started_at = time.monotonic()
@@ -615,6 +704,7 @@ def extract_card_evidence(
         known_set_codes=known_set_codes,
         artist_lexicon=artist_lexicon,
         printing_artist_lookup=printing_artist_lookup,
+        card_artist_names=() if name_artist_lookup is None else name_artist_lookup(card.name),
         md5_checksum=card.md5_checksum,
         sha256_checksum=card.sha256_checksum,
     )
@@ -634,6 +724,7 @@ def compute_card_evidence(
     known_set_codes: Optional[frozenset[str]] = None,
     artist_lexicon: Optional[ArtistLexicon] = None,
     printing_artist_lookup: Optional[Callable[[Optional[str], Optional[str]], Optional[str]]] = None,
+    card_artist_names: tuple[str, ...] = (),
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
 ) -> ExtractionResult:
@@ -765,6 +856,33 @@ def compute_card_evidence(
     `collector_line_artist.load_artist_lexicon`/`build_printing_artist_lookup` are called once per
     batch by the caller (`stage_e_dispatch._run_stage_c`).
 
+    TWO PRECISION FIXES TO THE READING ITSELF (2026-07-29), both of which sharpen the gate above
+    AND the `artist_ocr_name` storage fallback further down, and neither of which changes what any
+    extractor stores or bumps any extractor version. See `collector_line_artist`'s own WIDENING THE
+    READ and CARD-NAME NARROWING sections for the measurements; in this module:
+
+      1. THE FULL-WIDTH TWIN OF THE COLLECTOR CROP WAS ALREADY BEING EXTRACTED. The artist credit
+         prints to the RIGHT of the set code on the collector line, past `DEFAULT_CROP_BOX`'s 35%
+         right edge, which is why the collector read truncates it ('MMQ: EN > TERESE NIE'). The
+         legal_line extractor crops the IDENTICAL y band (0.90-0.965) at the FULL card width and
+         has been storing the untruncated string all along ('MMQ: EN > TERESE NIELSEN'). So the
+         artist reading now consumes BOTH strings. This is why `_extract_legal_line`'s compute is
+         hoisted above the OCR group (see its own docstring) - the storage position, the stored
+         values, and every extractor version are untouched. Widening `DEFAULT_CROP_BOX` itself was
+         the alternative and was rejected: it changes `collector_line_ocr`/`collector_line_tsv`
+         output, so both versions would have to be bumped, invalidating every existing row against
+         `run_image_evidence_cohort.MANIFEST_EXTRACTOR_CURRENT_VERSIONS` and forcing a ~220k-card
+         re-extraction to recover pixels this repository already had.
+
+      2. `card_artist_names` - the artists who illustrated a printing of this card's own NAME
+         (79.0% of canonical names have exactly one, 93.1% at most two), used to narrow an
+         otherwise-ambiguous reading. Passed in as a resolved tuple rather than a callable so this
+         function keeps issuing no DB query of its own and stays picklable for the
+         `ProcessPoolExecutor` compute stage; `extract_card_evidence`/`stage_e_dispatch` resolve it
+         from `collector_line_artist.build_name_artist_lookup()`, whose name resolution is
+         `local_identify_printing_tags.CandidateNameIndex.candidates_for` - the codebase's existing
+         normaliser, not a new one. Empty (the default) means no narrowing.
+
     `md5_checksum`/`sha256_checksum` (2026-07-25, issue #473 PR-2, folded with issue #472): the
     calling card's own live `Card.md5_checksum`/`Card.sha256_checksum` at the moment of THIS real
     extraction pass, stamped verbatim onto the result's `fields` (so
@@ -850,6 +968,19 @@ def compute_card_evidence(
         fields["artist_crop_px"] = _crop_box_to_pixels(ARTIST_CROP_BOX, bleed_class, width, height)
         fields["art_crop_px"] = _crop_box_to_pixels(ART_CROP_BOX, bleed_class, width, height)
     extractor_versions["crop_coordinates"] = CROP_COORDINATES_EXTRACTOR_VERSION
+
+    # legal_line COMPUTE, hoisted ahead of the OCR group (2026-07-29 - see `_extract_legal_line`'s
+    # own docstring for the full rationale). Its RESULTS are still stored at this extractor's own
+    # original position further down, so nothing about the persisted row changes; what moves is
+    # only WHEN the work happens, so that `legal_line_raw_text` - the full-width read of the same
+    # print row the collector-line crop clips at 35% - is already in hand when the OCR group below
+    # needs it to recover an untruncated artist credit.
+    _legal_line_started_at = time.monotonic()
+    legal_line: Optional[_LegalLineOutcome] = (
+        None if image is None else _extract_legal_line(image, bleed_class, width, height)
+    )
+    _legal_line_elapsed_ms = (time.monotonic() - _legal_line_started_at) * 1000
+    legal_line_raw_text = legal_line.raw_text if legal_line is not None else ""
 
     # collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group): consume
     # the *_crop_px pixel boxes crop_coordinates just computed above rather than recomputing them
@@ -938,7 +1069,12 @@ def compute_card_evidence(
             if candidate_parse.collector_number is not None:
                 if _parse_is_lexicon_valid(candidate_parse, known_set_codes):
                     if not _parse_artist_is_contradicted(
-                        candidate_parse, raw_text, artist_lexicon, printing_artist_lookup
+                        candidate_parse,
+                        raw_text,
+                        artist_lexicon,
+                        printing_artist_lookup,
+                        legal_line_raw_text=legal_line_raw_text,
+                        card_artist_names=card_artist_names,
                     ):
                         parsed = candidate_parse
                         selected_index = i
@@ -1046,11 +1182,20 @@ def compute_card_evidence(
 
         # COLLECTOR-LINE ARTIST RECOVERY (2026-07-29 - `cardpicker.collector_line_artist`), the
         # storage half of the same feature the escalation gate above uses for its own decision.
-        # Fills `artist_ocr_name` from the WINNING collector-line text when, and only when, the
+        # Fills `artist_ocr_name` from the card's own bottom print row when, and only when, the
         # "Illus." anchor found nothing - the anchor's own reading always wins, this can never
         # overwrite it. Measured read-only against production, 2026-07-29: `artist_ocr_name` is
         # blank on 93.7% of the 220,669 evidence rows, and this recovers a single unambiguous
-        # canonical artist for 21.8% of that blank population from a string already in hand.
+        # canonical artist for a large fraction of that blank population from strings already in
+        # hand.
+        #
+        # READS BOTH STORED READS OF THAT ROW (2026-07-29, `collector_line_artist`'s WIDENING THE
+        # READ): the winning collector-line text AND `legal_line_raw_text`, which is the SAME
+        # y band at the FULL card width and therefore carries the artist credit whole where the
+        # collector crop clips it. NARROWED BY CARD NAME (`card_artist_names`) so a read that is
+        # globally ambiguous between several real artists resolves against the one or two who
+        # actually illustrated this card. Still zero extra image work: both strings were already
+        # computed by extractors this function already runs.
         #
         # WHY THE EXISTING FIELD RATHER THAN A NEW PARALLEL ONE (owner preference, 2026-07-29):
         # `artist_ocr_name` already has live consumers - `local_calculate_verdicts.
@@ -1069,7 +1214,12 @@ def compute_card_evidence(
         # existing row against `run_image_evidence_cohort.MANIFEST_EXTRACTOR_CURRENT_VERSIONS` and
         # force a full 220k-card Stage C re-extraction.
         if artist_name is None and artist_lexicon is not None:
-            recovered_artist = recover_artist_from_collector_line(fields["collector_line_raw_text"], artist_lexicon)
+            recovered_artist = recover_artist_from_card_text(
+                fields["collector_line_raw_text"],
+                legal_line_raw_text,
+                artist_lexicon,
+                allowed_artist_names=card_artist_names,
+            )
             if recovered_artist is not None and recovered_artist.canonical_name is not None:
                 # `canonical_name` is a verbatim `CanonicalArtist.name` and is `None` unless the
                 # reading is compatible with exactly one of them - fuzzy MATCHING is permitted,
@@ -1140,44 +1290,22 @@ def compute_card_evidence(
     # with the collector-line crop is), then a tolerant parse for copyright year + the proxy/
     # not-for-sale moderator-flag signal. No candidate matching (Stage D's job, same as every
     # other OCR-adjacent extractor above).
-    _legal_line_started_at = time.monotonic()
-    if image is None:
+    #
+    # STORAGE ONLY (2026-07-29): the compute itself was hoisted above the OCR group - see
+    # `_extract_legal_line`'s own docstring - so this block writes exactly the same fields, in
+    # exactly the same order, from an outcome already in hand.
+    if legal_line is None:
         skip_reasons["legal_line"] = "fetch_failed"
     else:
-        fields["legal_line_crop_px"] = _crop_box_to_pixels(LEGAL_LINE_CROP_BOX, bleed_class, width, height)
-        legal_crop = image.crop(tuple(fields["legal_line_crop_px"]))
-        legal_variants = preprocess_variants(legal_crop)
-
-        # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md): lazily
-        # OCR each variant (run_tesseract, unchanged - no word boxes are stored for legal_line,
-        # so there's no TSV call to batch here the way collector_line_ocr's does above), stopping
-        # at the FIRST variant whose parse finds something (a year OR a proxy marker) rather than
-        # always running tesseract against every variant - same "first variant that produces
-        # something" precedence this selection already used, just applied to WHEN each variant
-        # gets OCR'd too.
-        legal_raw_texts: list[str] = []
-        selected_index = 0
-        legal_parsed = parse_legal_line("")
-        for i, variant in enumerate(legal_variants):
-            raw_text = run_tesseract(variant)
-            legal_raw_texts.append(raw_text)
-            legal_candidate_parse = parse_legal_line(raw_text)
-            if legal_candidate_parse.copyright_year is not None or legal_candidate_parse.proxy_marker_detected:
-                legal_parsed = legal_candidate_parse
-                selected_index = i
-                break
-        else:
-            if legal_raw_texts:
-                legal_parsed = parse_legal_line(legal_raw_texts[0])
-
-        fields["legal_line_raw_text"] = legal_raw_texts[selected_index] if legal_raw_texts else ""
-        fields["legal_line_copyright_year"] = legal_parsed.copyright_year or ""
-        fields["legal_line_proxy_marker_detected"] = legal_parsed.proxy_marker_detected
-        if legal_parsed.copyright_year is None and not legal_parsed.proxy_marker_detected:
+        fields["legal_line_crop_px"] = legal_line.crop_px
+        fields["legal_line_raw_text"] = legal_line.raw_text
+        fields["legal_line_copyright_year"] = legal_line.copyright_year
+        fields["legal_line_proxy_marker_detected"] = legal_line.proxy_marker_detected
+        if not legal_line.found_something:
             skip_reasons["legal_line"] = "no-text"
     extractor_versions["legal_line"] = LEGAL_LINE_EXTRACTOR_VERSION
     if profile is not None:
-        profile["legal_line_ms"] = (time.monotonic() - _legal_line_started_at) * 1000
+        profile["legal_line_ms"] = _legal_line_elapsed_ms
 
     # quality_signals (issue #150's re-spec, the LAST Stage C manifest extractor): a degenerate
     # (zero/negative) width or height is guarded before anything else - the same "sub-floor"

@@ -92,6 +92,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from cardpicker.collector_line_artist import (
+    build_name_artist_lookup,
     build_printing_artist_lookup,
     load_artist_lexicon,
 )
@@ -635,6 +636,13 @@ class _StageCFetchOutcome:
     fetch_latency_ms: float
     lockout: bool = False
     error: Optional[BaseException] = None
+    # 2026-07-29 (`collector_line_artist`'s CARD-NAME NARROWING): the card's own uploaded name,
+    # read off the SAME already-loaded `Card` instance every other field here comes from - no
+    # second query on either side of the fetch/compute boundary. The compute loop resolves it to
+    # this card's real artists via the batch's own `NameArtistLookup`; it is deliberately NOT
+    # resolved on the fetch thread, which must stay purely I/O-bound. Defaulted (like every field
+    # after `lockout` here) so the two error/lockout constructions above stay keyword-complete.
+    card_name: str = ""
 
 
 def _stage_c_fetch_ahead_worker(
@@ -700,6 +708,7 @@ def _stage_c_fetch_ahead_worker(
                     sha256_checksum=card.sha256_checksum,
                     image_bytes=None,
                     fetch_latency_ms=0.0,
+                    card_name=card.name,
                     lockout=True,
                 )
             )
@@ -714,6 +723,7 @@ def _stage_c_fetch_ahead_worker(
                     sha256_checksum=card.sha256_checksum,
                     image_bytes=None,
                     fetch_latency_ms=0.0,
+                    card_name=card.name,
                     error=exc,
                 )
             )
@@ -728,6 +738,7 @@ def _stage_c_fetch_ahead_worker(
                 sha256_checksum=card.sha256_checksum,
                 image_bytes=image_bytes,
                 fetch_latency_ms=fetch_latency_ms,
+                card_name=card.name,
             )
         )
 
@@ -864,6 +875,18 @@ def _run_stage_c(
     if not to_fetch:
         return None
 
+    # CARD-NAME NARROWING (2026-07-29 - see `collector_line_artist`'s own docstring section): the
+    # third batch-scoped resolver on this same "build once, thread through" convention, but built
+    # HERE rather than alongside the other two - after the transfer pass has already established
+    # that this batch really does have cards to extract. It is backed by
+    # `local_calculate_verdicts._get_cached_candidate_name_index()` (the single process-cached
+    # entry point that module documents as mandatory for every batch-reachable caller, so a worker
+    # that also runs Stage D shares the one index rather than building a second), and building
+    # that index is the most expensive of the three - a batch whose cards were all satisfied by
+    # evidence transfer must not pay for it, the same laziness `run_join_key_calculator`'s own
+    # `index` already practises.
+    name_artist_lookup = build_name_artist_lookup()
+
     # PHASE 2 (module docstring): decoupled fetch-ahead thread + this function's own sequential
     # compute loop.
     fetch_queue: "queue.Queue[_StageCFetchOutcome]" = queue.Queue(maxsize=_STAGE_C_FETCH_AHEAD_DEPTH)
@@ -909,6 +932,7 @@ def _run_stage_c(
                 known_set_codes=lexicon,
                 artist_lexicon=artist_lexicon,
                 printing_artist_lookup=printing_artist_lookup,
+                card_artist_names=name_artist_lookup(fetch_outcome.card_name),
                 md5_checksum=fetch_outcome.md5_checksum,
                 sha256_checksum=fetch_outcome.sha256_checksum,
             )

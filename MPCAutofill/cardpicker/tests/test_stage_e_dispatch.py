@@ -106,6 +106,7 @@ def _stub_compute_card_evidence_ok(**field_overrides: Any):
         known_set_codes=None,
         artist_lexicon=None,
         printing_artist_lookup=None,
+        card_artist_names=(),
         md5_checksum=None,
         sha256_checksum=None,
     ):
@@ -662,6 +663,7 @@ class TestForceStageCReextract:
             known_set_codes=None,
             artist_lexicon=None,
             printing_artist_lookup=None,
+            card_artist_names=(),
             md5_checksum=None,
             sha256_checksum=None,
         ):
@@ -1618,6 +1620,7 @@ class TestDecoupledFetchAhead:
             known_set_codes: Any = None,
             artist_lexicon: Any = None,
             printing_artist_lookup: Any = None,
+            card_artist_names: Any = (),
             md5_checksum: Any = None,
             sha256_checksum: Any = None,
         ) -> Any:
@@ -1769,6 +1772,7 @@ class TestDecoupledFetchAhead:
             known_set_codes: Any = None,
             artist_lexicon: Any = None,
             printing_artist_lookup: Any = None,
+            card_artist_names: Any = (),
             md5_checksum: Any = None,
             sha256_checksum: Any = None,
         ) -> Any:
