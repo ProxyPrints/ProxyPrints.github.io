@@ -30,22 +30,43 @@ the `funnel-counts-v1` pattern already established in `views.py` (`get_funnel_co
 structural difference: funnel-counts computes AND caches inline, in the same request that serves
 it; this feature's cache is instead populated by a SEPARATE management-command invocation.
 
-**Shared cache-backend prerequisite (issue #538, not this module's to fix).** This module uses
-the standard Django cache framework, same as `get_funnel_counts` and `cardpicker.review_clusters`
-- both of which work correctly today under this project's default `LocMemCache`, because gunicorn
-runs a single worker (`docker/django/Dockerfile`'s `CMD` has no `--workers` flag) and the SAME
-process both writes and later reads its own cache. This feature is different in one specific way,
-independent of worker count: `warm_artist_external_links` runs as a separate `manage.py`
-invocation (a cron entry) - a DIFFERENT OS process from the running web server regardless of
-worker count - so its cache writes are never visible to the process serving
-`2/artistExternalLinks/` requests. Until a shared backend is configured, this endpoint returns
-its not-found fallback on every request (safe degradation - the frontend falls back to today's
-existing behaviour) while the cron itself reports success every run. Tracked as issue #538
-(filed generically, since the unbuilt vote-stats design would have the same cross-process shape);
-the likely fix is a shared backend (`django.core.cache.backends.db.DatabaseCache` on the Postgres
-already present) landing in a SEPARATE infrastructure PR - this module's `cache.get`/`cache.set`
-calls need no further edit once that lands, since they already use the standard API. See
-`docs/features/artist-support-links.md`'s "Warming the cache" section for the full writeup.
+**Cache backend: a NAMED shared cache (`caches["shared"]`), deliberately NOT `default` (issue
+#538).** This module reads and writes `caches["shared"]`, never Django's `default` cache. That's
+not an arbitrary choice: `default` stays `LocMemCache` (per-process, in-memory) on purpose,
+because two OTHER things in this codebase already depend on that:
+
+- `django-ratelimit` (`views.py`'s `@ratelimit` decorators, including
+  `get_artist_external_links`'s own) runs against `default` with no `RATELIMIT_*` override in
+  `settings.py` - repointing `default` at a database-backed cache would turn every rate-limited
+  request into a DB read plus write, adding load through the exact mechanism meant to shed it.
+- `cardpicker.review_clusters` caches a `list[ReviewCluster]` built over a ~135k-row queue on
+  `default` - a `DatabaseCache` there means a pickle round-trip through Postgres on every read.
+
+Neither is broken today (gunicorn runs a single worker - `docker/django/Dockerfile`'s `CMD` has
+no `--workers` flag - so the SAME process both writes and later reads its own `default` cache),
+so neither should move. THIS feature is the one with the actual cross-process gap: a
+cron-invoked `warm_artist_external_links` runs as a separate `manage.py` process, a different OS
+process from the running web server, so writes to a per-process cache are never visible to the
+process serving `2/artistExternalLinks/` requests - independent of worker count. A second,
+NAMED cache (`caches["shared"]`, backed by something actually shared across processes -
+`DatabaseCache` on Postgres is the leading candidate) is the fix, tracked as issue #538 and
+landing in a SEPARATE infrastructure PR. **Do not "simplify" this later by moving `default` and
+`review_clusters`/rate-limiting onto the same shared backend** - re-read the two bullets above
+first if that ever looks tempting.
+
+**Graceful degradation when `"shared"` isn't configured yet - merge order with #538 doesn't
+matter.** `caches["shared"]` raises `InvalidCacheBackendError` if no such alias exists in
+`CACHES`. The read path (`get_cached_artist_external_links`) catches this and treats it EXACTLY
+as a cache miss - `not_found_record()`, the frontend degrades to today's existing behaviour,
+never a 500 because an optional infrastructure piece isn't wired up yet. The write path
+(`warm_artist_external_links_cache`, called from the cron) does the opposite on purpose: it lets
+this surface as a loud, actionable failure (see that function's own docstring) - a cron run that
+silently writes nowhere and reports success is exactly the original bug this feature shipped
+with, and swallowing it a second way here would reintroduce it. Because of this split, THIS PR
+and the #538 infrastructure PR can land and be deployed in EITHER order with no broken
+intermediate state: before #538, the endpoint just serves not-found (identical to today); after
+it, `warm_artist_external_links` starts working and the endpoint starts serving real data with
+no code change on either side.
 
 **The normaliser (`normalise_artist_record`) is the core of this module.** The upstream data is
 dirty in specific, measured ways (all confirmed against the real bulk export, 2,389 records):
@@ -98,11 +119,15 @@ from urllib.parse import urlparse
 
 import requests
 
-from django.core.cache import cache
+from django.core.cache import InvalidCacheBackendError, caches
 
 logger = logging.getLogger(__name__)
 
 MTGAC_BULK_URL = "https://mtgartistconnectionwebservice-production.up.railway.app/api/public/artists"
+
+# The named cache alias this feature reads/writes - deliberately NOT Django's `default` cache.
+# See module docstring's "Cache backend: a NAMED shared cache" section for why.
+SHARED_CACHE_ALIAS = "shared"
 
 # Versioned so a future shape change can be rolled out without a stale-shaped blob confusing a
 # freshly-deployed reader - same idiom as views.py's "funnel-counts-v1".
@@ -268,6 +293,38 @@ def fetch_bulk_export(timeout: float = 30.0) -> list[dict[str, Any]]:
     return data
 
 
+def _shared_cache_for_read() -> Optional[Any]:
+    """
+    Returns the named `"shared"` cache backend for the READ path, or `None` if it isn't
+    configured (`InvalidCacheBackendError`) - see module docstring's "Graceful degradation"
+    section. A missing `"shared"` alias here is treated EXACTLY like a cache miss by the caller,
+    never an exception that could 500 the endpoint.
+    """
+    try:
+        return caches[SHARED_CACHE_ALIAS]
+    except InvalidCacheBackendError:
+        return None
+
+
+def _shared_cache_for_write() -> Any:
+    """
+    Returns the named `"shared"` cache backend for the WRITE path (the warm command), or raises
+    `RuntimeError` with an actionable message if it isn't configured - deliberately NOT swallowed
+    the way the read path swallows it. See module docstring's "Graceful degradation" section: a
+    warm run that appears to succeed while silently writing nowhere is exactly the original bug
+    this feature shipped with, so this surfaces loudly instead of repeating it.
+    """
+    try:
+        return caches[SHARED_CACHE_ALIAS]
+    except InvalidCacheBackendError as e:
+        raise RuntimeError(
+            f"The {SHARED_CACHE_ALIAS!r} cache backend is not configured in CACHES "
+            "(MPCAutofill/settings.py) - issue #538 tracks the infrastructure PR that adds it. "
+            "warm_artist_external_links cannot write anywhere without it, so refusing to run "
+            "rather than silently succeeding while writing nowhere."
+        ) from e
+
+
 def warm_artist_external_links_cache() -> dict[str, dict[str, Any]]:
     """
     Fetch + normalise + write the cache blob in one call - the body of the
@@ -276,13 +333,20 @@ def warm_artist_external_links_cache() -> dict[str, dict[str, Any]]:
     costs at most 1 request against MTGAC's disclosed 12/hour bulk-endpoint budget (see
     `fetch_bulk_export`'s own docstring for the full rate-limit/no-retry rationale).
 
+    Resolves the `"shared"` cache backend BEFORE making any outbound call (`_shared_cache_for_
+    write` raises immediately if it isn't configured) - a misconfigured environment therefore
+    never wastes any of MTGAC's rate-limit budget on a fetch whose result couldn't be written
+    down anyway.
+
     Raises `ValueError` (fetch/shape errors propagate from `fetch_bulk_export` as-is) on ANY
-    failure, WITHOUT writing to the cache first - a refresh that can't complete cleanly must
-    leave the previous good blob in place, never overwrite it with an empty or partial one, and
-    is never itself retried within this call - the next attempt is the next scheduled cron run.
-    Returns the blob it wrote, so the calling command can report a real summary (artist count,
-    link count, etc.) without a second cache read.
+    fetch/shape failure, WITHOUT writing to the cache first - a refresh that can't complete
+    cleanly must leave the previous good blob in place, never overwrite it with an empty or
+    partial one, and is never itself retried within this call - the next attempt is the next
+    scheduled cron run. Returns the blob it wrote, so the calling command can report a real
+    summary (artist count, link count, etc.) without a second cache read.
     """
+    shared_cache = _shared_cache_for_write()
+
     records = fetch_bulk_export()
     if not records:
         raise ValueError("MTGAC bulk export returned zero records - refusing to overwrite the existing cache.")
@@ -291,22 +355,28 @@ def warm_artist_external_links_cache() -> dict[str, dict[str, Any]]:
     if not blob:
         raise ValueError("Normalised MTGAC blob is empty - refusing to overwrite the existing cache.")
 
-    cache.set(CACHE_KEY, blob, timeout=CACHE_TIMEOUT)
+    shared_cache.set(CACHE_KEY, blob, timeout=CACHE_TIMEOUT)
     return blob
 
 
 def get_cached_artist_external_links(artist_name: str) -> dict[str, Any]:
     """
     Cache-only read - NEVER calls upstream, regardless of hit or miss. Returns
-    `not_found_record()` both when the cache hasn't been warmed yet at all (blob missing) and
-    when this specific artist simply isn't in MTGAC's directory (name absent from the blob).
+    `not_found_record()` when: the `"shared"` cache backend isn't configured yet (see module
+    docstring's "Graceful degradation" section - this is the common case until issue #538 lands),
+    the cache hasn't been warmed yet even though it IS configured (blob missing), or this
+    specific artist simply isn't in MTGAC's directory (name absent from the blob). All three look
+    identical to the caller, by design.
 
     Deliberately does NOT check `CanonicalArtist` - that restriction (the requested name must be
     one this project actually indexes, so this endpoint can't be used to enumerate MTGAC's whole
     directory) is the CALLER's job (`views.get_artist_external_links`), not this cache-reading
     primitive's - keeps this function reusable/testable independent of that policy.
     """
-    blob = cache.get(CACHE_KEY)
+    shared_cache = _shared_cache_for_read()
+    if shared_cache is None:
+        return not_found_record()
+    blob = shared_cache.get(CACHE_KEY)
     if not blob:
         return not_found_record()
     return blob.get(artist_name) or not_found_record()

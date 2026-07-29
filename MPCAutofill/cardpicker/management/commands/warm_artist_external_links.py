@@ -27,21 +27,20 @@ to "no data for this artist" beats a fresh-but-broken one that quietly drops eve
 A cron that fails today and isn't re-run until tomorrow's scheduled invocation is the desired
 behaviour, not a bug to paper over.
 
-**Shared cache-backend prerequisite (issue #538, not this command's to fix).** This project's
-`CACHES` setting has no override, so Django falls back to its default `LocMemCache` - a cache
-that lives in one Python process's memory only. `get_funnel_counts`/`cardpicker.review_clusters`
-depend on the same cache framework and work correctly today, because gunicorn runs a single
-worker (`docker/django/Dockerfile`'s `CMD` has no `--workers` flag) and the SAME process both
-writes and reads its own cache. THIS command is different, independent of worker count: it runs
-as a separate `manage.py` invocation (a cron entry) - a different OS process from the running web
-server - so its writes never reach whatever cache a gunicorn worker reads from. Until a shared
-backend is configured (tracked as issue #538) this command will keep reporting success on every
-run while the endpoint keeps returning its not-found fallback - not a bug in this command, a
-known cross-process limitation of the standard `django.core.cache` API it already uses correctly
-(via `warm_artist_external_links_cache`), fixed by a separate infrastructure PR, not an edit
-here. See `cardpicker.artist_external_links`'s own module docstring and
-`docs/features/artist-support-links.md`'s "Warming the cache" section for the full writeup.
-Scheduling the actual daily cron entry is a separate, still-open owner item too.
+**Writes a NAMED `"shared"` cache, not Django's `default` (issue #538) - and FAILS LOUDLY if it
+isn't configured.** `default` stays `LocMemCache` on purpose (django-ratelimit and
+`cardpicker.review_clusters` both depend on that - see `cardpicker.artist_external_links`'s own
+module docstring for why moving them would be actively worse, not just unnecessary). This
+command instead writes `caches["shared"]`, resolved BEFORE any outbound MTGAC call so a
+misconfigured environment never wastes rate-limit budget on a fetch it couldn't have written down
+anyway. If `"shared"` isn't configured, this command exits non-zero with a clear, actionable
+`CommandError` (unlike the read endpoint, which degrades a missing `"shared"` cache to its
+ordinary not-found response, never a 500 - see the module docstring's "Graceful degradation"
+section) - a cron run that silently writes nowhere and reports success is exactly the bug this
+feature originally shipped with, and this command must not repeat it a second way. Once `"shared"`
+is configured (a separate infrastructure PR, issue #538), this command needs no further edit -
+merge/deploy order between that PR and this one doesn't matter. Scheduling the actual daily cron
+entry is a separate, still-open owner item too.
 """
 
 from typing import Any

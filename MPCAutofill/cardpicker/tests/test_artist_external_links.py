@@ -11,18 +11,27 @@ priority order and 5-cap, affiliate parameter preservation, and the signature-se
 Endpoint tests need `db` (CanonicalArtist lookups) and therefore the Postgres testcontainer this
 project's conftest.py spins up - may be blocked by port conflicts on a shared box; the normaliser/
 cache/command tests below do not need `db` at all and should always be runnable.
+
+Cache setup: this feature reads/writes the NAMED `"shared"` cache alias (`SHARED_CACHE_ALIAS`),
+deliberately not Django's `default` (see cardpicker.artist_external_links's own module docstring
+for why). `_shared_cache_configured` (autouse) provisions a real `"shared"` LocMemCache alias for
+every test in this file by default - the state this feature actually runs under once issue #538's
+infrastructure PR lands. `TestSharedCacheNotConfigured` overrides this per-test with its own
+`override_settings(CACHES=...)` that omits `"shared"` entirely, to cover the pre-#538 state.
 """
 
 from unittest.mock import patch
 
 import pytest
 
-from django.core.cache import cache
+from django.core.cache import caches
 from django.core.management import CommandError, call_command
+from django.test import override_settings
 from django.urls import reverse
 
 from cardpicker.artist_external_links import (
     CACHE_KEY,
+    SHARED_CACHE_ALIAS,
     compute_artist_external_links_blob,
     fetch_bulk_export,
     get_cached_artist_external_links,
@@ -45,12 +54,27 @@ from cardpicker.tests.mtgac_synthetic_fixtures import (
     raw_record,
 )
 
+# A real "shared" cache alias, distinct from "default" - matches the post-#538 shape this feature
+# is designed for. Tests that need the "shared" alias to be ABSENT (the pre-#538 degradation
+# path) override CACHES themselves with a dict that omits "shared" entirely - see
+# TestSharedCacheNotConfigured below.
+_TEST_CACHES = {
+    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+    "shared": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "test-artist-external-links-shared",
+    },
+}
+
 
 @pytest.fixture(autouse=True)
-def _clear_cache():
-    cache.clear()
-    yield
-    cache.clear()
+def _shared_cache_configured():
+    with override_settings(CACHES=_TEST_CACHES):
+        caches["default"].clear()
+        caches[SHARED_CACHE_ALIAS].clear()
+        yield
+        caches["default"].clear()
+        caches[SHARED_CACHE_ALIAS].clear()
 
 
 def _link_types(record: dict) -> list[str]:
@@ -239,14 +263,69 @@ class TestGetCachedArtistExternalLinks:
         assert get_cached_artist_external_links("Aurelia Thistledown") == not_found_record()
 
     def test_returns_not_found_when_artist_absent_from_populated_blob(self):
-        cache.set(CACHE_KEY, compute_artist_external_links_blob([CLEAN_RECORD]))
+        caches[SHARED_CACHE_ALIAS].set(CACHE_KEY, compute_artist_external_links_blob([CLEAN_RECORD]))
         assert get_cached_artist_external_links("Someone Else Entirely") == not_found_record()
 
     def test_returns_normalised_record_on_hit(self):
-        cache.set(CACHE_KEY, compute_artist_external_links_blob([CLEAN_RECORD]))
+        caches[SHARED_CACHE_ALIAS].set(CACHE_KEY, compute_artist_external_links_blob([CLEAN_RECORD]))
         result = get_cached_artist_external_links(CLEAN_RECORD["name"])
         assert result["found"] is True
         assert result["pageUrl"] == CLEAN_RECORD["pageUrl"]
+
+
+# CACHES with no "shared" alias at all - simulates every environment before issue #538's
+# infrastructure PR lands, regardless of what the real settings.py currently has (deliberately
+# NOT relying on "the real settings.py just happens to lack `shared` today", which would silently
+# start testing the wrong thing the moment that PR merges).
+_CACHES_WITHOUT_SHARED = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+
+
+class TestSharedCacheNotConfigured:
+    """
+    Covers the pre-#538 state: the named `"shared"` cache alias doesn't exist in `CACHES` at
+    all. `caches["shared"]` raises `InvalidCacheBackendError` in this state - the read path must
+    swallow it and degrade to an ordinary not-found response (never a 500), while the warm
+    command must NOT swallow it (a cron run that silently writes nowhere while reporting success
+    is exactly the bug this feature originally shipped with).
+    """
+
+    def test_read_path_returns_not_found_without_raising(self):
+        with override_settings(CACHES=_CACHES_WITHOUT_SHARED):
+            result = get_cached_artist_external_links(CLEAN_RECORD["name"])
+        assert result == not_found_record()
+
+    def test_read_path_makes_no_outbound_call_either(self):
+        with override_settings(CACHES=_CACHES_WITHOUT_SHARED):
+            with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+                get_cached_artist_external_links(CLEAN_RECORD["name"])
+                mock_get.assert_not_called()
+
+    def test_endpoint_returns_not_found_shape_not_a_500(self, client, django_settings):
+        artist = CanonicalArtistFactory(name=CLEAN_RECORD["name"])
+        with override_settings(CACHES=_CACHES_WITHOUT_SHARED):
+            response = client.get(reverse("get_artist_external_links"), {"name": artist.name})
+        assert response.status_code == 200
+        assert response.json() == {
+            "found": False,
+            "pageUrl": None,
+            "location": None,
+            "links": [],
+            "hasSignatureService": False,
+        }
+
+    def test_warm_function_raises_a_clear_runtime_error_before_any_outbound_call(self):
+        with override_settings(CACHES=_CACHES_WITHOUT_SHARED):
+            with patch("cardpicker.artist_external_links.requests.get") as mock_get:
+                with pytest.raises(RuntimeError, match="shared.*not configured"):
+                    warm_artist_external_links_cache()
+                # resolved BEFORE fetching, so a misconfigured environment never wastes any of
+                # MTGAC's rate-limit budget on a fetch it couldn't have written down anyway.
+                mock_get.assert_not_called()
+
+    def test_warm_command_exits_non_zero_with_a_comprehensible_message(self):
+        with override_settings(CACHES=_CACHES_WITHOUT_SHARED):
+            with pytest.raises(CommandError, match="shared.*not configured"):
+                call_command("warm_artist_external_links")
 
 
 class TestFetchBulkExport:
@@ -289,7 +368,7 @@ class TestWarmArtistExternalLinksCache:
     def test_writes_normalised_blob_to_cache(self):
         with patch("cardpicker.artist_external_links.fetch_bulk_export", return_value=[CLEAN_RECORD]):
             warm_artist_external_links_cache()
-        cached = cache.get(CACHE_KEY)
+        cached = caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
         assert cached is not None
         assert CLEAN_RECORD["name"] in cached
 
@@ -298,29 +377,29 @@ class TestWarmArtistExternalLinksCache:
             first = warm_artist_external_links_cache()
             second = warm_artist_external_links_cache()
         assert first == second
-        assert cache.get(CACHE_KEY) == second
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) == second
 
     def test_empty_export_raises_and_leaves_prior_cache_untouched(self):
         with patch("cardpicker.artist_external_links.fetch_bulk_export", return_value=[CLEAN_RECORD]):
             warm_artist_external_links_cache()
-        good_cache = cache.get(CACHE_KEY)
+        good_cache = caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
 
         with patch("cardpicker.artist_external_links.fetch_bulk_export", return_value=[]):
             with pytest.raises(ValueError):
                 warm_artist_external_links_cache()
 
-        assert cache.get(CACHE_KEY) == good_cache
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) == good_cache
 
     def test_fetch_failure_raises_and_leaves_prior_cache_untouched(self):
         with patch("cardpicker.artist_external_links.fetch_bulk_export", return_value=[CLEAN_RECORD]):
             warm_artist_external_links_cache()
-        good_cache = cache.get(CACHE_KEY)
+        good_cache = caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
 
         with patch("cardpicker.artist_external_links.fetch_bulk_export", side_effect=OSError("network down")):
             with pytest.raises(OSError):
                 warm_artist_external_links_cache()
 
-        assert cache.get(CACHE_KEY) == good_cache
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) == good_cache
 
     def test_successful_run_makes_exactly_one_outbound_call(self):
         # Patched at requests.get, not fetch_bulk_export, so this exercises the REAL
@@ -350,19 +429,19 @@ class TestWarmArtistExternalLinksCommand:
     def test_failure_exits_non_zero_and_leaves_cache_untouched(self):
         with patch("cardpicker.artist_external_links.fetch_bulk_export", return_value=[CLEAN_RECORD]):
             call_command("warm_artist_external_links")
-        good_cache = cache.get(CACHE_KEY)
+        good_cache = caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
 
         with patch("cardpicker.artist_external_links.fetch_bulk_export", side_effect=OSError("network down")):
             with pytest.raises(CommandError):
                 call_command("warm_artist_external_links")
 
-        assert cache.get(CACHE_KEY) == good_cache
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) == good_cache
 
     def test_re_running_after_success_is_safe(self):
         with patch("cardpicker.artist_external_links.fetch_bulk_export", return_value=[CLEAN_RECORD]):
             call_command("warm_artist_external_links")
             call_command("warm_artist_external_links")
-        assert CLEAN_RECORD["name"] in cache.get(CACHE_KEY)
+        assert CLEAN_RECORD["name"] in caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
 
     def test_one_command_invocation_makes_exactly_one_outbound_call_on_success(self):
         with patch("cardpicker.artist_external_links.requests.get") as mock_get:
@@ -382,7 +461,7 @@ class TestWarmArtistExternalLinksCommand:
 class TestGetArtistExternalLinksView:
     def test_cache_hit_for_an_indexed_artist_returns_normalised_links(self, client, django_settings):
         artist = CanonicalArtistFactory(name=CLEAN_RECORD["name"])
-        cache.set(CACHE_KEY, compute_artist_external_links_blob([CLEAN_RECORD]))
+        caches[SHARED_CACHE_ALIAS].set(CACHE_KEY, compute_artist_external_links_blob([CLEAN_RECORD]))
 
         response = client.get(reverse("get_artist_external_links"), {"name": artist.name})
 
@@ -394,7 +473,7 @@ class TestGetArtistExternalLinksView:
 
     def test_cache_miss_returns_not_found_and_makes_no_outbound_call(self, client, django_settings):
         artist = CanonicalArtistFactory(name=CLEAN_RECORD["name"])
-        assert cache.get(CACHE_KEY) is None
+        assert caches[SHARED_CACHE_ALIAS].get(CACHE_KEY) is None
 
         with patch("cardpicker.artist_external_links.requests.get") as mock_get:
             response = client.get(reverse("get_artist_external_links"), {"name": artist.name})
@@ -407,7 +486,7 @@ class TestGetArtistExternalLinksView:
     def test_artist_absent_from_canonical_artist_returns_not_found_even_if_cached(self, client, django_settings):
         # cache has real data for this name, but no CanonicalArtist row exists for it - this
         # endpoint must not be usable as a free-text lookup against the raw cached blob.
-        cache.set(CACHE_KEY, compute_artist_external_links_blob([CLEAN_RECORD]))
+        caches[SHARED_CACHE_ALIAS].set(CACHE_KEY, compute_artist_external_links_blob([CLEAN_RECORD]))
 
         with patch("cardpicker.artist_external_links.requests.get") as mock_get:
             response = client.get(reverse("get_artist_external_links"), {"name": CLEAN_RECORD["name"]})

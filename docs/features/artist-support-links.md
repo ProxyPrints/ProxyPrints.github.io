@@ -226,27 +226,41 @@ docstring first.
 1. **A daily cron must be scheduled** to run
    `warm_artist_external_links` - nothing runs it automatically yet.
 2. **A shared cache backend is a tracked prerequisite, not something this
-   PR fixes.** This feature uses the standard Django cache framework
-   (`django.core.cache`), same as `get_funnel_counts` and
-   `cardpicker.review_clusters` - both of which work correctly today under
-   this project's default `LocMemCache`, because gunicorn runs a single
-   worker (`docker/django/Dockerfile`'s `CMD` has no `--workers` flag) and
-   the SAME process both computes/writes and later reads its own cache.
-   This feature is different in one specific way, independent of worker
-   count: `warm_artist_external_links` runs as a separate `manage.py`
-   invocation (a cron entry), which is a DIFFERENT OS process from the
-   running web server regardless of how many gunicorn workers exist. That
-   process's cache writes are therefore never visible to the process
-   serving `2/artistExternalLinks/` requests - until a shared backend is
-   configured, this endpoint returns its not-found fallback on every
-   request (the frontend degrades to today's existing behaviour, which is
-   safe) while the cron itself reports success every run. Tracked as
-   **issue #538** (filed generically - the unbuilt vote-stats design would
-   have the same cross-process shape). The likely fix
-   (`django.core.cache.backends.db.DatabaseCache` on the Postgres already
-   present - no new service, no new dependency) is a **separate PR**; this
-   endpoint's cache-read/cache-write code needs no further edit once that
-   lands, since it already uses the standard `django.core.cache` API.
+   PR fixes - but merge order no longer matters (see below).** This
+   feature reads and writes a NAMED cache, `caches["shared"]`, deliberately
+   NOT Django's `default` cache
+   (`cardpicker.artist_external_links.SHARED_CACHE_ALIAS`). That's not
+   incidental: `default` stays `LocMemCache` on purpose, because two other
+   things already depend on that exact property -
+   `django-ratelimit` (no `RATELIMIT_*` override in `settings.py`) runs
+   against `default`, and `cardpicker.review_clusters` caches a
+   `list[ReviewCluster]` built over a ~135k-row queue on `default` too -
+   repointing `default` at a database-backed cache would turn every
+   rate-limited request into a DB read/write and every review-cluster
+   fetch into a pickle round-trip through Postgres, adding load through
+   the exact mechanisms meant to shed it. Neither is broken today
+   (gunicorn runs a single worker - `docker/django/Dockerfile`'s `CMD` has
+   no `--workers` flag - so the SAME process both writes and reads its own
+   `default` cache), so neither should move onto a shared backend.
+   `warm_artist_external_links` has the actual cross-process gap instead:
+   it runs as a separate `manage.py` invocation (a cron entry), a
+   different OS process from the running web server, so its writes to a
+   per-process cache are never visible to the process serving
+   `2/artistExternalLinks/` requests - independent of worker count. The
+   fix is a SECOND, named cache alias (`caches["shared"]`, backed by
+   something actually shared across processes - `DatabaseCache` on the
+   Postgres already present is the leading candidate), tracked as
+   **issue #538** and landing in a **separate infrastructure PR**.
+   **Graceful degradation means merge/deploy order between that PR and
+   this one doesn't matter**: `caches["shared"]` raises
+   `InvalidCacheBackendError` when the alias doesn't exist yet: the read
+   endpoint catches this and returns its ordinary not-found response
+   (identical to today's behaviour, never a 500), while the warm command
+   deliberately does NOT catch it - it exits non-zero with a clear message
+   instead, because a cron run that silently writes nowhere while
+   reporting success is exactly the bug this feature originally shipped
+   with. Once `"shared"` is configured, both sides start working with no
+   further code change on either side.
 
 ### Licence status
 

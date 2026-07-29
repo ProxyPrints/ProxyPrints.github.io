@@ -804,14 +804,17 @@ def get_artist_external_links(request: HttpRequest) -> HttpResponse:
     request via the `name` query parameter - there is no bulk/list shape, this never returns more
     than one artist's data.
 
-    Two independent reasons a request returns the "not found" shape (found=False, no links):
-    (1) `name` doesn't match any `CanonicalArtist` this project actually indexes - deliberate,
-    not an oversight: without this check, this endpoint would be a free-text lookup against the
-    raw cached MTGAC blob, i.e. an enumerable mirror of their whole directory, which is exactly
-    what this feature's "no proxy, no embed" posture rules out. (2) the name IS a real
-    CanonicalArtist but isn't present in the cache blob, either because MTGAC has no page for
-    them or because the daily warm run hasn't populated the cache yet - both look identical to
-    the caller, same as a `CanonicalArtist` existing with no votes yet.
+    Three independent reasons a request returns the "not found" shape (found=False, no links),
+    all indistinguishable to the caller by design: (1) `name` doesn't match any `CanonicalArtist`
+    this project actually indexes - deliberate, not an oversight: without this check, this
+    endpoint would be a free-text lookup against the raw cached MTGAC blob, i.e. an enumerable
+    mirror of their whole directory, which is exactly what this feature's "no proxy, no embed"
+    posture rules out. (2) the name IS a real CanonicalArtist but isn't present in the cache
+    blob, either because MTGAC has no page for them or because the daily warm run hasn't
+    populated the cache yet. (3) the named `"shared"` cache backend this feature reads
+    (`cardpicker.artist_external_links.SHARED_CACHE_ALIAS`) isn't configured in this environment
+    at all yet (issue #538) - graceful degradation, not an error; see that module's own
+    docstring's "Graceful degradation" section.
 
     Never calls upstream itself, on a cache hit OR a cache miss - see
     `cardpicker.artist_external_links.get_cached_artist_external_links`'s own docstring for why
