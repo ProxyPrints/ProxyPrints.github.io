@@ -28,6 +28,14 @@ on:
       - ".github/workflows/docs-lint.yml"
       - "readme.md"
       - "NOTICE"
+      # PROTECTED CORE roster (check_protected_core_license.py): the roster
+      # is DERIVED from license-provenance.md's marker region (covered by
+      # `docs/**` above), but the FILES it gates must trigger too — a PR
+      # that pastes AGPL-marked code into the decrypt tool touches no doc
+      # and no cardpicker module, and would otherwise miss this lint
+      # entirely until the weekly cron. `federation-hash-tool/**` below is
+      # the same entry for the other standalone trust-anchor tool.
+      - "decrypt-saved-deck-export/**"
       - "MPCAutofill/cardpicker/vote_consensus.py"
       - "MPCAutofill/cardpicker/printing_consensus.py"
       - "MPCAutofill/cardpicker/tag_consensus.py"
