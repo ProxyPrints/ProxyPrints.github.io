@@ -1469,9 +1469,11 @@ class TestRunPilotAgreementAndDisagreement:
 
     def test_only_requested_engine_appears_in_results(self, db, monkeypatch):
         results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=True, nice=False)
-        # "fallback" (pass 2) always gets a result entry - it isn't a selectable --engine, it
-        # fires automatically whenever pass 1 (whichever engines were requested) misses
-        assert set(results.keys()) == {"ocr", "fallback"}
+        # "fallback" (pass 2) used to get an unconditional result entry alongside the requested
+        # engine(s) - it isn't a selectable --engine, it fired automatically whenever pass 1
+        # missed. That channel is RETIRED (2026-07-29, module docstring), so there is no
+        # permanently-zero entry left to report.
+        assert set(results.keys()) == {"ocr"}
 
 
 class TestUncoveredPrintingsClosed:
@@ -2285,17 +2287,24 @@ class TestOcrNoMatchVoteCasting:
         assert not CardPrintingTag.objects.filter(card=card).exists()
 
 
-class TestFallbackNoMatchVoteCasting:
-    """issue #207 part 2: fallback's "eliminated" outcome (the evidence-combination
-    intersection narrowed to ZERO surviving candidates) is genuine whole-candidate-set no-match
-    evidence and casts a real `CardPrintingTag(is_no_match=True)` vote instead of a mere
-    CardScanLog row - "no-evidence" and "ambiguous" (a real, not-yet-eliminated candidate set)
-    must NOT."""
+class TestFallbackPrintingVoteRetired:
+    """RETIREMENT LOCK for the pass-2 fallback printing channel (owner ruling 2026-07-29,
+    redundancy doctrine - see local_identify_printing_tags' module docstring). `local-fallback-v1`
+    and `stage-d-fallback-v1` read the SAME border/artist/symbol evidence and agreed on
+    11,825/11,825 overlapping cards with zero conflicts, so the pilot's copy is one witness
+    counted twice; Stage D's is the one kept.
+
+    This class replaces `TestFallbackNoMatchVoteCasting` (issue #207 part 2), whose whole subject
+    - fallback's "eliminated" outcome casting a real `is_no_match` vote, and "no-evidence"/
+    "ambiguous" recording a `CardScanLog` abstention instead - no longer has a code path. The
+    tests below assert the retirement rather than the removed behaviour, and (critically) that
+    the retirement did NOT take the attribute-chip channels or the other two engines with it.
+    """
 
     @staticmethod
-    def _wire_pass_1_miss_and_fallback(module, fallback_outcome, image=None):
+    def _wire_pass_1_miss(module, image=None):
         image = image or Image.new("RGB", (750, 1050), (5, 5, 5))
-        monkeypatch_targets = [
+        return [
             (
                 module,
                 "run_ocr_for_card",
@@ -2310,118 +2319,106 @@ class TestFallbackNoMatchVoteCasting:
                 ),
             ),
             (module, "fetch_card_image", lambda card, dpi=None: image),
-            (
-                module.local_fallback,
-                "run_fallback_for_card",
-                lambda selected, image, ocr_raw_texts, bleed_class=None: fallback_outcome,
-            ),
         ]
-        return monkeypatch_targets
 
-    def test_eliminated_casts_is_no_match_vote_not_a_scan_log_row(self, db, monkeypatch):
+    def test_a_pass_1_miss_never_calls_the_fallback_engine_at_all(self, db, monkeypatch):
+        """Not merely "casts no vote": the verdict is never computed, so the run doesn't pay for
+        an extra artist-crop OCR pass and a symbol phash scan per missed card either."""
         import cardpicker.local_identify_printing_tags as module
         import cardpicker.local_ocr as local_ocr_module
-        from cardpicker.local_fallback import FallbackOutcome
 
         CanonicalCardFactory(name="Forest")
         card = CardFactory(name="Forest")
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        for target, name, fn in self._wire_pass_1_miss_and_fallback(
-            module, FallbackOutcome(skip_reason="eliminated", evidence_types_used=["border"])
-        ):
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("run_fallback_for_card is retired and must never be called from run_pilot")
+
+        monkeypatch.setattr(module.local_fallback, "run_fallback_for_card", fail_if_called)
+        for target, name, fn in self._wire_pass_1_miss(module):
             monkeypatch.setattr(target, name, fn)
 
-        results, _attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+        run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
 
-        vote = CardPrintingTag.objects.get(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID)
-        assert vote.is_no_match is True
-        assert vote.printing is None
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID).exists()
         assert not CardScanLog.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID).exists()
-        assert results["fallback"].no_match_votes_written == 1
-        assert results["fallback"].votes_written == 0
 
-    def test_no_evidence_does_not_cast_is_no_match_and_records_full_candidate_set_as_survivors(self, db, monkeypatch):
-        import cardpicker.local_identify_printing_tags as module
-        import cardpicker.local_ocr as local_ocr_module
-        from cardpicker.local_fallback import FallbackOutcome
-
+    def test_the_other_two_engines_in_the_same_command_are_untouched(self, db, monkeypatch):
+        """THE TRAP this retirement had to avoid (the `local-ocr-v1` precedent): the retired pass
+        shares its ONE management command with `local-phash-v1`/`local-ocr-v1`, which are kept -
+        "just stop running the command" would have silently dropped both."""
         printing = CanonicalCardFactory(name="Forest")
         card = CardFactory(name="Forest")
-        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
 
-        for target, name, fn in self._wire_pass_1_miss_and_fallback(module, FallbackOutcome(skip_reason="no-evidence")):
-            monkeypatch.setattr(target, name, fn)
-
-        run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
-
-        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID).exists()
-        row = CardScanLog.objects.get(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID)
-        assert row.skip_reason == "no-evidence"
-        assert row.evidence_types_used == []
-        assert row.survivor_pks == [printing.pk]
-
-    def test_ambiguous_does_not_cast_is_no_match_and_leaves_survivor_pks_unknown(self, db, monkeypatch):
         import cardpicker.local_identify_printing_tags as module
         import cardpicker.local_ocr as local_ocr_module
-        from cardpicker.local_fallback import FallbackOutcome
 
-        CanonicalCardFactory(name="Forest")
-        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
-        card = CardFactory(name="Forest")
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
-
-        for target, name, fn in self._wire_pass_1_miss_and_fallback(
-            module, FallbackOutcome(skip_reason="ambiguous", evidence_types_used=["border", "artist"])
-        ):
-            monkeypatch.setattr(target, name, fn)
-
-        run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
-
-        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID).exists()
-        row = CardScanLog.objects.get(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID)
-        assert row.skip_reason == "ambiguous"
-        assert row.evidence_types_used == ["border", "artist"]
-        # the OPEN ITEM this PR's body flags: the actual narrowed survivor set for "ambiguous"
-        # isn't recoverable without touching local_fallback.py (PROTECTED CORE) - left null
-        # rather than guessed at.
-        assert row.survivor_pks is None
-
-    def test_frame_mismatch_never_casts_is_no_match(self, db, monkeypatch):
-        # companion to TestPass2Wiring::test_frame_mismatch_withholds_the_printing_vote,
-        # asserting the is_no_match angle specifically.
-        printing = CanonicalCardFactory(
-            name="Forest",
-            expansion=CanonicalExpansionFactory(code="aaa"),
-            artist=CanonicalArtistFactory(name="Marie Magny"),
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (
+                module.EngineVote(engine="phash", printing_pk=printing.pk, confidence=0.8, detail="d=2"),
+                "",
+            ),
         )
-        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black", frame="2015")
-        card = CardFactory(name="Forest")
-        TagFactory(name="Black Border")
-        import cardpicker.local_identify_printing_tags as module
-        import cardpicker.local_ocr as local_ocr_module
-
-        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "Illus. Marie Magny")
         monkeypatch.setattr(
             module,
             "run_ocr_for_card",
             lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
         )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
+
+        results, _attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+
+        assert results["phash"].votes_written == 1
+        assert CardPrintingTag.objects.filter(
+            card=card, anonymous_id=module.PHASH_ANONYMOUS_ID, printing=printing
+        ).exists()
+
+    def test_the_flush_refuses_a_retired_family_row_by_family_not_by_literal(self, db, monkeypatch):
+        """The guard is keyed on `calculator_family`, so a "-v2" redeploy of a retired calculator
+        is caught too - an exact-string check would let an ordinary version bump silently
+        un-retire a ratified ruling (`vote_consensus.DEDUCTIVE_BACKFILL_FAMILY`'s own reasoning)."""
+        import cardpicker.local_identify_printing_tags as module
+
+        printing = CanonicalCardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+
         monkeypatch.setattr(
             module,
-            "run_phash_for_card",
-            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (
-                None,
-                "no-clear-winner-distance",
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(
+                vote=module.EngineVote(engine="ocr", printing_pk=printing.pk, confidence=0.85, detail="raw")
             ),
         )
-        monkeypatch.setattr(
-            module, "fetch_card_image", lambda card, dpi=None: _black_bordered_image_with_artist_text("Marie Magny")
-        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+        # The family set is DERIVED from FALLBACK_ANONYMOUS_ID, never written out as a second
+        # literal - so a "-v2" of the retired calculator is already a member without anyone
+        # having to remember to add it, and the kept engines are not.
+        assert module.calculator_family("local-fallback-v2") in module.RETIRED_PRINTING_VOTE_FAMILIES
+        assert module.calculator_family(module.OCR_ANONYMOUS_ID) not in module.RETIRED_PRINTING_VOTE_FAMILIES
 
-        assert not CardPrintingTag.objects.filter(card=card).exists()
+        # Sanity-check the fixture actually reaches `flush` with a printing row BEFORE re-pointing
+        # the identity - otherwise a vacuous run would "pass" the guard assertion below.
+        results, _attributes = run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+        assert results["ocr"].votes_written == 1
+        CardPrintingTag.objects.filter(card=card).delete()
+
+        # Now simulate the future edit this lock exists to stop: a printing vote reaching `flush`
+        # under a BUMPED version of the retired family. Re-pointing the one engine identity that
+        # does still stage printing rows is the cheapest faithful way to get such a row into
+        # `votes_batch` without re-adding the removed pass-2 code.
+        monkeypatch.setattr(module, "OCR_ANONYMOUS_ID", "local-fallback-v2")
+
+        with pytest.raises(AssertionError, match="RETIRED CALCULATOR"):
+            run_pilot(engine="ocr", limit=10, dry_run=False, nice=False)
+
+        # Refused BEFORE the write, not cleaned up after it: nothing landed under the retired
+        # family, and the flush's other write (the attribute CardTagVotes) didn't land either.
+        assert not CardPrintingTag.objects.filter(anonymous_id="local-fallback-v2").exists()
+        assert not CardTagVote.objects.filter(anonymous_id="local-fallback-v2").exists()
 
 
 class TestAbstentionAwareOrdering:
@@ -2567,31 +2564,36 @@ def _black_bordered_image_with_artist_text(artist_name: str) -> Image:
 
 
 class TestPass2Wiring:
-    """Integration coverage for the pass-2 fallback wiring inside run_pilot itself (not just
-    local_fallback's own unit tests) - pass 1 mocked to always miss, local_fallback's real
-    logic runs against a real (synthetic) image."""
+    """What survives the pass-2 printing channel's retirement (2026-07-29 - see
+    `TestFallbackPrintingVoteRetired`): the ATTRIBUTE-chip votes `local_fallback` casts under the
+    very same `local-fallback-v1` identity but on `CardTagVote`, and the frame-mismatch
+    consistency check, which was never fallback-specific."""
 
-    def test_fallback_fires_and_votes_when_pass_1_misses_entirely(self, db, monkeypatch):
+    def test_the_attribute_chip_channel_survives_the_printing_vote_retirement(self, db, monkeypatch):
+        """THE SECOND TRAP: `local-fallback-v1` is ALSO the identity of the border/frame/bleed
+        attribute-chip `CardTagVote`s, which Stage D has no analogue for and which were never part
+        of the printing-vote redundancy measurement. Retiring the identity wholesale would have
+        silently dropped them. Same fixture as the retired
+        `test_fallback_fires_and_votes_when_pass_1_misses_entirely`: pass 1 misses entirely on a
+        real (synthetic) black-bordered image."""
         printing = CanonicalCardFactory(
             name="Forest",
             expansion=CanonicalExpansionFactory(code="aaa"),
             artist=CanonicalArtistFactory(name="Marie Magny"),
         )
-        # frame="1993" (old-border class) - the fake image below carries an "Illus. <artist>"
-        # credit, which the frame classifier reads as old-border; the printing's own frame must
-        # agree, or the CONSISTENCY CHECK correctly withholds the vote as a frame-mismatch (see
-        # TestPass2Wiring::test_frame_mismatch_withholds_the_printing_vote below for that path).
         CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black", frame="1993")
         CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
         card = CardFactory(name="Forest")
         TagFactory(name="Black Border")
+        TagFactory(name="Old Border")
 
         import cardpicker.local_identify_printing_tags as module
         import cardpicker.local_ocr as local_ocr_module
 
         # no real tesseract binary in CI - the fake image below has "Illus. Marie Magny" drawn
-        # on it, but the crop/OCR fallback inside detect_illus_anchor() must not depend on the
-        # real binary reading it accurately; this mirrors what it would extract.
+        # on it, but the crop/OCR pass inside detect_illus_anchor() (which feeds the frame-style
+        # classifier, NOT the retired printing channel) must not depend on the real binary
+        # reading it accurately; this mirrors what it would extract.
         monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "Illus. Marie Magny")
         monkeypatch.setattr(
             module,
@@ -2607,20 +2609,17 @@ class TestPass2Wiring:
             module, "fetch_card_image", lambda card, dpi=None: _black_bordered_image_with_artist_text("Marie Magny")
         )
 
-        # workers=1: this test exercises REAL (unmocked) run_fallback_for_card, which queries
-        # CanonicalCard/CanonicalPrintingMetadata/CanonicalArtist - under workers>1 those queries
-        # run on a worker thread's own DB connection, which can't see this test's fixture data
-        # under pytest-django's default (non-transactional) `db` fixture (only the original
-        # connection sees an uncommitted test transaction). Concurrency correctness itself is
-        # covered separately (TestConcurrency, using transactional_db) - this test is about
-        # fallback wiring, not concurrency, so it stays on the simple single-threaded path.
-        results, attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
+        _results, attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
 
-        assert results["fallback"].votes_written == 1
-        assert CardPrintingTag.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID, printing=printing).exists()
+        # the printing vote is gone...
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=FALLBACK_ANONYMOUS_ID).exists()
+        # ...but the border/frame attribute chips it used to ride alongside are not
         assert attributes.border_votes_by_class["black"] == 1
         assert CardTagVote.objects.filter(
             card=card, anonymous_id=FALLBACK_ANONYMOUS_ID, tag__name="Black Border"
+        ).exists()
+        assert CardTagVote.objects.filter(
+            card=card, anonymous_id=FALLBACK_ANONYMOUS_ID, tag__name="Old Border"
         ).exists()
 
     def test_frame_mismatch_withholds_the_printing_vote(self, db, monkeypatch):
@@ -2657,36 +2656,6 @@ class TestPass2Wiring:
         assert not CardPrintingTag.objects.filter(card=card).exists()
         assert len(attributes.frame_mismatches) == 1
         assert attributes.frame_mismatches[0]["card_id"] == card.pk
-
-    def test_already_fallback_covered_card_is_not_reattempted(self, db, monkeypatch):
-        printing = CanonicalCardFactory(name="Forest")
-        card = CardFactory(name="Forest")
-        CardPrintingTagFactory(card=card, printing=printing, anonymous_id=FALLBACK_ANONYMOUS_ID)
-
-        import cardpicker.local_identify_printing_tags as module
-        import cardpicker.local_ocr as local_ocr_module
-
-        # no real tesseract binary in CI - see the identical note on the sibling test above
-        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
-
-        def fail_if_called(selected, image, ocr_raw_texts):
-            raise AssertionError("run_fallback_for_card must not run again for an already-covered card")
-
-        monkeypatch.setattr(module.local_fallback, "run_fallback_for_card", fail_if_called)
-        monkeypatch.setattr(
-            module,
-            "run_ocr_for_card",
-            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
-        )
-        monkeypatch.setattr(
-            module,
-            "run_phash_for_card",
-            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (None, "no-clear-winner"),
-        )
-        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
-
-        # if the assertion inside fail_if_called had fired, this call itself would raise
-        run_pilot(engine="both", limit=10, dry_run=False, nice=False)
 
 
 class TestGroundTruthAttributeVotes:
@@ -2896,7 +2865,7 @@ class TestBleedEdgeVotesEndToEnd:
 
 
 class TestConcurrency:
-    """Pre-scale program item 3d (2026-07-15): the per-card fetch+OCR+phash+fallback compute
+    """Pre-scale program item 3d (2026-07-15): the per-card fetch+OCR+phash compute
     work now runs across `workers` concurrent threads, feeding the same single-threaded
     DB-write loop as before. `transactional_db` (real commits, TRUNCATE-based cleanup), not the
     default rollback-wrapped `db` fixture - a real regression was caught writing these tests:
@@ -3604,9 +3573,10 @@ class TestPurgeWriteAtomicity:
         assert CardPrintingTag.objects.filter(pk=stale.pk).exists()
 
     def test_pilot_tag_vote_insert_failure_rolls_its_purge_back(self, db, monkeypatch):
-        """The same flush's OTHER write - the attribute `CardTagVote`s pass 2 casts. Fixture is
-        `TestPass2Wiring::test_fallback_fires_and_votes_when_pass_1_misses_entirely`'s, which is
-        the only path that puts rows in `tag_votes_batch`."""
+        """The same flush's OTHER write - the attribute `CardTagVote`s the border/frame
+        classifiers cast (still live after the 2026-07-29 printing-channel retirement). Fixture is
+        `TestPass2Wiring::test_the_attribute_chip_channel_survives_the_printing_vote_retirement`'s,
+        which is the only path that puts rows in `tag_votes_batch`."""
         printing = CanonicalCardFactory(
             name="Forest",
             expansion=CanonicalExpansionFactory(code="aaa"),
@@ -3645,8 +3615,9 @@ class TestPurgeWriteAtomicity:
 
         monkeypatch.setattr(CardTagVote.objects, "bulk_create", self._boom)
 
-        # workers=1 for the same reason TestPass2Wiring gives: real (unmocked)
-        # run_fallback_for_card must run on this test's own DB connection.
+        # workers=1 for the same reason TestPass2Wiring gives: the real (unmocked) border/frame
+        # classifiers query CanonicalCard/CanonicalPrintingMetadata, which under workers>1 would
+        # run on a worker thread's own DB connection and miss this test's uncommitted fixtures.
         with pytest.raises(RuntimeError):
             run_pilot(engine="both", limit=10, dry_run=False, nice=False, workers=1)
 

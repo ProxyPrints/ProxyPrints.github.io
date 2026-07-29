@@ -14,6 +14,37 @@ collector line, or a matching art crop) is exactly the signal that's missing the
 also revisits single-candidate names deductive backfill's own Scryfall printings_count
 cross-check rejected, since those are still unresolved despite one local match.
 
+PASS-2 FALLBACK PRINTING VOTES ARE RETIRED (owner ruling 2026-07-29, redundancy doctrine -
+"anything made redundant is retired", and the test is the EVIDENCE SOURCE, not the vote cast).
+This module used to cast a THIRD printing-vote identity, `local_fallback.FALLBACK_ANONYMOUS_ID`
+("local-fallback-v1"), from a pass-2 border/artist/symbol evidence combination run over the
+cards pass 1 missed. `local_calculate_verdicts.calculate_fallback_verdict`
+("stage-d-fallback-v1") is a faithful port of that SAME decision model reading the SAME three
+readings out of stored `ImageEvidence` instead of a freshly-fetched image - it calls
+`local_fallback.filter_by_border_color`/`match_artist` directly, and duplicates
+`find_symbol_matches`' arithmetic against the same PROTECTED CORE thresholds. Two calculators
+over one evidence source are one witness counted twice, which inflates apparent corroboration in
+`vote_consensus.resolve_weighted_consensus`' weighted quorum without adding information.
+Measured over all 179,176 `CardPrintingTag` rows (2026-07-29): the two overlap on 11,825 cards
+and agree on 11,825 of them - 100.0%, zero conflicts, zero one-sided abstentions. Stage D's
+identity is the one kept (it reads persisted evidence, so it re-runs with no CDN fetch at all);
+this module's pass-2 printing channel is gone. Rows already cast under "local-fallback-v1" are
+LEFT IN PLACE - history is kept, only future casting stops; removing them is a separate,
+owner-authorized `purge_machine_votes` step.
+
+WHAT IS *NOT* RETIRED WITH IT, and must not be swept up by a future "just stop running the
+fallback": `local_fallback.py` is also the home of three ATTRIBUTE-chip vote channels that vote
+under the very same `local-fallback-v1` identity but on `CardTagVote`, never `CardPrintingTag` -
+`cast_border_attribute_vote` (Black/White/Silver/Borderless), `cast_frame_style_vote` (Old/
+Modern Border) and `cast_bleed_edge_vote` (the `appropriate-bleed` SENSITIVE tag). Stage D has
+no analogue for any of the three, none of them was part of the redundancy measurement (which
+counted printing votes only), and all three are still cast below - as is `image_evidence.py`'s
+own separate `cast_border_attribute_vote` call under that same identity. Likewise
+`local-ocr-v1`/`local-phash-v1` share this module's single management command with the retired
+pass (there is no `--engine` value for the fallback: it rode along on whatever pass 1 selected),
+so the ruling had to be a code change here, not "stop running the command" - that would have
+silently dropped two calculators that are kept.
+
 FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX NORMALIZATION (2026-07-23, `CandidateNameIndex.
 candidates_for` - live-proven defect, card_id 7173 "Plaguecrafter (1)"): a source folder's own
 auto-dedup naming (two files sharing a name - Google Drive/local-filesystem convention) or the
@@ -50,11 +81,7 @@ from cardpicker import (
     local_ocr,
     local_phash,
 )
-from cardpicker.local_fallback import (
-    FALLBACK_ANONYMOUS_ID,
-    FALLBACK_CONFIDENCE_MULTI_EVIDENCE,
-    FALLBACK_CONFIDENCE_SINGLE_EVIDENCE,
-)
+from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID
 from cardpicker.models import (
     CanonicalCard,
     Card,
@@ -64,6 +91,7 @@ from cardpicker.models import (
     CardTypes,
     PrintingTagStatus,
     VoteSource,
+    calculator_family,
 )
 from cardpicker.search.sanitisation import strip_bracketed_groups, to_searchable
 from cardpicker.vote_write import purge_and_write_votes
@@ -89,12 +117,25 @@ PHASH_CONFIDENCE = 0.8
 # candidate that does exist but wasn't captured correctly, whereas a real match's exact-string
 # agreement is stronger positive confirmation.
 OCR_NO_MATCH_CONFIDENCE = 0.6
-# issue #207: same rationale as OCR_NO_MATCH_CONFIDENCE, for fallback's "eliminated" outcome
-# (every sub-check that produced a reading agrees no candidate fits) - below
-# FALLBACK_CONFIDENCE_SINGLE_EVIDENCE/MULTI_EVIDENCE (0.7/0.8, see local_fallback.py) for the
-# same reason: a negative conclusion from noisy sub-checks is weaker evidence than a positive
-# one landing on a single specific candidate.
-FALLBACK_NO_MATCH_CONFIDENCE = 0.6
+# RETIRED 2026-07-29 (module docstring's pass-2 section): the calculator FAMILIES that must
+# never appear on a `CardPrintingTag` row this module writes again. Keyed on the versionless
+# FAMILY, never on the literal id, for exactly the reason `vote_consensus.
+# DEDUCTIVE_BACKFILL_FAMILY`'s own comment gives: a machine calculator's version lives INSIDE
+# its `anonymous_id`, so an exact-string check would let an ordinary redeploy to
+# "local-fallback-v2" silently un-retire a ratified ruling with no error and no failing test.
+# DERIVED via `models.calculator_family`, not written out as a second literal, so the two can
+# never drift; the assert makes a rename that took the id outside the machine naming convention
+# fail loudly at import time rather than quietly disable the guard in `flush` below.
+#
+# This is scoped to PRINTING votes only. The same identity still legitimately writes
+# `CardTagVote` rows (border/frame/bleed attribute chips - see the module docstring), and
+# `purge_stale_machine_votes` still purges the family's HISTORICAL printing rows if a future
+# calculator in this family is ever reinstated - retiring the caster does not rewrite history.
+RETIRED_PRINTING_VOTE_FAMILIES = frozenset({calculator_family(FALLBACK_ANONYMOUS_ID)})
+assert None not in RETIRED_PRINTING_VOTE_FAMILIES, (
+    "every retired printing-vote identity must follow the machine calculator naming convention "
+    "(<family>-v<N>): the 2026-07-29 redundancy retirement is enforced by family, not by literal."
+)
 # Basic lands and staple commons can carry hundreds of printings (Forest alone: 944 in the
 # live pilot's own eligible pool, confirmed live 2026-07-15) - and "multi-candidate names
 # first" ordering puts exactly those names first, meaning an uncapped pilot run would try to
@@ -655,9 +696,9 @@ class CardOutcome:
     phash_vote: Optional[EngineVote] = None
     phash_skip_reason: str = ""
     disagreement: bool = False
-    fallback_vote: Optional[EngineVote] = None
-    fallback_skip_reason: str = ""
-    fallback_evidence_types: list[str] = field(default_factory=list)
+    # `fallback_vote`/`fallback_skip_reason`/`fallback_evidence_types` REMOVED 2026-07-29 with the
+    # pass-2 printing channel itself (module docstring) - nothing computes a fallback printing
+    # verdict here any more, so there is no per-card fallback state left to carry.
     border_color: Optional[str] = None
     frame_reading_attempted: bool = False
     frame_class: Optional[str] = None
@@ -907,7 +948,7 @@ def _narrow_candidates_by_expansion_hint(selected: SelectedCard) -> SelectedCard
     Scoped to engine-matching ONLY - never call this from select_candidates/
     compute_covered_printing_pks/anything computing coverage or ordering, which need the true,
     unnarrowed candidate set to stay correct. The returned SelectedCard is a LOCAL substitute
-    used only for this card's own OCR/phash/fallback calls within _compute_card; nothing
+    used only for this card's own OCR/phash calls within _compute_card; nothing
     downstream (run_pilot's own all_selected_by_card_id) ever sees the narrowed version.
 
     Real yield (measured live, 2026-07-15): of 2,466 pilot-eligible cards with a real
@@ -929,7 +970,6 @@ def _compute_card(
     selected: SelectedCard,
     ocr_selected_ids: set[int],
     phash_selected_ids: set[int],
-    already_fallback_covered: set[int],
     ocr_crop_box: tuple[float, float, float, float],
     phash_distance_threshold: int,
     phash_margin: int,
@@ -938,8 +978,8 @@ def _compute_card(
     known_set_codes: Optional[frozenset[str]] = None,
 ) -> CardComputeResult:
     """The parallelizable half of a card's work (pre-scale program item 3d): fetch + every
-    read-only heuristic reading (OCR, phash, border/frame/bleed classification, pass-2
-    fallback) - no DB writes, no shared/nonlocal state, safe to run concurrently across cards
+    read-only heuristic reading (OCR, phash, border/frame/bleed classification) - no DB
+    writes, no shared/nonlocal state, safe to run concurrently across cards
     via ThreadPoolExecutor.map() (see run_pilot's chunked loop). Deliberately does NOT include
     the ground-truth-preferred attribute override or the frame-mismatch consistency check -
     both of those are tightly coupled to the write/consensus decision (which candidate_vote
@@ -1001,23 +1041,15 @@ def _compute_card(
         outcome.frame_reading_attempted = True
         outcome.frame_class = local_fallback.classify_frame_style(parsed_a_collector_number, illus_anchor_fired)
 
-    pass_1_accepted = (outcome.ocr_vote is not None or outcome.phash_vote is not None) and not outcome.disagreement
-    if not pass_1_accepted and card_id not in already_fallback_covered and image is not None:
-        fallback_outcome = local_fallback.run_fallback_for_card(selected, image, ocr_raw_texts, bleed_class)
-        outcome.fallback_skip_reason = fallback_outcome.skip_reason
-        outcome.fallback_evidence_types = fallback_outcome.evidence_types_used
-        if fallback_outcome.printing_pk is not None:
-            confidence = (
-                FALLBACK_CONFIDENCE_MULTI_EVIDENCE
-                if len(fallback_outcome.evidence_types_used) >= 2
-                else FALLBACK_CONFIDENCE_SINGLE_EVIDENCE
-            )
-            outcome.fallback_vote = EngineVote(
-                engine="phash",  # placeholder Engine literal - fallback isn't a selectable --engine
-                printing_pk=fallback_outcome.printing_pk,
-                confidence=confidence,
-                detail=",".join(fallback_outcome.evidence_types_used),
-            )
+    # PASS 2 (`local_fallback.run_fallback_for_card` -> a "local-fallback-v1" printing vote for
+    # every card pass 1 missed) USED TO RUN HERE, and is RETIRED as of 2026-07-29 - see the
+    # module docstring for the ruling, the measurement behind it, and what deliberately survives
+    # it. Nothing calls `run_fallback_for_card` from this module any more; the border/artist/
+    # symbol evidence combination it performed is now cast ONCE, by
+    # `local_calculate_verdicts.calculate_fallback_verdict` off stored `ImageEvidence`. Note that
+    # `detect_illus_anchor` above is NOT part of that retirement: it feeds the frame-style
+    # classifier for EVERY card, independent of whether any printing vote is cast, and it was
+    # already a separate call before pass 2 ran.
 
     return CardComputeResult(card_id=card_id, fetch_attempted=fetch_attempted, outcome=outcome)
 
@@ -1033,7 +1065,8 @@ class PilotResult:
     run_id: str = ""
     votes_written: int = 0
     # issue #207: real is_no_match votes cast from a genuine whole-candidate-set no-match
-    # conclusion (OCR's "parsed-but-no-match", fallback's "eliminated") - counted separately
+    # conclusion (OCR's "parsed-but-no-match"; fallback's "eliminated" was the other, retired
+    # 2026-07-29 with the pass-2 printing channel itself) - counted separately
     # from votes_written (which names a specific printing) rather than folded into it, so
     # existing callers/tests reading votes_written as "a printing was identified" don't silently
     # change meaning.
@@ -1135,7 +1168,9 @@ def run_pilot(
     ocr_known_set_codes = _known_set_codes()
     engines_to_run: list[Engine] = ["ocr", "phash"] if engine == "both" else [engine]
     results: dict[str, PilotResult] = {e: PilotResult(engine=e, dry_run=dry_run, run_id=run_id) for e in engines_to_run}
-    results["fallback"] = PilotResult(engine="fallback", dry_run=dry_run, run_id=run_id)
+    # No `results["fallback"]` entry any more: the pass-2 printing channel that produced it is
+    # retired (module docstring), so a permanently all-zero PilotResult would only misreport a
+    # calculator that no longer exists as one that ran and found nothing.
     attributes = AttributeReport()
     exclude_source_pks_by_engine = exclude_source_pks_by_engine or {}
     # addendum item 1 (2026-07-15): computed ONCE per invocation (not once per engine) and
@@ -1217,26 +1252,17 @@ def run_pilot(
     if _cluster_member_ids:
         for _card_id, _anonymous_id in CardPrintingTag.objects.filter(
             card_id__in=_cluster_member_ids,
-            anonymous_id__in=[OCR_ANONYMOUS_ID, PHASH_ANONYMOUS_ID, FALLBACK_ANONYMOUS_ID],
+            # FALLBACK_ANONYMOUS_ID dropped from this lookup 2026-07-29 with the pass-2 printing
+            # channel (module docstring): nothing propagates a cluster vote under that identity
+            # any more, so there is no uniqueness collision left for it to guard against.
+            anonymous_id__in=[OCR_ANONYMOUS_ID, PHASH_ANONYMOUS_ID],
         ).values_list("card_id", "anonymous_id"):
             members_already_voted_by_anonymous_id[_anonymous_id].add(_card_id)
 
-    # fallback's own idempotence check - it has no selection query/anonymous_id exclusion of
-    # its own (it rides on whichever cards ocr/phash already selected), so a card already
-    # covered by a prior fallback run is excluded here instead. Part 3 addendum item 3: a
-    # non-re-scannable fallback scan-log row counts as "covered" too, same as a vote - fallback
-    # abstaining for a real reason (not a transient fetch failure or a frame-mismatch withhold)
-    # shouldn't be silently re-attempted forever just because fallback has no selection query
-    # of its own to apply RESCANNABLE_SKIP_REASONS through.
-    already_fallback_covered = set(
-        CardPrintingTag.objects.filter(
-            card_id__in=all_selected_by_card_id.keys(), anonymous_id=FALLBACK_ANONYMOUS_ID
-        ).values_list("card_id", flat=True)
-    ) | set(
-        CardScanLog.objects.filter(card_id__in=all_selected_by_card_id.keys(), anonymous_id=FALLBACK_ANONYMOUS_ID)
-        .exclude(skip_reason__in=RESCANNABLE_SKIP_REASONS)
-        .values_list("card_id", flat=True)
-    )
+    # The pass-2 fallback's own `already_fallback_covered` idempotence set (a prior run's
+    # "local-fallback-v1" vote or non-rescannable scan-log row) was removed here 2026-07-29 with
+    # the channel it guarded - it existed only because the fallback had no selection query of its
+    # own to apply RESCANNABLE_SKIP_REASONS through.
 
     def _absorb_engine_selection(engine_selected_ids: set[int]) -> set[int]:
         # a cluster's representative must run an engine if EITHER it or any absorbed member was
@@ -1260,7 +1286,7 @@ def run_pilot(
     # DIVERGES from that precedent on ONE point: the gate check runs after every flush here, not
     # once at the very end. deductive_backfill's votes are provably exact by construction (a gate
     # violation there is structurally impossible), so a single end-of-run check is just belt-and-
-    # suspenders; this pilot's OCR/phash/fallback votes are explicitly weaker, lower-confidence
+    # suspenders; this pilot's OCR/phash votes are explicitly weaker, lower-confidence
     # signal (module docstring) where a real violation is more plausible, and a kill is an
     # EXPECTED event for a multi-day run (the whole reason this checkpointing exists) - a
     # violation in an already-flushed batch must not sit undetected in the DB indefinitely just
@@ -1288,8 +1314,29 @@ def run_pilot(
         # `vote_write.purge_and_write_votes` makes each pair atomic and scopes the purge to
         # exactly the rows it inserts. Passing `anonymous_id=None` reproduces the per-identity
         # grouping this flush did by hand: a pilot batch legitimately mixes engines' identities
-        # (OCR/phash/fallback, plus propagated cluster votes), and each row must be purged under
-        # its OWN family, never one representative's.
+        # (OCR/phash, plus propagated cluster votes), and each row must be purged under its OWN
+        # family, never one representative's.
+        #
+        # RETIREMENT LOCK (2026-07-29, module docstring): the one place every printing vote this
+        # module casts passes through, so the one place a retired identity can be caught before
+        # it lands. Family-keyed, so a "-v2" redeploy of a retired calculator is caught too. This
+        # deliberately does NOT screen `tag_votes_batch`: the SAME "local-fallback-v1" identity
+        # still legitimately casts border/frame/bleed attribute chips there, and only its
+        # PRINTING channel was retired.
+        retired = sorted(
+            {
+                row.anonymous_id
+                for row in votes_batch
+                if calculator_family(row.anonymous_id) in RETIRED_PRINTING_VOTE_FAMILIES
+            }
+        )
+        if retired:
+            raise AssertionError(
+                f"RETIRED CALCULATOR: refusing to write CardPrintingTag rows under {retired} - "
+                "that calculator family's printing votes were retired as redundant (owner ruling "
+                "2026-07-29, see this module's docstring). Existing rows are kept as history; "
+                "casting new ones is not."
+            )
         purge_and_write_votes(CardTagVote, tag_votes_batch, target_field="card_id", ignore_conflicts=True)
         purge_and_write_votes(CardPrintingTag, votes_batch, target_field="card_id")
         if scan_log_batch:
@@ -1303,7 +1350,7 @@ def run_pilot(
     ) -> int:
         """Addendum item 2a: an accepted vote on a cluster representative propagates as an
         identical vote (same anonymous_id, printing, confidence) to every OTHER cluster member -
-        absorbed members never ran their own OCR/phash/fallback, so this is the only vote they
+        absorbed members never ran their own OCR/phash, so this is the only vote they
         ever get. Skips any member that already has a vote from this SAME anonymous_id (e.g. one
         engine's vote from a prior invocation, on a member only newly eligible for a DIFFERENT
         engine this run) - propagating anyway would violate CardPrintingTag's own
@@ -1347,7 +1394,7 @@ def run_pilot(
     cards_attempted = 0
 
     # Pipeline concurrency (pre-scale program item 3d, 2026-07-15): the per-card COMPUTE work
-    # (fetch, OCR, phash, border/frame/bleed classification, pass-2 fallback - everything
+    # (fetch, OCR, phash, border/frame/bleed classification - everything
     # _compute_card does) is independent per card and safe to run concurrently; the per-card
     # WRITE work below (votes_batch/tag_votes_batch staging, disagreement bookkeeping,
     # ground-truth-preferred attribute overrides, the frame-mismatch consistency check) stays
@@ -1371,7 +1418,6 @@ def run_pilot(
         _compute_card,
         ocr_selected_ids=ocr_selected_ids,
         phash_selected_ids=phash_selected_ids,
-        already_fallback_covered=already_fallback_covered,
         ocr_crop_box=ocr_crop_box,
         phash_distance_threshold=phash_distance_threshold,
         phash_margin=phash_margin,
@@ -1425,19 +1471,18 @@ def run_pilot(
                 if compute_result.fetch_attempted:
                     fetches_made += 1
 
-                # Finalize + queue for write - a card's full cost (image fetch, OCR, phash,
-                # fallback) was already paid once in _compute_card above; nothing here depends on
+                # Finalize + queue for write - a card's full cost (image fetch, OCR, phash) was
+                # already paid once in _compute_card above; nothing here depends on
                 # any OTHER card's outcome, only this card's own DB state (the frame-mismatch
                 # consistency check below re-queries the matched printing's own metadata,
                 # independent of processing order).
                 result_ocr = results.get("ocr")
                 result_phash = results.get("phash")
-                result_fallback = results["fallback"]
 
                 printing_vote_withheld_for_frame_mismatch = False
-                # consistency check: only meaningful once a printing vote (from either pass) exists
-                # to compare against the observed frame reading.
-                candidate_vote = outcome.ocr_vote or outcome.phash_vote or outcome.fallback_vote
+                # consistency check: only meaningful once a printing vote exists to compare
+                # against the observed frame reading.
+                candidate_vote = outcome.ocr_vote or outcome.phash_vote
                 if outcome.frame_class is not None and candidate_vote is not None and not outcome.disagreement:
                     canonical = (
                         CanonicalCard.objects.filter(pk=candidate_vote.printing_pk)
@@ -1602,96 +1647,15 @@ def run_pilot(
                             )
                         )
 
-                    if outcome.fallback_vote is not None:
-                        if printing_vote_withheld_for_frame_mismatch:
-                            result_fallback.skip_counts["frame-mismatch"] += 1
-                            scan_log_batch.append(
-                                CardScanLog(
-                                    card_id=card_id,
-                                    anonymous_id=FALLBACK_ANONYMOUS_ID,
-                                    run_id=run_id,
-                                    skip_reason="frame-mismatch",
-                                )
-                            )
-                        else:
-                            votes_batch.append(
-                                CardPrintingTag(
-                                    card_id=card_id,
-                                    printing_id=outcome.fallback_vote.printing_pk,
-                                    is_no_match=False,
-                                    anonymous_id=FALLBACK_ANONYMOUS_ID,
-                                    source=VoteSource.OCR,
-                                    confidence=outcome.fallback_vote.confidence,
-                                    run_id=run_id,
-                                )
-                            )
-                            result_fallback.votes_written += 1
-                            result_fallback.audit.append({"card_id": card_id, "evidence": outcome.fallback_vote.detail})
-                            if card_id not in written_card_ids:
-                                written_card_ids.append(card_id)
-                                batch_written_card_ids.append(card_id)
-                            result_fallback.votes_written += propagate_cluster_vote(
-                                card_id,
-                                outcome.fallback_vote.printing_pk,
-                                FALLBACK_ANONYMOUS_ID,
-                                outcome.fallback_vote.confidence,
-                            )
-                    elif outcome.fallback_skip_reason:
-                        if outcome.fallback_skip_reason == "eliminated":
-                            # issue #207: the evidence-combination intersection narrowed to ZERO
-                            # surviving candidates - every sub-check that produced a reading
-                            # agrees none of this card's own candidates fit, which is genuine
-                            # whole-set no-match evidence (unlike "ambiguous", more than one
-                            # candidate still fits, or "no-evidence", no sub-check produced a
-                            # reading at all - both stay abstentions, below). Same "the vote IS
-                            # the record" convention as the OCR branch above.
-                            votes_batch.append(
-                                CardPrintingTag(
-                                    card_id=card_id,
-                                    printing_id=None,
-                                    is_no_match=True,
-                                    anonymous_id=FALLBACK_ANONYMOUS_ID,
-                                    source=VoteSource.OCR,
-                                    confidence=FALLBACK_NO_MATCH_CONFIDENCE,
-                                    run_id=run_id,
-                                )
-                            )
-                            result_fallback.no_match_votes_written += 1
-                            result_fallback.audit.append(
-                                {
-                                    "card_id": card_id,
-                                    "no_match_reason": "eliminated",
-                                    "evidence": outcome.fallback_evidence_types,
-                                }
-                            )
-                            if card_id not in written_card_ids:
-                                written_card_ids.append(card_id)
-                                batch_written_card_ids.append(card_id)
-                        else:
-                            result_fallback.skip_counts[outcome.fallback_skip_reason] += 1
-                            # issue #207 instrumentation (code-only, no ranked-vote schema built
-                            # here): survivor_pks is the trivial, zero-recomputation case for
-                            # "no-evidence" (nothing filtered anything, so every candidate this
-                            # card's engines considered "survived" by definition) - left `null`
-                            # for "ambiguous", where the actual narrowed survivor set isn't
-                            # recoverable without either reimplementing local_fallback's
-                            # border/artist/symbol sub-checks a second time here, or having
-                            # FallbackOutcome expose it directly (a protected-core change, open
-                            # item - see this PR's body, not built in this change).
-                            scan_log_batch.append(
-                                CardScanLog(
-                                    card_id=card_id,
-                                    anonymous_id=FALLBACK_ANONYMOUS_ID,
-                                    run_id=run_id,
-                                    skip_reason=outcome.fallback_skip_reason,
-                                    evidence_types_used=outcome.fallback_evidence_types,
-                                    survivor_pks=(
-                                        outcome.candidate_pks_considered
-                                        if outcome.fallback_skip_reason == "no-evidence"
-                                        else None
-                                    ),
-                                )
-                            )
+                    # THE PASS-2 FALLBACK'S OWN WRITE BRANCH STOOD HERE and is RETIRED as of
+                    # 2026-07-29 (module docstring): a positive "local-fallback-v1"
+                    # CardPrintingTag vote (plus its cluster propagation), an is_no_match vote
+                    # for the "eliminated" outcome, and the CardScanLog abstention rows for
+                    # every other outcome. All three are gone because nothing computes a
+                    # fallback printing verdict any more - not gated off, removed - and the
+                    # `flush` guard above makes re-adding one fail loudly rather than silently
+                    # restore a retired witness. The card's border/frame/bleed attribute votes
+                    # are cast below, unchanged.
 
                 # border/frame attribute votes are independent of printing-vote success or the
                 # consistency-check outcome above - they fire for any card a border/frame reading

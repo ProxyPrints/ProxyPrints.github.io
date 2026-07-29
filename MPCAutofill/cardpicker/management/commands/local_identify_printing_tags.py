@@ -15,8 +15,10 @@ class Command(BaseCommand):
         "PILOT (see docs/features/printing-tags.md Stage 8): casts OCR-weight (source=ocr) "
         "CardPrintingTag votes from two local, zero-API-cost engines that actually look at a "
         "card's image - L1 Tesseract OCR on the collector-line crop, L2 perceptual-hash art "
-        "matching - plus a pass-2 fallback (border/artist/symbol evidence combination) for cards "
-        "pass 1 misses. Never resolves a card by itself (the human-backed gate in "
+        "matching. (The pass-2 border/artist/symbol fallback that used to run alongside them was "
+        "RETIRED 2026-07-29 as redundant with stage-d-fallback-v1 - see cardpicker/"
+        "local_identify_printing_tags.py's module docstring.) Never resolves a card by itself "
+        "(the human-backed gate in "
         "vote_consensus.resolve_weighted_consensus still applies). PILOT ONLY: --limit defaults "
         "to 300 - do not scale this up to a full-catalog run without reviewing the pilot's "
         "yield/accuracy report first."
@@ -250,8 +252,9 @@ class Command(BaseCommand):
             print(f"  votes written: {result.votes_written}")
             if result.no_match_votes_written:
                 # issue #207: is_no_match votes cast from a genuine whole-candidate-set no-match
-                # conclusion (OCR's "parsed-but-no-match", fallback's "eliminated") - reported
-                # separately from votes_written (which names a specific printing).
+                # conclusion (OCR's "parsed-but-no-match"; fallback's "eliminated" was the other,
+                # retired 2026-07-29 with the pass-2 printing channel) - reported separately from
+                # votes_written (which names a specific printing).
                 print(f"  no-match votes written: {result.no_match_votes_written}")
             for reason, count in sorted(result.skip_counts.items()):
                 print(f"  skipped ({reason}): {count}")
