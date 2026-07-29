@@ -20,7 +20,9 @@ THE FOUR RATIFIED PASSIVE-MODE BARS (§10(a), verbatim numbers - none invented h
   1. Host load average > 7.0 - the existing escalation threshold (§3 decision (3)/§1, reused
      unchanged; see docs/reports/2026-07-23-4c-pilot-dry-run.md's own "well under the 7.0
      escalation threshold" note).
-  2. RSS > 512MB per worker.
+  2. RSS > 768MB per worker (originally ratified at 512MB; raised 512 -> 768 by 70225df8,
+     2026-07-28, an owner ops ruling - 768 is THE ratified number, and a 512 found in an older
+     doc, report or test is pre-70225df8 history, not a competing bar).
   3. Fetch-failure rate > 1% over a rolling 500-card window.
   4. INSTANT pause on any Google fetch lockout signal (`GoogleFetchLockoutError` -
      harvest_fetch_limiter.py's existing `lockout_hit` bar, reused unchanged) - no threshold to
@@ -51,6 +53,9 @@ from cardpicker.models import EnvelopeTrip
 
 # §10(a) ratified numeric bounds - PASSIVE mode only (see module docstring). None of these are
 # invented here; every one is cited to a specific brief section in the module docstring above.
+# `RSS_MB_PER_WORKER_CEILING` is the one bound whose value has moved since §10(a) was written:
+# raised 512 -> 768 by 70225df8 (2026-07-28) under an owner ops ruling, which is itself the
+# ratifying act for 768 - see the module docstring's bar 2.
 HOST_LOAD_CEILING = 7.0
 RSS_MB_PER_WORKER_CEILING = 768.0
 FETCH_FAILURE_RATE_CEILING = 0.01
