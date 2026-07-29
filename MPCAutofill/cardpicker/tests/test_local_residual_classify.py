@@ -656,3 +656,122 @@ class TestD0SiblingPropagationCardIdScoping:
         result = run_d0_sibling_artist_propagation(dry_run=True, card_ids=[sibling.pk])
 
         assert result.votes_would_cast == 0
+
+
+class TestFrameMismatchRecoveryUsesTheSharedCandidateNameIndexCache:
+    """Issue #533's THIRD blocking prerequisite (2026-07-29). `run_frame_mismatch_recovery` used
+    to call `CandidateNameIndex()` directly at the top of every invocation - a 113,224-row scan,
+    measured 1.48s. PR #541 made this function scopeable by `card_ids`, i.e. usable by a
+    per-25-card-micro-batch caller; the index is keyed by card NAME over a different table, so
+    `card_ids` cannot narrow it. At 25-card batches over a ~135,000-row queue that was ~5,400
+    rebuilds.
+
+    It now resolves through `local_calculate_verdicts._get_cached_candidate_name_index()` - the
+    SAME per-worker-process, version-stamped cache the join-key/fallback/illustration calculators
+    use, not a second implementation. These tests count REAL `CandidateNameIndex.__init__` calls,
+    because a cache that silently rebuilds every time passes every behavioural test in this file
+    while fixing nothing."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self):
+        import cardpicker.local_calculate_verdicts as verdicts_module
+
+        verdicts_module.reset_candidate_name_index_cache_for_tests()
+        yield
+        verdicts_module.reset_candidate_name_index_cache_for_tests()
+
+    @staticmethod
+    def _count_constructions(monkeypatch) -> list[int]:
+        """Patches the REAL `__init__` (not a replacement) so the indexes handed back stay fully
+        functional - the recovery assertions below are on real behaviour, not a stub."""
+        import cardpicker.local_calculate_verdicts as verdicts_module
+
+        count = [0]
+        real_init = CandidateNameIndex.__init__
+
+        def counting_init(self, *args, **kwargs):
+            count[0] += 1
+            real_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(verdicts_module.CandidateNameIndex, "__init__", counting_init)
+        return count
+
+    @staticmethod
+    def _flagged_card(name: str, image_hash: int):
+        """One canonical printing per NAME deliberately - `find_best_match` needs a clear winner,
+        and two same-named printings with different hashes is an ambiguous candidate set, not a
+        recovery."""
+        CanonicalCardFactory(name=name, image_hash=image_hash)
+        card = CardFactory(name=name, content_phash=image_hash)
+        CardScanLog.objects.create(card=card, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+        return card
+
+    def test_the_index_is_built_once_across_two_invocations(self, db, monkeypatch):
+        """Two invocations = two Stage E micro-batches in one worker process. No
+        CanonicalCard/CanonicalExpansion/CanonicalPrintingMetadata write happens between them, so
+        the version stamp is unchanged and the second invocation must reuse the first's index."""
+        count = self._count_constructions(monkeypatch)
+        card_one = self._flagged_card("Forest", 100)
+        card_two = self._flagged_card("Island", 200)
+
+        first = run_frame_mismatch_recovery(dry_run=True, card_ids=[card_one.pk])
+        second = run_frame_mismatch_recovery(dry_run=True, card_ids=[card_two.pk])
+
+        # both invocations did real work off the index - this is not "one built, one no-op".
+        assert first.phash_recovered == 1
+        assert second.phash_recovered == 1
+        assert count[0] == 1
+
+    def test_the_index_is_never_built_when_the_scope_has_no_flagged_cards(self, db, monkeypatch):
+        """The LAZY half: resolution is deferred to the first card this pass actually recovers,
+        so a micro-batch whose `card_ids` scope turns up no frame-mismatch scan logs pays neither
+        the 1.48s build nor the version-stamp queries."""
+        count = self._count_constructions(monkeypatch)
+        self._flagged_card("Forest", 100)
+        unflagged = CardFactory(name="Forest", content_phash=300)
+
+        result = run_frame_mismatch_recovery(dry_run=True, card_ids=[unflagged.pk])
+
+        assert result.cards_considered == 0
+        assert count[0] == 0
+
+    def test_a_canonical_card_write_between_invocations_still_rebuilds(self, db, monkeypatch):
+        """The cache must not go stale for the scoped callers either - the invalidation event
+        reaches this call site exactly as it reaches the join-key calculator's."""
+        count = self._count_constructions(monkeypatch)
+        card_one = self._flagged_card("Forest", 100)
+        run_frame_mismatch_recovery(dry_run=True, card_ids=[card_one.pk])
+        assert count[0] == 1
+
+        CanonicalCardFactory(name="Island", image_hash=777)
+        card_two = CardFactory(name="Island", content_phash=777)
+        CardScanLog.objects.create(card=card_two, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+
+        second = run_frame_mismatch_recovery(dry_run=True, card_ids=[card_two.pk])
+
+        assert count[0] == 2
+        assert second.phash_recovered == 1  # the REBUILT index actually sees "Island"
+
+    def test_the_second_invocation_issues_no_catalog_scale_index_query(self, db, monkeypatch):
+        """Construction counting proves the Python object is reused; this proves the DATABASE work
+        is gone too - `CandidateNameIndex.__init__`'s own unaggregated `CanonicalCard` x
+        `CanonicalPrintingMetadata` join is absent from the second invocation's SQL entirely. The
+        `count(`/`sum(` exclusion is what separates it from the version stamp's own aggregates,
+        which SHOULD still be there (they are the invalidation check)."""
+        self._count_constructions(monkeypatch)
+        card_one = self._flagged_card("Forest", 100)
+        card_two = self._flagged_card("Island", 200)
+
+        run_frame_mismatch_recovery(dry_run=True, card_ids=[card_one.pk])
+
+        with CaptureQueriesContext(connection) as ctx:
+            run_frame_mismatch_recovery(dry_run=True, card_ids=[card_two.pk])
+
+        index_build_queries = [
+            query["sql"]
+            for query in ctx.captured_queries
+            if "edhrec_rank" in query["sql"].lower()
+            and "count(" not in query["sql"].lower()
+            and "sum(" not in query["sql"].lower()
+        ]
+        assert index_build_queries == []

@@ -55,6 +55,20 @@ from django.db.models import Q, QuerySet
 from cardpicker import local_phash
 from cardpicker.artist_consensus import resolve_and_persist_artist
 from cardpicker.image_cdn_fetch import fetch_card_image
+
+# Issue #533's third blocking prerequisite. A PLAIN MODULE-LEVEL IMPORT, not the function-local
+# one `local_illustration` uses for the same helper: that module needs a deferred import because
+# `management/commands/local_calculate_verdicts.py` imports `local_illustration`, so a hard
+# import back would close a cycle. Nothing on `local_calculate_verdicts`' own import closure
+# (`image_evidence`, `local_fallback`, `local_identify_printing_tags`, `local_ocr`, `models`,
+# `printing_consensus`, `printing_metadata_import`, `utils`, `vote_write`) reaches this module, so
+# there is no cycle to defer around here - the same reason `management/commands/ocr_engine_ab.py`
+# and `management/commands/rejudge_fallback_channel.py` already import this helper at module level.
+# The helper is NOT extracted to a leaf module (the `vote_write.py` move PR #534 made for the
+# purge/write primitive) precisely because no cycle forces it, and a second home for the cache
+# would risk a second module-level cache instance - the exact "silently rebuilds every time"
+# failure this change exists to remove.
+from cardpicker.local_calculate_verdicts import _get_cached_candidate_name_index
 from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID, run_fallback_for_card
 from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
@@ -282,11 +296,17 @@ def run_frame_mismatch_recovery(
     `card_ids` with both budgets 0 (the scoped, genuinely free phash-only path). No default
     budget is changed by this work.
 
-    STILL O(CATALOG) ON ONE AXIS: `CandidateNameIndex()` below builds an in-memory index over
-    CanonicalCard's 113k+ rows on every invocation. That is keyed by card NAME over a different
-    table entirely, so `card_ids` cannot narrow it; it needs the process-cache-behind-a-version-
-    stamp treatment PR #526 established for the illustration calculator, which is deliberately
-    out of scope here (scoping queries is this change; caching indexes is the follow-up).
+    CATALOG-SCALE INDEX, LAZY AND PROCESS-CACHED (issue #533's THIRD blocking prerequisite,
+    2026-07-29 - this docstring previously recorded it as the outstanding follow-up): the
+    `CandidateNameIndex` this pass needs is an in-memory index over CanonicalCard's 113k+ rows
+    (measured 1.48s). It is keyed by card NAME over a different table entirely, so `card_ids`
+    cannot narrow it, and a per-batch caller invoking this once per 25-card micro-batch over a
+    ~135,000-row queue would rebuild it ~5,400 times. It is therefore resolved through
+    `local_calculate_verdicts._get_cached_candidate_name_index()` - the SAME per-worker-process,
+    version-stamped cache `run_join_key_calculator`/`run_fallback_calculator`/
+    `run_illustration_calculator` use, not a second implementation - and resolved LAZILY, on the
+    first card this pass actually has to recover, so an invocation whose `card_ids` scope turns up
+    no frame-mismatch scan logs pays neither the build nor the version-stamp check.
     """
     if card_ids is not None and (ocr_refetch_budget or fallback_refetch_budget):
         # Raised BEFORE any query, index build or fetch - see the docstring section above for
@@ -314,7 +334,9 @@ def run_frame_mismatch_recovery(
         )
     run_id = run_id or generate_run_id()
     altered_frame_tag = Tag.objects.filter(name=ALTERED_FRAME_TAG_NAME).first()
-    index = CandidateNameIndex()
+    # Resolved on first real need in the three recovery loops below - see this function's own
+    # docstring. `Optional` rather than an eager call so an empty scope costs nothing at all.
+    index: Optional[CandidateNameIndex] = None
 
     card_ids_by_engine: dict[str, set[int]] = {
         OCR_ANONYMOUS_ID: set(),
@@ -380,6 +402,7 @@ def run_frame_mismatch_recovery(
 
     for card in Card.objects.filter(pk__in=phash_card_ids):
         result.cards_considered += 1
+        index = index or _get_cached_candidate_name_index()
         printing_pk = recover_frame_mismatch_printing_via_phash(card, index)
         if printing_pk is not None:
             result.phash_recovered += 1
@@ -398,6 +421,7 @@ def run_frame_mismatch_recovery(
             continue
         ocr_budget_remaining -= 1
         result.ocr_refetch_attempted += 1
+        index = index or _get_cached_candidate_name_index()
         printing_pk, _fetched = recover_frame_mismatch_printing_via_ocr_refetch(card, index)
         if printing_pk is not None:
             result.ocr_refetch_recovered += 1
@@ -416,6 +440,7 @@ def run_frame_mismatch_recovery(
             continue
         fallback_budget_remaining -= 1
         result.fallback_refetch_attempted += 1
+        index = index or _get_cached_candidate_name_index()
         printing_pk, _fetched = recover_frame_mismatch_printing_via_fallback_refetch(card, index)
         if printing_pk is not None:
             result.fallback_refetch_recovered += 1
