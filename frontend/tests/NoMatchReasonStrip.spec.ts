@@ -9,6 +9,7 @@ import {
 } from "@/common/test-constants";
 import {
   defaultHandlers,
+  NO_MATCH_REASON_TAG_DISPLAY_NAMES,
   questionFeedIdentifyPrinting,
   submitPrintingTagNoMatch,
   submitTagVoteResolvesToApply,
@@ -83,8 +84,61 @@ function questionFeedUntilNoMatchVoted(): {
   };
 }
 
+test.describe("NoMatchReasonStrip reason-tag partition", () => {
+  // Deliberately exercised through the actual rendered page (not a direct Node-side import
+  // of NoMatchReasonStrip.tsx's NO_MATCH_REASON_TAG_GROUPS/NO_MATCH_REASON_TAG_NAMES) -
+  // Playwright test files run under plain Node module resolution outside webpack, which
+  // can't resolve react-bootstrap's package-subpath imports (e.g. "react-bootstrap/Button"),
+  // so importing a component module at the top of a .spec.ts file breaks collection of every
+  // test in the file. Rendering through the real page instead exercises the exact same
+  // partition the browser actually uses, and is checked against
+  // NO_MATCH_REASON_TAG_DISPLAY_NAMES (mocks/handlers.ts's own independent mirror of
+  // cardpicker/reason_tags.py's NO_MATCH_REASON_TAGS) as the "full set" oracle, so this
+  // still fails if a tag goes missing from - or ends up duplicated across - the UI's two
+  // groups, not just if the two groups disagree with each other.
+  test("the not-official-printing/not-official-art groups are exhaustive over the full reason-tag list, with no overlap", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrinting,
+      submitPrintingTagNoMatch,
+      submitTagVoteResolvesToApply,
+      tagsAllNoMatchReasonTags, // all seven reason tags seeded
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await page.getByTestId("question-feed-no-match").click();
+
+    const strip = page.getByTestId("no-match-reason-strip");
+    await expect(strip).toBeVisible();
+
+    // Every rendered reason-chip testid, across BOTH groups combined - excludes the group
+    // wrapper testids (which share the "no-match-reason-" prefix) and the Skip button.
+    const renderedTagTestIds = await strip
+      .locator(
+        '[data-testid^="no-match-reason-"]:not([data-testid^="no-match-reason-group-"]):not([data-testid="no-match-reason-skip"])'
+      )
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute("data-testid"))
+      );
+    const expectedTagTestIds = NO_MATCH_REASON_TAG_DISPLAY_NAMES.map(
+      ([name]) => `no-match-reason-${name}`
+    );
+
+    // Exhaustive: nothing from the backend's known tag set is missing from the union of the
+    // two rendered groups.
+    expect([...renderedTagTestIds].sort()).toEqual(
+      [...expectedTagTestIds].sort()
+    );
+    // No overlap: if a tag were rendered in both groups, its testid would appear twice here.
+    expect(new Set(renderedTagTestIds).size).toBe(renderedTagTestIds.length);
+  });
+});
+
 test.describe("NoMatchReasonStrip tests", () => {
-  test("No match is disabled until a chip is set, then shows the reason strip (not the general attribute panel)", async ({
+  test("No match is disabled until a chip is set, then shows the reason strip split into two labelled groups (not the general attribute panel)", async ({
     page,
     network,
   }) => {
@@ -101,15 +155,35 @@ test.describe("NoMatchReasonStrip tests", () => {
 
     const strip = page.getByTestId("no-match-reason-strip");
     await expect(strip).toBeVisible();
-    await expect(strip.getByText("Custom art")).toBeVisible();
-    await expect(strip.getByText("Altered frame")).toBeVisible();
-    await expect(strip.getByText("Upscaled")).toBeVisible();
-    await expect(strip.getByText("AI art")).toBeVisible();
-    await expect(strip.getByText("No collector line")).toBeVisible();
-    await expect(strip.getByText("Non-English")).toBeVisible();
+
+    const printingGroup = strip.getByTestId(
+      "no-match-reason-group-not-official-printing"
+    );
+    const artGroup = strip.getByTestId(
+      "no-match-reason-group-not-official-art"
+    );
+    await expect(printingGroup).toBeVisible();
+    await expect(artGroup).toBeVisible();
+    await expect(
+      printingGroup.getByText("Not an official printing")
+    ).toBeVisible();
+    await expect(artGroup.getByText("Not official art")).toBeVisible();
+
+    // Every chip lands in exactly the group its axis says it should.
+    await expect(printingGroup.getByText("Altered frame")).toBeVisible();
+    await expect(printingGroup.getByText("Upscaled")).toBeVisible();
+    await expect(printingGroup.getByText("No collector line")).toBeVisible();
+    await expect(printingGroup.getByText("Non-English")).toBeVisible();
+    await expect(artGroup.getByText("Custom art")).toBeVisible();
+    await expect(artGroup.getByText("AI art")).toBeVisible();
+    await expect(artGroup.getByText("External IP")).toBeVisible();
+
+    // ... and nowhere else.
+    await expect(printingGroup.getByText("Custom art")).not.toBeVisible();
+    await expect(artGroup.getByText("Altered frame")).not.toBeVisible();
   });
 
-  test("hides chips for reason tags that don't exist server-side yet", async ({
+  test("hides chips for reason tags that don't exist server-side yet, in both groups", async ({
     page,
     network,
   }) => {
@@ -117,7 +191,7 @@ test.describe("NoMatchReasonStrip tests", () => {
       questionFeedIdentifyPrinting,
       submitPrintingTagNoMatch,
       submitTagVoteResolvesToApply,
-      tagsSomeNoMatchReasonTags, // only custom-art and ai-art exist
+      tagsSomeNoMatchReasonTags, // only custom-art and ai-art exist (both "not-official-art")
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
@@ -126,8 +200,24 @@ test.describe("NoMatchReasonStrip tests", () => {
 
     const strip = page.getByTestId("no-match-reason-strip");
     await expect(strip).toBeVisible();
+
+    // Every not-official-printing tag is unseeded here - the whole group hides rather than
+    // rendering an empty header.
+    await expect(
+      strip.getByTestId("no-match-reason-group-not-official-printing")
+    ).not.toBeVisible();
+
+    // The not-official-art group still renders (custom-art/ai-art are seeded), but the
+    // per-chip filter still hides the one unseeded tag within it (external-ip) - proving the
+    // existing graceful-degradation filter applies inside a group, not just across whole
+    // groups.
+    const artGroup = strip.getByTestId(
+      "no-match-reason-group-not-official-art"
+    );
+    await expect(artGroup).toBeVisible();
     await expect(strip.getByText("Custom art")).toBeVisible();
     await expect(strip.getByText("AI art")).toBeVisible();
+    await expect(strip.getByText("External IP")).not.toBeVisible();
     await expect(strip.getByText("Altered frame")).not.toBeVisible();
     await expect(strip.getByText("Upscaled")).not.toBeVisible();
     await expect(strip.getByText("No collector line")).not.toBeVisible();
@@ -166,6 +256,43 @@ test.describe("NoMatchReasonStrip tests", () => {
       )
     ).toBeVisible();
     expect(submittedBody.tagName).toBe("ai-art");
+    expect(submittedBody.polarity).toBe(1);
+  });
+
+  test("tapping a reason chip from the OTHER group (not-official-printing) submits the same vote payload shape through the same endpoint", async ({
+    page,
+    network,
+  }) => {
+    let submittedBody: { tagName?: string; polarity?: number } = {};
+    const mocks = questionFeedUntilNoMatchVoted();
+    network.use(
+      mocks.questionFeed,
+      mocks.submitPrintingTagNoMatch,
+      submitTagVoteResolvesToApply,
+      tagsAllNoMatchReasonTags,
+      ...defaultHandlers
+    );
+    page.on("request", async (request) => {
+      if (
+        request.url().includes("/2/submitTagVote/") &&
+        request.postDataJSON()?.tagName === "altered-frame"
+      ) {
+        submittedBody = request.postDataJSON();
+      }
+    });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await page.getByTestId("question-feed-no-match").click();
+    await page.getByTestId("no-match-reason-altered-frame").click();
+
+    await expect(
+      page.getByText(
+        "You're all caught up - no cards left to work on right now!"
+      )
+    ).toBeVisible();
+    // Same tagName/polarity shape as the not-official-art chip in the previous test - the
+    // split is presentational, not a new vote payload.
+    expect(submittedBody.tagName).toBe("altered-frame");
     expect(submittedBody.polarity).toBe(1);
   });
 

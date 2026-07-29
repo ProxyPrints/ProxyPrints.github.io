@@ -456,6 +456,7 @@ class QuestionFeedItem(BaseModel):
     type: TypeEnum
     candidates: Optional[List[PrintingCandidate]] = None
     confidentlyKnownArtistName: Optional[str] = None
+    scryfallIllustrationUrl: Optional[str] = None
     suggestedPrinting: Optional[PrintingCandidate] = None
     tagConfidence: Optional[Dict[str, float]] = None
     tagName: Optional[str] = None
@@ -467,11 +468,19 @@ class QuestionFeedItem(BaseModel):
         type = TypeEnum(obj.get("type"))
         candidates = from_union([lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("candidates"))
         confidentlyKnownArtistName = from_union([from_none, from_str], obj.get("confidentlyKnownArtistName"))
+        scryfallIllustrationUrl = from_union([from_none, from_str], obj.get("scryfallIllustrationUrl"))
         suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
         tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
         tagName = from_union([from_str, from_none], obj.get("tagName"))
         return QuestionFeedItem(
-            card, type, candidates, confidentlyKnownArtistName, suggestedPrinting, tagConfidence, tagName
+            card,
+            type,
+            candidates,
+            confidentlyKnownArtistName,
+            scryfallIllustrationUrl,
+            suggestedPrinting,
+            tagConfidence,
+            tagName,
         )
 
     def to_dict(self) -> dict:
@@ -484,6 +493,8 @@ class QuestionFeedItem(BaseModel):
             )
         if self.confidentlyKnownArtistName is not None:
             result["confidentlyKnownArtistName"] = from_union([from_none, from_str], self.confidentlyKnownArtistName)
+        if self.scryfallIllustrationUrl is not None:
+            result["scryfallIllustrationUrl"] = from_union([from_none, from_str], self.scryfallIllustrationUrl)
         if self.suggestedPrinting is not None:
             result["suggestedPrinting"] = from_union(
                 [lambda x: to_class(PrintingCandidate, x), from_none], self.suggestedPrinting

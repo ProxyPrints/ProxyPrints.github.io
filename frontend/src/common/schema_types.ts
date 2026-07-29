@@ -146,6 +146,7 @@ export interface QuestionFeedItem {
   candidates?: PrintingCandidate[];
   card: Card;
   confidentlyKnownArtistName?: null | string;
+  scryfallIllustrationUrl?: null | string;
   suggestedPrinting?: PrintingCandidate;
   tagConfidence?: { [key: string]: number };
   tagName?: string;
