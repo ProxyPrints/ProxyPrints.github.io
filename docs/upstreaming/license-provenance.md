@@ -156,7 +156,9 @@ nobody can point at doesn't function as one:
 - `MPCAutofill/cardpicker/printing_consensus.py`
 - `MPCAutofill/cardpicker/tag_consensus.py`
 - `MPCAutofill/cardpicker/artist_consensus.py`
-- `MPCAutofill/cardpicker/local_phash.py`
+- `MPCAutofill/cardpicker/local_phash.py` — **still protected**; carries
+  one authorised exception, 2026-07-29, logged in §2.1. The exception
+  covers that one change, not the file.
 - `MPCAutofill/cardpicker/local_fallback.py`
 - `federation-hash-tool/hash_my_cards.py` (+ its test)
 - `MPCAutofill/cardpicker/tests/test_federation_hash_tool_parity.py` (the
@@ -229,6 +231,85 @@ part of this pass); it catches the specific risk the absorption protocol
 is actually worried about: someone pasting AGPL-licensed _source code_
 directly into a protected-core file, not a third-party package turning
 out to have an unexpected license three dependencies deep.
+
+### 2.1 Authorised exceptions — the log
+
+Protection here means **deliberate review**, not immutability. A change to
+a listed file is allowed when the owner rules on it specifically. Every
+such ruling gets an entry below, so a reviewer who was not present can see
+what was changed, why, who authorised it, and — the part that matters most
+— **how far the authorisation reaches**. An entry that reads as a
+precedent would be worse than no entry: the whole value of the policy is
+that the next change has to be asked for again.
+
+The file stays on the list in §2 either way. An exception authorises **one
+change**; it does not un-protect a file.
+
+**2026-07-29 — `MPCAutofill/cardpicker/local_phash.py`: declare the two
+skip-reason constants at source.**
+
+- **What changed.** `find_best_match` returned two skip reasons as bare
+  inline string literals, `"no-hashable-candidates"` and
+  `"no-clear-winner"`. They are now declared as module-level
+  `PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON` and
+  `PHASH_NO_CLEAR_WINNER_SKIP_REASON`, exported in `__all__`, and returned
+  by name. The mirrored copies of both constants in
+  `local_identify_printing_tags.py` (added by PR #567 precisely because
+  this file could not be edited) were deleted; that module now imports the
+  one it uses. Nothing else in the file was touched.
+- **Why.** The `*_SKIP_REASON` declaration convention and the roster tether
+  `check_skip_reason_roster_tether()` (PR #567,
+  `docs/reference/skip-reasons.md`) derive the skip-reason roster by
+  scanning for module-level `NAME = "<literal>"` declarations. **The tether
+  cannot enumerate literals it cannot see.** With the values declared only
+  in the consuming module, a NEW literal added inside `find_best_match`
+  would have reached `CardScanLog.skip_reason` — a column with ~2.7M
+  production rows and no `choices` list or foreign key protecting it — with
+  no lint failure anywhere. PR #567 documented that hole and could not
+  close it, because closing it required editing this file. Two declarations
+  in a protected file is the smaller risk; an undetectable roster gap in
+  the vote system's own scan log is the larger one.
+- **Who authorised it.** The owner, ruling on 2026-07-29 on a request that
+  named this file and this change specifically.
+- **Effect: none, and it is proved rather than asserted.** This is a
+  naming-only change. The string VALUES are untouched, so a `CardScanLog`
+  row written after it is byte-identical to one written before. Proof, in
+  the PR: (a) the after-source with the two constants inlined back to their
+  literals parses to an AST identical to the before-source; (b) the
+  sequence of strings `find_best_match` can return, resolved statically
+  through the module's constant table, is unchanged; (c)
+  `tests/test_skip_reason_roster.py`, which pins every roster value against
+  a hand-written expected set, needed **no edit** — the constant NAMES were
+  kept byte-identical too, so nothing about the roster moved except its
+  declaration site. There is no licensing effect of any kind: no import was
+  added to or removed from this file, no external code was introduced, and
+  the file's GPL-3.0 status and `PROVENANCE:`-header cleanliness are
+  unchanged. `check_protected_core_license.py` passes, and
+  `local_phash.py` remains in `PROTECTED_CORE_FILES` and in §2's list
+  above.
+
+- **What keeps the hole closed.** The tether alone cannot: it is blind to
+  exactly the two regressions that would undo this. Two guards in
+  `tests/test_skip_reason_roster.py` cover them —
+  `test_phash_skip_reasons_are_declared_at_their_origin_and_nowhere_else`
+  (fails if any other `cardpicker` module re-declares either value, i.e. if
+  the mirror comes back) and
+  `test_find_best_match_returns_no_bare_skip_reason_literal` (fails if a
+  skip reason is returned from `find_best_match` as a bare literal rather
+  than a named module-level constant). Both were mutation-checked against
+  the regression each claims to catch.
+
+- **SCOPE OF THIS EXCEPTION — read this before citing it.** It permits
+  **declaring skip-reason constants in `local_phash.py`**, and that is its
+  entire reach. It is specifically NOT:
+  - a general licence to edit `local_phash.py`;
+  - a licence to edit any other protected-core file, including the four
+    consensus modules, `local_fallback.py`, or the federation hash tool —
+    several of which emit skip-reason-shaped literals of their own (see
+    `docs/reference/skip-reasons.md`), and none of which are covered here;
+  - a standing rule that "lint-driven refactors are exempt". The next
+    change of any shape to any file on this list, including the next
+    lint-driven one, **needs its own ruling and its own entry below.**
 
 ## 3. Absorption protocol
 

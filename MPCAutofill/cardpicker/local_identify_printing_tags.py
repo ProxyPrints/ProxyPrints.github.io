@@ -82,6 +82,7 @@ from cardpicker import (
     local_phash,
 )
 from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID
+from cardpicker.local_phash import PHASH_NO_CLEAR_WINNER_SKIP_REASON
 from cardpicker.models import (
     CanonicalCard,
     Card,
@@ -167,15 +168,18 @@ OCR_UNKNOWN_SET_CODE_SKIP_REASON = "unknown-set-code"
 
 # The phash engine's own outcomes (`run_phash_for_card`).
 PHASH_TOO_MANY_CANDIDATES_SKIP_REASON = "too-many-candidates"
-# `local_phash.find_best_match` is PROTECTED CORE (docs/upstreaming/license-provenance.md §2) and
-# returns these two strings as its own inline literals; they cannot be declared at their true
-# source without editing a protected file. They are MIRRORED here - the one roster entry whose
-# declaration is not co-located with its origin - and used for the equality test below so the
-# coupling is at least named rather than anonymous. NO_CLEAR_WINNER is never written to
-# `CardScanLog` by this module today (`_classify_no_clear_winner` always refines it into one of
-# the two variants below); HISTORICAL rows predating that refinement still carry it.
-PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON = "no-hashable-candidates"
-PHASH_NO_CLEAR_WINNER_SKIP_REASON = "no-clear-winner"
+# `no-hashable-candidates` and `no-clear-winner` are NOT declared here. They originate inside
+# `local_phash.find_best_match` and, as of the 2026-07-29 protected-core exception
+# (docs/upstreaming/license-provenance.md §2), are declared THERE as
+# `PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON` / `PHASH_NO_CLEAR_WINNER_SKIP_REASON`. They were
+# briefly mirrored here because that file is protected core and could not be edited; the mirror is
+# gone, so there is ONE declaration per value and nothing that can drift. This module IMPORTS the
+# one it needs (see the import block above) rather than re-declaring it.
+#
+# The two refinements below ARE this module's own: `_classify_no_clear_winner` splits phash's
+# undifferentiated `no-clear-winner` into a threshold miss and a margin miss, so plain
+# `no-clear-winner` is never written to `CardScanLog` by this module today - HISTORICAL rows
+# predating that refinement still carry it.
 PHASH_NO_CLEAR_WINNER_DISTANCE_SKIP_REASON = "no-clear-winner-distance"
 PHASH_NO_CLEAR_WINNER_MARGIN_SKIP_REASON = "no-clear-winner-margin"
 
@@ -1994,8 +1998,10 @@ __all__ = [
     "OCR_UNKNOWN_SET_CODE_SKIP_REASON",
     "PARSED_BUT_NO_MATCH_SKIP_REASON",
     "PHASH_TOO_MANY_CANDIDATES_SKIP_REASON",
-    "PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON",
-    "PHASH_NO_CLEAR_WINNER_SKIP_REASON",
+    # `PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON` / `PHASH_NO_CLEAR_WINNER_SKIP_REASON` are
+    # deliberately absent: they are declared and exported by `cardpicker.local_phash`, their
+    # origin. Re-exporting them from here would recreate the two-names-one-value ambiguity that
+    # removing the mirror was meant to end.
     "PHASH_NO_CLEAR_WINNER_DISTANCE_SKIP_REASON",
     "PHASH_NO_CLEAR_WINNER_MARGIN_SKIP_REASON",
     "RESCANNABLE_SKIP_REASONS",

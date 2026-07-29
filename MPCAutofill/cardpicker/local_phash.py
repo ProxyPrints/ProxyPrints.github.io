@@ -72,6 +72,27 @@ ART_CROP_BOX: tuple[float, float, float, float] = (0.07, 0.10, 0.93, 0.58)
 # win either one already gets over full resolution.
 INGEST_HASH_FETCH_DPI = 40
 
+# THIS MODULE'S SKIP VOCABULARY (2026-07-29, see docs/reference/skip-reasons.md). `find_best_match`
+# below returns these two strings; via `local_identify_printing_tags.run_phash_for_card` they reach
+# `CardScanLog.skip_reason`, so they are roster members and must be statically enumerable - the
+# docs_lint roster tether derives the roster from module-level `*_SKIP_REASON = "<literal>"`
+# declarations and CANNOT see a bare inline literal, which is exactly the hole a new literal added
+# inside `find_best_match` would have fallen through.
+#
+# THIS FILE IS PROTECTED CORE (docs/upstreaming/license-provenance.md section 2). These two
+# declarations exist under a NARROW, EXPLICIT owner exception granted 2026-07-29, recorded in that
+# section - it authorises declaring skip-reason constants HERE and nothing else. The file remains
+# protected; any other change to it still needs its own ruling.
+#
+# Naming: the `PHASH_` prefix is kept even though this module is already the phash engine, because
+# these names moved here VERBATIM from `local_identify_printing_tags`, where they were mirrored,
+# and because the consuming module reads them alongside its own
+# `PHASH_NO_CLEAR_WINNER_{DISTANCE,MARGIN}_SKIP_REASON` refinements as one family. Keeping the
+# names byte-identical (not only the values) is what makes this change nothing but a move: the
+# roster's pinning test and the doc's Constant column needed no edit at all.
+PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON = "no-hashable-candidates"
+PHASH_NO_CLEAR_WINNER_SKIP_REASON = "no-clear-winner"
+
 
 def _hash_to_int(image_hash: "imagehash.ImageHash") -> int:
     return twos_complement(str(image_hash), _HASH_BITS)
@@ -376,15 +397,20 @@ def find_best_match(
     margin: int = DEFAULT_MARGIN,
 ) -> tuple[Optional[PhashMatch], str]:
     """
-    Returns (match, skip_reason). skip_reason is "no-hashable-candidates" (every candidate
-    failed to fetch/hash), "no-clear-winner" (best distance is over threshold, or the runner-up
-    is too close behind it), or "" (matched). Requires at least 2 hashed candidates to compute a
-    margin at all when there's more than one name-candidate in the first place; a genuinely
-    single-candidate name (already excluded by the orchestrator's selection - phash only runs on
-    multi-candidate names in practice) would just need the threshold.
+    Returns (match, skip_reason). skip_reason is PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON
+    ("no-hashable-candidates" - every candidate failed to fetch/hash),
+    PHASH_NO_CLEAR_WINNER_SKIP_REASON ("no-clear-winner" - best distance is over threshold, or the
+    runner-up is too close behind it), or "" (matched). Requires at least 2 hashed candidates to
+    compute a margin at all when there's more than one name-candidate in the first place; a
+    genuinely single-candidate name (already excluded by the orchestrator's selection - phash only
+    runs on multi-candidate names in practice) would just need the threshold.
+
+    Any NEW skip reason added here must be declared as a module-level `*_SKIP_REASON` constant
+    above and documented in docs/reference/skip-reasons.md - a bare literal returned from here
+    reaches `CardScanLog` without the roster tether ever seeing it.
     """
     if not candidates_with_hashes:
-        return None, "no-hashable-candidates"
+        return None, PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON
 
     # card_hash and each candidate hash are both plain ints (the DB storage representation) -
     # ImageHash's `-` operator (Hamming distance) needs two ImageHash objects, not raw ints.
@@ -400,9 +426,9 @@ def find_best_match(
     runner_up_distance = scored[1][1] if len(scored) > 1 else None
 
     if best_distance > distance_threshold:
-        return None, "no-clear-winner"
+        return None, PHASH_NO_CLEAR_WINNER_SKIP_REASON
     if runner_up_distance is not None and (runner_up_distance - best_distance) <= margin:
-        return None, "no-clear-winner"
+        return None, PHASH_NO_CLEAR_WINNER_SKIP_REASON
 
     return PhashMatch(candidate=best_candidate, distance=best_distance, runner_up_distance=runner_up_distance), ""
 
@@ -412,6 +438,8 @@ __all__ = [
     "DEFAULT_MARGIN",
     "ART_CROP_BOX",
     "INGEST_HASH_FETCH_DPI",
+    "PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON",
+    "PHASH_NO_CLEAR_WINNER_SKIP_REASON",
     "DEFAULT_BACKFILL_BATCH_SIZE",
     "DEFAULT_BACKFILL_WORKERS",
     "DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES",

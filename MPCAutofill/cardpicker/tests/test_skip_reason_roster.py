@@ -21,6 +21,7 @@ enumerate — see docs/reference/skip-reasons.md's "Why this doc exists":
    hand-written set, so a value reintroduced as a bare inline literal (which
    the derivation cannot see) fails here even if nothing else notices.
 """
+import ast
 import re
 from pathlib import Path
 
@@ -204,3 +205,82 @@ def test_docs_roster_tether_is_clean():
     spec.loader.exec_module(module)
 
     assert module.check_skip_reason_roster_tether() == []
+
+
+# ---------------------------------------------------------------------------
+# The protected-core exception's own guard rails (2026-07-29,
+# docs/upstreaming/license-provenance.md section 2.1).
+#
+# `local_phash.find_best_match` produces two roster values. Until the owner
+# granted a narrow exception, that file could not be edited, so the constants
+# were MIRRORED in `local_identify_printing_tags.py` — which meant a NEW bare
+# literal returned from `find_best_match` reached `CardScanLog` with nothing to
+# catch it, because the roster tether cannot enumerate literals it cannot see.
+#
+# The exception was granted to close exactly that hole, and these two tests are
+# what keep it closed. They fail if the mirror comes back (two declarations that
+# can drift) or if a bare literal is reintroduced at the origin (a roster member
+# no derivation can find). Neither failure mode is visible to the tether itself,
+# which is the whole reason they are pinned here.
+# ---------------------------------------------------------------------------
+
+PHASH_ORIGIN_SKIP_REASONS = {
+    "PHASH_NO_HASHABLE_CANDIDATES_SKIP_REASON": "no-hashable-candidates",
+    "PHASH_NO_CLEAR_WINNER_SKIP_REASON": "no-clear-winner",
+}
+
+
+def _module_level_str_constants(path: Path) -> dict[str, str]:
+    tree = ast.parse(path.read_text())
+    return {
+        node.targets[0].id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+
+
+def test_phash_skip_reasons_are_declared_at_their_origin_and_nowhere_else():
+    """One declaration per value, in the module that produces it."""
+    declared_in_phash = _module_level_str_constants(CARDPICKER_DIR / "local_phash.py")
+    for name, value in PHASH_ORIGIN_SKIP_REASONS.items():
+        assert declared_in_phash.get(name) == value, (
+            f"{name} must be declared in local_phash.py, where find_best_match produces it, "
+            f"with the value {value!r} — see license-provenance.md section 2.1."
+        )
+
+    for py in sorted(CARDPICKER_DIR.glob("*.py")):
+        if py.name == "local_phash.py":
+            continue
+        for name, value in _module_level_str_constants(py).items():
+            assert value not in set(PHASH_ORIGIN_SKIP_REASONS.values()), (
+                f"{py.name} re-declares a local_phash skip reason as {name}={value!r}. "
+                f"That mirror was removed on purpose: two declarations of one value can drift. "
+                f"Import it from cardpicker.local_phash instead."
+            )
+
+
+def test_find_best_match_returns_no_bare_skip_reason_literal():
+    """Every skip reason `find_best_match` returns must be a NAME bound to one of
+    its module's own constants. A bare literal here is invisible to the roster
+    derivation and would reach `CardScanLog` unnoticed — the exact defect the
+    protected-core exception was granted to fix."""
+    path = CARDPICKER_DIR / "local_phash.py"
+    tree = ast.parse(path.read_text())
+    constants = _module_level_str_constants(path)
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "find_best_match")
+
+    returned = [n.value.elts[1] for n in ast.walk(fn) if isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple)]
+    assert returned, "find_best_match no longer returns a (match, skip_reason) tuple"
+    for node in returned:
+        if isinstance(node, ast.Constant) and node.value == "":
+            continue  # the "matched, not a skip" sentinel, not a roster member
+        assert isinstance(node, ast.Name), (
+            f"line {node.lineno}: find_best_match returns a bare skip-reason literal. "
+            f"Declare it as a module-level *_SKIP_REASON constant and document it in "
+            f"docs/reference/skip-reasons.md."
+        )
+        assert node.id in constants, f"line {node.lineno}: {node.id} is not a module-level string constant"

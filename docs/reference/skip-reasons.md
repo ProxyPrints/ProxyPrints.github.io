@@ -140,11 +140,17 @@ longer exists in the code; it wrote `fetch_failed` like the rest.
 | `no-clear-winner-margin`         | `PHASH_NO_CLEAR_WINNER_MARGIN_SKIP_REASON`   | `local-phash-v1` | A candidate cleared the threshold, but the runner-up was too close behind it.                                                                                                                                                                            | Live                                                                                                               |
 
 `no-hashable-candidates` and `no-clear-winner` are the two values whose
-strings physically originate inside `MPCAutofill/cardpicker/local_phash.py`,
-which is PROTECTED CORE (`docs/upstreaming/license-provenance.md` section 2) and therefore cannot be edited to declare them at their true source.
-They are **mirrored** in the consuming module, which is the one place in
-the roster where the declaration is not co-located with the origin. See
-"The values that are not declared at their origin" below.
+strings physically originate inside `MPCAutofill/cardpicker/local_phash.py`
+(`find_best_match`), and that is where their constants are **declared** —
+not in this section's own module. That file is PROTECTED CORE
+(`docs/upstreaming/license-provenance.md` section 2); the two declarations
+sit there under the narrow owner exception granted 2026-07-29 and recorded
+in that section. They were briefly mirrored in
+`local_identify_printing_tags.py`, while that file was the only editable
+one; the mirror is gone, so every roster value now has exactly one
+declaration and it is co-located with its origin.
+`local_identify_printing_tags` imports `PHASH_NO_CLEAR_WINNER_SKIP_REASON`
+from `local_phash` for its `_classify_no_clear_winner` refinement test.
 
 ## Stage D join-key calculator — `MPCAutofill/cardpicker/local_calculate_verdicts.py`
 
@@ -266,27 +272,32 @@ persisted values with no further work.
 
 Stated explicitly rather than forced, per the sweep's own brief.
 
-**`local_phash.find_best_match`'s two return literals**
-(`no-hashable-candidates`, `no-clear-winner`) are emitted from
+**`local_phash.find_best_match`'s two return values — CLOSED 2026-07-29.**
+`no-hashable-candidates` and `no-clear-winner` were the sweep's one
+exception: they are produced inside
 `MPCAutofill/cardpicker/local_phash.py`, which is PROTECTED CORE
-(`docs/upstreaming/license-provenance.md` section 2) and cannot be edited
-to declare them at source without an owner exception. They are mirrored as
-constants in the consuming module,
-`MPCAutofill/cardpicker/local_identify_printing_tags.py`, and that module's
-equality test reads the mirrored constant, so the coupling is named rather
-than anonymous. The roster is still complete — but the guarantee is
-"declared where it is consumed", not "declared where it is produced", for
-these two alone. A NEW literal added to `find_best_match` would flow
-through to `CardScanLog` without any lint failure. That residual gap closes
-only by editing a protected file.
+(`docs/upstreaming/license-provenance.md` section 2), so the sweep could
+not declare them at source and mirrored them in the consuming module
+instead. That left a real hole — a NEW literal added inside
+`find_best_match` would have reached `CardScanLog` without the tether ever
+seeing it, because the tether cannot enumerate literals it cannot see.
+The owner granted a narrow exception on 2026-07-29 (recorded in
+`license-provenance.md` section 2, which also states its limits): the two
+constants are now declared in `local_phash.py` itself, the mirror in
+`local_identify_printing_tags.py` is removed, and the tether reports
+`local_phash.py` as the declaration site. **Every roster value is now
+declared where it is produced.** The exception covers skip-reason constants
+in that one file only; the file remains protected.
 
 **The lands module's phash-branch composition.** That module reports
 `f"{LANDS_PHASH_SKIP_REASON_PREFIX}{reason}"` — a `phash-` prefix
 concatenated onto whatever `find_best_match` returned. The prefix is a
-constant and the routing test reads it, but the composed value is not a
-declared string and cannot be made one without enumerating protected-core
-returns. This is harmless today precisely because nothing in that module is
-persisted; the constant's own comment records that a `CardScanLog` write
+constant and the routing test reads it, but the composed value is still not
+a declared string — the concatenation is what the tether cannot see, and
+that is true regardless of the two `find_best_match` returns now being
+named constants. This is harmless today precisely because nothing in that
+module is persisted; the constant's own comment records that a
+`CardScanLog` write
 must not be added there until the composition is replaced with explicit
 per-outcome constants.
 
