@@ -9,14 +9,24 @@ hard "at least one human-backed vote" gate in `cardpicker.vote_consensus.resolve
 means these votes can NEVER resolve consensus by themselves, regardless of volume - a human
 still has to confirm. See `docs/features/printing-tags.md`'s Stage 4 section for the full
 design writeup (census methodology, Scryfall `printings_count` cross-verification).
+
+VOTES THIS MODULE CASTS TODAY CARRY WEIGHT (2026-07-29). The 2026-07-14 production run's 28,112
+votes are permanently zero-weighted, but that is a ruling about THAT COHORT, held out as a
+measurement control - not about this method. From the 2026-07-29 owner clarification onward, a
+fresh run's votes resolve to the ordinary `PRINTING_TAG_MACHINE_WEIGHT` like any other machine
+vote. The frozen cohort is identified by its stamped `run_id`, not by this module's identity, so
+`run_backfill` stamps a fresh run_id per invocation and it can never be the frozen one - see
+`generate_run_id` below and `vote_consensus.DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID`.
 """
 
 import collections
 import itertools
+import uuid
 from dataclasses import dataclass, field
 from typing import Iterable, Literal, Optional
 
 from django.db.models import QuerySet
+from django.utils import timezone
 
 from cardpicker.models import (
     CanonicalCard,
@@ -26,9 +36,41 @@ from cardpicker.models import (
     VoteSource,
 )
 from cardpicker.search.sanitisation import to_searchable
+from cardpicker.vote_consensus import DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
 from cardpicker.vote_write import purge_and_write_votes
 
 DEDUCTIVE_BACKFILL_ANONYMOUS_ID = "deductive-backfill-v1"
+
+
+def generate_run_id() -> str:
+    """
+    Fresh per-invocation `run_id` for the votes this run writes - same shape and same rationale as
+    `local_identify_printing_tags.generate_run_id` (a UTC-timestamp prefix for human scannability
+    plus a short random suffix so two invocations in the same second can't collide), prefixed with
+    this calculator's `anonymous_id` so a run stamp says which calculator produced it on sight.
+
+    This run was NOT stamped before 2026-07-29 - the 2026-07-14 production cohort's rows carry
+    `run_id = NULL`, which is why they needed a retroactive stamp (migration
+    `0096_freeze_deductive_backfill_zero_weight_cohort`) before the zero-weight override could be
+    scoped to that run. Stamping every future run keeps that from ever being true again: from here
+    on, every deductive-backfill vote says which invocation cast it, and `purge_machine_votes
+    --run-id <id>` can retract one bad run without touching another.
+
+    THE ASSERT IS THE ANTI-DRIFT GUARD, not a formality. The whole 2026-07-29 re-scoping rests on
+    "the frozen control cohort is exactly the rows carrying one specific run_id". If this function
+    could ever mint that same string, a future run's votes would silently join a ratified control
+    cohort and lose their weight - re-creating, by collision, precisely the over-broad "this method
+    is disqualified forever" behaviour that clarification removed. The timestamp shape makes that
+    unreachable in practice; the assert makes it unreachable in fact, and fails loudly rather than
+    quietly if someone changes this format to something that collides.
+    """
+    run_id = f"{DEDUCTIVE_BACKFILL_ANONYMOUS_ID}/{timezone.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    assert run_id != DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID, (
+        "a new deductive-backfill run must never re-mint the frozen 2026-07-14 cohort's run_id: "
+        "its votes would be silently swept into a ratified zero-weight measurement control."
+    )
+    return run_id
+
 
 Tier = Literal["d1", "d2"]
 
@@ -171,6 +213,16 @@ def verify_zero_resolutions(card_ids: list[int], batch_size: int = 5000) -> list
     human-backed gate, and `_eligible_base_queryset` excludes every card with a pre-existing
     vote of any kind), but "should structurally never happen" is exactly what an operational
     gate exists to verify against the real data rather than trust.
+
+    LEFT FAMILY-AGNOSTIC ON PURPOSE (2026-07-29 review of every consumer of the old family-scoped
+    zero-weight rule): this gate keys on nothing about this calculator's identity - it just re-runs
+    the real `resolve_printing` against fresh DB state. That is what makes it still meaningful now
+    that this run's votes carry weight again. Before the re-scoping it was trivially satisfied for
+    a second reason (every vote written weighed 0); now it is satisfied only by the reason that
+    actually matters - `_eligible_base_queryset` admits only cards with ZERO pre-existing votes,
+    so a just-voted card holds one machine-only vote, and `resolve_weighted_consensus`' hard
+    human-backed gate makes a machine-only group unresolvable at any weight. Do not "optimise"
+    this by skipping the check on the grounds that these votes are zero-weight. They are not.
     """
     from cardpicker.printing_consensus import resolve_printing
 
@@ -196,11 +248,17 @@ def run_backfill(
     excludes any card with an existing vote, so simply re-running the command later picks up
     exactly where it left off with no separate checkpoint file needed), then - unless `dry_run`
     - runs the live gate check over every card just written to.
+
+    Every vote this invocation writes is stamped with ONE `run_id`, generated once here and
+    threaded through the whole run (`generate_run_id`'s own docstring covers why, and why it can
+    never collide with the frozen 2026-07-14 cohort's stamp). Votes written by this run carry
+    ordinary machine weight - see the module docstring.
     """
     votes: Iterable[DeductiveVote] = select_candidates(tier)
     if limit is not None:
         votes = itertools.islice(votes, limit)
 
+    run_id = generate_run_id()
     result = BackfillResult(dry_run=dry_run)
     written_card_ids: list[int] = []
     batch: list[DeductiveVote] = []
@@ -227,6 +285,7 @@ def run_backfill(
                         anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
                         source=VoteSource.DEDUCTION,
                         confidence=vote.confidence,
+                        run_id=run_id,
                     )
                     for vote in pending
                 ],
@@ -258,6 +317,7 @@ def run_backfill(
 
 __all__ = [
     "DEDUCTIVE_BACKFILL_ANONYMOUS_ID",
+    "generate_run_id",
     "CONFIDENCE_BY_TIER",
     "DeductiveVote",
     "CanonicalNameIndex",

@@ -742,7 +742,7 @@ class TestTransferredEvidencePoolsWithItsSource:
         assert len(votes) == 2  # both rows are read...
         vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
         assert len(vote_tuples) == 1  # ...and pool to ONE event
-        assert vote_tuples[0].weight == resolve_vote_weight(VoteSource.OCR, JOIN_KEY_ANONYMOUS_ID)
+        assert vote_tuples[0].weight == resolve_vote_weight(VoteSource.OCR, JOIN_KEY_ANONYMOUS_ID, None)
 
         # never enough to resolve alone - exactly the outcome the retired guard used to guarantee
         # by excluding the transferred vote outright, now achieved by pooling instead.

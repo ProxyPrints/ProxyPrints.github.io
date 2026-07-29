@@ -125,8 +125,9 @@ QUICK_NEGATIVE_SKIP_REASONS = frozenset(
 # persisted, never compared against a real anonymous_id; passed through `resolve_vote_weight`
 # (rather than reading `vote_consensus._SOURCE_WEIGHTS[VoteSource.USER]` directly) purely so this
 # stays routed through the one sanctioned weight-resolution entry point, matching every other
-# caller's convention, even though `resolve_vote_weight`'s only override (the deductive-backfill
-# zero-weight cohort) can never match `source=VoteSource.USER` regardless of anonymous_id.
+# caller's convention, even though `resolve_vote_weight`'s only override (the frozen 2026-07-14
+# deductive-backfill cohort) can never match `source=VoteSource.USER` regardless of anonymous_id
+# or run_id.
 _HYPOTHETICAL_VOTE_ANONYMOUS_ID = "question-feed-hypothetical-vote"
 
 
@@ -290,7 +291,9 @@ def is_likely_resolve_printing(card: Card) -> bool:
     # tuples it joins are already pooled, and this list is not re-pooled.
     hypothetical_vote = VoteTuple(
         outcome_key=leading_key,
-        weight=resolve_vote_weight(VoteSource.USER, _HYPOTHETICAL_VOTE_ANONYMOUS_ID),
+        # `run_id=None`: a hypothetical vote belongs to no run at all, and is USER-sourced anyway,
+        # so the zero-weight cohort override can never match it on either conjunct.
+        weight=resolve_vote_weight(VoteSource.USER, _HYPOTHETICAL_VOTE_ANONYMOUS_ID, None),
         is_human_backed=True,
     )
     winning_key = resolve_weighted_consensus(

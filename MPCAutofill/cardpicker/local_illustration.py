@@ -61,7 +61,7 @@ THE 1:1 RULE (issue #525, 2026-07-28) — WHY BOTH MULTI-OUTCOME BRANCHES ABSTAI
 previously emitted one ``CardPrintingTag`` per printing in the verdict, so a single machine
 identity ended up voting simultaneously for several MUTUALLY EXCLUSIVE printings of the same
 card. The ``BASE_CONFIDENCE / N`` spread that was supposed to discount them is decorative:
-``vote_consensus.resolve_vote_weight(source, anonymous_id)`` takes no confidence argument and
+``vote_consensus.resolve_vote_weight(source, anonymous_id, run_id)`` takes no confidence argument and
 ``VoteTuple`` carries no confidence field, so confidence NEVER reaches the tally — every emitted
 row landed at full ``PRINTING_TAG_MACHINE_WEIGHT``. The DB does not stop it either:
 ``cardprintingtag_unique_printing_vote`` is on (card, printing, anonymous_id), so different

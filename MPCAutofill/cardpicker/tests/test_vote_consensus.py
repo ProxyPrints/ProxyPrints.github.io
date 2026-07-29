@@ -1,13 +1,18 @@
+import inspect
+from importlib import import_module
+
 import pytest
 
 from django.conf import settings
 
-from cardpicker.models import VoteSource
+from cardpicker.deductive_backfill import generate_run_id
+from cardpicker.models import AbstractWeightedVote, VoteSource
 from cardpicker.tests.factories import CardArtistVoteFactory, CardFactory
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
     DEDUCTIVE_BACKFILL_FAMILY,
+    DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
     PENDING_PRIVILEGED,
     VoteTuple,
     is_human_backed_source,
@@ -42,47 +47,97 @@ class TestIsHumanBackedSource:
 
 class TestResolveVoteWeight:
     """
-    2026-07-23 owner ruling: the 2026-07-14 deductive-name-backfill's 28,112 votes
-    (source=DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID) carry weight 0.0 in every
-    consensus computation - `resolve_vote_weight` is the one function that mechanism lives in,
-    so it's the unit tested directly here (the printing_consensus-level effect is proven
-    separately in test_printing_consensus.py).
+    2026-07-23 owner ruling, as clarified by the owner 2026-07-29: the 28,112 votes the
+    2026-07-14 deductive-name-backfill RUN wrote carry weight 0.0 in every consensus
+    computation, held out as a measurement control - but the METHOD is not disqualified, so a
+    vote cast by that same calculator in future carries the ordinary machine weight.
+    `resolve_vote_weight` is the one function that mechanism lives in, so it's the unit tested
+    directly here (the printing_consensus-level effect is proven separately in
+    test_printing_consensus.py).
     """
 
-    def test_deductive_backfill_deduction_vote_is_zero_weight(self):
-        assert resolve_vote_weight(VoteSource.DEDUCTION, DEDUCTIVE_BACKFILL_ANONYMOUS_ID) == 0.0
-
-    def test_ordinary_deduction_vote_keeps_its_normal_weight(self):
-        # a DEDUCTION-sourced vote NOT carrying the backfill's own anonymous_id is unaffected -
-        # the override is scoped to (source, anonymous_id) together, not to DEDUCTION alone
+    def test_a_vote_from_the_frozen_cohort_is_zero_weight(self):
+        # THE cohort row shape: all three conjuncts present, exactly as the 28,112 production
+        # rows read after migration 0096 stamped them.
         assert (
-            resolve_vote_weight(VoteSource.DEDUCTION, "some-other-anonymous-id")
+            resolve_vote_weight(
+                VoteSource.DEDUCTION, DEDUCTIVE_BACKFILL_ANONYMOUS_ID, DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
+            )
+            == 0.0
+        )
+
+    def test_a_new_vote_by_the_same_method_carries_ordinary_machine_weight(self):
+        # The 2026-07-29 clarification, stated as a test: same source, same calculator, same
+        # method - a DIFFERENT run, so it is not part of the frozen control and it COUNTS.
+        # This assertion was red under the 2026-07-28 family-scoped implementation.
+        assert (
+            resolve_vote_weight(VoteSource.DEDUCTION, DEDUCTIVE_BACKFILL_ANONYMOUS_ID, generate_run_id())
+            == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+        )
+        assert _SOURCE_WEIGHTS[VoteSource.DEDUCTION] == settings.PRINTING_TAG_MACHINE_WEIGHT
+
+    def test_an_unstamped_deductive_backfill_vote_is_not_in_the_cohort(self):
+        # run_id=None is what every deductive-backfill row looked like BEFORE migration 0096;
+        # after it, only the frozen cohort carries the stamp. A NULL run_id therefore means
+        # "not the control", which is the correct reading now the ruling is cohort-scoped.
+        assert (
+            resolve_vote_weight(VoteSource.DEDUCTION, DEDUCTIVE_BACKFILL_ANONYMOUS_ID, None)
             == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
         )
 
-    def test_ocr_vote_with_the_backfill_anonymous_id_is_unaffected(self):
+    def test_ordinary_deduction_vote_keeps_its_normal_weight(self):
+        # a DEDUCTION-sourced vote from a different calculator entirely is unaffected
+        assert (
+            resolve_vote_weight(VoteSource.DEDUCTION, "some-other-anonymous-id", None)
+            == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+        )
+
+    def test_another_calculator_carrying_the_frozen_run_id_is_unaffected(self):
+        # defensive: the run stamp alone is never enough - all three conjuncts must hold, so a
+        # stray re-stamp onto some other calculator's row cannot pull it into a ratified ruling
+        assert (
+            resolve_vote_weight(VoteSource.DEDUCTION, "scryfall-tagger-v1", DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID)
+            == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+        )
+
+    def test_ocr_vote_with_the_backfill_identity_is_unaffected(self):
         # defensive: the override requires source == DEDUCTION specifically - an OCR-sourced
         # vote is never written under this anonymous_id in practice (deductive_backfill.py only
         # ever writes DEDUCTION), but the function itself must not zero it out if it somehow was
-        assert resolve_vote_weight(VoteSource.OCR, DEDUCTIVE_BACKFILL_ANONYMOUS_ID) == _SOURCE_WEIGHTS[VoteSource.OCR]
+        assert (
+            resolve_vote_weight(VoteSource.OCR, DEDUCTIVE_BACKFILL_ANONYMOUS_ID, DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID)
+            == _SOURCE_WEIGHTS[VoteSource.OCR]
+        )
 
-    def test_user_vote_with_the_backfill_anonymous_id_is_unaffected(self):
-        # same defensive point as above, for the human-backed source: matching anonymous_id
-        # alone is never enough, source must also be DEDUCTION
-        assert resolve_vote_weight(VoteSource.USER, DEDUCTIVE_BACKFILL_ANONYMOUS_ID) == _SOURCE_WEIGHTS[VoteSource.USER]
+    def test_user_vote_with_the_backfill_identity_is_unaffected(self):
+        # same defensive point as above, for the human-backed source
+        assert (
+            resolve_vote_weight(VoteSource.USER, DEDUCTIVE_BACKFILL_ANONYMOUS_ID, DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID)
+            == _SOURCE_WEIGHTS[VoteSource.USER]
+        )
 
     @pytest.mark.parametrize("source", [VoteSource.USER, VoteSource.ADMIN, VoteSource.OCR, VoteSource.FEDERATED])
     def test_every_other_source_matches_the_plain_source_weights_table(self, source):
-        assert resolve_vote_weight(source, "anonymous-1") == _SOURCE_WEIGHTS[source]
+        assert resolve_vote_weight(source, "anonymous-1", None) == _SOURCE_WEIGHTS[source]
 
 
-class TestZeroWeightRulingSurvivesAVersionBump:
+class TestZeroWeightScopeIsTheCohortNotTheMethod:
     """
-    2026-07-28: the 2026-07-23 zeroing was an EXACT string match against
-    "deductive-backfill-v1". A machine calculator's version lives INSIDE its `anonymous_id`, so
-    bumping that calculator to -v2 - an ordinary redeploy - would have silently restored all
-    28,112 votes to full DEDUCTION weight, with no error and no log line. The match is now on
-    the versionless calculator FAMILY, and it is scoped to that ONE family, no wider.
+    2026-07-29 owner clarification. Two earlier revisions of this rule were wrong in opposite
+    directions, and this class pins the line between them:
+
+      - the ORIGINAL (2026-07-23) matched the exact string "deductive-backfill-v1", so an
+        ordinary redeploy to -v2 would have silently restored all 28,112 control votes to full
+        weight - no error, no log line, a ratified ruling reversed by a version string;
+      - the REPLACEMENT (2026-07-28) matched the versionless calculator FAMILY, which fixed that
+        but zeroed the METHOD - every vote name-matching inference would ever cast, forever. The
+        owner ruled on a cohort, not on a method; that implementation claimed more than was
+        ratified.
+
+    The scope is now the frozen 2026-07-14 RUN, identified by its stamped `run_id`. Both failure
+    modes are closed at once: a version bump cannot un-zero the control (its rows keep the stamp
+    whatever the calculator is later called), and a new run cannot be zeroed by it (a new run has
+    a new stamp).
     """
 
     def test_the_family_constant_is_derived_from_the_id_not_written_out_twice(self):
@@ -92,10 +147,22 @@ class TestZeroWeightRulingSurvivesAVersionBump:
     @pytest.mark.parametrize(
         "anonymous_id", ["deductive-backfill-v1", "deductive-backfill-v2", "deductive-backfill-v10"]
     )
-    def test_every_version_of_the_backfill_calculator_is_zero_weight(self, anonymous_id):
-        # -v2 does not exist today; that is exactly the point. The ruling must already hold for
-        # it before anyone bumps the version, because nothing would fail if it didn't.
-        assert resolve_vote_weight(VoteSource.DEDUCTION, anonymous_id) == 0.0
+    def test_a_version_bump_cannot_un_zero_the_frozen_cohort(self, anonymous_id):
+        # the control rows keep their stamp no matter what the calculator is renamed to later,
+        # so the 2026-07-28 fix's actual property is preserved - it just no longer reaches beyond
+        # the run. -v2/-v10 do not exist today; that is exactly the point.
+        assert resolve_vote_weight(VoteSource.DEDUCTION, anonymous_id, DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID) == 0.0
+
+    @pytest.mark.parametrize(
+        "anonymous_id", ["deductive-backfill-v1", "deductive-backfill-v2", "deductive-backfill-v10"]
+    )
+    def test_no_version_of_the_backfill_calculator_is_zero_weighted_outside_that_run(self, anonymous_id):
+        # the correction itself: the METHOD is not disqualified, at any version. Under the
+        # 2026-07-28 family-scoped implementation every one of these was 0.0.
+        assert (
+            resolve_vote_weight(VoteSource.DEDUCTION, anonymous_id, generate_run_id())
+            == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+        )
 
     @pytest.mark.parametrize(
         "anonymous_id",
@@ -112,21 +179,84 @@ class TestZeroWeightRulingSurvivesAVersionBump:
         ],
     )
     def test_no_other_calculator_family_is_zero_weighted(self, anonymous_id):
-        assert resolve_vote_weight(VoteSource.DEDUCTION, anonymous_id) == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+        assert (
+            resolve_vote_weight(VoteSource.DEDUCTION, anonymous_id, DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID)
+            == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+        )
 
     def test_a_human_uuid_is_never_zero_weighted(self):
         # calculator_family() returns None for a UUID; None must never compare equal to the
         # ruled family, or every human DEDUCTION-labelled vote would silently lose its weight.
         assert (
-            resolve_vote_weight(VoteSource.DEDUCTION, "3f2a9c1e-7b64-4a0d-9c88-1e5f2b3d4a60")
+            resolve_vote_weight(
+                VoteSource.DEDUCTION,
+                "3f2a9c1e-7b64-4a0d-9c88-1e5f2b3d4a60",
+                DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
+            )
             == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
         )
 
     @pytest.mark.parametrize("source", [VoteSource.USER, VoteSource.ADMIN, VoteSource.OCR, VoteSource.FEDERATED])
-    def test_the_family_match_still_requires_source_to_be_deduction(self, source):
-        # the override is (source, family) TOGETHER - broadening it to the family alone would
-        # zero a differently-sourced vote that happened to carry the id, which is not the ruling
-        assert resolve_vote_weight(source, "deductive-backfill-v2") == _SOURCE_WEIGHTS[source]
+    def test_the_cohort_match_still_requires_source_to_be_deduction(self, source):
+        # the override is (source, family, run_id) TOGETHER - dropping the source conjunct would
+        # zero a differently-sourced vote that happened to carry the stamp, which is not the ruling
+        assert (
+            resolve_vote_weight(source, "deductive-backfill-v2", DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID)
+            == _SOURCE_WEIGHTS[source]
+        )
+
+
+class TestZeroWeightCohortScopeIsPinned:
+    """
+    ANTI-DRIFT. The family-scoped implementation this replaced had one property worth keeping: an
+    unrelated change could not silently disable a ratified owner ruling - a rename that broke the
+    naming convention failed loudly at import. Re-scoping the rule from the method to one cohort
+    must not trade that away for a fragility, so these are the equivalent guards for the new
+    mechanism. Every one of them protects against the same failure: a zeroed cohort quietly
+    becoming unzeroed, or an unzeroed vote quietly becoming zeroed, with nothing red anywhere.
+    """
+
+    def test_the_code_constant_equals_what_the_migration_actually_wrote(self):
+        """
+        THE LOAD-BEARING ONE. `DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID` is not a setting - it is a
+        claim about 28,112 rows in the production database, put there by migration 0096. Editing
+        the constant without editing the database would leave the override matching nothing and
+        the control cohort silently restored to full machine weight, with no error and no failing
+        test anywhere else. Migrations are append-only history, which is what makes comparing
+        against one a real check rather than a restatement of the same literal.
+        """
+        migration = import_module("cardpicker.migrations.0096_freeze_deductive_backfill_zero_weight_cohort")
+        assert migration.ZERO_WEIGHT_RUN_ID == DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
+        # and the migration must still be selecting the cohort it claims to select
+        assert migration.COHORT_ANONYMOUS_ID == DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+        assert migration.EXPECTED_PRODUCTION_ROWS == 28112
+
+    def test_the_frozen_run_id_still_names_the_calculator_it_freezes(self):
+        # a run stamp that stopped naming this calculator would be a boundary around nothing -
+        # mirrors the import-time assert, pinned here so the assert itself cannot be dropped
+        assert DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID.startswith(f"{DEDUCTIVE_BACKFILL_ANONYMOUS_ID}/")
+
+    def test_the_frozen_run_id_fits_the_column_it_is_stored_in(self):
+        # a value too long for run_id could not have been stamped at all, i.e. the cohort would
+        # be unmarked and the override would match nothing
+        max_length = AbstractWeightedVote._meta.get_field("run_id").max_length
+        assert len(DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID) <= max_length
+
+    def test_run_id_is_a_required_argument_of_resolve_vote_weight(self):
+        """
+        `run_id` must never acquire a default. A defaulted `run_id=None` would mean "not in the
+        cohort", so a new call site could hand a genuine control row full machine weight purely
+        by not knowing the parameter exists - exactly the class of silent scope loss this whole
+        change is about. Requiring it forces every call site to answer the question.
+        """
+        parameter = inspect.signature(resolve_vote_weight).parameters["run_id"]
+        assert parameter.default is inspect.Parameter.empty
+
+    def test_a_fresh_backfill_run_can_never_re_mint_the_frozen_stamp(self):
+        # the collision guard from the caster's side: if `generate_run_id` could ever produce the
+        # frozen value, a future run's votes would silently join the zero-weight control cohort,
+        # re-creating the over-broad "this method is disqualified forever" behaviour by accident
+        assert all(generate_run_id() != DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID for _ in range(50))
 
 
 class TestResolveWeightedConsensus:

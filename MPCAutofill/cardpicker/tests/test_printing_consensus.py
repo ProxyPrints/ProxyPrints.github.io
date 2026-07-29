@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+from cardpicker.deductive_backfill import generate_run_id
 from cardpicker.models import PrintingTagStatus, VoteSource
 from cardpicker.printing_consensus import (
     NO_MATCH,
@@ -17,7 +18,10 @@ from cardpicker.tests.factories import (
     CardFactory,
     CardPrintingTagFactory,
 )
-from cardpicker.vote_consensus import DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+from cardpicker.vote_consensus import (
+    DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+    DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
+)
 
 
 class TestResolvePrinting:
@@ -137,13 +141,21 @@ class TestResolvePrinting:
         assert resolve_printing(card) == printing_a
 
 
-class TestDeductiveBackfillZeroWeight:
+class TestDeductiveBackfillCohortZeroWeight:
     """
-    2026-07-23 owner ruling: the 2026-07-14 deductive-name-backfill's votes (source=DEDUCTION,
-    anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID) carry weight 0.0 in every consensus
-    computation, permanently - proven here at the `resolve_printing` level (winner selection,
-    the quorum/share gate, and promotion), contrasted against unchanged behaviour for ordinary
-    (non-backfill) machine votes and human votes.
+    2026-07-23 owner ruling, as clarified 2026-07-29: the votes the 2026-07-14 deductive-name-
+    backfill RUN wrote (source=DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+    run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID - the stamp migration 0096 put on exactly those
+    28,112 rows) carry weight 0.0 in every consensus computation, permanently, as a measurement
+    control - proven here at the `resolve_printing` level (winner selection, the quorum/share
+    gate, and promotion), contrasted against unchanged behaviour for ordinary (non-cohort)
+    machine votes and human votes.
+
+    Every cohort vote below therefore carries that run stamp explicitly. That is not decoration:
+    the scope is the RUN, not the calculator, so a vote from the same calculator WITHOUT the
+    stamp carries ordinary machine weight and can promote a card - see
+    `test_a_fresh_backfill_run_s_vote_does_carry_weight_and_can_promote`, which is deliberately
+    the same shape as `test_backfill_vote_does_not_help_promote_...` with only the stamp removed.
 
     Every scenario below casts AT MOST ONE backfill-sourced vote per card, matching a genuine
     DB invariant (not just a test-data choice): `cardprintingtag_unique_printing_vote` is
@@ -160,7 +172,11 @@ class TestDeductiveBackfillZeroWeight:
         card = CardFactory()
         printing = CanonicalCardFactory()
         CardPrintingTagFactory(
-            card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+            card=card,
+            printing=printing,
+            source=VoteSource.DEDUCTION,
+            anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+            run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
         )
         assert resolve_printing(card) is None
 
@@ -179,7 +195,11 @@ class TestDeductiveBackfillZeroWeight:
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="local-ocr-v1")
         CardPrintingTagFactory(
-            card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+            card=card,
+            printing=printing,
+            source=VoteSource.DEDUCTION,
+            anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+            run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
         )
         assert resolve_printing(card) is None
 
@@ -187,15 +207,56 @@ class TestDeductiveBackfillZeroWeight:
         # control for the test above: the identical shape (1 human vote + 2 machine-weight
         # votes for the same printing), but with a second ORDINARY machine vote (not the
         # zero-weighted backfill cohort) in the third slot - 1.0 + 0.5 + 0.5 = 2.0, share 1.0,
-        # so this DOES promote to RESOLVED. Proves the zero-weighting is scoped to the
-        # backfill's own anonymous_id, not to VoteSource.DEDUCTION (or "machine evidence") as a
-        # whole, and that ordinary human+machine promotion behaviour is unchanged by this
-        # ruling.
+        # so this DOES promote to RESOLVED. Proves the zero-weighting is scoped to the frozen
+        # cohort, not to VoteSource.DEDUCTION (or "machine evidence") as a whole, and that
+        # ordinary human+machine promotion behaviour is unchanged by this ruling.
         card = CardFactory()
         printing = CanonicalCardFactory()
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="local-ocr-v1")
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="local-phash-v1")
+        assert resolve_printing(card) == printing
+
+    def test_a_fresh_backfill_run_s_vote_does_carry_weight_and_can_promote(self, db):
+        # THE 2026-07-29 CLARIFICATION, at the resolve_printing level. Byte-for-byte the same
+        # shape as test_backfill_vote_does_not_help_promote_a_card_an_ordinary_machine_vote_
+        # would_have - same source, same calculator, same three votes agreeing on one printing -
+        # with ONE difference: this deduction vote carries a fresh run stamp instead of the
+        # frozen cohort's, so it is not part of the measurement control. 1.0 + 0.5 + 0.5 = 2.0,
+        # share 1.0: RESOLVED.
+        #
+        # This is the live behavioural consequence of the re-scoping, stated as a test rather
+        # than left implicit: re-running `deductive_backfill_printing_tags` now casts votes that
+        # COUNT. Under the previous family-scoped implementation this assertion was red.
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="local-ocr-v1")
+        CardPrintingTagFactory(
+            card=card,
+            printing=printing,
+            source=VoteSource.DEDUCTION,
+            anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+            run_id=generate_run_id(),
+        )
+        assert resolve_printing(card) == printing
+
+    def test_an_unstamped_backfill_vote_is_not_in_the_control_cohort(self, db):
+        # `run_id=None` - the shape every deductive-backfill row had BEFORE migration 0096, and
+        # the shape any hand-written or imported DEDUCTION row has. It is NOT the frozen cohort,
+        # so it weighs 0.5 and promotes. Pinned because "unstamped" is the easy thing to
+        # accidentally treat as "in the cohort" when re-reading this rule later.
+        card = CardFactory()
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="local-ocr-v1")
+        CardPrintingTagFactory(
+            card=card,
+            printing=printing,
+            source=VoteSource.DEDUCTION,
+            anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+            run_id=None,
+        )
         assert resolve_printing(card) == printing
 
     def test_backfill_vote_pooled_on_one_side_cannot_tip_a_human_vs_human_contest(self, db):
@@ -208,7 +269,11 @@ class TestDeductiveBackfillZeroWeight:
         printing_b = CanonicalCardFactory()
         CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
         CardPrintingTagFactory(
-            card=card, printing=printing_a, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+            card=card,
+            printing=printing_a,
+            source=VoteSource.DEDUCTION,
+            anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+            run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
         )
         CardPrintingTagFactory(card=card, printing=printing_b, source=VoteSource.USER)
         assert resolve_printing(card) is None
@@ -224,7 +289,11 @@ class TestDeductiveBackfillZeroWeight:
         CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
         CardPrintingTagFactory(card=card, printing=printing_a, source=VoteSource.USER)
         CardPrintingTagFactory(
-            card=card, printing=printing_b, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+            card=card,
+            printing=printing_b,
+            source=VoteSource.DEDUCTION,
+            anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+            run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
         )
         assert resolve_printing(card) == printing_a
 
@@ -235,7 +304,11 @@ class TestDeductiveBackfillZeroWeight:
         card = CardFactory()
         printing = CanonicalCardFactory()
         CardPrintingTagFactory(
-            card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID
+            card=card,
+            printing=printing,
+            source=VoteSource.DEDUCTION,
+            anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+            run_id=DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID,
         )
         CardPrintingTagFactory(card=card, printing=None, is_no_match=True, source=VoteSource.USER)
 

@@ -39,8 +39,10 @@ inference from already-trusted structured data with ZERO image inspection - exac
 `VoteSource.DEDUCTION`'s own definition (VoteSource's docstring) - so votes are written as
 (source=DEDUCTION, anonymous_id="scryfall-tagger-v1"). Weight resolves to
 PRINTING_TAG_MACHINE_WEIGHT (default 0.5) via vote_consensus._SOURCE_WEIGHTS, and the
-2026-07-23 zero-weight override is scoped to (source=DEDUCTION, anonymous_id=
-"deductive-backfill-v1") only, so these votes are unaffected by it.
+2026-07-23 zero-weight override is scoped (as re-scoped by the 2026-07-29 owner clarification)
+to the single frozen 2026-07-14 deductive-backfill RUN - source=DEDUCTION, the
+"deductive-backfill" calculator family, AND vote_consensus.DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
+on the row's run_id, all three together - so these votes are unaffected by it.
 
 RE-RUN SEMANTICS (matches the existing machine-vote casters exactly): the
 (printing, tag, anonymous_id) uniqueness constraint on PrintingTagVote plus the eligibility
