@@ -204,6 +204,124 @@ class TestProposalCrossrefs(unittest.TestCase):
             self.assertEqual(docs_lint.check_proposal_crossrefs(), [])
 
 
+class TestCalculatorRosterTether(unittest.TestCase):
+    """
+    The roster tether: every `*_ANONYMOUS_ID` declared in
+    MPCAutofill/cardpicker/*.py must have an entry in
+    docs/pipeline-fidelity-gate.md. Fixture tests build a miniature
+    repo (a cardpicker source dir + the doc) under temp_docs()'s
+    redirected REPO_ROOT/DOCS_DIR.
+    """
+
+    @contextlib.contextmanager
+    def _repo(self, sources: dict, doc_text: str):
+        """sources: {filename: python source}; doc_text: fidelity-gate doc body."""
+        with temp_docs() as docs:
+            src = docs_lint.REPO_ROOT / "MPCAutofill" / "cardpicker"
+            src.mkdir(parents=True)
+            for name, text in sources.items():
+                write(src / name, text)
+            write(docs / docs_lint.FIDELITY_GATE_DOC_REL, doc_text)
+            yield docs
+
+    def test_undocumented_identity_is_flagged(self):
+        with self._repo(
+            {"local_thing.py": 'THING_ANONYMOUS_ID = "local-thing-v1"\n'},
+            "| `local-other-v1` | 5 |\n",
+        ):
+            out = " || ".join(docs_lint.check_calculator_roster_tether())
+            self.assertIn("calculator roster drift", out)
+            self.assertIn("`local-thing-v1`", out)
+            self.assertIn("local_thing.py:1", out)
+
+    def test_documented_identity_is_clean(self):
+        with self._repo(
+            {"local_thing.py": 'THING_ANONYMOUS_ID = "local-thing-v1"\n'},
+            "- **`local-thing-v1`** (5 rows) — does a thing. DORMANT.\n",
+        ):
+            self.assertEqual(docs_lint.check_calculator_roster_tether(), [])
+
+    def test_roster_is_derived_from_code_not_hardcoded(self):
+        # A brand-new calculator nobody has documented yet must fail on the
+        # day it's declared — that is the whole point of deriving the list.
+        with self._repo(
+            {"local_new.py": 'BRAND_NEW_ANONYMOUS_ID = "brand-new-engine-v1"\n'},
+            "this doc mentions no identities at all\n",
+        ):
+            self.assertIn("`brand-new-engine-v1`", " || ".join(docs_lint.check_calculator_roster_tether()))
+
+    def test_allowlisted_non_calculator_is_exempt(self):
+        with self._repo(
+            {"evidence_transfer.py": 'EVIDENCE_TRANSFER_ANONYMOUS_ID = "evidence-transfer-v1"\n'},
+            "this doc mentions no identities at all\n",
+        ):
+            self.assertEqual(docs_lint.check_calculator_roster_tether(), [])
+
+    def test_version_bump_is_not_satisfied_by_the_old_entry(self):
+        # calculator_family strips `-vN`; the tether deliberately does NOT.
+        # A v1 entry must not silently cover a v2 identity.
+        with self._repo(
+            {"local_thing.py": 'THING_ANONYMOUS_ID = "local-thing-v2"\n'},
+            "- **`local-thing-v1`** — the old engine.\n",
+        ):
+            self.assertIn("`local-thing-v2`", " || ".join(docs_lint.check_calculator_roster_tether()))
+
+    def test_substring_of_another_identity_does_not_satisfy_the_check(self):
+        with self._repo(
+            {"local_thing.py": 'FALLBACK_ANONYMOUS_ID = "local-fallback-v1"\n'},
+            "- **`stage-d-fallback-v1`** — a different engine entirely.\n",
+        ):
+            self.assertIn("`local-fallback-v1`", " || ".join(docs_lint.check_calculator_roster_tether()))
+
+    def test_version_key_and_fixture_literals_are_not_roster_members(self):
+        # Extractor version keys and test-fixture engine names share the
+        # `<name>-vN` shape but are not declared as `*_ANONYMOUS_ID`
+        # constants — keying on the constant name is what excludes them.
+        with self._repo(
+            {
+                "image_evidence.py": (
+                    'COLLECTOR_LINE_VERSION = "collector-line-ocr-v2"\n'
+                    'LEGAL_LINE_VERSION = "legal-line-v2"\n'
+                    'ARTIST_OCR_VERSION = "artist-ocr-v1"\n'
+                    'OTHER_ENGINE = "some-other-engine-v1"\n'
+                    'FAMILY = "unrelated-family-v1"\n'
+                ),
+            },
+            "this doc mentions no identities at all\n",
+        ):
+            self.assertEqual(docs_lint.check_calculator_roster_tether(), [])
+
+    def test_indented_rebinding_is_not_a_declaration(self):
+        with self._repo(
+            {
+                "local_thing.py": (
+                    'THING_ANONYMOUS_ID = "local-thing-v1"\n'
+                    "def f():\n"
+                    '    LOCAL_ANONYMOUS_ID = "not-a-declaration-v1"\n'
+                ),
+            },
+            "- **`local-thing-v1`** — documented.\n",
+        ):
+            self.assertEqual(docs_lint.check_calculator_roster_tether(), [])
+
+    def test_identity_only_inside_a_fenced_block_is_not_an_entry(self):
+        with self._repo(
+            {"local_thing.py": 'THING_ANONYMOUS_ID = "local-thing-v1"\n'},
+            "some prose\n\n```\nanonymous_id='local-thing-v1'\n```\n",
+        ):
+            self.assertIn("`local-thing-v1`", " || ".join(docs_lint.check_calculator_roster_tether()))
+
+    def test_missing_doc_is_not_a_finding(self):
+        # Same defensive shape as check_extractable_primitives_tether():
+        # a missing doc is the path-existence check's business, not this
+        # rule's, and must not make the rule explode.
+        with temp_docs():
+            src = docs_lint.REPO_ROOT / "MPCAutofill" / "cardpicker"
+            src.mkdir(parents=True)
+            write(src / "local_thing.py", 'THING_ANONYMOUS_ID = "local-thing-v1"\n')
+            self.assertEqual(docs_lint.check_calculator_roster_tether(), [])
+
+
 class TestAgainstRealRepo(unittest.TestCase):
     """Invariants against the committed docs/ tree, post de-lettering sweep."""
 
@@ -216,6 +334,23 @@ class TestAgainstRealRepo(unittest.TestCase):
 
     def test_proposal_crossrefs_clean(self):
         self.assertEqual(docs_lint.check_proposal_crossrefs(), [])
+
+    def test_calculator_roster_tether_is_clean(self):
+        self.assertEqual(docs_lint.check_calculator_roster_tether(), [])
+
+    def test_roster_derivation_sees_the_real_calculators(self):
+        # Guards the derivation itself: if the discovery ever silently
+        # stopped finding declarations, the tether would pass vacuously —
+        # a lint rule that cannot fail. These four include the three
+        # identities the fidelity-gate doc omitted until 2026-07-29.
+        found = docs_lint._declared_calculator_identities()
+        for identity in (
+            "local-ocr-v1",
+            "stage-d-slow-path-v1",
+            "stage-d-illustration-v1",
+            "local-name-frequency-v1",
+        ):
+            self.assertIn(identity, found)
 
     def test_merged_corpus_is_fully_clean(self):
         # Sweep landed: no D-number labels, no orphans, no dangling

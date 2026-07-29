@@ -191,6 +191,69 @@ contradicts, a date stamp that's drifted) from a true one — resolving that
 requires reading the doc's actual content and cross-checking it against
 reality, which is exactly what the next section is for.
 
+## Roster tethers: an enumerated set is tethered to its definition in code
+
+**The rule.** Any document that ENUMERATES a set which is actually defined
+in code must be tethered to that code by a lint rule, with **code as the
+source of truth**. A hand-maintained list of things-that-exist will drift,
+and the drift is silent precisely where it matters most — the item nobody
+remembered to add is the item nobody is checking.
+
+**Where this was earned.**
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) enumerated the
+calculators whose output the gate audits. It listed eleven identities;
+code declared fourteen. The gate performed **perfectly on all eleven it
+listed** — and two of the three it omitted were entirely dead in
+production (`stage-d-illustration-v1` had cast 3 votes in its whole
+existence; `local-name-frequency-v1` had produced no output at all, not
+even a skip log). The audit was not wrong about anything it looked at. It
+simply never looked, because nothing bound its list to reality. Note the
+shape of this: **dormancy is exactly what a coverage-based audit misses**,
+because a calculator producing nothing generates no divergence to explain
+and so reads as clean by being invisible. A roster tether catches it,
+because it checks against what is DECLARED, not against what showed up in
+the output.
+
+**How to write one** — the two shipped examples,
+`check_extractable_primitives_tether()` and
+`check_calculator_roster_tether()` in
+[`docs_lint.py`](../.github/scripts/docs_lint.py), are the pattern to copy:
+
+1. **Derive the roster from code, never restate it in the linter.** A
+   second hand-maintained list inside the check reproduces the exact drift
+   the check exists to prevent; it only moves the stale list from the doc
+   into the lint.
+2. **Key on the declared symbol, not on the shape of its value.** The
+   calculator tether matches module-level `*_ANONYMOUS_ID = "..."` bindings
+   rather than regexing for `<name>-vN` strings, because test fixtures and
+   extractor version keys share that shape and are not roster members.
+3. **Match the full identity, not a normalised family.** `calculator_family`
+   strips the `-vN` suffix; matching on it would let a version bump ride on
+   a stale entry, leaving a doc paragraph describing an engine that no
+   longer runs while CI stayed green. Full-identity matching makes the bump
+   fail loudly. A version bump SHOULD be a two-file change.
+4. **Exclusions are an explicit, per-entry-justified allowlist.** Same
+   discipline as `ALLOWLIST` above: an exclusion has to be a visible
+   decision with a stated reason (`evidence-transfer-v1` casts no votes;
+   `question-feed-hypothetical-vote` is a UI construct), never "it was
+   failing so I dropped it."
+5. **Annotate the doc, not the code.** The finding is "the doc is behind
+   code"; the fix goes in the doc, so that is where the `::error::` points.
+
+**What an entry must say.** Being on the list is not enough — an entry
+that describes a calculator's intent while it is silently dead is the same
+blind spot in prose form. State what the thing does **and its current
+status**, dormancy and no-op-by-design included, plainly and without
+papering over: "casts no votes by construction, routes only" and "dormant,
+3 votes ever, root cause diagnosed, fix in flight" are both entries that
+do their job.
+
+Other hand-maintained rosters across `docs/` are candidates for the same
+treatment; tether them as their code-side definition becomes unambiguous,
+and prefer no tether over a tether whose mapping needs judgment to
+evaluate — a rule that fires on honest content teaches people to ignore
+the linter.
+
 ## Interconnection lint
 
 The 2026-07-23 owner ruling abolished the letter/number decision-labeling

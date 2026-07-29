@@ -34,6 +34,17 @@ on:
       - "MPCAutofill/cardpicker/artist_consensus.py"
       - "MPCAutofill/cardpicker/local_phash.py"
       - "MPCAutofill/cardpicker/local_fallback.py"
+      # Roster tether (check_calculator_roster_tether, added 2026-07-29):
+      # the calculator roster is DERIVED from every `*_ANONYMOUS_ID`
+      # declared anywhere in MPCAutofill/cardpicker/*.py, so a PR that
+      # declares a NEW calculator has to run this lint even when it
+      # touches no doc at all. Without this glob the tether would only
+      # fire on the weekly cron — i.e. the new calculator would land
+      # undocumented and unchecked, which is the exact gap it exists to
+      # close. Supersedes the individual cardpicker entries above; those
+      # are kept because they name the files the extractable-primitives
+      # tether cares about.
+      - "MPCAutofill/cardpicker/*.py"
       - "federation-hash-tool/**"
   schedule:
     # Weekly, independent of any PR — catches rot introduced by a change
@@ -46,6 +57,7 @@ on:
       - "docs/**"
       - ".github/wiki-publish-map.json"
       - ".github/scripts/**"
+      - "MPCAutofill/cardpicker/*.py"
   workflow_dispatch:
 
 permissions:
