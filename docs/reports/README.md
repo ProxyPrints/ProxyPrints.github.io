@@ -93,6 +93,19 @@ a `detail` object read only when the summary signals it's needed.
   `godzillaseries`/`draculaseries` in the same column. Recommends dropping
   the Tagger dependency, with the definitional question that would
   invert that recommendation stated explicitly.
+- `2026-07-29-printing-vs-illustration-tag-grain.md` — **decision
+  document, awaiting an owner ruling.** Should `PrintingTagVote` exist?
+  Disambiguates `CardPrintingTag` / `CardTagVote` / `PrintingTagVote` and
+  traces which of them `PRINTING_TAG_MIN_VOTES` /
+  `PRINTING_TAG_IMPLICIT_CAP` / `_split_new_printing_tag_votes` actually
+  govern (none of them govern `PrintingTagVote`). Measured: the table is
+  empty (0 rows, 0 human) and has no consensus resolver; machine-only
+  votes cannot resolve at any volume (executed, n up to 1,000), so the
+  original auto-tagging design was unreachable at every grain;
+  `promo_types` already carries `universesbeyond` on 10,407 of 113,224
+  printings at 100% per-set recall; 0 of 50,828 illustrations straddle
+  the UB boundary; `import_external_ip_tags` was forgotten, not
+  abandoned. Ten numbered open questions.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
