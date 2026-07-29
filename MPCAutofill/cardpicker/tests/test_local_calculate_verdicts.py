@@ -3057,7 +3057,7 @@ class TestStageDDependencySubqueryScoping:
         eligible = self._no_hit_card("Slow Path Eligible")
         already_routed = self._no_hit_card("Slow Path Already Routed")
         CardScanLog.objects.create(
-            card=already_routed, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=already_routed, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
         fallback_resolved = self._no_hit_card("Slow Path Fallback Resolved")
         CardPrintingTag.objects.create(
