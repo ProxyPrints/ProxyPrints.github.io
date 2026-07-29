@@ -103,6 +103,8 @@ from django.utils import timezone
 from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
+    JOIN_KEY_NO_TEXT_SKIP_REASON,
+    JOIN_KEY_PROXY_MARKER_VETO_SKIP_REASON,
     JoinKeyVerdict,
     _resolve_candidates_for_card,
     calculate_join_key_verdict,
@@ -189,7 +191,7 @@ def select_card_ids_no_text(stage_d_run_id: str) -> list[int]:
     return sorted(
         set(
             CardScanLog.objects.filter(
-                anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text", run_id=stage_d_run_id
+                anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason=JOIN_KEY_NO_TEXT_SKIP_REASON, run_id=stage_d_run_id
             ).values_list("card_id", flat=True)
         )
     )
@@ -208,7 +210,9 @@ def select_card_ids_proxy_marker_veto(stage_d_run_id: str) -> list[int]:
     return sorted(
         set(
             CardScanLog.objects.filter(
-                anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="proxy-marker-veto", run_id=stage_d_run_id
+                anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+                skip_reason=JOIN_KEY_PROXY_MARKER_VETO_SKIP_REASON,
+                run_id=stage_d_run_id,
             ).values_list("card_id", flat=True)
         )
     )

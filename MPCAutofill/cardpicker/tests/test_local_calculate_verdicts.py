@@ -44,7 +44,7 @@ from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
     RESOLUTION_FLOOR_DPI,
     SLOW_PATH_ANONYMOUS_ID,
-    SLOW_PATH_TO_REVIEW_REASON,
+    SLOW_PATH_TO_REVIEW_SKIP_REASON,
     STAGE_D_FALLBACK_ANONYMOUS_ID,
     TRANSFERRED_INTERIM_GUARD_SKIP_REASON,
     _eligible_cards_queryset,
@@ -952,7 +952,7 @@ class TestTransferredEvidenceIsEligible:
         assert result.cards_considered == 1
         assert result.routed_written == 1
         log = CardScanLog.objects.get(card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID)
-        assert log.skip_reason == SLOW_PATH_TO_REVIEW_REASON
+        assert log.skip_reason == SLOW_PATH_TO_REVIEW_SKIP_REASON
 
 
 class TestEligibleCardsQueryset:
@@ -1940,7 +1940,7 @@ class TestRunSlowPathCalculator:
 
         assert result.routed_written == 1
         log = CardScanLog.objects.get(card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID)
-        assert log.skip_reason == SLOW_PATH_TO_REVIEW_REASON
+        assert log.skip_reason == SLOW_PATH_TO_REVIEW_SKIP_REASON
 
     def test_an_agreement_layer_withhold_is_also_routed(self, db):
         """The slow-path calculator sweeps up the agreement/corroboration layer's own withhold

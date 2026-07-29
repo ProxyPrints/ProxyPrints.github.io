@@ -349,6 +349,23 @@ ARTBOX_MODERN_CROP_BOX: tuple[float, float, float, float] = ART_CROP_BOX
 ARTBOX_OLD_CROP_BOX: tuple[float, float, float, float] = (0.05, 0.07, 0.95, 0.62)
 
 
+# THE STAGE C EXTRACTORS' OWN SKIP VOCABULARY (2026-07-29 declaration-convention sweep - see
+# docs/reference/skip-reasons.md). Every value `persist_evidence` writes to
+# `CardScanLog.skip_reason` arrives via `ExtractionResult.skip_reasons`, so these three constants
+# ARE this module's complete contribution to the roster; declaring them at module level is what
+# makes that roster statically enumerable, exactly as `*_ANONYMOUS_ID` already is. These were
+# inline string literals at ~20 assignment sites until this sweep; the STRINGS are unchanged (a
+# row written before and after this change is byte-identical) - only their point of declaration
+# moved.
+#
+# NOTE the underscore in "fetch_failed": it is the ONE value in the whole roster that does not
+# use the hyphen convention. Kept verbatim on purpose - 37,975 production rows carry it, and
+# normalising it would be a data change, not a refactor.
+EXTRACTOR_FETCH_FAILED_SKIP_REASON = "fetch_failed"
+EXTRACTOR_AMBIGUOUS_SKIP_REASON = "ambiguous"
+EXTRACTOR_NO_TEXT_SKIP_REASON = "no-text"
+
+
 @dataclass(frozen=True)
 class ExtractionResult:
     """
@@ -913,7 +930,7 @@ def compute_card_evidence(
         fields["fetch_ok"] = False
         fields["fetch_error_class"] = "fetch_failed"
         fields["fetch_image_format"] = ""
-        skip_reasons["fetch_health"] = "fetch_failed"
+        skip_reasons["fetch_health"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
         fields["fetch_ok"] = True
         fields["fetch_error_class"] = ""
@@ -927,7 +944,7 @@ def compute_card_evidence(
     # fetch_health already recorded), not a crash, so it still gets its own extractor_versions
     # entry - matching fetch_health's own "ran to completion, found nothing" convention above.
     if image is None:
-        skip_reasons["geometry_bleed"] = "fetch_failed"
+        skip_reasons["geometry_bleed"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
         width, height = image.size
         fields["width"] = width
@@ -940,13 +957,13 @@ def compute_card_evidence(
             # classify_bleed_edge's own documented "genuinely non-standard image" outcome -
             # "ambiguous" is the pipeline's own pre-existing skip-reason vocabulary
             # (docs/features/catalog-completion-plan.md's CardScanLog section), not a new string.
-            skip_reasons["geometry_bleed"] = "ambiguous"
+            skip_reasons["geometry_bleed"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
     extractor_versions["geometry_bleed"] = GEOMETRY_BLEED_EXTRACTOR_VERSION
 
     # layout_class (issue #148): reuses this same fetched image + the bleed_class just computed
     # above - see module docstring for why classify_border_color, not classify_frame_style.
     if image is None:
-        skip_reasons["layout_class"] = "fetch_failed"
+        skip_reasons["layout_class"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
         layout_class = classify_border_color(image, bleed_class)
         fields["layout_class"] = layout_class or ""
@@ -954,7 +971,7 @@ def compute_card_evidence(
             # classify_border_color's own documented ambiguous outcome (non-uniform sample or a
             # color outside this taxonomy) - "ambiguous" is the same pre-existing skip-reason
             # vocabulary geometry_bleed's own abstention above uses, not a new string.
-            skip_reasons["layout_class"] = "ambiguous"
+            skip_reasons["layout_class"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
     extractor_versions["layout_class"] = LAYOUT_CLASS_EXTRACTOR_VERSION
 
     # crop_coordinates (issue #148): three existing fixed-fraction crop-box constants, remapped
@@ -962,7 +979,7 @@ def compute_card_evidence(
     # space. Unlike layout_class/geometry_bleed, normalize_crop_box never abstains - there is no
     # "ambiguous" outcome here, only fetch_failed.
     if image is None:
-        skip_reasons["crop_coordinates"] = "fetch_failed"
+        skip_reasons["crop_coordinates"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
         fields["collector_line_crop_px"] = _crop_box_to_pixels(DEFAULT_CROP_BOX, bleed_class, width, height)
         fields["artist_crop_px"] = _crop_box_to_pixels(ARTIST_CROP_BOX, bleed_class, width, height)
@@ -988,9 +1005,9 @@ def compute_card_evidence(
     _ocr_group_started_at = time.monotonic()
     card_short_circuited = False
     if image is None:
-        skip_reasons["collector_line_ocr"] = "fetch_failed"
-        skip_reasons["artist_ocr"] = "fetch_failed"
-        skip_reasons["collector_line_tsv"] = "fetch_failed"
+        skip_reasons["collector_line_ocr"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        skip_reasons["artist_ocr"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        skip_reasons["collector_line_tsv"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
         collector_crop = image.crop(tuple(fields["collector_line_crop_px"]))
 
@@ -1135,7 +1152,7 @@ def compute_card_evidence(
         fields["collector_line_set_code"] = parsed.set_code or ""
         fields["collector_line_collector_number"] = parsed.collector_number or ""
         if parsed.collector_number is None:
-            skip_reasons["collector_line_ocr"] = "no-text"
+            skip_reasons["collector_line_ocr"] = EXTRACTOR_NO_TEXT_SKIP_REASON
 
         # TSV word boxes: same winning variant the text parse above came from (computed by the
         # SAME tesseract call as that variant's raw text, not a second call) - so the word boxes
@@ -1178,7 +1195,7 @@ def compute_card_evidence(
         # local_fallback.detect_illus_anchor's own (fired, name) return.
         fields["illus_anchor_fired"] = artist_name is not None
         if artist_name is None:
-            skip_reasons["artist_ocr"] = "no-text"
+            skip_reasons["artist_ocr"] = EXTRACTOR_NO_TEXT_SKIP_REASON
 
         # COLLECTOR-LINE ARTIST RECOVERY (2026-07-29 - `cardpicker.collector_line_artist`), the
         # storage half of the same feature the escalation gate above uses for its own decision.
@@ -1240,14 +1257,14 @@ def compute_card_evidence(
     # unclassifiable frame and a degenerate crop box (see module docstring for why one string
     # covers both here).
     if image is None:
-        skip_reasons["artbox_phash"] = "fetch_failed"
+        skip_reasons["artbox_phash"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
         parsed_a_collector_number = bool(fields.get("collector_line_collector_number"))
         illus_anchor_fired_value = bool(fields.get("illus_anchor_fired"))
         frame_class = classify_frame_style(parsed_a_collector_number, illus_anchor_fired_value)
         fields["artbox_frame_class"] = frame_class or ""
         if frame_class is None:
-            skip_reasons["artbox_phash"] = "ambiguous"
+            skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
         else:
             artbox_box = ARTBOX_MODERN_CROP_BOX if frame_class == "modern" else ARTBOX_OLD_CROP_BOX
             artbox_crop_px = _crop_box_to_pixels(artbox_box, bleed_class, width, height)
@@ -1255,7 +1272,7 @@ def compute_card_evidence(
             if right <= left or bottom <= top:
                 # Same real, non-fabricated "sub-floor" guard symbol_region's own degenerate-crop-
                 # box check exists for - not expected to fire against real fetched images either.
-                skip_reasons["artbox_phash"] = "ambiguous"
+                skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
             else:
                 fields["artbox_crop_px"] = artbox_crop_px
                 fields["artbox_phash"] = _compute_region_phash(image, artbox_crop_px)
@@ -1267,7 +1284,7 @@ def compute_card_evidence(
     # compare against a candidate's rendered glyph), not a verdict, and why the only named skip is
     # a degenerate crop box rather than a tuned classification threshold.
     if image is None:
-        skip_reasons["symbol_region"] = "fetch_failed"
+        skip_reasons["symbol_region"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
         symbol_crop_px = _crop_box_to_pixels(SYMBOL_STRIP_BOX, bleed_class, width, height)
         left, top, right, bottom = symbol_crop_px
@@ -1277,7 +1294,7 @@ def compute_card_evidence(
             # module docstring) - guarded here before PIL.Image.crop/imagehash.phash would raise
             # on an empty region. Real fetched images essentially never hit this; not expected to
             # fire against the golden set (see module docstring).
-            skip_reasons["symbol_region"] = "ambiguous"
+            skip_reasons["symbol_region"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
         else:
             fields["symbol_crop_px"] = symbol_crop_px
             fields["symbol_phash"] = _compute_region_phash(image, symbol_crop_px)
@@ -1295,14 +1312,14 @@ def compute_card_evidence(
     # `_extract_legal_line`'s own docstring - so this block writes exactly the same fields, in
     # exactly the same order, from an outcome already in hand.
     if legal_line is None:
-        skip_reasons["legal_line"] = "fetch_failed"
+        skip_reasons["legal_line"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
         fields["legal_line_crop_px"] = legal_line.crop_px
         fields["legal_line_raw_text"] = legal_line.raw_text
         fields["legal_line_copyright_year"] = legal_line.copyright_year
         fields["legal_line_proxy_marker_detected"] = legal_line.proxy_marker_detected
         if not legal_line.found_something:
-            skip_reasons["legal_line"] = "no-text"
+            skip_reasons["legal_line"] = EXTRACTOR_NO_TEXT_SKIP_REASON
     extractor_versions["legal_line"] = LEGAL_LINE_EXTRACTOR_VERSION
     if profile is not None:
         profile["legal_line_ms"] = _legal_line_elapsed_ms
@@ -1316,16 +1333,16 @@ def compute_card_evidence(
     # - a truncated image's partial pixel data would produce meaningless numbers, not a real
     # reading.
     if image is None:
-        skip_reasons["quality_signals"] = "fetch_failed"
+        skip_reasons["quality_signals"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     elif width <= 0 or height <= 0:
-        skip_reasons["quality_signals"] = "ambiguous"
+        skip_reasons["quality_signals"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
     else:
         truncated = is_image_truncated(image)
         fields["image_is_truncated"] = truncated
         if truncated:
             # Shares fetch_health's own "fetch_failed" skip reason - see module docstring for
             # why this isn't a new, separately-invented skip-reason string.
-            skip_reasons["quality_signals"] = "fetch_failed"
+            skip_reasons["quality_signals"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
         else:
             fields["blur_variance"] = compute_blur_variance(image)
             fields["image_entropy"] = compute_entropy(image)
@@ -1504,6 +1521,9 @@ def build_reconciliation_report(
 
 
 __all__ = [
+    "EXTRACTOR_FETCH_FAILED_SKIP_REASON",
+    "EXTRACTOR_AMBIGUOUS_SKIP_REASON",
+    "EXTRACTOR_NO_TEXT_SKIP_REASON",
     "ExtractionResult",
     "extract_card_evidence",
     "compute_card_evidence",

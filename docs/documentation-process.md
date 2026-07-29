@@ -214,9 +214,29 @@ and so reads as clean by being invisible. A roster tether catches it,
 because it checks against what is DECLARED, not against what showed up in
 the output.
 
-**How to write one** — the two shipped examples,
-`check_extractable_primitives_tether()` and
-`check_calculator_roster_tether()` in
+A second instance was earned one layer down.
+[`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) also fired on the
+precondition that every empirically-derived **skip reason** was mapped to
+its home in the pipeline. That precondition could not even be _tested_: the
+skip reasons could not be enumerated. Roughly thirty distinct values
+existed, about eleven were declared constants, the rest were bare inline
+literals, and several write sites passed the value through dynamically — so
+no static analysis could produce a complete list, and twelve values
+appeared nowhere in `docs/` at all. Two files meanwhile asserted "~11
+distinct reasons observed in production" against a real figure of 23. The
+fix had two halves, and the code half came first: **a set cannot be
+tethered until it can be enumerated.** The 2026-07-29 sweep gave every
+value a module-level `*_SKIP_REASON` declaration (a pure refactor — no
+string changed), and only then could
+[`reference/skip-reasons.md`](reference/skip-reasons.md) be tethered by
+`check_skip_reason_roster_tether()`. If a roster is not derivable, fixing
+the code so it is derivable is part of the tethering job, not a
+prerequisite someone else owns.
+
+**How to write one** — the three shipped examples,
+`check_extractable_primitives_tether()`,
+`check_calculator_roster_tether()` and
+`check_skip_reason_roster_tether()` in
 [`docs_lint.py`](../.github/scripts/docs_lint.py), are the pattern to copy:
 
 1. **Derive the roster from code, never restate it in the linter.** A
@@ -227,11 +247,18 @@ the output.
    calculator tether matches module-level `*_ANONYMOUS_ID = "..."` bindings
    rather than regexing for `<name>-vN` strings, because test fixtures and
    extractor version keys share that shape and are not roster members.
-3. **Match the full identity, not a normalised family.** `calculator_family`
-   strips the `-vN` suffix; matching on it would let a version bump ride on
-   a stale entry, leaving a doc paragraph describing an engine that no
-   longer runs while CI stayed green. Full-identity matching makes the bump
-   fail loudly. A version bump SHOULD be a two-file change.
+3. **Match on whatever the durable datum is, and say which that is.** For
+   the calculator roster it is the full versioned identity, not
+   `calculator_family`'s version-stripped form: matching the family would
+   let a version bump ride on a stale entry, leaving a doc paragraph
+   describing an engine that no longer runs while CI stayed green. For the
+   skip-reason roster it is the opposite — the linter matches the literal
+   VALUE, not the constant name, because the string is what millions of
+   `CardScanLog` rows key on while the constant name is an internal handle a
+   refactor may legitimately change. These are not inconsistent; each tether
+   matches the thing whose change would break production, so that change is
+   the one that fails loudly. A change to the durable datum SHOULD be a
+   two-file change.
 4. **Exclusions are an explicit, per-entry-justified allowlist.** Same
    discipline as `ALLOWLIST` above: an exclusion has to be a visible
    decision with a stated reason (`evidence-transfer-v1` casts no votes;
@@ -244,9 +271,13 @@ the output.
 that describes a calculator's intent while it is silently dead is the same
 blind spot in prose form. State what the thing does **and its current
 status**, dormancy and no-op-by-design included, plainly and without
-papering over: "casts no votes by construction, routes only" and "dormant,
-3 votes ever, root cause diagnosed, fix in flight" are both entries that
-do their job.
+papering over: "casts no votes by construction, routes only", "dormant, 3
+votes ever, root cause diagnosed, fix in flight", "retired — nothing writes
+it, 48k historical rows remain" and "report-only, never persisted" are all
+entries that do their job. The retired and never-persisted cases matter
+most: a value nothing writes any more is precisely what an enumeration
+loses first, and it is still the thing a reader querying the column will
+hit.
 
 Other hand-maintained rosters across `docs/` are candidates for the same
 treatment; tether them as their code-side definition becomes unambiguous,

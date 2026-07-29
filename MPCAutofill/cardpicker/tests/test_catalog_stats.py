@@ -37,7 +37,7 @@ from cardpicker.catalog_stats import (
 )
 from cardpicker.local_calculate_verdicts import (
     SLOW_PATH_ANONYMOUS_ID,
-    SLOW_PATH_TO_REVIEW_REASON,
+    SLOW_PATH_TO_REVIEW_SKIP_REASON,
 )
 from cardpicker.models import CardScanLog, CardTypes, PilotRunLedger, VoteSource
 from cardpicker.schema_types import CatalogStatsResponse
@@ -365,13 +365,13 @@ class TestComputeParticipation:
         # rows for the same (card, anonymous_id) pair - a raw row count would overstate cards.
         card = CardFactory(source=source)
         CardScanLog.objects.create(
-            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
         CardScanLog.objects.create(
-            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
         CardScanLog.objects.create(
-            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
 
         result = compute_participation()
@@ -391,7 +391,7 @@ class TestComputeParticipation:
         self, db, source
     ):
         CardScanLog.objects.create(
-            card=CardFactory(source=source), anonymous_id="local-ocr-v1", skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=CardFactory(source=source), anonymous_id="local-ocr-v1", skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
 
         result = compute_participation()
@@ -402,7 +402,7 @@ class TestComputeParticipation:
     ):
         card = CardFactory(source=source)
         CardScanLog.objects.create(
-            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
         CardPrintingTagFactory(card=card, printing=canonical_printing, source=VoteSource.USER)
 
@@ -429,7 +429,7 @@ class TestComputeParticipation:
     def test_routed_but_never_human_voted_card_counts_in_routed_only(self, db, source):
         card = CardFactory(source=source)
         CardScanLog.objects.create(
-            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
 
         result = compute_participation()
@@ -442,13 +442,13 @@ class TestComputeParticipation:
     ):
         routed_and_voted = CardFactory(source=source)
         CardScanLog.objects.create(
-            card=routed_and_voted, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=routed_and_voted, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
         CardPrintingTagFactory(card=routed_and_voted, printing=canonical_printing, source=VoteSource.USER)
 
         routed_only = CardFactory(source=source)
         CardScanLog.objects.create(
-            card=routed_only, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON
+            card=routed_only, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         )
 
         voted_only = CardFactory(source=source)

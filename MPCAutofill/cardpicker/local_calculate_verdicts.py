@@ -502,13 +502,39 @@ JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT = 0.65
 # reselection - no code path writes a NEW row with this reason anymore.
 TRANSFERRED_INTERIM_GUARD_SKIP_REASON = "transferred-interim-guard"
 
+# THE JOIN-KEY CALCULATOR'S OWN SKIP VOCABULARY (2026-07-29 declaration-convention sweep - see
+# docs/reference/skip-reasons.md). Every value this calculator writes to `CardScanLog.skip_reason`
+# is declared here as a module-level `*_SKIP_REASON` constant so the roster is statically
+# enumerable, exactly as `*_ANONYMOUS_ID` already is. These were inline string literals at their
+# write sites until this sweep; the STRINGS are unchanged (a row written before and after this
+# change is byte-identical) - only their point of declaration moved.
+#
+# `JOIN_KEY_` prefixed on purpose: several of these strings ("no-evidence", "ambiguous",
+# "frame-mismatch", "no-text") are ALSO emitted by other calculators under a different
+# `anonymous_id` and a different meaning, so a single unprefixed constant per string would
+# falsely imply one shared concept. Same-value/different-constant is the correct shape here.
+JOIN_KEY_NO_EVIDENCE_SKIP_REASON = "no-evidence"
+JOIN_KEY_NO_TEXT_SKIP_REASON = "no-text"
+JOIN_KEY_AMBIGUOUS_SKIP_REASON = "ambiguous"
+JOIN_KEY_TRUNCATED_IMAGE_SKIP_REASON = "truncated-image"
+JOIN_KEY_BORDER_MISMATCH_SKIP_REASON = "border-mismatch"
+JOIN_KEY_FRAME_MISMATCH_SKIP_REASON = "frame-mismatch"
+JOIN_KEY_COPYRIGHT_YEAR_MISMATCH_SKIP_REASON = "copyright-year-mismatch"
+# RETIRED as a write value on 2026-07-21 (module docstring's moderator-flag signal section):
+# `calculate_join_key_verdict` no longer vetoes on a proxy marker, so no code path writes a NEW
+# row with this reason. Declared, and still a member of JOIN_KEY_NO_HIT_SKIP_REASONS below,
+# purely so HISTORICAL rows (retractable via `reparse_collector_evidence --selector
+# proxy-marker-veto`) still read sensibly and still route their card to human review - the same
+# retired-not-removed treatment TRANSFERRED_INTERIM_GUARD_SKIP_REASON gets above.
+JOIN_KEY_PROXY_MARKER_VETO_SKIP_REASON = "proxy-marker-veto"
+
 # A degenerate/skip outcome that stays eligible for re-selection on a future invocation, same
 # convention as local_identify_printing_tags.RESCANNABLE_SKIP_REASONS - "no-evidence" here
 # because ImageEvidence simply hadn't been extracted yet for this card at selection time is a
 # transient state (a future extraction run may still land it), not a permanent conclusion.
 # TRANSFERRED_INTERIM_GUARD_SKIP_REASON (above) is included for the same reason, scoped now to
 # HISTORICAL rows only - see its own module-level comment for why it is retired, not removed.
-JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence", TRANSFERRED_INTERIM_GUARD_SKIP_REASON})
+JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({JOIN_KEY_NO_EVIDENCE_SKIP_REASON, TRANSFERRED_INTERIM_GUARD_SKIP_REASON})
 
 # THE SET-CODE LEXICON GATE (module docstring) - a parsed `set_code` that matches no
 # `CanonicalExpansion.code` at all, same permanent-conclusion category as "no-text"/"ambiguous"
@@ -732,7 +758,7 @@ def _apply_agreement_checks(
         # partial pixel data makes any OCR/symbol-phash reading over it untrustworthy as
         # evidence for anything, the same reasoning image_evidence.py's own extraction pass
         # already applies by checking this BEFORE computing blur/entropy/color stats.
-        return JoinKeyVerdict(card_id=card_id, skip_reason="truncated-image", detail=detail)
+        return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_TRUNCATED_IMAGE_SKIP_REASON, detail=detail)
 
     canonical = CanonicalCard.objects.filter(pk=matched.pk).select_related("printing_metadata", "artist").first()
     metadata = getattr(canonical, "printing_metadata", None) if canonical is not None else None
@@ -744,7 +770,7 @@ def _apply_agreement_checks(
             # "silver"/"borderless"), the SAME value space Scryfall's own border_color field uses
             # (confirmed via BORDER_COLOR_TO_TAG's own key set), so a direct string comparison is
             # correct - no value-to-class remapping needed, unlike frame below.
-            return JoinKeyVerdict(card_id=card_id, skip_reason="border-mismatch", detail=detail)
+            return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_BORDER_MISMATCH_SKIP_REASON, detail=detail)
 
         # frame_class is re-derived here (not read from a stored ImageEvidence field - no such
         # field exists) via the SAME two OCR-derived inputs local_identify_printing_tags.py's own
@@ -758,7 +784,7 @@ def _apply_agreement_checks(
         if not frame_style_is_consistent(frame_class, metadata.frame):
             # THE FRAME AGREEMENT VETO (module docstring) - mirrors
             # local_identify_printing_tags.py's own frame-mismatch-withholding exactly.
-            return JoinKeyVerdict(card_id=card_id, skip_reason="frame-mismatch", detail=detail)
+            return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON, detail=detail)
 
         # THE COPYRIGHT-YEAR ERA CHECK (module docstring) - reuses the SAME metadata row the
         # border/frame checks above already fetched, no second query. Skipped entirely (not a
@@ -771,7 +797,9 @@ def _apply_agreement_checks(
             if copyright_year is not None:
                 years_before_release = metadata.released_at.year - copyright_year
                 if years_before_release > COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS:
-                    return JoinKeyVerdict(card_id=card_id, skip_reason="copyright-year-mismatch", detail=detail)
+                    return JoinKeyVerdict(
+                        card_id=card_id, skip_reason=JOIN_KEY_COPYRIGHT_YEAR_MISMATCH_SKIP_REASON, detail=detail
+                    )
 
     # THE COLLECTOR-LINE ARTIST VETO (module docstring's COLLECTOR-LINE ARTIST GATE, and check 6
     # in this function's own ordering above). Reuses the SAME `canonical` row the border/frame/
@@ -912,7 +940,7 @@ def calculate_join_key_verdict(
                 artist_lexicon=artist_lexicon,
                 card_artist_names=card_artist_names,
             )
-        return JoinKeyVerdict(card_id=card_id, skip_reason="ambiguous", detail=parsed.raw_text)
+        return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_AMBIGUOUS_SKIP_REASON, detail=parsed.raw_text)
 
     if reason == "parsed-but-no-match":
         # THE SET-CODE LEXICON GATE (module docstring, 2026-07-23) - a parsed set_code that
@@ -940,7 +968,7 @@ def calculate_join_key_verdict(
     # (an already-extracted ImageEvidence row with no collector_number found is a real, repeat-
     # able negative outcome, not a transient one - see JOIN_KEY_RESCANNABLE_SKIP_REASONS's own
     # comment for the one skip reason that IS treated as transient).
-    return JoinKeyVerdict(card_id=card_id, skip_reason="no-text")
+    return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_NO_TEXT_SKIP_REASON)
 
 
 def _resolve_candidates_for_card(
@@ -1497,7 +1525,10 @@ def run_join_key_calculator(
             if not dry_run:
                 scan_log_batch.append(
                     CardScanLog(
-                        card_id=card.pk, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id=run_id, skip_reason="no-evidence"
+                        card_id=card.pk,
+                        anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+                        run_id=run_id,
+                        skip_reason=JOIN_KEY_NO_EVIDENCE_SKIP_REASON,
                     )
                 )
             continue
@@ -1586,6 +1617,16 @@ STAGE_D_FALLBACK_ANONYMOUS_ID = "stage-d-fallback-v1"
 # two carry the same meaning here as there, no rename needed.
 FALLBACK_NO_EVIDENCE_SKIP_REASON = "no-evidence"  # this calculator's own ImageEvidence-row-missing case, same meaning as JOIN_KEY's own identical string, different anonymous_id scope
 FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON = "no-sub-check-evidence"  # local_fallback.FallbackOutcome's own "no-evidence" concept, renamed to avoid colliding with the line above
+# Comments ABOVE these two, not trailing: a `*_SKIP_REASON` declaration must stay on ONE line
+# starting at column 0, because that is the shape `check_skip_reason_roster_tether()` in
+# .github/scripts/docs_lint.py matches. A trailing comment long enough to push the line past
+# black's limit makes black wrap the value in parentheses, which silently drops the constant
+# out of the derived roster. `cardpicker/tests/test_skip_reason_roster.py` fails if that
+# happens, but keeping the line short avoids the trap in the first place.
+# Every candidate ruled out by the sub-checks - zero survivors.
+FALLBACK_ELIMINATED_SKIP_REASON = "eliminated"
+# More than one candidate survived the sub-check intersection.
+FALLBACK_AMBIGUOUS_SKIP_REASON = "ambiguous"
 # TRANSFERRED_INTERIM_GUARD_SKIP_REASON (module-level comment above, issue #473 PR-2, retired by
 # PR-3) is included here too, scoped to HISTORICAL rows only - same reasoning as
 # JOIN_KEY_RESCANNABLE_SKIP_REASONS' own inclusion of it.
@@ -1716,10 +1757,12 @@ def calculate_fallback_verdict(
         return FallbackVerdict(card_id=card_id, skip_reason=FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON)
     if len(survivors) == 0:
         return FallbackVerdict(
-            card_id=card_id, skip_reason="eliminated", evidence_types_used=tuple(evidence_types_used)
+            card_id=card_id, skip_reason=FALLBACK_ELIMINATED_SKIP_REASON, evidence_types_used=tuple(evidence_types_used)
         )
     if len(survivors) > 1:
-        return FallbackVerdict(card_id=card_id, skip_reason="ambiguous", evidence_types_used=tuple(evidence_types_used))
+        return FallbackVerdict(
+            card_id=card_id, skip_reason=FALLBACK_AMBIGUOUS_SKIP_REASON, evidence_types_used=tuple(evidence_types_used)
+        )
 
     confidence = (
         FALLBACK_CONFIDENCE_MULTI_EVIDENCE if len(evidence_types_used) > 1 else FALLBACK_CONFIDENCE_SINGLE_EVIDENCE
@@ -1903,7 +1946,10 @@ SLOW_PATH_ANONYMOUS_ID = "stage-d-slow-path-v1"
 # separate vocabulary/table for a concept an existing field can hold" convention (see
 # image_evidence.py's own remarks about reusing skip-reason strings rather than growing a new
 # taxonomy).
-SLOW_PATH_TO_REVIEW_REASON = "to-review"
+# Named `*_SKIP_REASON` (renamed from `SLOW_PATH_TO_REVIEW_REASON`, 2026-07-29) purely so it
+# matches the declaration convention every other value written to this column now follows and
+# is picked up by docs_lint's roster tether. The STRING is unchanged.
+SLOW_PATH_TO_REVIEW_SKIP_REASON = "to-review"
 
 # The join-key calculator's own non-match outcomes that qualify a card for slow-path routing: a
 # real is_no_match vote (handled separately, via CardPrintingTag), or any of these named,
@@ -1931,13 +1977,13 @@ SLOW_PATH_TO_REVIEW_REASON = "to-review"
 # review queue, a real review-queue gap, not just a naming detail.
 JOIN_KEY_NO_HIT_SKIP_REASONS = frozenset(
     {
-        "ambiguous",
-        "no-text",
-        "proxy-marker-veto",
-        "border-mismatch",
-        "frame-mismatch",
-        "truncated-image",
-        "copyright-year-mismatch",
+        JOIN_KEY_AMBIGUOUS_SKIP_REASON,
+        JOIN_KEY_NO_TEXT_SKIP_REASON,
+        JOIN_KEY_PROXY_MARKER_VETO_SKIP_REASON,
+        JOIN_KEY_BORDER_MISMATCH_SKIP_REASON,
+        JOIN_KEY_FRAME_MISMATCH_SKIP_REASON,
+        JOIN_KEY_TRUNCATED_IMAGE_SKIP_REASON,
+        JOIN_KEY_COPYRIGHT_YEAR_MISMATCH_SKIP_REASON,
         JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
         # JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON ("artist-mismatch", 2026-07-29, module docstring's
         # COLLECTOR-LINE ARTIST GATE): listed here for exactly the reason "unknown-set-code" above
@@ -2080,7 +2126,7 @@ def run_slow_path_calculator(
     (same content-hash-freshness check `run_join_key_calculator` uses; a card whose evidence has
     gone stale since the join-key pass is skipped here too, rather than routing stale signals to
     a reviewer) and writes a `CardScanLog(anonymous_id=SLOW_PATH_ANONYMOUS_ID,
-    skip_reason=SLOW_PATH_TO_REVIEW_REASON)` durable routing marker. `dry_run=True` (the default,
+    skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON)` durable routing marker. `dry_run=True` (the default,
     matching `run_join_key_calculator`'s own convention) computes and counts everything without
     writing. `card_ids` (2026-07-24, Stage E Phase 2) is forwarded straight through to
     `_slow_path_eligible_cards_queryset` - see `_eligible_cards_queryset`'s own docstring.
@@ -2149,7 +2195,7 @@ def run_slow_path_calculator(
                     card_id=card.pk,
                     anonymous_id=SLOW_PATH_ANONYMOUS_ID,
                     run_id=run_id,
-                    skip_reason=SLOW_PATH_TO_REVIEW_REASON,
+                    skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON,
                 )
             )
 
@@ -2173,19 +2219,29 @@ __all__ = [
     "TRANSFERRED_INTERIM_GUARD_SKIP_REASON",
     "JOIN_KEY_NO_HIT_SKIP_REASONS",
     "JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON",
+    "JOIN_KEY_NO_EVIDENCE_SKIP_REASON",
+    "JOIN_KEY_NO_TEXT_SKIP_REASON",
+    "JOIN_KEY_AMBIGUOUS_SKIP_REASON",
+    "JOIN_KEY_TRUNCATED_IMAGE_SKIP_REASON",
+    "JOIN_KEY_BORDER_MISMATCH_SKIP_REASON",
+    "JOIN_KEY_FRAME_MISMATCH_SKIP_REASON",
+    "JOIN_KEY_COPYRIGHT_YEAR_MISMATCH_SKIP_REASON",
+    "JOIN_KEY_PROXY_MARKER_VETO_SKIP_REASON",
     "JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON",
     "known_set_codes",
     "COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS",
     "STAGE_D_FALLBACK_ANONYMOUS_ID",
     "FALLBACK_NO_EVIDENCE_SKIP_REASON",
     "FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON",
+    "FALLBACK_ELIMINATED_SKIP_REASON",
+    "FALLBACK_AMBIGUOUS_SKIP_REASON",
     "FALLBACK_RESCANNABLE_SKIP_REASONS",
     "FallbackVerdict",
     "calculate_fallback_verdict",
     "FallbackCalculatorResult",
     "run_fallback_calculator",
     "SLOW_PATH_ANONYMOUS_ID",
-    "SLOW_PATH_TO_REVIEW_REASON",
+    "SLOW_PATH_TO_REVIEW_SKIP_REASON",
     "SLOW_PATH_RAW_SIGNAL_FIELDS",
     "JoinKeyVerdict",
     "calculate_join_key_verdict",

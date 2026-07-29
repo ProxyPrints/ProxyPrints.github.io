@@ -27,6 +27,13 @@ The methodology and the systems it governs.
   evidence extraction, Stage D join-key calculator, the human-backed vote
   gate) rather than `theory.md`'s formal decoding model. **Reviewed and
   approved by the owner, 2026-07-21.**
+- [`reference/skip-reasons.md`](reference/skip-reasons.md) — the complete
+  roster of every `CardScanLog.skip_reason` value: what each one means,
+  which calculator emits it, and whether it is live, retired (historical
+  rows only) or report-only. Tethered to the `*_SKIP_REASON` constant
+  declarations in code by `check_skip_reason_roster_tether()` in
+  `.github/scripts/docs_lint.py`, on the same terms as the calculator
+  roster: code is the source of truth, the doc is the thing checked.
 - [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md) —
   the owner-ratified 2026-07-22 vote-weight scenario matrix (raw decision
   record, implemented in PR #325) that `theory.md`'s §4/§7a and

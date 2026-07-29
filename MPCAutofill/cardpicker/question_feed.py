@@ -73,7 +73,10 @@ from django.db.models import (
 from cardpicker.artist_consensus import get_contested_artist_card_ids
 from cardpicker.attribute_tags import ATTRIBUTE_CHIP_TAG_NAMES
 from cardpicker.local_calculate_verdicts import (
+    FALLBACK_ELIMINATED_SKIP_REASON,
     JOIN_KEY_ANONYMOUS_ID,
+    JOIN_KEY_BORDER_MISMATCH_SKIP_REASON,
+    JOIN_KEY_FRAME_MISMATCH_SKIP_REASON,
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
     STAGE_D_FALLBACK_ANONYMOUS_ID,
 )
@@ -108,17 +111,24 @@ from cardpicker.vote_consensus import (
 # Origin reasons `local_calculate_verdicts.py`'s Stage D join-key/fallback calculators write to
 # `CardScanLog.skip_reason` that the 2026-07-24 data brief's queue-composition item classifies
 # as "answerable-as-quick-negative" - a quick, low-ambiguity classification click (custom-art/
-# no-match/visual-contradiction), not an open-ended one. Two of these have named constants in
-# `local_calculate_verdicts.py` already (imported above); "eliminated"/"border-mismatch"/
-# "frame-mismatch" are that module's own inline skip-reason vocabulary (no named constant exists
-# for these three there today) taken verbatim - see that module's own skip_reason call sites.
+# no-match/visual-contradiction), not an open-ended one. All four now have named
+# constants in `local_calculate_verdicts.py` (imported above): the 2026-07-29
+# declaration-convention sweep gave the three that used to be bare literals here ("eliminated"/
+# "border-mismatch"/"frame-mismatch") their own `*_SKIP_REASON` declarations at their write
+# sites, so this set no longer restates any string by hand. See docs/reference/skip-reasons.md
+# for the full roster.
 # Deliberately EXCLUDES "ambiguous" despite the brief calling it "YES - answerable" in principle:
 # the same brief's prioritization item ranks it as BLOCKED on a build dependency
 # (`CardScanLog.survivor_pks` is unpopulated for every to-review card - see that field's own
 # docstring), not free supply today, so it falls into this module's default/hard-open-ended
 # bucket alongside "no-sub-check-evidence"/"no-text" rather than the quick-negative one.
 QUICK_NEGATIVE_SKIP_REASONS = frozenset(
-    {JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON, "eliminated", "border-mismatch", "frame-mismatch"}
+    {
+        JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
+        FALLBACK_ELIMINATED_SKIP_REASON,
+        JOIN_KEY_BORDER_MISMATCH_SKIP_REASON,
+        JOIN_KEY_FRAME_MISMATCH_SKIP_REASON,
+    }
 )
 
 # anonymous_id placeholder for the hypothetical vote `is_likely_resolve_printing` adds - never

@@ -1,7 +1,7 @@
 """
 Review-queue clustering (public issue #262): groups cards routed to the human review queue
 (`CardScanLog(anonymous_id=local_calculate_verdicts.SLOW_PATH_ANONYMOUS_ID,
-skip_reason=local_calculate_verdicts.SLOW_PATH_TO_REVIEW_REASON)`, see that module's docstring)
+skip_reason=local_calculate_verdicts.SLOW_PATH_TO_REVIEW_SKIP_REASON)`, see that module's docstring)
 by CONSERVATIVE exact-match signals only, per issue #262's own read-only measurement comment
 (2026-07-21): exact `Card.content_phash` union exact `ImageEvidence.symbol_phash` union exact
 normalized legal-line text - "conservative grouping... collapses 16,928 cards -> 11,802
@@ -46,7 +46,7 @@ from django.core.cache import cache
 
 from cardpicker.local_calculate_verdicts import (
     SLOW_PATH_ANONYMOUS_ID,
-    SLOW_PATH_TO_REVIEW_REASON,
+    SLOW_PATH_TO_REVIEW_SKIP_REASON,
 )
 from cardpicker.models import (
     Card,
@@ -179,7 +179,7 @@ def _review_queue_card_ids() -> list[int]:
     own docstring) - the population issue #262 asks to cluster. `.distinct()` since a card can
     accumulate more than one such row across re-runs (CardScanLog is append-only)."""
     return list(
-        CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_REASON)
+        CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON)
         .values_list("card_id", flat=True)
         .distinct()
     )

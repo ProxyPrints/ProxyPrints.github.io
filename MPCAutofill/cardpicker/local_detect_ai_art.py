@@ -124,7 +124,19 @@ REQUIRED_EXTRACTOR_KEYS: tuple[str, ...] = ("collector_line_ocr", "artist_ocr", 
 # changes" reasoning "ambiguous"/"no-text" get elsewhere. A future marker-list update naturally
 # gets a fresh look by simply purging/re-running against the updated list (curated-list ownership
 # is issue #261's own still-open scoping question, not resolved here).
-AI_ART_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence", "incomplete-evidence"})
+# THIS CALCULATOR'S OWN SKIP VOCABULARY (2026-07-29 declaration-convention sweep - see
+# docs/reference/skip-reasons.md). Every value written to `CardScanLog.skip_reason` here is
+# declared as a module-level `*_SKIP_REASON` constant so the roster is statically enumerable,
+# exactly as `*_ANONYMOUS_ID` already is. These were inline string literals at their write sites
+# until this sweep; the STRINGS are unchanged (a row written before and after this change is
+# byte-identical) - only their point of declaration moved. The ``AI_ART_`` prefix is deliberate:
+# these same strings are also emitted by other calculators under a different `anonymous_id`, and
+# a single shared constant would falsely imply one shared concept.
+AI_ART_NO_EVIDENCE_SKIP_REASON = "no-evidence"
+AI_ART_INCOMPLETE_EVIDENCE_SKIP_REASON = "incomplete-evidence"
+AI_ART_NO_MARKER_HIT_SKIP_REASON = "no-marker-hit"
+
+AI_ART_RESCANNABLE_SKIP_REASONS = frozenset({AI_ART_NO_EVIDENCE_SKIP_REASON, AI_ART_INCOMPLETE_EVIDENCE_SKIP_REASON})
 
 # The minimum normalized marker length (see normalize_ocr_text) this module tolerates a single-
 # character OCR substitution for (module docstring's "OCR-tolerant matching" requirement) - a
@@ -428,24 +440,31 @@ def run_ai_art_detector(
 
         evidence = current_evidence_queryset(card).order_by("-updated_at").first()
         if evidence is None:
-            result.skip_counts["no-evidence"] = result.skip_counts.get("no-evidence", 0) + 1
-            if not dry_run:
-                scan_log_batch.append(
-                    CardScanLog(
-                        card_id=card.pk, anonymous_id=AI_ART_ANONYMOUS_ID, run_id=run_id, skip_reason="no-evidence"
-                    )
-                )
-            continue
-
-        if any(key not in evidence.extractor_versions for key in REQUIRED_EXTRACTOR_KEYS):
-            result.skip_counts["incomplete-evidence"] = result.skip_counts.get("incomplete-evidence", 0) + 1
+            result.skip_counts[AI_ART_NO_EVIDENCE_SKIP_REASON] = (
+                result.skip_counts.get(AI_ART_NO_EVIDENCE_SKIP_REASON, 0) + 1
+            )
             if not dry_run:
                 scan_log_batch.append(
                     CardScanLog(
                         card_id=card.pk,
                         anonymous_id=AI_ART_ANONYMOUS_ID,
                         run_id=run_id,
-                        skip_reason="incomplete-evidence",
+                        skip_reason=AI_ART_NO_EVIDENCE_SKIP_REASON,
+                    )
+                )
+            continue
+
+        if any(key not in evidence.extractor_versions for key in REQUIRED_EXTRACTOR_KEYS):
+            result.skip_counts[AI_ART_INCOMPLETE_EVIDENCE_SKIP_REASON] = (
+                result.skip_counts.get(AI_ART_INCOMPLETE_EVIDENCE_SKIP_REASON, 0) + 1
+            )
+            if not dry_run:
+                scan_log_batch.append(
+                    CardScanLog(
+                        card_id=card.pk,
+                        anonymous_id=AI_ART_ANONYMOUS_ID,
+                        run_id=run_id,
+                        skip_reason=AI_ART_INCOMPLETE_EVIDENCE_SKIP_REASON,
                     )
                 )
             continue
@@ -454,11 +473,16 @@ def run_ai_art_detector(
         verdict = calculate_ai_art_verdict(card.pk, evidence)
 
         if not verdict.is_hit:
-            result.skip_counts["no-marker-hit"] = result.skip_counts.get("no-marker-hit", 0) + 1
+            result.skip_counts[AI_ART_NO_MARKER_HIT_SKIP_REASON] = (
+                result.skip_counts.get(AI_ART_NO_MARKER_HIT_SKIP_REASON, 0) + 1
+            )
             if not dry_run:
                 scan_log_batch.append(
                     CardScanLog(
-                        card_id=card.pk, anonymous_id=AI_ART_ANONYMOUS_ID, run_id=run_id, skip_reason="no-marker-hit"
+                        card_id=card.pk,
+                        anonymous_id=AI_ART_ANONYMOUS_ID,
+                        run_id=run_id,
+                        skip_reason=AI_ART_NO_MARKER_HIT_SKIP_REASON,
                     )
                 )
             continue
@@ -515,6 +539,9 @@ __all__ = [
     "AI_ART_EVIDENCE_FIELDS",
     "REQUIRED_EXTRACTOR_KEYS",
     "AI_ART_RESCANNABLE_SKIP_REASONS",
+    "AI_ART_NO_EVIDENCE_SKIP_REASON",
+    "AI_ART_INCOMPLETE_EVIDENCE_SKIP_REASON",
+    "AI_ART_NO_MARKER_HIT_SKIP_REASON",
     "FUZZY_MIN_MARKER_LENGTH",
     "AI_ART_CONFIDENCE_SINGLE_FIELD",
     "AI_ART_CONFIDENCE_MULTI_FIELD",
