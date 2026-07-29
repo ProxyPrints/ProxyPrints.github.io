@@ -499,7 +499,18 @@ justify it:
   cluster members (by definition, the same uploaded image) that somehow
   resolve to _different_ printings are an internal contradiction with
   zero new machinery required — just a report over
-  `local_clustering`'s existing output.
+  `local_clustering`'s existing output. **Built, and currently dormant**
+  (`cardpicker/local_cluster_consistency.py`, `manage.py local_cluster_consistency_check`). Measured 2026-07-29: the catalogue
+  holds 33,631 `d=0` groups of 2+ hashed cards, but only 4 cards are
+  RESOLVED at all and no two of them share a hash — so the detector
+  checks **0 clusters** and reports nothing. The code is correct and
+  fully unit-tested; it is starved of resolutions, not broken. Because
+  "nothing disagreed" and "nothing was compared" both produce an empty
+  result, the command refuses to print an all-clear in that state: it
+  prints a `DORMANT — NOT AN ALL-CLEAR` banner carrying the 0-of-33,631
+  ratio and exits non-zero unless `--allow-vacuous` is passed. Treat a
+  green line from this detector as evidence only once
+  `clusters_checked > 0`.
 - **Cohort revocation generalizes beyond `run_id`**: Part 1's
   `purge_machine_votes` pattern (delete a cohort's votes, re-resolve
   every affected card via the persisting resolvers, assert no

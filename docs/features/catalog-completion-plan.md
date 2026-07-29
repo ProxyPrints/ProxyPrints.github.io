@@ -2954,7 +2954,11 @@ over a closed codebook.
      members that resolve differently are, by the clustering
      definition itself (same uploaded image), already a contradiction —
      no new machinery needed, just a report over
-     `local_clustering`'s existing output.
+     `local_clustering`'s existing output. **Built, and dormant as of
+     2026-07-29**: 33,631 `d=0` groups exist in the hashed catalogue, but
+     only 4 cards are RESOLVED and none share a hash, so the detector
+     checks 0 clusters. Correct code, no input. `manage.py local_cluster_consistency_check` prints a `DORMANT — NOT AN ALL-CLEAR` banner and exits non-zero in that state rather than
+     reporting a clean run; see `docs/theory.md` §6.
    - Cohort revocation generalizes beyond `run_id`: the same purge
      pattern (`purge_machine_votes`, the post-purge invariant) applies
      to a suspect _human_ cohort scoped by `created_at` window instead
