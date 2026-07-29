@@ -46,6 +46,15 @@ on:
       # tether cares about.
       - "MPCAutofill/cardpicker/*.py"
       - "federation-hash-tool/**"
+      # Extractor-manifest tether (check_extractor_manifest_sync.py, added
+      # 2026-07-29): image_evidence.py is the SOURCE of the manifest and
+      # run_image_evidence_cohort.py re-types it, so a PR touching either
+      # side alone is exactly the PR that can put them out of sync. The
+      # cohort command sits one directory below the `cardpicker/*.py` glob
+      # above, and a single `*` does not match a slash — so it needs
+      # naming explicitly rather than being assumed covered.
+      - "MPCAutofill/cardpicker/image_evidence.py"
+      - "MPCAutofill/cardpicker/management/commands/run_image_evidence_cohort.py"
   schedule:
     # Weekly, independent of any PR — catches rot introduced by a change
     # OUTSIDE docs/ (e.g. a component move that a doc's path reference
@@ -142,3 +151,23 @@ jobs:
         run: python3 .github/scripts/tests/test_check_protected_core_license.py
       - name: Run protected-core license lint against the real repo
         run: python3 .github/scripts/check_protected_core_license.py
+
+  extractor-manifest-sync:
+    name: Extractor manifest sync (image_evidence.py -> cohort constants)
+    # CODE-TO-CODE tether. image_evidence.py declares the
+    # `*_EXTRACTOR_VERSION` constants and writes them into each row's
+    # `extractor_versions` manifest; run_image_evidence_cohort.py RE-TYPES
+    # the same key set and version strings as two module-level literals,
+    # held in sync only by a prose comment saying "keep this set in sync".
+    # Drift is silent at runtime and expensive both ways: a stale version
+    # marks already-extracted rows current (never re-extracted), a version
+    # nothing writes marks every row incomplete (re-pays fetch+OCR across
+    # ~220k cards). AST-based, stdlib only - reads source text, never
+    # imports or executes it, so no Django/third-party deps in this job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run extractor-manifest tether unit tests
+        run: python3 .github/scripts/tests/test_check_extractor_manifest_sync.py
+      - name: Run extractor-manifest tether against the real repo
+        run: python3 .github/scripts/check_extractor_manifest_sync.py
