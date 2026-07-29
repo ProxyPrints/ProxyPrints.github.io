@@ -1109,8 +1109,8 @@ module is not modified here, and issue #513 item 1 is separate open work.
   reproducible from it. Do not "improve" this later by adding a periodic
   mid-run refresh.
 - **Fail before any dispatch.** Any stage-0 failure — network, partial
-  download, import error — aborts with a non-zero exit before a single batch
-  is dispatched, writing nothing. For an unattended ~230k-card run the
+  download, import error — aborts with a non-zero exit (code 2) before a
+  single batch is dispatched, writing nothing. For an unattended ~230k-card run the
   acceptable outcomes are "did not start" and "ran to completion", never
   "started against stale or half-imported reference data".
 - **Reports what it decided**, including the remote `updated_at` it compared
@@ -1159,7 +1159,9 @@ or an env var (`--batch-size`'s DEFAULT reads
   of the same gap).
 - `--start-pk N` — resume from a pk, EXCLUSIVE. Overrides AND resets the
   stored high-water mark, so `--start-pk 0` genuinely restarts the pass.
-- `--max-batches N` — bound one invocation.
+- `--max-batches N` — bound one invocation. Reaching the bound with cards
+  still in the cohort is an INCOMPLETE pass and exits 5 (see "Exit codes"
+  below); reaching it exactly as the cohort runs out exits 0.
 - `--sample N` — a deterministic pseudo-random subset of N cards drawn across
   the WHOLE pk space (seeded from N itself, never the clock), for
   representative throughput measurement; a pk-ordered prefix is not
@@ -1170,7 +1172,8 @@ or an env var (`--batch-size`'s DEFAULT reads
 - `--short-circuit` / `--no-short-circuit` — independent of `--reextract`.
   Omitted leaves `short_circuit=None`, i.e. inherit the
   `STAGE_C_NO_SHORTCIRCUIT` env default (resolved at call time).
-- `--dry-run` — report the cohort size and batch plan, write nothing.
+- `--dry-run` — report the cohort size and batch plan, write nothing. Exits
+  0: it did what was asked.
 - `--skip-freshness`, `--require-fresh` — stage 0 controls (see "Stage 0"
   below).
 - `--max-throttle-retries N`, `--throttle-backoff-initial S`,
@@ -1223,7 +1226,10 @@ STOP.
   retry, no backoff, ever. NO SELF-RESUME is a binding design gate: an
   envelope trip clears only via an explicit human `resolve_envelope_trip`
   (see the runbook above), and nothing in this command may retry past one,
-  sleep hoping it clears, or acknowledge it.
+  sleep hoping it clears, or acknowledge it. It **exits 3** — non-zero,
+  because the pass ends with cards still unprocessed (see "Exit codes"
+  below; it used to exit 0, which told a supervisor the opposite of the
+  truth). Only the reporting changed; the hard stop itself is untouched.
 - **`throttled-concurrency-cap` — BOUNDED EXPONENTIAL BACKOFF AND RETRY** of
   the same chunk, not a stop. A throttle means every
   `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slot is currently held; it is
@@ -1234,7 +1240,7 @@ STOP.
   most `--max-throttle-retries` (default 20) CONSECUTIVE throttled attempts;
   the consecutive counter resets on any successful dispatch. Exhausting the
   budget means the cap is genuinely not clearing: the command then stops,
-  prints the resume pk, and **exits non-zero** so a supervisor can detect it.
+  prints the resume pk, and **exits 4** so a supervisor can detect it.
 
   This does NOT contradict `stage_e_dispatch.py`'s (and
   `stream_backstop_sweep.py`'s) warning against a "hot, backoff-free loop"
@@ -1249,6 +1255,72 @@ STOP.
 A halted or throttled batch did no work, so its pks do NOT advance the
 high-water mark; the retry (or the relaunch) re-dispatches exactly that
 chunk. The resume pk is printed on every exit path.
+
+### Exit codes — the supervisor contract
+
+Owner ruling, 2026-07-29:
+
+> **Any termination that leaves work in the cohort exits non-zero. Exit zero
+> is reserved for genuine cohort exhaustion.**
+
+This command is designed to run unattended to completion under a systemd unit
+or a wrapper script, and that supervisor decides whether the pass finished by
+reading the process's exit status. It shipped with an inconsistency: an
+exhausted throttle budget exited non-zero (correct) but an envelope halt
+exited **zero**, so a supervisor reading exit 0 on a trip recorded the pass as
+complete when ~229,000 cards were still unprocessed. The ruling above resolves
+it. **Nothing about when the command stops changed — only what it reports on
+the way out.** The envelope halt still hard-stops immediately with no retry,
+no backoff and no self-resume; the throttle still backs off and retries within
+its budget.
+
+| Code | Meaning                                                                                                                                                                                                            | What the supervisor should do                                                                                                                        |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | **Complete.** Genuine cohort exhaustion — every card in this pass's cohort was dispatched and nothing remains. Also covers `--dry-run` (it reported its plan) and an empty cohort (there was nothing to dispatch). | Nothing. The pass finished.                                                                                                                          |
+| `1`  | **Invocation rejected** before anything ran: a bad flag value or an unknown `--source` key. Django's own default `CommandError` code.                                                                              | Fix the command line. Never retry it verbatim.                                                                                                       |
+| `2`  | **Stage 0 failed** — Scryfall reference data could not be verified or refreshed. Nothing was dispatched and nothing was written.                                                                                   | Fix the network / the cache, then relaunch.                                                                                                          |
+| `3`  | **Envelope halt** (`halted-open-trip` / `halted-new-trip`). Work REMAINS.                                                                                                                                          | STOP. Do **not** auto-relaunch — a human must acknowledge the trip via `resolve_envelope_trip` (runbook above) first, or the relaunch just re-trips. |
+| `4`  | **Throttle-retry budget exhausted** — the concurrency cap never cleared. Work REMAINS.                                                                                                                             | Safe to relaunch later, unattended, once the cap is free. If it recurs, look for wedged dispatches.                                                  |
+| `5`  | **`--max-batches` bound reached** with cards still in the cohort. Work REMAINS.                                                                                                                                    | Expected if the flag was passed on purpose. Relaunch to continue from the printed resume pk.                                                         |
+| `6`  | **Streaming disabled** (`settings.STAGE_E_STREAMING_ENABLED` is False). The WHOLE cohort remains.                                                                                                                  | Flip the setting, then relaunch. The pass never started.                                                                                             |
+
+Distinct codes rather than a single `1` because each maps to a **different**
+supervisor action, and the differences are the operationally expensive kind:
+`3` must never be auto-relaunched, `4` usually resolves itself, `5` is not a
+fault at all, and `2`/`6` never dispatched anything so there is nothing to
+reconcile. A supervisor that could only see "non-zero" would either page a
+human for a deliberate `--max-batches` bound or, worse, hammer a tripped
+envelope.
+
+Three cases that are easy to read the wrong way:
+
+- **`--dry-run` is 0.** It did precisely what was asked of it — report the
+  plan, write nothing. It is not an interrupted pass, and treating it as a
+  failure would make "check the plan first" unscriptable.
+- **`--max-batches` is 5, not 0.** It is a deliberate operator bound rather
+  than a fault, but the invocation still ends with cards unprocessed, and a
+  supervisor cannot otherwise tell "you asked me to stop" from "I finished".
+  The bound reached EXACTLY as the cohort ran out is 0 — the test is "is any
+  work left", not "was the bound hit".
+- **An empty cohort is 0.** Nothing remains in it, which is the definition the
+  ruling uses. The false success this could mask — a typo'd `--source` key
+  "completing" a zero-card pass — is already caught upstream and far more
+  precisely, as a code-`1` unknown-key error. A key that EXISTS but whose
+  drive has no indexed cards yet is a real operator situation, so it gets a
+  loud `WARNING: the cohort for scope=… is EMPTY` line rather than a fake
+  failure.
+
+**The exit code and the human-readable output never disagree.** Every
+terminating path writes one final verdict line as the last thing on stdout:
+
+```
+PASS COMPLETE exit_code=0 reason=cohort-exhausted - the whole cohort was dispatched; no work remains. scope=full-catalog resume_pk=230753
+PASS STOPPED EARLY exit_code=3 reason=envelope-halt - envelope trip halted-new-trip hard-stopped the pass; work REMAINS in the cohort. scope=full-catalog resume_pk=41200 (relaunch with the SAME --source flags to continue, or --start-pk 41200)
+```
+
+That line — not the `DONE` / `PROGRESS` counters above it — is what to grep a
+truncated multi-hour log for, and a stopped-early one always carries the
+resume pk and the relaunch argument.
 
 ### Progress output, built for unattended running
 
