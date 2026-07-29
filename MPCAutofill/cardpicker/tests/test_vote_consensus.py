@@ -7,6 +7,7 @@ from cardpicker.tests.factories import CardArtistVoteFactory, CardFactory
 from cardpicker.vote_consensus import (
     _SOURCE_WEIGHTS,
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
+    DEDUCTIVE_BACKFILL_FAMILY,
     PENDING_PRIVILEGED,
     VoteTuple,
     is_human_backed_source,
@@ -73,6 +74,59 @@ class TestResolveVoteWeight:
     @pytest.mark.parametrize("source", [VoteSource.USER, VoteSource.ADMIN, VoteSource.OCR, VoteSource.FEDERATED])
     def test_every_other_source_matches_the_plain_source_weights_table(self, source):
         assert resolve_vote_weight(source, "anonymous-1") == _SOURCE_WEIGHTS[source]
+
+
+class TestZeroWeightRulingSurvivesAVersionBump:
+    """
+    2026-07-28: the 2026-07-23 zeroing was an EXACT string match against
+    "deductive-backfill-v1". A machine calculator's version lives INSIDE its `anonymous_id`, so
+    bumping that calculator to -v2 - an ordinary redeploy - would have silently restored all
+    28,112 votes to full DEDUCTION weight, with no error and no log line. The match is now on
+    the versionless calculator FAMILY, and it is scoped to that ONE family, no wider.
+    """
+
+    def test_the_family_constant_is_derived_from_the_id_not_written_out_twice(self):
+        assert DEDUCTIVE_BACKFILL_FAMILY == "deductive-backfill"
+        assert DEDUCTIVE_BACKFILL_ANONYMOUS_ID.startswith(f"{DEDUCTIVE_BACKFILL_FAMILY}-v")
+
+    @pytest.mark.parametrize(
+        "anonymous_id", ["deductive-backfill-v1", "deductive-backfill-v2", "deductive-backfill-v10"]
+    )
+    def test_every_version_of_the_backfill_calculator_is_zero_weight(self, anonymous_id):
+        # -v2 does not exist today; that is exactly the point. The ruling must already hold for
+        # it before anyone bumps the version, because nothing would fail if it didn't.
+        assert resolve_vote_weight(VoteSource.DEDUCTION, anonymous_id) == 0.0
+
+    @pytest.mark.parametrize(
+        "anonymous_id",
+        [
+            "local-ocr-v1",
+            "local-ocr-v2",
+            "stage-d-join-key-v1",
+            "stage-d-fallback-v2",
+            "local-name-frequency-v1",
+            # near-misses: a DIFFERENT family that merely shares a prefix or suffix with the
+            # ruled one must not be swept in - the match is family EQUALITY, not containment.
+            "deductive-backfill-extra-v1",
+            "extra-deductive-backfill-v1",
+        ],
+    )
+    def test_no_other_calculator_family_is_zero_weighted(self, anonymous_id):
+        assert resolve_vote_weight(VoteSource.DEDUCTION, anonymous_id) == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+
+    def test_a_human_uuid_is_never_zero_weighted(self):
+        # calculator_family() returns None for a UUID; None must never compare equal to the
+        # ruled family, or every human DEDUCTION-labelled vote would silently lose its weight.
+        assert (
+            resolve_vote_weight(VoteSource.DEDUCTION, "3f2a9c1e-7b64-4a0d-9c88-1e5f2b3d4a60")
+            == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
+        )
+
+    @pytest.mark.parametrize("source", [VoteSource.USER, VoteSource.ADMIN, VoteSource.OCR, VoteSource.FEDERATED])
+    def test_the_family_match_still_requires_source_to_be_deduction(self, source):
+        # the override is (source, family) TOGETHER - broadening it to the family alone would
+        # zero a differently-sourced vote that happened to carry the id, which is not the ruling
+        assert resolve_vote_weight(source, "deductive-backfill-v2") == _SOURCE_WEIGHTS[source]
 
 
 class TestResolveWeightedConsensus:

@@ -4,7 +4,7 @@ from typing import Any, Hashable, Iterable, NamedTuple, TypedDict
 from django.conf import settings
 from django.db.models import Case, Count, IntegerField, Q, QuerySet, When
 
-from cardpicker.models import VoteSource
+from cardpicker.models import VoteSource, calculator_family
 
 # Shared across printing/artist/tag consensus - previously duplicated identically in each of
 # their own modules; hoisted here so a new source (e.g. `FEDERATED`) can't be forgotten in one
@@ -73,28 +73,64 @@ def is_human_backed_source(source: str) -> bool:
 # unverifiable against any independent evidence. Soundness is strictly tightening: this removes
 # name-derived weight from resolution, leaving only image-derived machine evidence (OCR/phash/
 # fallback - see `local_phash.py`/`local_fallback.py`) plus human votes - see docs/theory.md's
-# soundness section for the full writeup. This is scoped to (source, anonymous_id) together,
-# not to `VoteSource.DEDUCTION` alone, so a future, differently-sourced DEDUCTION-labelled
-# cohort (should one ever be ratified) isn't silently swept in by this same override without
-# its own separate review.
+# soundness section for the full writeup. This is scoped to (source, calculator FAMILY) together
+# - see `DEDUCTIVE_BACKFILL_FAMILY` and `resolve_vote_weight` below - not to
+# `VoteSource.DEDUCTION` alone, so a future, differently-sourced DEDUCTION-labelled cohort
+# (should one ever be ratified) isn't silently swept in by this same override without its own
+# separate review.
 DEDUCTIVE_BACKFILL_ANONYMOUS_ID = "deductive-backfill-v1"
+
+# The versionless FAMILY of the id above ("deductive-backfill"), which is what the zero-weight
+# override actually matches on. DERIVED, not written out as a second literal, so the two can
+# never drift: `models.calculator_family` is the single definition of how a version suffix is
+# stripped. The assert makes a rename that took this constant outside the machine naming
+# convention fail loudly at import time rather than silently disabling a ratified ruling.
+DEDUCTIVE_BACKFILL_FAMILY = calculator_family(DEDUCTIVE_BACKFILL_ANONYMOUS_ID)
+assert DEDUCTIVE_BACKFILL_FAMILY is not None, (
+    "DEDUCTIVE_BACKFILL_ANONYMOUS_ID must follow the machine calculator naming convention "
+    "(<family>-v<N>): the 2026-07-23 zero-weight ruling is enforced by family, not by literal."
+)
 
 
 def resolve_vote_weight(source: str, anonymous_id: str) -> float:
     """
     Resolves a single vote's consensus weight from its `source` (via `_SOURCE_WEIGHTS`), with
-    one override: a vote carrying `source=VoteSource.DEDUCTION` AND
-    `anonymous_id=DEDUCTIVE_BACKFILL_ANONYMOUS_ID` (see that constant's own docstring for the
-    2026-07-23 owner ruling) resolves to 0.0 regardless of `_SOURCE_WEIGHTS[DEDUCTION]`.
+    one override: a vote carrying `source=VoteSource.DEDUCTION` AND an `anonymous_id` in the
+    DEDUCTIVE-BACKFILL CALCULATOR FAMILY resolves to 0.0 regardless of
+    `_SOURCE_WEIGHTS[DEDUCTION]`. See `DEDUCTIVE_BACKFILL_ANONYMOUS_ID`'s own comment above for
+    the 2026-07-23 owner ruling that zeroed that cohort's 28,112 votes and the evidence behind
+    it.
 
-    Every call site that builds a `VoteTuple`'s (or an inline weighted-sum's) `weight` from a
-    `CardPrintingTag` row's `source` should route through this rather than indexing
-    `_SOURCE_WEIGHTS` directly, so a future new zero-weight cohort (should one ever be ratified)
-    has exactly one place to add it. `CardArtistVote`/`CardTagVote` rows are unaffected in
-    practice (`deductive_backfill.py` only ever writes `CardPrintingTag` rows) but are safe to
-    route through this too - the override simply never matches for them.
+    WHY THE MATCH IS SCOPED TO THE FAMILY, NOT TO THE EXACT ID
+    ---------------------------------------------------------
+    This was an exact string comparison against "deductive-backfill-v1" until it was noticed
+    that a machine calculator's version lives INSIDE its `anonymous_id` rather than beside it as
+    metadata (see `models.calculator_family`). Under an exact match, bumping this calculator to
+    "deductive-backfill-v2" - an ordinary, unremarkable redeploy - would silently restore the
+    whole cohort to full DEDUCTION weight: no error, no log line, no failing test, a ratified
+    owner ruling reversed by a version string. Matching on the family is what makes "forever" in
+    that ruling mean forever. The ruling was about the METHOD (pure name-matching inference,
+    zero image inspection), and a re-versioned run of the same method is the same method.
+
+    It is scoped to that ONE family and NO WIDER, deliberately: the ruling zeroed one cohort,
+    not `VoteSource.DEDUCTION` as a class. Every call site that builds a `VoteTuple`'s (or an
+    inline weighted-sum's) `weight` from a vote row's `source` should route through this rather
+    than indexing `_SOURCE_WEIGHTS` directly, so a future zero-weight cohort (should one ever be
+    ratified) has exactly ONE place to be added - preserve that property when adding one, and
+    give the new cohort its own family check rather than broadening this one.
+
+    CONFIDENCE IS NOT A PARAMETER OF THIS FUNCTION and must not become one. A vote's weight is a
+    function of WHO cast it and by what method - not of how sure that agent reports being.
+    Letting a calculator's self-reported confidence scale its own consensus weight would let a
+    miscalibrated or merely optimistic calculator buy quorum, which is exactly what the
+    distinct-agent quorum rule (see `pool_group_votes`) exists to prevent. Confidence belongs in
+    a calculator's own emit-or-skip decision, upstream of any vote row existing at all.
+
+    `CardArtistVote`/`CardTagVote` rows are unaffected in practice (`deductive_backfill.py` only
+    ever writes `CardPrintingTag` rows) but are safe to route through this too - the override
+    simply never matches for them.
     """
-    if source == VoteSource.DEDUCTION and anonymous_id == DEDUCTIVE_BACKFILL_ANONYMOUS_ID:
+    if source == VoteSource.DEDUCTION and calculator_family(anonymous_id) == DEDUCTIVE_BACKFILL_FAMILY:
         return 0.0
     return _SOURCE_WEIGHTS[source]
 
