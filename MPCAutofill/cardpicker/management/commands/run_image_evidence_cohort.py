@@ -192,6 +192,47 @@ line already takes (no extra `/proc` reads), and `handle()` writes it onto
 for this command. `PilotRunLedger.counters` (a `JSONField`) is extended, not migrated - per the
 brief's own recommendation to prefer the existing free-form counters convention over a schema
 change where the data fits.
+
+**COLLECTOR-LINE ARTIST WIRING (2026-07-29)**: `compute_card_evidence` grew three artist-aware
+inputs (`artist_lexicon`, `printing_artist_lookup`, `card_artist_names`) which drive both the
+collector-line escalation gate AND the `artist_ocr_name` storage fallback - see that function's
+own `artist_lexicon` docstring paragraph. `stage_e_dispatch._run_stage_c` (the CONVEYOR Stage C
+path) threaded all three from the day they landed; THIS command - the POOLED path, and the faster
+of the two by 5.5x-9.3x per card - did not, so a card extracted here got none of it and stored a
+blank `artist_ocr_name` where the conveyor would have stored a real one. Wiring them here is a
+pure parity change: the same card now produces the same stored values down either path.
+
+Each of the three is threaded by whichever mechanism suits a PROCESS pool (the conveyor is
+sequential and in-process, so it simply builds all three as locals - none of those options
+transfer across a fork):
+
+  1. `artist_lexicon` (~2.5k `CanonicalArtist.name`s, 98 KB pickled) - built ONCE per run in the
+     parent (`handle()`, one query, next to `known_set_codes()`) and handed to each worker
+     PROCESS exactly once via `ProcessPoolExecutor(initargs=...)`/`_init_worker`, which parks it
+     in a module global the compute unit reads. Deliberately NOT a per-submit argument the way
+     `known_set_codes` is: a frozenset of ~800 short codes is cheap to re-pickle per card, a
+     98 KB lexicon measures at 1.36 ms of pickle round-trip per card (~1.2% of the 109 ms/card
+     compute budget) for a value that cannot vary within a run.
+  2. `printing_artist_lookup` - constructed per worker process in `_init_worker` (construction
+     issues no query of its own; it loads one expansion's `{collector number: artist}` map on
+     first touch and answers from memory thereafter, bounded at 64 expansions). Built in the
+     WORKER rather than the parent because it is the one of the three that must issue queries at
+     CALL time, and a pooled compute worker already holds its own DB connection for
+     `persist_evidence`. Its cache therefore spans that worker's whole lifetime rather than the
+     conveyor's one batch - strictly better locality, and the only observable difference is that
+     a `CanonicalCard.artist` edited mid-run is picked up on the next run rather than the next
+     batch.
+  3. `card_artist_names` - resolved on the PARENT side, per card, from one
+     `collector_line_artist.build_name_artist_lookup()` built once per run, and passed to the
+     compute unit as an already-resolved `tuple[str, ...]` (a handful of short strings). That is
+     the shape `compute_card_evidence` documents as mandatory - resolved plain data, never a
+     callable, so it stays picklable across the pool boundary. Resolving it parent-side is also
+     the answer to whether `local_calculate_verdicts._get_cached_candidate_name_index()` is the
+     right sharing mechanism here: that cache is per-PROCESS, so letting each of 7 compute workers
+     reach for it would build 7 independent copies of the 113k-row `CandidateNameIndex` (measured:
+     1.6 s and ~100 MB each) instead of the single one the parent builds. Measured cost of the
+     parent-side call: 0.053 ms/card, against a driver loop with ~15.6 ms/card of throughput
+     headroom at 7 workers.
 """
 
 import json
@@ -214,6 +255,14 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db.models import Min
 from django.utils import timezone
 
+from cardpicker.collector_line_artist import (
+    ArtistLexicon,
+    NameArtistLookup,
+    PrintingArtistLookup,
+    build_name_artist_lookup,
+    build_printing_artist_lookup,
+    load_artist_lexicon,
+)
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.local_calculate_verdicts import known_set_codes
 from cardpicker.models import CanonicalCard, Card, ImageEvidence, PilotRunLedger
@@ -291,11 +340,28 @@ DEFAULT_QUEUE_DEPTH_MULTIPLIER = 2
 PROGRESS_EVERY = 25
 
 
-def _init_worker() -> None:
+# COLLECTOR-LINE ARTIST WIRING (2026-07-29, module docstring's own section): the two per-WORKER-
+# PROCESS halves of the artist context. Both are set exactly once, by `_init_worker` below, and
+# read (never reassigned) by `_compute_one_card`. `None` in either means "the gate and the
+# `artist_ocr_name` storage fallback are both off for this process", which is precisely the
+# pre-2026-07-29 behaviour of this command - so a caller that constructs a pool WITHOUT this
+# initializer degrades to exactly what it used to do rather than crashing, and `_run_cohort` (the
+# only production constructor) always passes it.
+_WORKER_ARTIST_LEXICON: Optional[ArtistLexicon] = None
+_WORKER_PRINTING_ARTIST_LOOKUP: Optional[PrintingArtistLookup] = None
+
+
+def _init_worker(artist_lexicon: Optional[ArtistLexicon] = None) -> None:
     """Compute pool `initializer=` - runs once per worker PROCESS, immediately after it starts
-    (fork on Linux), before that worker executes its first task. Two jobs (down from three - see
-    module docstring for why the rate-limiter descaling job is gone entirely under the decoupled
-    design):
+    (fork on Linux), before that worker executes its first task. Three jobs (the rate-limiter
+    descaling job is gone entirely under the decoupled design - see module docstring):
+
+    `artist_lexicon` (2026-07-29) is `handle()`'s own single per-run `load_artist_lexicon()`
+    result, delivered here through `ProcessPoolExecutor(initargs=...)` so it crosses the fork
+    boundary ONCE per worker instead of once per card. See the module docstring's COLLECTOR-LINE
+    ARTIST WIRING section for why this one travels by initializer while `known_set_codes` travels
+    per submit, and why `printing_artist_lookup` is built here rather than shipped from the
+    parent.
     """
     # 1. tesseract's LSTM engine can multi-thread itself internally via OpenMP - without this, N
     # worker PROCESSES (not just N threads within one process) would each ALSO spread across
@@ -308,6 +374,16 @@ def _init_worker() -> None:
     from django.db import connections
 
     connections.close_all()
+
+    # 3. Park this process's artist context. `build_printing_artist_lookup()` issues no query at
+    # construction (its per-expansion maps load lazily on first touch), so this runs safely on
+    # BOTH sides of the `close_all()` above; it is placed after it deliberately, so the resolver
+    # can only ever open a connection this worker owns. Skipped entirely when no lexicon was
+    # supplied - a `PrintingArtistLookup` with no lexicon alongside it can never be consulted
+    # (`_parse_artist_is_contradicted` requires both), so building one would be pure waste.
+    global _WORKER_ARTIST_LEXICON, _WORKER_PRINTING_ARTIST_LOOKUP
+    _WORKER_ARTIST_LEXICON = artist_lexicon
+    _WORKER_PRINTING_ARTIST_LOOKUP = None if artist_lexicon is None else build_printing_artist_lookup()
 
 
 def _get_rss_mb() -> Optional[float]:
@@ -340,7 +416,13 @@ class _FetchOutcome:
     2026-07-25, issue #473 PR-2's own new terminal outcome, see `_fetch_one_card`'s own docstring).
     `md5_checksum`/`sha256_checksum` (also issue #473 PR-2) are the card's own live values at fetch
     time, carried across to the compute stage for stamping onto the resulting `ImageEvidence` row -
-    see `_compute_one_card`'s own docstring."""
+    see `_compute_one_card`'s own docstring.
+
+    `card_name` (2026-07-29, module docstring's COLLECTOR-LINE ARTIST WIRING item 3) is the same
+    `Card.name` this fetch step already loaded, carried back so `_run_cohort` can resolve the
+    card's `card_artist_names` narrowing tuple in the PARENT process (one shared
+    `CandidateNameIndex`) rather than in each compute worker (seven of them). Empty string for
+    every terminal outcome that never reaches the compute stage."""
 
     card_id: int
     content_hash: Optional[int] = None
@@ -349,6 +431,7 @@ class _FetchOutcome:
     image_bytes: Optional[bytes] = None
     fetch_latency_ms: float = 0.0
     outcome: Optional[str] = None
+    card_name: str = ""
 
 
 def _fetch_one_card(
@@ -415,6 +498,7 @@ def _fetch_one_card(
         image_bytes=image_bytes,
         fetch_latency_ms=fetch_latency_ms,
         outcome=None,
+        card_name=card.name,
     )
 
 
@@ -430,6 +514,7 @@ def _compute_one_card(
     known_set_codes: Optional[frozenset[str]] = None,
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
+    card_artist_names: tuple[str, ...] = (),
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Module-level (picklable) compute-only work unit for the process pool - takes plain,
     already-fetched data (never a `Card`/`Image` instance re-fetched or re-decoded elsewhere), and
@@ -466,7 +551,21 @@ def _compute_one_card(
     `md5_checksum`/`sha256_checksum` (2026-07-25, issue #473 PR-2): the card's own live values,
     already read by `_fetch_one_card` (no second query here) and carried across via
     `_FetchOutcome` - forwarded straight through to `compute_card_evidence` for stamping onto the
-    resulting `ImageEvidence` row, same as `stage_e_dispatch._run_stage_c`'s own compute step."""
+    resulting `ImageEvidence` row, same as `stage_e_dispatch._run_stage_c`'s own compute step.
+
+    `card_artist_names` (2026-07-29, module docstring's COLLECTOR-LINE ARTIST WIRING item 3): the
+    artists who illustrated a printing of THIS card's own name, already resolved to a plain tuple
+    by `_run_cohort` in the parent process - never a callable, so this work unit's whole argument
+    list stays picklable exactly as `compute_card_evidence`'s own docstring requires. `()` (the
+    default) means "don't narrow", byte-identical to the pre-2026-07-29 behaviour.
+
+    THE OTHER TWO ARTIST INPUTS ARE PROCESS STATE, NOT ARGUMENTS. `artist_lexicon` and
+    `printing_artist_lookup` are read off `_WORKER_ARTIST_LEXICON`/`_WORKER_PRINTING_ARTIST_LOOKUP`,
+    which `_init_worker` set once when this worker process started - see the module docstring for
+    why each travels the way it does. Both being `None` (an un-initialised process: a direct unit
+    call, a pool built without the initializer) disables the escalation gate and the
+    `artist_ocr_name` storage fallback entirely, which is exactly what this command did before
+    2026-07-29 - never an error, and never a partially-wired read."""
     from cardpicker.image_evidence import compute_card_evidence, persist_evidence
 
     wall_started_at = time.monotonic() if profile else None
@@ -488,6 +587,9 @@ def _compute_one_card(
         profile=profile_dict,
         short_circuit=short_circuit,
         known_set_codes=known_set_codes,
+        artist_lexicon=_WORKER_ARTIST_LEXICON,
+        printing_artist_lookup=_WORKER_PRINTING_ARTIST_LOOKUP,
+        card_artist_names=card_artist_names,
         md5_checksum=md5_checksum,
         sha256_checksum=sha256_checksum,
     )
@@ -611,6 +713,8 @@ def _run_cohort(
     short_circuit: Optional[bool] = None,
     max_rss_mb: Optional[float] = None,
     known_set_codes: Optional[frozenset[str]] = None,
+    artist_lexicon: Optional[ArtistLexicon] = None,
+    name_artist_lookup: Optional[NameArtistLookup] = None,
 ) -> tuple[int, int, bool, int, bool, Optional[float]]:
     """
     The decoupled fetch/compute driver itself. Two concurrent executors:
@@ -655,6 +759,15 @@ def _run_cohort(
     below and forwarded to every `_compute_one_card` submission - see that function's own
     docstring and `compute_card_evidence`'s own docstring for the mechanism this controls.
 
+    `artist_lexicon`/`name_artist_lookup` (2026-07-29, module docstring's COLLECTOR-LINE ARTIST
+    WIRING section): both built ONCE by `handle()` below, and consumed here by two DIFFERENT
+    routes because they have two different lifetimes. `artist_lexicon` is handed to the compute
+    pool's `initializer=` as `initargs`, so it crosses the fork boundary once per worker PROCESS;
+    `name_artist_lookup` never crosses it at all - it is called HERE, on the parent's own driver
+    thread, once per card about to be submitted, and only its tiny resolved tuple travels. Both
+    `None` (the default, and every test that doesn't thread them) leaves the artist gate and the
+    `artist_ocr_name` storage fallback off, exactly as before 2026-07-29.
+
     Returns `(completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit, peak_rss_mb)`
     - the same three figures the old single-loop design printed in its final summary line, plus the
     short-circuit counter (item 1's own "count it during the real run" ask), the RSS-limit flag, and
@@ -666,7 +779,7 @@ def _run_cohort(
     stats = _CohortStats(total=len(cohort_ids), stdout_write=stdout_write, stop_event=stop_event, max_rss_mb=max_rss_mb)
 
     with ThreadPoolExecutor(max_workers=fetch_threads) as fetch_pool, ProcessPoolExecutor(
-        max_workers=workers, initializer=_init_worker
+        max_workers=workers, initializer=_init_worker, initargs=(artist_lexicon,)
     ) as compute_pool:
         cohort_iter = iter(cohort_ids)
         outstanding_fetch: "set[Future[Any]]" = set()
@@ -719,6 +832,13 @@ def _run_cohort(
                 if len(pending) >= queue_depth:
                     _drain_one_pending()
 
+                # CARD-NAME NARROWING resolved HERE, in the parent (2026-07-29 - module
+                # docstring's COLLECTOR-LINE ARTIST WIRING item 3): one shared
+                # `CandidateNameIndex` answers every card, and only the resolved tuple is
+                # pickled into the worker. Measured at 0.053 ms/card, so doing it on this
+                # single-threaded driver loop costs nothing against the pool's own throughput.
+                card_artist_names = () if name_artist_lookup is None else name_artist_lookup(fetch_result.card_name)
+
                 compute_future = compute_pool.submit(
                     _compute_one_card,
                     fetch_result.card_id,
@@ -732,6 +852,7 @@ def _run_cohort(
                     known_set_codes,
                     fetch_result.md5_checksum,
                     fetch_result.sha256_checksum,
+                    card_artist_names,
                 )
                 pending[compute_future] = fetch_result.card_id
             _submit_more_fetch()
@@ -1037,6 +1158,20 @@ class Command(BaseCommand):
             # already use for name_rank/already_done_ids.
             lexicon = known_set_codes()
 
+            # COLLECTOR-LINE ARTIST WIRING (2026-07-29 - see the module docstring's own section
+            # for the full rationale and the measurements behind each choice). Both built ONCE
+            # here, in the parent, on the same "query once, pass through explicitly" convention
+            # `lexicon` immediately above already uses - and, like it, built only AFTER the
+            # "Nothing to do" early return above, so a run whose cohort is empty never pays for
+            # either. That laziness matters most for `build_name_artist_lookup()`: it is backed by
+            # `local_calculate_verdicts._get_cached_candidate_name_index()`, the single
+            # process-cached entry point that module requires every batch-reachable caller to use,
+            # and building its 113k-row `CandidateNameIndex` measures at 1.6 s / ~100 MB - the
+            # same "only once there is really work to do" posture `_run_stage_c` and
+            # `run_join_key_calculator` already practise.
+            artist_lexicon = load_artist_lexicon()
+            name_artist_lookup = build_name_artist_lookup()
+
             # Close the parent's own DB connection(s) before forking the compute pool - belt-and-
             # braces alongside each compute worker's own _init_worker close_all() call, so the
             # connection this command's own step 1/2/3 queries above used is never inherited by any
@@ -1061,6 +1196,8 @@ class Command(BaseCommand):
                     short_circuit=short_circuit,
                     max_rss_mb=max_rss_mb,
                     known_set_codes=lexicon,
+                    artist_lexicon=artist_lexicon,
+                    name_artist_lookup=name_artist_lookup,
                 )
             finally:
                 if profile_file is not None:
