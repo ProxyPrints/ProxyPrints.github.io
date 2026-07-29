@@ -85,6 +85,18 @@ PRINTING_TAG_IMPLICIT_WEIGHT = env.float("PRINTING_TAG_IMPLICIT_WEIGHT", default
 # ratified 2026-07-22 vote-weight scenario matrix, decision D5/S3). See
 # cardpicker.vote_consensus.resolve_weighted_consensus's own docstring for the full mechanism.
 PRINTING_TAG_IMPLICIT_CAP = env.float("PRINTING_TAG_IMPLICIT_CAP", default=1.0)
+# Illustration-vote consensus thresholds (see cardpicker.illustration_consensus). Their own
+# settings, DEFAULTING TO THE PRINTING VALUES ABOVE - so this changes nothing anywhere today, and
+# the illustration bar can later be tuned without moving the printing bar with it. Whether an
+# illustration claim deserves a different quorum than a printing claim is genuinely open (it is a
+# strictly coarser claim - artwork-to-printing is 1:N - so it is easier to get right, but it also
+# does less work once resolved) and there is no data to settle it with yet; these exist so the
+# answer, when it arrives, is a config change rather than a code change.
+# There is deliberately NO ILLUSTRATION_MACHINE_WEIGHT: a vote's weight is a property of WHO cast
+# it and by what method, never of what is being voted on - see
+# cardpicker.vote_consensus.resolve_vote_weight's own docstring for that argument in full.
+ILLUSTRATION_MIN_VOTES = env.float("ILLUSTRATION_MIN_VOTES", default=PRINTING_TAG_MIN_VOTES)
+ILLUSTRATION_MIN_SHARE = env.float("ILLUSTRATION_MIN_SHARE", default=PRINTING_TAG_MIN_SHARE)
 # Floor share of served `2/questionFeed/` questions that must come from the "likely-resolve"
 # pool (a question one more agreeing human vote would actually resolve, per the real
 # `resolve_weighted_consensus` - see cardpicker.question_feed.is_likely_resolve_printing) when

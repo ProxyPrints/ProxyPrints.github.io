@@ -435,6 +435,27 @@ class ArtistVoteStatus(models.TextChoices):
     CONTESTED = "contested", gettext_lazy("Contested")
 
 
+class IllustrationVoteStatus(models.TextChoices):
+    """
+    Denormalised cache of `cardpicker.illustration_consensus.resolve_illustration`'s outcome for a
+    `Card`, kept in lockstep with `Card.inferred_illustration_id` by
+    `resolve_and_persist_illustration` - same purpose as `PrintingTagStatus`/`ArtistVoteStatus`
+    above, and the same four members as `ArtistVoteStatus` because the outcome spaces match
+    exactly (a named identity, an explicit "no known identity", or neither).
+
+    UNKNOWN here means CONSENSUS SAYS THERE IS NO KNOWN ARTWORK IDENTITY (enough agents voted
+    `is_unknown=True`) - a positive finding, e.g. a custom/altered image with no Scryfall artwork
+    behind it. It is NOT "we don't know yet", which is UNRESOLVED. See
+    `illustration_consensus`'s module docstring for why `is_unknown` is a full participant in the
+    tally rather than an abstention.
+    """
+
+    UNRESOLVED = "unresolved", gettext_lazy("Unresolved")
+    RESOLVED = "resolved", gettext_lazy("Resolved")
+    UNKNOWN = "unknown", gettext_lazy("Unknown")
+    CONTESTED = "contested", gettext_lazy("Contested")
+
+
 class TagVoteStatus(models.TextChoices):
     """
     Per-tag status stored in `Card.tag_vote_statuses` (a JSONField, not a plain model field -
@@ -488,6 +509,25 @@ class Card(models.Model):
     )
     artist_vote_status = models.CharField(
         max_length=10, choices=ArtistVoteStatus.choices, default=ArtistVoteStatus.UNRESOLVED, db_index=True
+    )
+    # illustration-vote consensus outcome (`cardpicker.illustration_consensus`), written by
+    # `resolve_and_persist_illustration` for EVERY member of this card's md5 identity group at
+    # once - byte-identical images are one identification target, so they cannot be allowed to
+    # disagree about which artwork they depict.
+    #
+    # A plain `UUIDField`, NOT a ForeignKey, mirroring `CardIllustrationVote.illustration_id` and
+    # `CanonicalPrintingMetadata.illustration_id`: there is no `CanonicalIllustration` table and
+    # this field must not cause one to exist (see `CardIllustrationVote`'s own "NOT A FOREIGN KEY"
+    # section). It also means this field carries NO dependency on imported Scryfall reference
+    # data, which per the 2026-07-29 owner ruling is informative and possibly stale rather than
+    # ground truth - the uuid stored here is exactly what agents voted for, and turning it into
+    # printings is a live join every consumer performs itself.
+    #
+    # Only meaningful while `illustration_vote_status == RESOLVED`; NULL for every other status,
+    # including UNKNOWN (which asserts there IS no identity, not that one is being withheld).
+    inferred_illustration_id = models.UUIDField(null=True, blank=True, db_index=True)
+    illustration_vote_status = models.CharField(
+        max_length=10, choices=IllustrationVoteStatus.choices, default=IllustrationVoteStatus.UNRESOLVED, db_index=True
     )
     # Per-tag vote status, written by cardpicker.tag_consensus.resolve_and_persist_tag_votes:
     # {tag.name: "resolved_apply" | "resolved_reject" | "contested" | "unresolved" |
