@@ -500,11 +500,10 @@ reliability, and estimate the _true_ label jointly with each source's
 reliability, rather than trusting any single source's raw output — is
 exactly the **Dawid-Skene** model from crowdsourced-label aggregation.
 This pipeline currently uses _fixed_, hand-set per-source weights
-(`PRINTING_TAG_AI_WEIGHT` (a legacy name — it weights machine-derived
-sources: OCR and deduction; no generative AI is involved) `=0.5` — now
-`PRINTING_TAG_MACHINE_WEIGHT` in settings.py, with the old name kept as a
-backward-compatible env-var fallback so an existing deployment's config
-can't silently break — human `1.0`, admin `5.0`,
+(`PRINTING_TAG_MACHINE_WEIGHT` (it weights machine-derived
+sources: OCR and deduction; no generative AI is involved) `=0.5` — the
+legacy `PRINTING_TAG_AI_WEIGHT` env-var fallback was deleted on
+2026-07-29 after verifying no deployment set it — human `1.0`, admin `5.0`,
 `VOTE_FEDERATED_WEIGHT=1.0` — non-human-backed (the matrix's own
 FEDERATED-weight ruling, [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md)),
 despite matching a

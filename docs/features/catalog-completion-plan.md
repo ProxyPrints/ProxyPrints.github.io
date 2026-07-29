@@ -216,7 +216,7 @@ established CLI conventions (`[DRY RUN]`/`[WRITE]` prefix, clear counts,
 **Post-purge invariant, corrected from the original task framing**
 ("assert statuses return to pre-run state" is wrong and would false-
 positive on the first real purge): with the real default weights
-(`PRINTING_TAG_MIN_VOTES=2`, `PRINTING_TAG_AI_WEIGHT=0.5`, human vote
+(`PRINTING_TAG_MIN_VOTES=2`, `PRINTING_TAG_MACHINE_WEIGHT=0.5`, human vote
 weight `1.0`, confirmed live in `settings.py:65-68`), 1 human vote + 2
 agreeing machine votes sums to 2.0, clears threshold, resolves. Purging
 those 2 machine votes correctly drops the weight below threshold and the
