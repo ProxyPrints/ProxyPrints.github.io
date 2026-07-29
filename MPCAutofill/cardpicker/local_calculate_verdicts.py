@@ -110,6 +110,24 @@ control flow (no new eligible-card population, no new `anonymous_id`, no new vot
     own softer, tie-tolerant design (a single fuzzy ratio below threshold is real but weaker
     evidence against a match than a hard frame/border/era contradiction, not proof the match is
     wrong).
+  - THE COLLECTOR-LINE ARTIST GATE (2026-07-29): a hard veto (`"artist-mismatch"` named skip), and
+    deliberately harsher than the artist-OCR corroboration immediately above despite comparing the
+    same field of the same `CanonicalCard`. This calculator parses set+number out of
+    `collector_line_raw_text` and then DISCARDS the rest of that string - but a modern collector
+    line also prints the ARTIST, and `cardpicker.collector_line_artist` recovers it from the
+    already-stored text (no re-OCR, no re-fetch; see that module for the truncation/OCR-noise
+    handling and the production measurements). When the recovered artist is incompatible with the
+    artist of the printing this card's own parsed set+number resolves to, the parse contradicts its
+    OWN SOURCE STRING - the signature of a misread collector number (right set code, wrong digits),
+    which is the owner-confirmed symptom "cards where the artist and illustration were accurate but
+    the reported collector ID was incorrect". That is an internal inconsistency rather than two
+    independent readings disagreeing (which is all the artist-OCR check above can ever see, since
+    `artist_ocr_name` comes from a DIFFERENT crop), so it withholds the match instead of
+    discounting it: abstaining is honest, casting a vote a card's own pixels contradict is not.
+    Measured read-only against 6,000 production rows (2026-07-29): 49.5% of set+number-resolvable
+    evidence rows yield a confident artist reading, and 10.7% of those contradict.
+    `is_compatible_with` (not string equality) is the criterion, so a truncated read that fits
+    several real artists at once only ever abstains when it fits NONE of them.
   - Quality/integrity gating (issue #150's `image_is_truncated`): a hard veto
     (`truncated-image` named skip) - a genuinely truncated download's partial pixel data makes any
     OCR/phash reading over it untrustworthy as evidence for anything, the same "checked before
@@ -379,6 +397,11 @@ import imagehash
 
 from django.db.models import Count, Max, Q, QuerySet, Sum
 
+from cardpicker.collector_line_artist import (
+    ArtistLexicon,
+    load_artist_lexicon,
+    recover_artist_from_collector_line,
+)
 from cardpicker.image_evidence import current_evidence_queryset
 from cardpicker.local_fallback import (
     FALLBACK_CONFIDENCE_MULTI_EVIDENCE,
@@ -493,6 +516,17 @@ JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({"no-evidence", TRANSFERRED_INTERI
 # the same lexicon miss forever) - deliberately NOT in JOIN_KEY_RESCANNABLE_SKIP_REASONS above.
 JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON = "unknown-set-code"
 
+# THE COLLECTOR-LINE ARTIST GATE (module docstring) - the collector line this calculator parses
+# set+number out of ALSO prints the artist, and when the printing that set+number resolves to has
+# an artist incompatible with the one printed on the card itself, the parse contradicts its own
+# source string. Abstain rather than cast a confident vote the evidence doesn't support. Same
+# permanent-conclusion category as JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON immediately above (the
+# same stored evidence row would deterministically reproduce the same contradiction on every
+# future pass), so likewise NOT in JOIN_KEY_RESCANNABLE_SKIP_REASONS - and, like it, a member of
+# JOIN_KEY_NO_HIT_SKIP_REASONS below so an abstained card still routes to the fallback calculator
+# and the slow-path human review queue instead of becoming routing-invisible.
+JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON = "artist-mismatch"
+
 
 def known_set_codes() -> frozenset[str]:
     """
@@ -601,7 +635,12 @@ def _symbol_phash_tiebreak(
 
 
 def _apply_agreement_checks(
-    card_id: int, matched: CandidatePrinting, base_confidence: float, detail: str, evidence: ImageEvidence
+    card_id: int,
+    matched: CandidatePrinting,
+    base_confidence: float,
+    detail: str,
+    evidence: ImageEvidence,
+    artist_lexicon: "Optional[ArtistLexicon]" = None,
 ) -> JoinKeyVerdict:
     """
     The agreement/corroboration layer (module docstring) - runs once a join-key match candidate
@@ -620,7 +659,27 @@ def _apply_agreement_checks(
       3. border agreement (one `CanonicalCard` query, shared with 4/5/6)
       4. frame agreement (same query)
       5. copyright-year era check (same query's `released_at` field)
-      6. artist-OCR corroboration (same query's `artist` field)
+      6. collector-line artist veto (same query's `artist` field - see `artist_lexicon` below)
+      7. artist-OCR corroboration (same query's `artist` field)
+
+    `artist_lexicon` (2026-07-29, module docstring's COLLECTOR-LINE ARTIST GATE): the output of
+    `collector_line_artist.load_artist_lexicon()`, built once per batch by the caller and passed
+    through explicitly - the same "caller builds it once, this function stays pure" shape
+    `candidates`/`known_set_codes` already have. `None` (the default) disables check 6 entirely,
+    which is every pre-2026-07-29 caller's own behavior, unchanged.
+
+    WHY CHECK 6 IS A VETO WHILE CHECK 7 ONLY WEAKENS, even though both compare an artist. Check 7
+    reads `evidence.artist_ocr_name`, whose provenance is a SEPARATE crop from the one that
+    produced the set/collector-number parse - a disagreement there is one reading contradicting a
+    different reading, and either could be the wrong one, so it weakens rather than vetoes. Check 6
+    compares the parse against the artist printed in THE SAME STRING the parse itself came from:
+    when those disagree, the parse contradicts its own source, which is the signature of a misread
+    collector number (right set code, wrong digits). That is an internal inconsistency, not a
+    cross-signal disagreement, so it withholds the match rather than discounting it - "the join-key
+    calculator DISCARDS the artist in the same string it parses set+number out of" is precisely the
+    defect this closes. Both checks stay: 6 fires only when the collector line yields a confident
+    artist reading at all (49.5% of set+number-resolvable rows, measured 2026-07-29), and 7 still
+    covers the anchor-derived population 6 says nothing about.
 
     A missing `CanonicalCard` row for `matched.pk` (unit tests exercise `calculate_join_key_verdict`
     directly against hand-built `CandidatePrinting`s with no backing DB row) or a missing
@@ -704,6 +763,27 @@ def _apply_agreement_checks(
                 if years_before_release > COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS:
                     return JoinKeyVerdict(card_id=card_id, skip_reason="copyright-year-mismatch", detail=detail)
 
+    # THE COLLECTOR-LINE ARTIST VETO (module docstring's COLLECTOR-LINE ARTIST GATE, and check 6
+    # in this function's own ordering above). Reuses the SAME `canonical` row the border/frame/
+    # copyright checks already fetched (`select_related("artist")`) - no second query - and the
+    # SAME `collector_line_raw_text` this calculator already parses set+number out of, re-read for
+    # the artist it also prints (`cardpicker.collector_line_artist`, no image fetch, no OCR).
+    #
+    # Deliberately OUTSIDE the `if metadata is not None:` block above: this check needs only the
+    # `CanonicalCard.artist` FK, not the `CanonicalPrintingMetadata` sidecar, and a card missing
+    # that sidecar should still get the check rather than silently skipping it.
+    #
+    # `is_compatible_with` is the abstention criterion, not "the recovered name != the printing's
+    # artist": a truncated read is often compatible with several real artists at once (`CLIFF CHIL`
+    # fits both "Cliff Childs" and "Cliff Chiang"), and this must only abstain when the reading is
+    # incompatible with EVERY plausible interpretation. Missing data is never a mismatch - no
+    # lexicon threaded, no `CanonicalCard` row, or no confident reading all fall through to the
+    # unchanged behaviour below, matching every other check in this function.
+    if artist_lexicon is not None and canonical is not None:
+        recovered_artist = recover_artist_from_collector_line(evidence.collector_line_raw_text, artist_lexicon)
+        if recovered_artist is not None and not recovered_artist.is_compatible_with(canonical.artist.name):
+            return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON, detail=detail)
+
     confidence = base_confidence
     if evidence.artist_ocr_name and canonical is not None:
         # ARTIST-OCR CORROBORATION (module docstring) - match_artist returns None (no surviving
@@ -723,6 +803,7 @@ def calculate_join_key_verdict(
     evidence: ImageEvidence,
     candidates: list[CandidatePrinting],
     known_set_codes: Optional[frozenset[str]] = None,
+    artist_lexicon: "Optional[ArtistLexicon]" = None,
 ) -> JoinKeyVerdict:
     """
     The join-key calculator. Pure function, no DB write (aside from `_apply_agreement_checks`'s
@@ -746,6 +827,12 @@ def calculate_join_key_verdict(
     every such existing test already exercises the "parsed-but-no-match" branch with a `None`
     `parsed.set_code`, i.e. the pre-M15 collector-number-only case the gate never touches anyway -
     see this function's own set-code lexicon gate test coverage for the explicit confirmation).
+
+    `artist_lexicon` (module docstring's COLLECTOR-LINE ARTIST GATE, 2026-07-29) - forwarded
+    verbatim to `_apply_agreement_checks` (see that function's own docstring for the veto it
+    controls and why it withholds rather than weakens). Same "built once per batch by the caller"
+    convention as `known_set_codes` immediately above; `None` (the default) disables the check, so
+    every existing caller and test is unaffected.
 
     INVARIANT (module docstring's collector-number-only ambiguity guard): `candidates` MUST
     already be narrowed to this card's own name - the only correct way to produce it is
@@ -771,7 +858,9 @@ def calculate_join_key_verdict(
 
     if matched is not None:
         confidence = JOIN_KEY_CONFIDENCE_BOTH if parsed.set_code is not None else JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY
-        return _apply_agreement_checks(card_id, matched, confidence, parsed.raw_text, evidence)
+        return _apply_agreement_checks(
+            card_id, matched, confidence, parsed.raw_text, evidence, artist_lexicon=artist_lexicon
+        )
 
     if reason == "ambiguous":
         ambiguous_candidates = find_matching_candidates(parsed, candidates)
@@ -783,6 +872,7 @@ def calculate_join_key_verdict(
                 JOIN_KEY_CONFIDENCE_SYMBOL_TIEBREAK,
                 f"{parsed.raw_text} + symbol_phash tiebreak",
                 evidence,
+                artist_lexicon=artist_lexicon,
             )
         return JoinKeyVerdict(card_id=card_id, skip_reason="ambiguous", detail=parsed.raw_text)
 
@@ -1346,6 +1436,8 @@ def run_join_key_calculator(
     index: Optional[CandidateNameIndex] = None
     lexicon = known_set_codes()  # module docstring's SET-CODE LEXICON GATE - built once, reused
     # across the whole batch, same shape as `index` immediately above.
+    artist_lexicon = load_artist_lexicon()  # module docstring's COLLECTOR-LINE ARTIST GATE
+    # (2026-07-29) - one query, built once and reused across the whole batch, same shape again.
     result = JoinKeyCalculatorResult(dry_run=dry_run, run_id=run_id)
 
     votes_batch: list[CardPrintingTag] = []
@@ -1376,7 +1468,9 @@ def run_join_key_calculator(
         if index is None:
             index = _get_cached_candidate_name_index()
         candidates = _resolve_candidates_for_card(card.name, index, default_cards_path=default_cards_path)
-        verdict = calculate_join_key_verdict(card.pk, evidence, candidates, known_set_codes=lexicon)
+        verdict = calculate_join_key_verdict(
+            card.pk, evidence, candidates, known_set_codes=lexicon, artist_lexicon=artist_lexicon
+        )
 
         if verdict.skip_reason:
             result.skip_counts[verdict.skip_reason] = result.skip_counts.get(verdict.skip_reason, 0) + 1
@@ -1807,6 +1901,12 @@ JOIN_KEY_NO_HIT_SKIP_REASONS = frozenset(
         "truncated-image",
         "copyright-year-mismatch",
         JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
+        # JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON ("artist-mismatch", 2026-07-29, module docstring's
+        # COLLECTOR-LINE ARTIST GATE): listed here for exactly the reason "unknown-set-code" above
+        # is - an abstention that doesn't route is a review-queue gap, not a naming detail. A card
+        # whose collector line names an artist the parsed printing contradicts is precisely a card
+        # a human reviewer should see.
+        JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON,
     }
 )
 
@@ -2035,6 +2135,7 @@ __all__ = [
     "TRANSFERRED_INTERIM_GUARD_SKIP_REASON",
     "JOIN_KEY_NO_HIT_SKIP_REASONS",
     "JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON",
+    "JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON",
     "known_set_codes",
     "COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS",
     "STAGE_D_FALLBACK_ANONYMOUS_ID",
