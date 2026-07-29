@@ -1,4 +1,5 @@
 import datetime as dt
+import os
 import uuid
 from typing import Type
 
@@ -23,8 +24,73 @@ from cardpicker.tests.factories import (
     TagFactory,
 )
 
-POSTGRES_PORT = 47000
-ELASTICSEARCH_PORT = 9300  # this is the default expected by `elasticsearch_nooproc`
+# Host ports the session-scoped testcontainers bind to. Overridable from the environment so that
+# two suites can run CONCURRENTLY on one host (2026-07-28: several agents share this box; a second
+# run against the same fixed ports dies at container start with "port is already allocated", which
+# surfaces as mass collection errors that look like catastrophic breakage rather than a port
+# clash). The defaults are the historical fixed values, so CI and a single local run are unchanged.
+#
+#   TEST_POSTGRES_PORT=47001 TEST_ELASTICSEARCH_PORT=9301 pytest ...
+#
+# NOTE both must be moved together with the same offset if you want two full suites side by side -
+# the two containers are independent, so a collision on either one fails the whole session.
+POSTGRES_PORT = int(os.environ.get("TEST_POSTGRES_PORT", 47000))
+ELASTICSEARCH_PORT = int(os.environ.get("TEST_ELASTICSEARCH_PORT", 9300))  # `elasticsearch_nooproc`'s own default
+
+
+def pytest_configure(config):
+    """
+    Thread `ELASTICSEARCH_PORT` through to pytest-elasticsearch's own config, which is where
+    `elasticsearch_nooproc` reads its port from (`pytest_elasticsearch.config.get_config` ->
+    `config.getoption("elasticsearch_port") or config.getini("elasticsearch_port")`, falling back
+    to a hardcoded 9300 - the "default expected by `elasticsearch_nooproc`" the constant above used
+    to silently rely on). Nothing in this suite currently RESOLVES that fixture (the `elasticsearch`
+    fixture below shadows the plugin's and never requests the noproc process), so this is belt-and-
+    braces: without it, overriding `TEST_ELASTICSEARCH_PORT` would leave a latent 9300 behind for
+    any future test that does request `elasticsearch_nooproc`. Setting it to 9300 when the
+    environment variable is unset is a no-op against the plugin's own fallback.
+    """
+    if hasattr(config.option, "elasticsearch_port") and not config.option.elasticsearch_port:
+        config.option.elasticsearch_port = str(ELASTICSEARCH_PORT)
+
+
+# The host load average every test sees, unless it opts out with `@pytest.mark.real_host_load`.
+# Deliberately well under `operating_envelope.HOST_LOAD_CEILING` (7.0, a RATIFIED number - not
+# changed here, and not to be changed to accommodate tests).
+#
+# Why this exists (2026-07-28): `stage_e_dispatch._sample_envelope_signals` samples the REAL
+# `os.getloadavg()[0]` before every dispatch decision, exactly as it should in production. Under
+# test that made every Stage E dispatch test a function of whatever ELSE was running on the box -
+# on a shared machine at load 8.67 an observed 18 tests failed with `halted-new-trip`, all of which
+# pass at load 3.4. Those failures are the worst kind: plausible, specific, and entirely about the
+# neighbouring process, so they burn hours pointing at an envelope bug that does not exist.
+#
+# The seam is `os.getloadavg` itself rather than `_sample_envelope_signals`, deliberately: stubbing
+# the whole sampler would also flatten `_window.failures_and_total()` and `get_process_rss_mb()`,
+# which several dispatch tests legitimately drive (the fetch-failure-rate bar in particular). Only
+# the ambient host signal is pinned; every other envelope input still comes from the real code
+# path, and production sampling is untouched.
+#
+# Override with TEST_HOST_LOAD_AVG to prove a test is genuinely load-sensitive:
+#   TEST_HOST_LOAD_AVG=20 pytest cardpicker/tests/test_stage_e_dispatch.py   # -> load-bar trips
+TEST_HOST_LOAD_AVG = float(os.environ.get("TEST_HOST_LOAD_AVG", 0.5))
+
+
+@pytest.fixture(autouse=True)
+def deterministic_host_load(request, monkeypatch):
+    """
+    Pins `os.getloadavg()` for the duration of every test, so no assertion depends on ambient host
+    load. Opt out with `@pytest.mark.real_host_load` if a test genuinely needs to observe the real
+    machine (nothing does today - `test_process_metrics.py` samples real RSS, not load).
+    """
+    if "real_host_load" in request.keywords:
+        return
+    monkeypatch.setattr(
+        os,
+        "getloadavg",
+        lambda: (TEST_HOST_LOAD_AVG, TEST_HOST_LOAD_AVG, TEST_HOST_LOAD_AVG),
+        raising=False,
+    )
 
 
 def google_drive_credentials_available() -> bool:
