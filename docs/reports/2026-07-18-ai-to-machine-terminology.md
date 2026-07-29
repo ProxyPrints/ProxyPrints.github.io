@@ -174,6 +174,15 @@ them on a third pass:
   - MPCAutofill/MPCAutofill/settings.py's PRINTING_TAG_AI_WEIGHT: the
     live backward-compatible env-var fallback name. Renaming it breaks
     existing deployments' env.
+    SUPERSEDED 2026-07-29 (PR #561): verified that nothing set this
+    variable - no env file, no docker/ compose file, no systemd unit,
+    and no PRINTING_TAG_* variable at all in the running production
+    container - so the fallback was deleted outright rather than
+    preserved or renamed. settings.py now reads plain
+    env.float("PRINTING_TAG_MACHINE_WEIGHT", default=0.5); behaviour
+    is unchanged, since 0.5 was already the outer default. The ruling
+    above is kept intact as the record of what was believed on
+    2026-07-18.
   - Every VoteSource.AI / "the old single AI value" reference
     (vote_consensus.py, models.py, tests/test_vote_consensus.py,
     docs/federation-v1.md, docs/features/printing-tags.md): accurate

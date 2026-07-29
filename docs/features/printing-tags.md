@@ -356,7 +356,7 @@ printings, artists, tags, and moderation from one screen.
   ingestion-time matching.
 - **Deductive backfill**: `cardpicker/deductive_backfill.py` +
   `manage.py deductive_backfill_printing_tags` casts `source=deduction`
-  votes (weight `PRINTING_TAG_AI_WEIGHT`) for cards whose printing is
+  votes (weight `PRINTING_TAG_MACHINE_WEIGHT`) for cards whose printing is
   logically entailed by data already in the catalog — D1 (name matches
   exactly one `CanonicalCard`, cross-verified against Scryfall's own
   `printings_count`) and D2 (name + `Card.expansion_hint` narrows to
