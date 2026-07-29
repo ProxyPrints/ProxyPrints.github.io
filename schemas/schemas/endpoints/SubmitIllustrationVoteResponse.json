@@ -1,0 +1,15 @@
+{
+  "title": "Submit Illustration Vote Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "illustrationId": { "type": ["string", "null"] },
+    "isUnknown": { "type": "boolean" },
+    "printingVoteCast": { "type": "boolean" },
+    "resolvedPrinting": { "$ref": "../PrintingCandidate.json" },
+    "artistVoteCast": { "type": "boolean" },
+    "artistAbstainReason": { "type": ["string", "null"] }
+  },
+  "required": ["isUnknown", "printingVoteCast", "artistVoteCast"],
+  "additionalProperties": false
+}

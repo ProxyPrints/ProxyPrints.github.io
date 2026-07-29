@@ -5,6 +5,7 @@ import json
 import logging
 import mimetypes
 import re
+import uuid
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
@@ -57,6 +58,7 @@ from cardpicker.constants import (
     SAVED_DECK_SNAPSHOT_RING_SIZE,
 )
 from cardpicker.documents import CardSearch
+from cardpicker.illustration_vote import cast_illustration_vote
 from cardpicker.integrations.integrations import get_configured_game_integration
 from cardpicker.integrations.patreon import get_patreon_campaign_details, get_patrons
 from cardpicker.models import (
@@ -207,6 +209,8 @@ from cardpicker.schema_types import (
     SubmitArtistVoteRequest,
     SubmitArtistWriteInVoteRequest,
     SubmitArtistWriteInVoteResponse,
+    SubmitIllustrationVoteRequest,
+    SubmitIllustrationVoteResponse,
     SubmitPrintingTagRequest,
     SubmitTagVoteRequest,
     TagConsensusEntry,
@@ -1134,6 +1138,81 @@ def post_submit_artist_vote(request: HttpRequest) -> HttpResponse:
         resolved = resolve_and_persist_artist(card)
 
     return JsonResponse(_build_artist_consensus_response(card, resolved).model_dump())
+
+
+@csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_submit_illustration_vote(request: HttpRequest) -> HttpResponse:
+    """
+    Submit a vote that a card depicts a specific Scryfall illustration (artwork), or
+    definitively depicts an artwork with no known illustration identity (`isUnknown=True`).
+    Issue #503 (WTC phase C2) / #524.
+
+    Accepts, for one card, ONE `illustrationId` or `isUnknown` - never a list of printings.
+    Narrowing an illustration to candidate printings (and, from there, to an artist) is a
+    server-side join against LIVE data, done at write time inside
+    `cardpicker.illustration_vote.cast_illustration_vote` - see that module's own docstring for
+    the full rationale (TOCTOU, stale-snapshot 1:1, and the #525 parallel) for why this endpoint
+    performs up to three writes (`CardIllustrationVote` always; `CardPrintingTag` only at a live
+    1:1 printing match; a derived `CardArtistVote` only when absent and not a multi-artist
+    credit) in ONE transaction rather than as three separate endpoint calls the browser
+    orchestrates itself.
+
+    Reuses the printing-tag submission's rate-limit plumbing (`_printing_tag_rate_limit_key`/
+    `_printing_tag_rate_limit_rate`, keyed on `anonymousId` from the request body, IP as a
+    fallback) - same precedent `post_submit_artist_vote` already sets for a non-printing-tag
+    endpoint.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many illustration vote submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = SubmitIllustrationVoteRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+
+    illustration_id: Optional[uuid.UUID] = None
+    if not req.isUnknown:
+        if not req.illustrationId:
+            raise BadRequestException("illustrationId is required unless isUnknown is set.")
+        try:
+            illustration_id = uuid.UUID(req.illustrationId)
+        except (ValueError, AttributeError, TypeError):
+            raise BadRequestException(f"illustrationId {req.illustrationId!r} is not a valid UUID.")
+
+    outcome = cast_illustration_vote(
+        card=card,
+        anonymous_id=req.anonymousId,
+        illustration_id=illustration_id,
+        is_unknown=req.isUnknown,
+        user=_requesting_user(request),
+        vote_surface=req.voteSurface,
+    )
+
+    return JsonResponse(
+        SubmitIllustrationVoteResponse(
+            illustrationId=str(outcome.illustration_id) if outcome.illustration_id is not None else None,
+            isUnknown=outcome.is_unknown,
+            printingVoteCast=outcome.printing_vote_cast,
+            resolvedPrinting=(
+                outcome.resolved_printing.serialise_as_printing_candidate()
+                if outcome.resolved_printing is not None
+                else None
+            ),
+            artistVoteCast=outcome.artist_vote_cast,
+            artistAbstainReason=outcome.artist_abstain_reason,
+        ).model_dump()
+    )
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")

@@ -2734,6 +2734,88 @@ class SubmitPrintingTagRequest(BaseModel):
         return result
 
 
+class SubmitIllustrationVoteRequest(BaseModel):
+    """
+    2/submitIllustrationVote/ - issue #503 (WTC phase C2) / #524. One `illustrationId`
+    (Scryfall artwork identity) OR `isUnknown=True`, never a list of printings - narrowing
+    from artwork to printing/artist is done server-side, at write time, against live data
+    (see cardpicker.illustration_vote.cast_illustration_vote).
+    """
+
+    anonymousId: str
+    identifier: str
+    isUnknown: bool
+    illustrationId: Optional[str] = None
+    voteSurface: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitIllustrationVoteRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        isUnknown = from_bool(obj.get("isUnknown"))
+        illustrationId = from_union([from_none, from_str], obj.get("illustrationId"))
+        voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
+        return SubmitIllustrationVoteRequest(anonymousId, identifier, isUnknown, illustrationId, voteSurface)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["isUnknown"] = from_bool(self.isUnknown)
+        if self.illustrationId is not None:
+            result["illustrationId"] = from_union([from_none, from_str], self.illustrationId)
+        if self.voteSurface is not None:
+            result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
+        return result
+
+
+class SubmitIllustrationVoteResponse(BaseModel):
+    """
+    Response to 2/submitIllustrationVote/ - reports which of the (up to three) writes this
+    invocation actually made, plus the resolved printing when the printing channel fired.
+    `artistAbstainReason` is populated (non-null) whenever the artist channel did NOT write:
+    "combined_credit" (issue #503's ' & ' census), "existing_explicit_vote" (the precedence
+    rule - never populated together with artistVoteCast=True), or "no_printing_found" (the
+    illustration didn't narrow to any live candidate printing for this card).
+    """
+
+    artistVoteCast: bool
+    isUnknown: bool
+    printingVoteCast: bool
+    artistAbstainReason: Optional[str] = None
+    illustrationId: Optional[str] = None
+    resolvedPrinting: Optional[PrintingCandidate] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitIllustrationVoteResponse":
+        assert isinstance(obj, dict)
+        artistVoteCast = from_bool(obj.get("artistVoteCast"))
+        isUnknown = from_bool(obj.get("isUnknown"))
+        printingVoteCast = from_bool(obj.get("printingVoteCast"))
+        artistAbstainReason = from_union([from_none, from_str], obj.get("artistAbstainReason"))
+        illustrationId = from_union([from_none, from_str], obj.get("illustrationId"))
+        resolvedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("resolvedPrinting"))
+        return SubmitIllustrationVoteResponse(
+            artistVoteCast, isUnknown, printingVoteCast, artistAbstainReason, illustrationId, resolvedPrinting
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["artistVoteCast"] = from_bool(self.artistVoteCast)
+        result["isUnknown"] = from_bool(self.isUnknown)
+        result["printingVoteCast"] = from_bool(self.printingVoteCast)
+        if self.artistAbstainReason is not None:
+            result["artistAbstainReason"] = from_union([from_none, from_str], self.artistAbstainReason)
+        if self.illustrationId is not None:
+            result["illustrationId"] = from_union([from_none, from_str], self.illustrationId)
+        if self.resolvedPrinting is not None:
+            result["resolvedPrinting"] = from_union(
+                [lambda x: to_class(PrintingCandidate, x), from_none], self.resolvedPrinting
+            )
+        return result
+
+
 class SubmitTagVoteRequest(BaseModel):
     anonymousId: str
     identifier: str

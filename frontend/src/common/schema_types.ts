@@ -1042,6 +1042,34 @@ export interface SubmitTagVoteRequest {
 }
 
 /**
+ * 2/submitIllustrationVote/ - issue #503 (WTC phase C2) / #524. Mirrors
+ * MPCAutofill/cardpicker/schema_types.py's SubmitIllustrationVoteRequest. Send ONE
+ * illustrationId (Scryfall artwork identity) OR isUnknown=true, never a list of printings -
+ * the server derives the printing/artist writes at write time, against live data.
+ */
+export interface SubmitIllustrationVoteRequest {
+  anonymousId: string;
+  identifier: string;
+  illustrationId?: null | string;
+  isUnknown: boolean;
+  voteSurface?: null | string;
+}
+
+/**
+ * Response to 2/submitIllustrationVote/ - reports which of the (up to three) writes this
+ * invocation actually made. artistAbstainReason is non-null whenever the artist channel did
+ * NOT write ("combined_credit" | "existing_explicit_vote" | "no_printing_found").
+ */
+export interface SubmitIllustrationVoteResponse {
+  artistAbstainReason?: null | string;
+  artistVoteCast: boolean;
+  illustrationId?: null | string;
+  isUnknown: boolean;
+  printingVoteCast: boolean;
+  resolvedPrinting?: PrintingCandidate;
+}
+
+/**
  * 2/castImplicitVote/ - hand-maintained, mirroring MPCAutofill/cardpicker/schema_types.py's
  * CastImplicitVoteRequest (PR #325's implicit-vote backend contract; the frontend request-type
  * propagation it deferred - see that PR's own "Deviations" section). No JSON schema source

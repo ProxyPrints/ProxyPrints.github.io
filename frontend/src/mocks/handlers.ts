@@ -1291,6 +1291,41 @@ export const questionFeedIdentifyPrintingGroupedByIllustration = http.get(
     )
 );
 
+// Issue #503 (WTC phase C2) / #524 - 2/submitIllustrationVote/. Mirrors the shape
+// `illustration_vote.py`'s IllustrationVoteOutcome serialises: `printingVoteCast` true only at
+// a live 1:1 printing match, `artistVoteCast` true only when the artist channel actually wrote.
+export const submitIllustrationVoteCastsPrintingAndArtist = http.post(
+  buildRoute("2/submitIllustrationVote/"),
+  () =>
+    HttpResponse.json(
+      {
+        illustrationId: "illustration-shared",
+        isUnknown: false,
+        printingVoteCast: true,
+        resolvedPrinting: illustrationGroupCandidateA,
+        artistVoteCast: true,
+      },
+      { status: 200 }
+    )
+);
+
+// N>1 live printings - nothing on the printing channel, matching what the always->2-member
+// visual grouping (illustrationGroups' own `.filter((group) => group.length > 1)`) normally
+// produces server-side.
+export const submitIllustrationVoteCastsNothingOnPrintingChannel = http.post(
+  buildRoute("2/submitIllustrationVote/"),
+  () =>
+    HttpResponse.json(
+      {
+        illustrationId: "illustration-shared",
+        isUnknown: false,
+        printingVoteCast: false,
+        artistVoteCast: true,
+      },
+      { status: 200 }
+    )
+);
+
 export const questionFeedArtist = http.get(buildRoute("2/questionFeed/"), () =>
   HttpResponse.json(
     {

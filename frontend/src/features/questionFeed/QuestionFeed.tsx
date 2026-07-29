@@ -84,6 +84,7 @@ import {
 import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
 import {
   APIGetQuestionFeed,
+  APISubmitIllustrationVote,
   APISubmitPrintingTag,
   APISubmitTagVote,
 } from "@/store/api";
@@ -895,6 +896,47 @@ export function QuestionFeed() {
       });
   };
 
+  // Issue #503 (WTC phase C2) / #524 - tapping a tile inside an illustration-grouped cluster
+  // (illustrationGroups below, always >=2 members - a singleton never forms a visible cluster,
+  // see that constant's own comment) submits ONE illustrationId through /2/submitIllustrationVote/,
+  // never a printing list: the browser's own candidate payload is a snapshot and cannot be
+  // trusted to know whether the group is still >1 printing by the time this fires (reference
+  // data can move between render and tap) - that check is server-side, against live data, at
+  // write time (see illustration_vote.py). The backend derives up to two further votes
+  // (a printing vote at a live 1:1 match, a artist vote when absent) in the same transaction, so
+  // - unlike selectCandidate - this never knows which single printing (if any) was actually
+  // voted for, and therefore skips the auto-tag-chip / Level 3 attribute-exclusion flow (both
+  // require knowing the specific printing's own attributes) and goes straight to advancing.
+  const selectIllustrationGroup = (
+    illustrationId: string,
+    tappedCandidate: PrintingCandidate
+  ) => {
+    if (backendURL == null || item == null) {
+      return;
+    }
+    setSubmitting(true);
+    setSelectedCandidateId(tappedCandidate.identifier);
+    const anonymousId = getOrCreateAnonymousId();
+    APISubmitIllustrationVote(
+      backendURL,
+      item.card.identifier,
+      anonymousId,
+      illustrationId,
+      false,
+      "question-feed"
+    )
+      .then(() => {
+        bumpSessionCount();
+        setLanded(true);
+        advance();
+      })
+      .catch(reportVoteFailed)
+      .finally(() => {
+        setSubmitting(false);
+        setSelectedCandidateId(null);
+      });
+  };
+
   // The pre-classified exit for "this is real art, just not an official printing" - one tap
   // instead of "None of these" -> the reason strip, since the tap already told us why (see
   // reason_tags.py's existing seeded "custom-art" tag - no new endpoint).
@@ -1072,14 +1114,18 @@ export function QuestionFeed() {
   );
   const hiddenCount = nonRejectedCandidates.length - visibleCandidates.length;
 
-  // Issue #503 (WTC phase C1) - group the level-2 grid by shared Scryfall illustration.
-  // PURELY visual: tapping any candidate below, grouped or not, still calls selectCandidate
-  // with that exact PrintingCandidate through the exact same path as before this change (no
-  // group-level vote, no artist-vote derivation - that's phase C2). A cluster only forms for
-  // >=2 candidates sharing a non-null illustrationId; every other candidate - a unique
-  // illustrationId, or no illustrationId at all (CanonicalPrintingMetadata.illustration_id is
-  // nullable and frequently absent, see local_illustration.py:137) - renders in the flat
-  // "ungrouped" grid below the clusters, so nothing is ever dropped from the grid.
+  // Issue #503 (WTC phase C1) - group the level-2 grid by shared Scryfall illustration. A
+  // cluster only forms for >=2 candidates sharing a non-null illustrationId; every other
+  // candidate - a unique illustrationId, or no illustrationId at all
+  // (CanonicalPrintingMetadata.illustration_id is nullable and frequently absent, see
+  // local_illustration.py:137) - renders in the flat "ungrouped" grid below the clusters, so
+  // nothing is ever dropped from the grid.
+  //
+  // Phase C2: tapping a tile inside one of these clusters submits through
+  // selectIllustrationGroup (ONE illustrationId, /2/submitIllustrationVote/) rather than
+  // selectCandidate - see that function's own comment. Ungrouped tiles are unaffected: they
+  // still call selectCandidate with that exact PrintingCandidate through the unchanged
+  // /2/submitPrintingTag/ path.
   const illustrationGroupsById = new Map<string, PrintingCandidate[]>();
   visibleCandidates.forEach((candidate) => {
     if (!candidate.illustrationId) {
@@ -1378,8 +1424,15 @@ export function QuestionFeed() {
           : "pick";
       // Shared by both the illustration-clustered and flat/ungrouped rendering below - keeps
       // the tile markup (and its data-card-* attributes / mpc:card-selected event / testids)
-      // byte-for-byte identical regardless of which grid a candidate ends up in.
-      const renderCandidateTile = (candidate: PrintingCandidate) => (
+      // byte-for-byte identical regardless of which grid a candidate ends up in. `onSelect`
+      // defaults to the ungrouped path (selectCandidate, unchanged since before C2); illustration
+      // clusters (below) pass selectIllustrationGroup instead, per #503 phase C2 - see that
+      // function's own comment for why grouped and ungrouped tiles submit through different
+      // endpoints despite sharing this exact markup.
+      const renderCandidateTile = (
+        candidate: PrintingCandidate,
+        onSelect: () => void = () => selectCandidate(candidate, false)
+      ) => (
         <CandidateButton
           key={candidate.identifier}
           className={
@@ -1389,7 +1442,7 @@ export function QuestionFeed() {
               : ""
           }
           disabled={submitting}
-          onClick={() => selectCandidate(candidate, false)}
+          onClick={onSelect}
           {...getPrintingCandidateDataAttributes(item.card.name, candidate)}
         >
           <ArtPlaceholder>
@@ -1518,7 +1571,16 @@ export function QuestionFeed() {
                 Same illustration - {group.length} printings
               </IllustrationGroupLabel>
               <CandidateGrid>
-                {group.map((candidate) => renderCandidateTile(candidate))}
+                {group.map((candidate) =>
+                  renderCandidateTile(candidate, () =>
+                    // every member of `group` shares this non-null illustrationId - see the
+                    // grouping logic above, which only clusters candidates that have one.
+                    selectIllustrationGroup(
+                      candidate.illustrationId as string,
+                      candidate
+                    )
+                  )
+                )}
               </CandidateGrid>
             </IllustrationGroup>
           ))}

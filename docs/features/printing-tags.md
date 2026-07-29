@@ -699,11 +699,41 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     a candidate with no illustration, or a candidate whose illustration has
     no other member, is never dropped: it renders in a flat "ungrouped"
     `CandidateGrid` below the clusters, visually identical to Level 2's
-    pre-grouping grid. This is a display-only regrouping — tapping any
-    candidate, clustered or not, still calls the same `selectCandidate`
-    with the same `PrintingCandidate` through the same
-    `/2/submitPrintingTag/` path as before; no group-level vote, artist-
-    vote derivation, or persistence was added (that's phase C2).
+    pre-grouping grid. Ungrouped candidates still call `selectCandidate`
+    with that exact `PrintingCandidate` through the unchanged
+    `/2/submitPrintingTag/` path.
+  - **Illustration voting** (issue #503, WTC phase C2; `CardIllustrationVote`
+    itself is #524/#531): tapping a tile inside an illustration cluster now
+    calls `selectIllustrationGroup` instead of `selectCandidate` — it sends
+    ONE `illustrationId` (never a printing list) to the new
+    `POST /2/submitIllustrationVote/` endpoint
+    (`views.post_submit_illustration_vote`,
+    `cardpicker/illustration_vote.py`'s `cast_illustration_vote`). That one
+    call performs up to three writes in a single `transaction.atomic()`
+    block: `CardIllustrationVote` is always written
+    (`update_or_create(card=, anonymous_id=)`, since that model's
+    `(card, anonymous_id)` uniqueness is unconditional — see the model's own
+    docstring, issue #525); `CardPrintingTag` is written only when the
+    illustration resolves, against LIVE data at write time, to exactly one
+    candidate printing for this card (`printings_for_card_and_illustration`
+    — N>1 casts nothing on the printing channel, matching #526's machine-side
+    rule); and a `CardArtistVote` is derived (`source=USER`,
+    `vote_surface="illustration_vote_derived_artist"`) whenever the
+    resolved artist's name doesn't indicate a combined credit (tests for
+    `' & '` only — see the module's own census comment) and no
+    `CardArtistVote` already exists for `(card, anonymous_id)` — an
+    existing vote, explicit or previously derived, is left untouched (the
+    "never override" precedence rule; see `illustration_vote.py`'s
+    docstring for the full TOCTOU/stale-snapshot rationale and its relation
+    to issue #483). Because the endpoint never reveals which single
+    printing (if any) was resolved, `selectIllustrationGroup` skips the
+    auto-tag-chip/Level 3 attribute-exclusion flow and advances straight to
+    the next item. Request/response types
+    (`SubmitIllustrationVoteRequest`/`Response`) are hand-integrated into
+    both `schema_types.py`/`schema_types.ts` from real JSON schema sources
+    in `schemas/schemas/endpoints/` — the generator itself was NOT run (see
+    issue #332: it destroys the hand-added `CastImplicitVoteRequest`/
+    `RetractImplicitVoteRequest` types).
   - **No-re-presentation rule** (owner-directed fix, was a real live bug:
     Level 1 "Is it M21 203?" → NO → Level 2 grid containing only M21 203
     again): within a single question item's flow, a candidate the user

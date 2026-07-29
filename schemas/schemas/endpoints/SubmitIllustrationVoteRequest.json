@@ -1,0 +1,14 @@
+{
+  "title": "Submit Illustration Vote Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" },
+    "illustrationId": { "type": ["string", "null"] },
+    "isUnknown": { "type": "boolean" },
+    "anonymousId": { "type": "string" },
+    "voteSurface": { "type": ["string", "null"] }
+  },
+  "required": ["identifier", "isUnknown", "anonymousId"],
+  "additionalProperties": false
+}

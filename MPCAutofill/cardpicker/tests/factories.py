@@ -134,6 +134,18 @@ class CardArtistVoteFactory(factory.django.DjangoModelFactory):
     confidence = None
 
 
+class CardIllustrationVoteFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.CardIllustrationVote
+
+    card = factory.SubFactory(CardFactory)
+    illustration_id = factory.LazyFunction(uuid.uuid4)
+    is_unknown = False
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
+    source = models.VoteSource.USER
+    confidence = None
+
+
 class CardTagVoteFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = models.CardTagVote
