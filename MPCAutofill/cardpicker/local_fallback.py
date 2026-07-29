@@ -13,6 +13,21 @@ filter anything). A vote is written only when the intersection across every sub-
 produce a reading narrows to EXACTLY ONE candidate, with the usual clear-margin rule inside the
 sub-checks that need one (symbol matching). Distinct anonymous_id 'local-fallback-v1'.
 
+THIS MODULE NO LONGER CASTS A PRINTING VOTE (owner ruling 2026-07-29, redundancy doctrine).
+`local_identify_printing_tags` stopped calling `run_fallback_for_card` for a pass-2
+`CardPrintingTag` vote under 'local-fallback-v1': `local_calculate_verdicts.
+calculate_fallback_verdict` ('stage-d-fallback-v1') applies the SAME decision model to the SAME
+three readings out of stored `ImageEvidence`, and measurement over all 179,176 printing-vote
+rows found the two agreeing on 11,825/11,825 overlapping cards with zero conflicts - one witness
+counted twice. See `local_identify_printing_tags`' own module docstring for the full ruling.
+What that retirement did NOT touch, and what keeps this module live: every pure decision helper
+below is called directly by the Stage D calculator that survived; `cast_border_attribute_vote`/
+`cast_frame_style_vote`/`cast_bleed_edge_vote` still cast their `CardTagVote` attribute chips
+under 'local-fallback-v1' (Stage D has no analogue, and they were never part of the printing-
+vote measurement); and `run_fallback_for_card` itself is still called by
+`local_residual_classify.recover_frame_mismatch_printing_via_fallback_refetch` to recompute a
+printing for HISTORICAL frame-mismatch scan-log rows, which casts under its own identity.
+
 Border-color sampling (2c) does double duty: besides filtering candidates here, it separately
 casts a standalone CardTagVote on the matching border attribute chip tag (Black Border/White
 Border/Silver Border/Borderless - see attribute_tags.py) for EVERY card either pass processes,
