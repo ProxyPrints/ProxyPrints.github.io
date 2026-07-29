@@ -175,9 +175,10 @@ class TestIdentityGrouping:
             anonymous_id="local-ocr-v1",
             source=VoteSource.OCR,
         )
+        # a no-match row carries NO printing - `cardprintingtag_printing_xor_no_match`.
         own_family = CardPrintingTag.objects.create(
             card=card,
-            printing=printing,
+            printing=None,
             is_no_match=True,
             anonymous_id="lands-artist-decomp-v0",
             source=VoteSource.OCR,
