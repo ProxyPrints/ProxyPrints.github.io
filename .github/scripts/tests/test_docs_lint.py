@@ -145,6 +145,123 @@ class TestOrphanCheck(unittest.TestCase):
             self.assertEqual(docs_lint.check_orphans(), [])
 
 
+class TestManifestCoverage(unittest.TestCase):
+    """
+    MANIFEST.md coverage. Distinct from the orphan rule on purpose: the
+    orphan rule asks "is this doc REACHABLE", and every doc in the corpus
+    is, because docs cross-link freely. A doc reachable only through a
+    see-also link in a sibling is reachable and unroutable at the same
+    time, which is why the orphan rule passed on all eight real docs that
+    had no MANIFEST row.
+    """
+
+    TABLE = "| path | purpose | surface | authority |\n| --- | --- | --- | --- |\n"
+
+    def _manifest(self, docs, rows: str):
+        write(docs / "MANIFEST.md", self.TABLE + rows)
+        write(docs / "README.md", "index\n")
+
+    def test_doc_without_a_row_is_flagged(self):
+        with temp_docs() as docs:
+            self._manifest(docs, "| `a.md` | does a | a-work | BINDING |\n")
+            write(docs / "a.md", "covered\n")
+            write(docs / "b.md", "not covered\n")
+            out = msgs(docs_lint.check_manifest_coverage())
+            self.assertIn("MANIFEST.md coverage gap: b.md", out)
+            self.assertNotIn("coverage gap: a.md", out)
+
+    def test_nested_doc_without_a_row_is_flagged(self):
+        with temp_docs() as docs:
+            self._manifest(docs, "| `a.md` | does a | a-work | BINDING |\n")
+            write(docs / "features" / "deep.md", "no row\n")
+            self.assertIn("coverage gap: features/deep.md", msgs(docs_lint.check_manifest_coverage()))
+
+    def test_directory_row_covers_everything_beneath_it(self):
+        with temp_docs() as docs:
+            self._manifest(docs, "| `reports/` | dated records | none | historical |\n")
+            write(docs / "reports" / "r.md", "covered by the directory row\n")
+            write(docs / "reports" / "nested" / "deep.md", "also covered\n")
+            self.assertEqual(docs_lint.check_manifest_coverage(), [])
+
+    def test_directory_row_does_not_cover_a_sibling_prefix(self):
+        # `report/` must not be satisfied by a `reports/` row, and vice
+        # versa — a prefix match on the raw string without the trailing
+        # slash would conflate them.
+        with temp_docs() as docs:
+            self._manifest(docs, "| `reports/` | dated records | none | historical |\n")
+            write(docs / "reports-archive" / "r.md", "different directory\n")
+            self.assertIn("coverage gap: reports-archive/r.md", msgs(docs_lint.check_manifest_coverage()))
+
+    def test_row_pointing_at_a_deleted_file_is_flagged(self):
+        # NOT covered by the generic backtick-path check, which skips any
+        # candidate without a "/" — so a top-level row was never verified.
+        with temp_docs() as docs:
+            self._manifest(docs, "| `gone.md` | deleted last month | nothing | BINDING |\n")
+            out = msgs(docs_lint.check_manifest_coverage())
+            self.assertIn("row `gone.md` does not resolve", out)
+            self.assertIn("file", out)
+
+    def test_row_pointing_at_a_deleted_directory_is_flagged(self):
+        with temp_docs() as docs:
+            self._manifest(docs, "| `gone/` | deleted bucket | nothing | historical |\n")
+            self.assertIn("does not resolve to a real directory", msgs(docs_lint.check_manifest_coverage()))
+
+    def test_index_roots_are_allowlisted(self):
+        with temp_docs() as docs:
+            self._manifest(docs, "| `a.md` | does a | a-work | BINDING |\n")
+            write(docs / "a.md", "covered\n")
+            out = msgs(docs_lint.check_manifest_coverage())
+            self.assertNotIn("README.md", out)
+            self.assertNotIn("coverage gap: MANIFEST.md", out)
+
+    def test_allowlisted_doc_is_exempt(self):
+        saved = docs_lint.MANIFEST_COVERAGE_ALLOWLIST
+        docs_lint.MANIFEST_COVERAGE_ALLOWLIST = {**saved, "b.md": "fixture reason"}
+        try:
+            with temp_docs() as docs:
+                self._manifest(docs, "| `a.md` | does a | a-work | BINDING |\n")
+                write(docs / "a.md", "covered\n")
+                write(docs / "b.md", "allowlisted\n")
+                self.assertEqual(docs_lint.check_manifest_coverage(), [])
+        finally:
+            docs_lint.MANIFEST_COVERAGE_ALLOWLIST = saved
+
+    def test_header_separator_row_is_not_a_path(self):
+        with temp_docs() as docs:
+            self._manifest(docs, "| `a.md` | does a | a-work | BINDING |\n")
+            write(docs / "a.md", "covered\n")
+            self.assertEqual(docs_lint.check_manifest_coverage(), [])
+
+    def test_row_in_a_fenced_block_is_not_a_row(self):
+        with temp_docs() as docs:
+            write(docs / "README.md", "index\n")
+            write(
+                docs / "MANIFEST.md",
+                self.TABLE
+                + "| `a.md` | does a | a-work | BINDING |\n\n"
+                + "```\n| `illustrative.md` | example only | none | BINDING |\n```\n",
+            )
+            write(docs / "a.md", "covered\n")
+            # `illustrative.md` does not exist; if the fenced example were
+            # read as a row this would report an unresolvable row.
+            self.assertEqual(docs_lint.check_manifest_coverage(), [])
+
+    def test_unparseable_manifest_is_a_finding_not_a_pass(self):
+        with temp_docs() as docs:
+            write(docs / "MANIFEST.md", "# routing map\n\nno table at all\n")
+            write(docs / "README.md", "index\n")
+            write(docs / "a.md", "would be uncovered\n")
+            out = msgs(docs_lint.check_manifest_coverage())
+            self.assertIn("no readable table rows", out)
+
+    def test_missing_manifest_is_not_a_finding(self):
+        # Same defensive shape as the tether rules: a missing doc is the
+        # path-existence check's business, not this rule's.
+        with temp_docs() as docs:
+            write(docs / "a.md", "no manifest exists\n")
+            self.assertEqual(docs_lint.check_manifest_coverage(), [])
+
+
 class TestSupersession(unittest.TestCase):
     def test_marker_without_pointer_is_flagged(self):
         with temp_docs() as docs:
