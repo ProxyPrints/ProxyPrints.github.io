@@ -51,6 +51,14 @@ The methodology and the systems it governs.
   writing any new gate, tether, golden fixture, agreement statistic or
   coverage percentage.** Companion to the fidelity-gate recheck report
   (PR #586), which covers one named gate; this one is cross-cutting.
+- [`reference/constant-rename-equivalence.md`](reference/constant-rename-equivalence.md)
+  — the AST-level check that proves a constant rename or extraction changed
+  no behaviour, and catches the concurrently-merged PR that silently breaks
+  one. Run it on any branch that renames a `*_SKIP_REASON`,
+  `*_ANONYMOUS_ID`, weight or threshold. Written up around the 2026-07-29
+  #567/#568 incident, where a clean textual auto-merge produced an
+  `ImportError` at module-import time that git, the 3,036-test backend
+  suite and the lint chain all passed over.
 - [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md) —
   the owner-ratified 2026-07-22 vote-weight scenario matrix (raw decision
   record, implemented in PR #325) that `theory.md`'s §4/§7a and
