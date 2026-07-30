@@ -140,6 +140,30 @@ conditions that genuinely require a human, and never spent on one that resolves 
 STOP CONDITIONS - the two are DELIBERATELY ASYMMETRIC. A throttle is the system being BUSY; a trip
 is the system saying STOP.
 
+  THERE ARE NOW TWO DISTINCT THROTTLES, AND THEY ARE NOT THE SAME MECHANISM. Do not conflate them:
+
+    - LOCAL DISPATCH-SLOT throttle (`throttled-concurrency-cap`, below) - OUR OWN
+      `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slots are all held. Handled by this command's
+      own `--max-throttle-retries`/`--throttle-backoff-*` budget; exhausting it is exit 4. It has
+      NOTHING to do with Google, or with any request rate.
+    - DESTINATION FETCH-RATE throttle (2026-07-30 owner rate ruling) - GOOGLE answered 429/503.
+      Handled entirely BELOW this command, inside `harvest_fetch_limiter` (the pacing interval
+      widens) and `stage_e_dispatch` (that one card is deferred, the pass continues). It consumes
+      NO retry budget, has NO exit code of its own, and can never stop this command. It surfaces
+      only as the `fetch_throttled=` counter on the progress line and the `stage_c_fetch_throttled=`
+      total in the summary. A rising counter with the pass still running is the system working
+      exactly as ruled: degrading, not dying.
+
+  This is why the pre-existing `--max-throttle-retries` budget was EXTENDED-AROUND rather than
+  reused: it is a budget for OUR OWN saturation, denominated in dispatch attempts, and spending it
+  on a destination's request rate would put a hard stop back onto the very condition the ruling
+  says must never stop the run. Before 2026-07-30 rate pressure had no channel of its own at all -
+  a 429 was counted as an ordinary per-card fetch failure, so sustained pressure crossed the
+  envelope's own >1% fetch-failure bar and produced a `halted-new-trip`: exit 3, "a human must
+  acknowledge the trip". The ruling ("the limit needs to throttle not shut it down") is implemented
+  by giving rate pressure that separate channel, NOT by weakening the envelope - every bar still
+  halts for everything it ever halted for, except a destination telling us to slow down.
+
   * `halted-open-trip` / `halted-new-trip` - HARD STOP, immediately, no retry, no backoff, ever.
     NO SELF-RESUME is a binding design gate (`stage_e_dispatch.py`'s own note): an envelope trip
     requires an explicit human acknowledgement via `resolve_envelope_trip`, and nothing in this
@@ -197,11 +221,16 @@ retries within its budget.
   2     STAGE 0 FAILED - Scryfall reference data  Fix the network / the cache, then relaunch.
         could not be verified or refreshed.       Nothing was dispatched and nothing was written.
   3     ENVELOPE HALT (`halted-open-trip` /       STOP. Do NOT auto-relaunch. A human must
-        `halted-new-trip`). Work REMAINS.         acknowledge the trip via `resolve_envelope_trip`
-                                                  (docs/features/stage-e-operations.md) first.
-  4     THROTTLE-RETRY BUDGET EXHAUSTED - the     Safe to relaunch later, unattended, once the
-        concurrency cap never cleared. Work       cap is free. If it recurs, a human should look
-        REMAINS.                                  for wedged dispatches.
+        `halted-new-trip`) - host load, RSS, a    acknowledge the trip via `resolve_envelope_trip`
+        403 lockout, or a NON-THROTTLE fetch-     (docs/features/stage-e-operations.md) first.
+        failure rate over 1%. A Google 429/503    If the pass was being rate-limited, look for a
+        can no longer reach this code             `stage_c_fetch_throttled=` total instead - that
+        (2026-07-30). Work REMAINS.               path never exits non-zero.
+  4     THROTTLE-RETRY BUDGET EXHAUSTED - OUR     Safe to relaunch later, unattended, once the
+        OWN dispatch-slot concurrency cap never   cap is free. If it recurs, a human should look
+        cleared. NOT a destination rate limit;    for wedged dispatches.
+        see the two-throttles note above. Work
+        REMAINS.
   5     `--max-batches` BOUND REACHED with cards  Expected if the operator passed the flag on
         still in the cohort. Work REMAINS.        purpose. Relaunch to continue from the printed
                                                   resume pk.
@@ -860,6 +889,7 @@ class Command(BaseCommand):
         total_stage_c = 0
         total_stage_c_transferred = 0
         total_stage_c_fetch_failures = 0
+        total_stage_c_fetch_throttled = 0
         total_stage_d_votes = 0
         halted_status: Optional[str] = None
         stopped_reason: Optional[str] = None
@@ -964,6 +994,7 @@ class Command(BaseCommand):
             total_stage_c += outcome.stage_c_completed
             total_stage_c_transferred += outcome.stage_c_transferred
             total_stage_c_fetch_failures += outcome.stage_c_fetch_failures
+            total_stage_c_fetch_throttled += outcome.stage_c_fetch_throttled
             total_stage_d_votes += (
                 outcome.stage_d_join_key_votes + outcome.stage_d_fallback_votes + outcome.stage_d_slow_path_routed
             )
@@ -977,6 +1008,7 @@ class Command(BaseCommand):
                 f"status={outcome.status} stage_c={outcome.stage_c_completed} "
                 f"transferred={outcome.stage_c_transferred} "
                 f"fetch_failures={outcome.stage_c_fetch_failures} "
+                f"fetch_throttled={outcome.stage_c_fetch_throttled} "
                 f"stage_d_votes={outcome.stage_d_join_key_votes + outcome.stage_d_fallback_votes} "
                 f"| done={cards_done} elapsed={elapsed:.1f}s "
                 f"rate={(cards_done / elapsed) if elapsed > 0 else 0.0:.3f} cards/s"
@@ -1058,6 +1090,7 @@ class Command(BaseCommand):
             f"DONE batches_dispatched={batches_dispatched} cards_done={cards_done} "
             f"stage_c_completed={total_stage_c} stage_c_transferred={total_stage_c_transferred} "
             f"stage_c_fetch_failures={total_stage_c_fetch_failures} "
+            f"stage_c_fetch_throttled={total_stage_c_fetch_throttled} "
             f"stage_d_votes_or_routes={total_stage_d_votes} elapsed={elapsed:.1f}s "
             f"rate={(cards_done / elapsed) if elapsed > 0 else 0.0:.3f} cards/s "
             f"throttle_retries={total_throttle_retries} "

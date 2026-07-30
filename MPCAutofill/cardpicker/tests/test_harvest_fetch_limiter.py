@@ -18,6 +18,7 @@ from cardpicker.harvest_fetch_limiter import (
     SCRYFALL_CDN,
     SCRYFALL_REST,
     DestinationLimiterConfig,
+    DestinationThrottledError,
     GoogleFetchLockoutError,
     get_limiter,
     rate_limited_get,
@@ -165,16 +166,22 @@ class TestRateLimitedGet:
 
         assert limiter.locked_out is True
 
-    def test_backoff_status_does_not_raise_but_escalates(self, monkeypatch):
+    def test_backoff_status_raises_the_throttle_severity_and_escalates(self, monkeypatch):
+        """CONTRACT CHANGE, 2026-07-30 owner rate ruling ("the limit needs to throttle not shut it
+        down"). This used to RETURN the 429 response, leaving the caller's own `raise_for_status()`
+        to flatten it into a generic failure indistinguishable from a 404 - which is exactly how
+        sustained rate pressure used to reach the operating envelope's fetch-failure bar and
+        HARD-STOP a run. It now raises `DestinationThrottledError`, a severity a caller can act on.
+        The escalation itself is unchanged."""
         config = DestinationLimiterConfig(
             name="test-rlg-backoff", rate_per_sec=1000, max_concurrency=10, backoff_status_codes=frozenset({429})
         )
         limiter = get_limiter(config)
         monkeypatch.setattr(limiter.session, "get", lambda url, **kwargs: _FakeResponse(status_code=429))
 
-        response = rate_limited_get(config, "https://example.test/image.jpg")
+        with pytest.raises(DestinationThrottledError):
+            rate_limited_get(config, "https://example.test/image.jpg")
 
-        assert response.status_code == 429
         assert limiter.backoff_multiplier == 2.0
 
     def test_ordinary_status_neither_raises_nor_escalates(self, monkeypatch):
@@ -292,20 +299,28 @@ class TestConfiguredDestinations:
     are policy, not something to lock down as a snapshot), but the invariants Stage B's design
     depends on."""
 
-    def test_google_image_paced_at_probe_measured_ceiling(self):
-        # 8.0/s + max_concurrency=6, not a higher number - task #165's concurrency-raise probe
-        # (2026-07-19, docs/features/catalog-completion-plan.md's concurrency-probe table) is the
-        # empirical basis: concurrency=6 achieved 8.116/s clean on every dimension including its
-        # independent live-site canary, while concurrency=10's higher raw throughput (9.59/s) was
-        # REJECTED for a 2.43x canary-p95 latency regression despite zero Google quota events (see
-        # the module's own docstring). 8.0 sits a touch under the measured 8.116/s ceiling for
-        # margin.
-        assert GOOGLE_IMAGE.rate_per_sec == 8.0
+    def test_google_image_paced_at_the_owner_ratified_ceiling(self):
+        # 7.0/s + max_concurrency=6. 7.0 is the 2026-07-30 OWNER RATE RULING's own number ("the
+        # limit needs to be on the amount we are fetching from google api 7/s"), superseding the
+        # 8.0 this test used to assert. It contradicts nothing task #165's concurrency-raise probe
+        # established (2026-07-19, docs/features/catalog-completion-plan.md's concurrency-probe
+        # table: concurrency=6 achieved 8.116/s clean on every dimension including its independent
+        # live-site canary, while concurrency=10's higher raw throughput (9.59/s) was REJECTED for
+        # a 2.43x canary-p95 latency regression despite zero Google quota events) - it sits
+        # strictly UNDER that measured ceiling, so it only tightens it. `max_concurrency` is
+        # UNCHANGED at 6 and is deliberately not the ruling's subject: the rate limit, not the
+        # concurrency limit, is what actually protects the destination, which is why the owner
+        # specified it in requests/second.
+        assert GOOGLE_IMAGE.rate_per_sec == 7.0
         assert GOOGLE_IMAGE.max_concurrency == 6
 
     def test_google_image_has_both_lockout_and_backoff_configured(self):
         assert GOOGLE_IMAGE.lockout_status_codes == frozenset({403})
-        assert GOOGLE_IMAGE.backoff_status_codes == frozenset({429})
+        # 503 joined 429 on 2026-07-30: both mean "this destination wants less traffic right now"
+        # (the shared image-cdn Worker in front of Google answers 503 under its own overload), and
+        # treating either as an ordinary per-card failure is the misclassification the owner rate
+        # ruling exists to fix. 403 stays a lockout - that severity is unchanged.
+        assert GOOGLE_IMAGE.backoff_status_codes == frozenset({429, 503})
 
     def test_scryfall_destinations_have_no_reactive_handling_configured(self):
         # Deliberate (see harvest_fetch_limiter.py's own comments): no observed throttling
@@ -322,3 +337,110 @@ class TestConfiguredDestinations:
         import cardpicker.harvest_fetch_limiter as module
 
         assert not any("r2" in name.lower() for name in module.__all__)
+
+
+class TestOwnerRatedCeiling:
+    """2026-07-30 owner rate ruling: "the limit needs to be on the amount we are fetching from
+    google api 7/s or hardware whichever comes first"."""
+
+    def test_google_image_is_paced_at_the_ratified_seven_per_second(self) -> None:
+        assert GOOGLE_IMAGE.rate_per_sec == 7.0
+
+    def test_the_hardware_term_binds_without_being_configured(self, monkeypatch) -> None:
+        """ "or hardware, whichever comes first" needs no second constant, and this is the property
+        that makes that true: the limiter is a strict MINIMUM-INTERVAL pacer, so it can only ever
+        DELAY a request - never issue one, never make a slow host go faster. The achieved rate is
+        therefore `min(7.0, what the host actually sustains)` by construction. Proven here by a
+        destination whose own "hardware" (the fake session) is slower than the configured ceiling:
+        the achieved rate tracks the SLOW term, not the configured one."""
+        config = DestinationLimiterConfig(name="test-hw-term", rate_per_sec=1000.0, max_concurrency=10)
+        limiter = get_limiter(config)
+
+        def _slow_get(url: str, **kwargs: Any) -> _FakeResponse:
+            time.sleep(0.02)  # the "hardware" term: ~50/s, far under the configured 1000/s
+            return _FakeResponse(status_code=200)
+
+        monkeypatch.setattr(limiter.session, "get", _slow_get)
+        for _ in range(5):
+            rate_limited_get(config, "https://example.test/image.jpg")
+
+        assert limiter.current_rate() < config.rate_per_sec
+
+
+class TestThrottleNotShutdown:
+    """2026-07-30 owner rate ruling: "the limit needs to throttle not shut it down". Rate pressure
+    gets its own exception so a caller can tell it apart from an ordinary failure - see
+    `DestinationThrottledError`'s own docstring for why that distinction is the whole change."""
+
+    def test_backoff_status_raises_the_throttle_exception_and_widens_pacing(self, monkeypatch) -> None:
+        config = DestinationLimiterConfig(
+            name="test-throttle-raise", rate_per_sec=1000, max_concurrency=10, backoff_status_codes=frozenset({429})
+        )
+        limiter = get_limiter(config)
+        monkeypatch.setattr(limiter.session, "get", lambda url, **kwargs: _FakeResponse(status_code=429))
+
+        with pytest.raises(DestinationThrottledError):
+            rate_limited_get(config, "https://example.test/image.jpg")
+
+        assert limiter.backoff_multiplier == 2.0
+        assert limiter.locked_out is False  # a throttle is NOT a shutdown
+
+    def test_a_503_is_rate_pressure_for_the_google_destination(self) -> None:
+        assert 503 in GOOGLE_IMAGE.backoff_status_codes
+        assert 429 in GOOGLE_IMAGE.backoff_status_codes
+        assert 403 in GOOGLE_IMAGE.lockout_status_codes  # unchanged: still a hard stop
+
+    def test_pacing_decays_back_toward_the_ceiling_after_sustained_clean_traffic(self, monkeypatch) -> None:
+        """The recovery half. Backoff used to be sticky forever, which on a one-shot 230,753-card
+        pass meant one early blip pinned the whole run at half speed. Decay is deliberately
+        asymmetric: one signal doubles, `_CLEAN_RESPONSES_BEFORE_DECAY` clean responses halve."""
+        config = DestinationLimiterConfig(
+            name="test-throttle-decay", rate_per_sec=1000, max_concurrency=10, backoff_status_codes=frozenset({429})
+        )
+        limiter = get_limiter(config)
+        limiter.backoff()
+        limiter.backoff()
+        assert limiter.backoff_multiplier == 4.0
+
+        monkeypatch.setattr(limiter.session, "get", lambda url, **kwargs: _FakeResponse(status_code=200))
+        for _ in range(limiter._CLEAN_RESPONSES_BEFORE_DECAY - 1):
+            rate_limited_get(config, "https://example.test/image.jpg")
+        assert limiter.backoff_multiplier == 4.0  # not yet - decay is slow on purpose
+
+        rate_limited_get(config, "https://example.test/image.jpg")
+        assert limiter.backoff_multiplier == 2.0
+
+    def test_decay_can_never_overshoot_the_configured_ceiling(self, monkeypatch) -> None:
+        config = DestinationLimiterConfig(name="test-throttle-floor", rate_per_sec=1000, max_concurrency=10)
+        limiter = get_limiter(config)
+        monkeypatch.setattr(limiter.session, "get", lambda url, **kwargs: _FakeResponse(status_code=200))
+
+        for _ in range(limiter._CLEAN_RESPONSES_BEFORE_DECAY * 3):
+            rate_limited_get(config, "https://example.test/image.jpg")
+
+        assert limiter.backoff_multiplier == 1.0
+
+    def test_one_backoff_resets_an_accumulating_clean_streak(self, monkeypatch) -> None:
+        """A destination still intermittently pushing back must never accumulate its way back to
+        full speed - the streak is CONSECUTIVE clean responses, not a running total."""
+        config = DestinationLimiterConfig(
+            name="test-throttle-streak", rate_per_sec=1000, max_concurrency=10, backoff_status_codes=frozenset({429})
+        )
+        limiter = get_limiter(config)
+        limiter.backoff()
+        limiter.backoff()  # x4
+
+        responses = [200] * (limiter._CLEAN_RESPONSES_BEFORE_DECAY - 1) + [429]
+        responses += [200] * (limiter._CLEAN_RESPONSES_BEFORE_DECAY - 1)
+        pending = list(responses)
+        monkeypatch.setattr(limiter.session, "get", lambda url, **kwargs: _FakeResponse(status_code=pending.pop(0)))
+
+        for _ in range(len(responses)):
+            try:
+                rate_limited_get(config, "https://example.test/image.jpg")
+            except DestinationThrottledError:
+                pass
+
+        # The 429 both doubled the multiplier and zeroed the streak, so the clean responses after
+        # it are one short of buying a halving.
+        assert limiter.backoff_multiplier == 8.0

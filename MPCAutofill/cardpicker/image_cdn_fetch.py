@@ -24,6 +24,7 @@ from django.conf import settings
 
 from cardpicker.harvest_fetch_limiter import (
     GOOGLE_IMAGE,
+    DestinationThrottledError,
     GoogleFetchLockoutError,
     rate_limited_get,
 )
@@ -95,6 +96,17 @@ def fetch_card_image_bytes(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI)
         # destination that has already locked us out, risking the live site's own image
         # serving (which shares this same Google endpoint) for an extended cooldown window.
         raise
+    except DestinationThrottledError:
+        # ALSO deliberately NOT caught by the broad except below (2026-07-30 owner rate ruling:
+        # "the limit needs to throttle not shut it down"). A 429/503 is RATE PRESSURE, not a
+        # per-card failure: returning None here would flatten it into the same signal as a 404 or a
+        # corrupt download, and `stage_e_dispatch`'s fetch-outcome window would then count it
+        # toward `EnvelopeTrip.Bar.FETCH_FAILURE_RATE` - i.e. sustained rate pressure would
+        # HARD-STOP the unattended catalog pass (exit 3, human acknowledgement required) instead of
+        # slowing it down. The limiter has already widened its own pacing interval by the time this
+        # arrives; the caller's job is to defer THIS card and keep going. See
+        # DestinationThrottledError's own docstring for the full reasoning.
+        raise
     except Exception:
         logger.exception("Failed to fetch image for card %s", card.identifier)
         return None
@@ -105,10 +117,26 @@ def fetch_card_image(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Op
     for this function's existing callers (`extract_card_evidence`, the ingest hook in
     `cardpicker.sources.update_database`). Not used by the decoupled fetch stage in
     `run_image_evidence_cohort.py` - that caller wants the raw bytes above instead, precisely to
-    avoid decoding on the fetch side (see that function's own docstring)."""
+    avoid decoding on the fetch side (see that function's own docstring).
+
+    THROTTLE CONTRACT (2026-07-30 owner rate ruling): this wrapper's `Optional` contract is
+    deliberately UNCHANGED - a `DestinationThrottledError` from the fetch below is caught here and
+    reported as `None`, not propagated. The distinction the new exception carries only means
+    something to a caller that owns an operating-envelope fetch-outcome window and a per-card
+    deferral path, which is `stage_e_dispatch` alone; it consumes the raw-bytes entry point above
+    and never this one. This wrapper's callers (`extract_card_evidence`, the ingest hook in
+    `cardpicker.sources.update_database`) have neither, and changing an established `-> Optional`
+    signature into a raising one for them would convert a throttle into a crash - the exact
+    "shut it down" failure mode the ruling forbids. The pacing widening still happened inside the
+    limiter either way, which is the part that actually protects the destination.
+    """
     from PIL import Image
 
-    data = fetch_card_image_bytes(card, dpi)
+    try:
+        data = fetch_card_image_bytes(card, dpi)
+    except DestinationThrottledError:
+        logger.warning("Throttled fetching image for card %s - deferring this card", card.identifier)
+        return None
     if data is None:
         return None
     return Image.open(BytesIO(data))

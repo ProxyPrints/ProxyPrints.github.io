@@ -488,11 +488,34 @@ def _fetch_one_card(
             outcome="transferred",
         )
 
+    from cardpicker.harvest_fetch_limiter import DestinationThrottledError
     from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
 
     fetch_started_at = time.monotonic()
     try:
         image_bytes = fetch_card_image_bytes(card, dpi=DEFAULT_FETCH_DPI)
+    except DestinationThrottledError:
+        # 2026-07-30 owner rate ruling: `fetch_card_image_bytes` now raises this instead of
+        # returning None on a 429/503, so the Stage E dispatcher can tell rate pressure apart from
+        # a genuine fetch failure and DEGRADE rather than trip its operating envelope. THIS command
+        # is BULK mode, which `operating_envelope.py` explicitly does not govern at all - there is
+        # no envelope here to spare, so the distinction buys nothing, and the only thing that
+        # matters is that this must not escape through the Future and kill the fetch pool.
+        # Deliberately reported as an ordinary un-fetched card (`image_bytes=None`), which is
+        # EXACTLY the shape a 429 produced here before this change: bit-for-bit unchanged
+        # behaviour for this command. The limiter has still widened its own pacing interval, which
+        # is the half that actually protects the destination.
+        logger.warning("Throttled fetching card %s - deferring it; the limiter has slowed the pace", card_id)
+        return _FetchOutcome(
+            card_id=card_id,
+            content_hash=card.content_phash,
+            md5_checksum=card.md5_checksum,
+            sha256_checksum=card.sha256_checksum,
+            image_bytes=None,
+            fetch_latency_ms=(time.monotonic() - fetch_started_at) * 1000,
+            outcome=None,
+            card_name=card.name,
+        )
     except GoogleFetchLockoutError:
         stop_event.set()
         logger.error("GoogleFetchLockoutError observed - stopping the run, no further fetches submitted")

@@ -1812,3 +1812,96 @@ class TestBatchSizeAutoscaling:
     @pytest.mark.parametrize("spelling", ["1", "250", 250])
     def test_a_positive_size_parses_to_itself(self, spelling: Any) -> None:
         assert stream_full_catalog.parse_batch_size_option(spelling) == int(spelling)
+
+
+class TestDestinationRateThrottleDegradesRatherThanHalting:
+    """2026-07-30 OWNER RATE RULING: "the limit needs to be on the amount we are fetching from
+    google api 7/s or hardware whichever comes first. and the limit needs to throttle not shut it
+    down."
+
+    The whole point of this class is the pair of tests below, which must move TOGETHER or the
+    change is wrong in one of two opposite ways:
+
+      * sustained RATE PRESSURE (Google answering 429/503) must SLOW the pass and let it finish,
+        exiting ZERO with every card accounted for - never exit 3, never demand a human
+        `resolve_envelope_trip` acknowledgement;
+      * a GENUINE ENVELOPE BREACH (host load here; RSS, a 403 lockout and a non-throttle
+        fetch-failure rate behave identically) must still HARD-STOP at exit 3, untouched.
+
+    Before this change both produced the second behaviour, because a 429 reached
+    `stage_e_dispatch`'s fetch-outcome window as an ordinary per-card failure and >1% of a rolling
+    500-card window trips `EnvelopeTrip.Bar.FETCH_FAILURE_RATE`.
+    """
+
+    @STREAMING_ON
+    def test_sustained_rate_pressure_degrades_and_completes_at_exit_zero(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """EVERY fetch in this pass is throttled - 100% rate pressure, far past the envelope's own
+        >1% fetch-failure bar. The pass must still run to genuine cohort exhaustion and exit 0."""
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+        from cardpicker.harvest_fetch_limiter import DestinationThrottledError
+
+        cards = _cards(6)
+        stage_e_dispatch._window = stage_e_dispatch._FetchOutcomeWindow()
+
+        def _throttled_fetch(card: Any, dpi: Any = None) -> bytes:
+            raise DestinationThrottledError("429 - pacing interval widened")
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", _throttled_fetch)
+
+        call_command("stream_full_catalog", "--batch-size", "2")  # exit 0: does not raise
+        output = capsys.readouterr().out
+
+        # No trip of ANY kind, and specifically not the fetch-failure-rate bar this used to hit.
+        assert EnvelopeTrip.objects.count() == 0
+        assert "Envelope halt" not in output
+        # The run kept going through every batch rather than stopping at the first throttle.
+        assert PilotRunLedger.objects.count() == 3
+        # Throttles are reported as throttles, and are NEVER counted as fetch failures.
+        assert f"stage_c_fetch_throttled={len(cards)}" in output
+        assert "stage_c_fetch_failures=0" in output
+        # The envelope's own window never saw them at all - the load-bearing assertion, since that
+        # window is what the >1% bar is computed from.
+        failures, total = stage_e_dispatch._window.failures_and_total()
+        assert (failures, total) == (0, 0)
+
+    @STREAMING_ON
+    def test_a_genuine_envelope_breach_still_hard_stops_at_exit_three(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The other half of the pair. Rate pressure degrading must not have made the envelope
+        itself soft: a real bar (host load 9.0 > the ratified 7.0 ceiling) still stops the pass
+        dead, records a trip, and exits 3."""
+        _cards(6)
+        monkeypatch.setattr(
+            stage_e_dispatch,
+            "_sample_envelope_signals",
+            lambda google_lockout=False: stage_e_dispatch.EnvelopeSignals(load_avg=9.0),
+        )
+
+        assert _exit_code("--batch-size", "1") == 3
+        output = capsys.readouterr().out
+
+        assert EnvelopeTrip.objects.filter(bar=EnvelopeTrip.Bar.HOST_LOAD).count() == 1
+        assert "halted=halted-new-trip" in output
+        assert output.count("Envelope halt") == 1  # one attempt, no retry, no self-resume
+
+    @STREAMING_ON
+    def test_non_throttle_fetch_failures_still_reach_the_envelope_window(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The narrowing is a narrowing, not a removal. A fetch that fails for a reason slowing
+        down would NOT fix (a 404, a corrupt download - anything that arrives as `-> None`) still
+        feeds `fetch_failures_in_window`, so the >1% bar keeps every bit of the reach it had for
+        the failures it was actually written to catch."""
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+
+        _cards(4)
+        stage_e_dispatch._window = stage_e_dispatch._FetchOutcomeWindow()
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", lambda card, dpi=None: None)
+
+        call_command("stream_full_catalog", "--batch-size", "4")
+
+        failures, total = stage_e_dispatch._window.failures_and_total()
+        assert (failures, total) == (4, 4)

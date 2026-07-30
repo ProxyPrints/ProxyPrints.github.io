@@ -56,12 +56,12 @@ of them crosses its bar. The four ratified bars
 (`stage-e-streaming.md` §10(a)), in the priority order
 `operating_envelope._bar_breach` checks them:
 
-| bar                  | ceiling                                 | source                                                                            |
-| -------------------- | --------------------------------------- | --------------------------------------------------------------------------------- |
-| Google fetch lockout | any occurrence — **instant** pause      | the existing `GoogleFetchLockoutError`/`lockout_hit` signal, unchanged            |
-| Host load average    | **> 7.0**                               | the existing escalation threshold (`docs/reports/2026-07-23-4c-pilot-dry-run.md`) |
-| RSS per worker       | **> 768MB**                             | `stage-e-streaming.md` §10(a), a new, streaming-specific per-worker bar           |
-| Fetch-failure rate   | **> 1%** over a rolling 500-card window | `stage-e-streaming.md` §10(a)                                                     |
+| bar                  | ceiling                                                                          | source                                                                            |
+| -------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Google fetch lockout | any occurrence — **instant** pause                                               | the existing `GoogleFetchLockoutError`/`lockout_hit` signal, unchanged            |
+| Host load average    | **> 7.0**                                                                        | the existing escalation threshold (`docs/reports/2026-07-23-4c-pilot-dry-run.md`) |
+| RSS per worker       | **> 768MB**                                                                      | `stage-e-streaming.md` §10(a), a new, streaming-specific per-worker bar           |
+| Fetch-failure rate   | **> 1%** over a rolling 500-card window, **excluding rate pressure** — see below | `stage-e-streaming.md` §10(a), narrowed 2026-07-30                                |
 
 None of these numbers are invented on this page or in `operating_envelope.py`
 itself — every one is cited to the ratifying brief section in that module's
@@ -73,6 +73,79 @@ was ratified at 512MB and raised 512 → 768 by `70225df8` (2026-07-28, an
 owner ops ruling — itself the ratifying act for 768). 768 is the live bar and
 the value `operating_envelope.RSS_MB_PER_WORKER_CEILING` carries; a 512 in an
 older report or test is pre-`70225df8` history, not a competing number.
+
+### Rate pressure is throttled, not halted (owner ruling, 2026-07-30)
+
+> "the limit needs to be on the amount we are fetching from google api 7/s or
+> hardware whichever comes first. and the limit needs to throttle not shut it
+> down"
+
+**Two different things can go wrong with a fetch, and they now get different
+answers.**
+
+- **Rate pressure** — Google (or the image-cdn Worker in front of it) answers
+  **429 or 503**: _we are pushing the destination faster than it wants_. The
+  answer is to **go slower and keep going**. `harvest_fetch_limiter` widens
+  its own pacing interval (doubling per signal, capped at 1/16th speed), the
+  one card that got the 429 is **deferred**, and the pass continues. No trip,
+  no ledger halt, no non-zero exit. The deferred card is picked up by a later
+  pass's Stage C backlog walk.
+- **A genuine envelope breach** — host load, RSS, a 403 lockout, or fetches
+  failing for reasons _slowing down would not fix_ (a 404, a corrupt
+  download, a broken dependency). The answer is unchanged: **HALT**, record an
+  `EnvelopeTrip`, exit 3, wait for a human.
+
+**Which bars are which:**
+
+| bar                  | classification                           | behaviour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host load average    | genuine breach                           | **Halts**, unchanged. Fetching Google more slowly does not reduce this box's own load, and the load is what threatens the co-hosted live site.                                                                                                                                                                                                                                                                                                                                              |
+| RSS per worker       | genuine breach                           | **Halts**, unchanged. A worker over its memory ceiling is a leak or a pathological image; a slower request cadence does not address either.                                                                                                                                                                                                                                                                                                                                                 |
+| Google fetch lockout | terminal rate pressure                   | **Halts**, unchanged — deliberately, and this is the hard case. A 403 _is_ rate pressure (Google escalates 429 → 403 under sustained load), but by the time it arrives throttling is no longer the available remedy: it is an IP-level lockout on an endpoint **shared with the live site's own PDF-export/bulk-download image serving**, and continuing at _any_ rate risks extending that cooldown for real users. Throttling 429/503 is precisely what makes reaching a 403 less likely. |
+| Fetch-failure rate   | **mixed — this is the one that changed** | **Narrowed.** The bar, its 1% ceiling and its 500-card window are all unchanged; what changed is that a 429/503 no longer feeds it. It was the one bar that halted for what is really rate pressure.                                                                                                                                                                                                                                                                                        |
+
+**What was actually wrong before 2026-07-30.** A 429 arrived at the dispatch
+loop as `fetch_card_image_bytes() -> None` — byte-for-byte indistinguishable
+from a 404 or a corrupt download, because the limiter returned the 429
+response and the caller's own `raise_for_status()` flattened it into a generic
+exception. It was therefore recorded on the operating envelope's rolling
+fetch-outcome window, and **more than 1% of a 500-card window tripped the
+fetch-failure bar** — hard-stopping a 230,753-card unattended pass with exit 3
+and a demand for a human `resolve_envelope_trip` acknowledgement, for a
+condition whose correct answer is "go slower". Rate pressure now travels its
+own channel end to end (`harvest_fetch_limiter.DestinationThrottledError` →
+`_StageCFetchOutcome.throttled` → `DispatchOutcome.stage_c_fetch_throttled`)
+and never touches that window.
+
+**This is a narrowing, not a weakening.** Every bar still halts for everything
+it ever halted for, _except_ a destination asking us to slow down.
+
+**The ceiling itself is now 7 req/sec** (`harvest_fetch_limiter.GOOGLE_IMAGE .rate_per_sec`, down from 8.0). The "**or hardware, whichever comes first**"
+half of the ruling needs no second number and deliberately does not get one:
+the limiter is a strict _minimum-interval_ pacer, so it can only ever **delay**
+a request — never issue one, never make a slow host go faster. The achieved
+rate is therefore `min(7.0, whatever this host and network actually sustain)`
+**by construction**, and `_DestinationLimiter.current_rate()` (logged every 50
+requests) is what tells you which of the two is binding right now. A configured
+hardware-derived _rate_ would need a mean per-fetch latency term that this
+project has never measured at catalog scale; inventing one would be exactly the
+fabricated ceiling PR #589 **removed** from `stage_e_batch_sizing`. The honest
+hardware-vs-destination signal remains #589's own
+`HostProfile.fetch_overcommitted`.
+
+**Backoff now decays.** It used to be sticky for the life of the process — the
+multiplier only ever grew. On a one-shot multi-hour pass that meant a single
+early 429 pinned the whole run at half speed with no way back. It is now
+asymmetric: **one** signal doubles the interval, **100 consecutive clean
+responses** halve it, and it can never decay past the configured ceiling. Slow
+to recover, fast to yield.
+
+**What an operator sees.** A throttled pass reports `fetch_throttled=N` on each
+progress line and `stage_c_fetch_throttled=N` in the final summary, alongside a
+separately-counted `stage_c_fetch_failures=`. A rising throttle count **with
+the pass still running** is the system working as ruled. If you were expecting
+an exit-3 trip during a rate-limited period and did not get one, that is the
+change, not a fault.
 
 **HALT is not a soft slowdown.** The moment any bar is breached, the
 primitive persists an `EnvelopeTrip` row (`bar`, the observed `detail`
@@ -1318,6 +1391,22 @@ STOP.
   is logged with its wait and attempt number so an operator reading the log
   can tell a SATURATED pipeline from a STALLED one.
 
+- **Destination fetch-rate throttle (Google 429/503) — NEITHER of the above.**
+  Added 2026-07-30 under the owner rate ruling; see "Rate pressure is
+  throttled, not halted" above for the full reasoning. It is handled entirely
+  _below_ this command, inside `harvest_fetch_limiter` (the pacing interval
+  widens) and `stage_e_dispatch` (that one card is deferred, the pass
+  continues). It **consumes no retry budget, has no exit code of its own, and
+  can never stop this command.** It surfaces only as `fetch_throttled=` on the
+  progress line and `stage_c_fetch_throttled=` in the summary.
+
+  **Do not confuse it with `throttled-concurrency-cap`.** That one is _our own_
+  dispatch-slot saturation, denominated in dispatch attempts, and exhausting
+  its budget is exit 4. Spending that budget on a _destination's_ request rate
+  would put a hard stop straight back onto the condition the ruling says must
+  never stop the run, which is why the fetch-rate throttle was built alongside
+  it rather than folded into it.
+
 A halted or throttled batch did no work, so its pks do NOT advance the
 high-water mark; the retry (or the relaunch) re-dispatches exactly that
 chunk. The resume pk is printed on every exit path.
@@ -1340,15 +1429,15 @@ the way out.** The envelope halt still hard-stops immediately with no retry,
 no backoff and no self-resume; the throttle still backs off and retries within
 its budget.
 
-| Code | Meaning                                                                                                                                                                                                            | What the supervisor should do                                                                                                                        |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`  | **Complete.** Genuine cohort exhaustion — every card in this pass's cohort was dispatched and nothing remains. Also covers `--dry-run` (it reported its plan) and an empty cohort (there was nothing to dispatch). | Nothing. The pass finished.                                                                                                                          |
-| `1`  | **Invocation rejected** before anything ran: a bad flag value or an unknown `--source` key. Django's own default `CommandError` code.                                                                              | Fix the command line. Never retry it verbatim.                                                                                                       |
-| `2`  | **Stage 0 failed** — Scryfall reference data could not be verified or refreshed. Nothing was dispatched and nothing was written.                                                                                   | Fix the network / the cache, then relaunch.                                                                                                          |
-| `3`  | **Envelope halt** (`halted-open-trip` / `halted-new-trip`). Work REMAINS.                                                                                                                                          | STOP. Do **not** auto-relaunch — a human must acknowledge the trip via `resolve_envelope_trip` (runbook above) first, or the relaunch just re-trips. |
-| `4`  | **Throttle-retry budget exhausted** — the concurrency cap never cleared. Work REMAINS.                                                                                                                             | Safe to relaunch later, unattended, once the cap is free. If it recurs, look for wedged dispatches.                                                  |
-| `5`  | **`--max-batches` bound reached** with cards still in the cohort. Work REMAINS.                                                                                                                                    | Expected if the flag was passed on purpose. Relaunch to continue from the printed resume pk.                                                         |
-| `6`  | **Streaming disabled** (`settings.STAGE_E_STREAMING_ENABLED` is False). The WHOLE cohort remains.                                                                                                                  | Flip the setting, then relaunch. The pass never started.                                                                                             |
+| Code | Meaning                                                                                                                                                                                                                  | What the supervisor should do                                                                                                                                                                                                                                                 |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | **Complete.** Genuine cohort exhaustion — every card in this pass's cohort was dispatched and nothing remains. Also covers `--dry-run` (it reported its plan) and an empty cohort (there was nothing to dispatch).       | Nothing. The pass finished.                                                                                                                                                                                                                                                   |
+| `1`  | **Invocation rejected** before anything ran: a bad flag value or an unknown `--source` key. Django's own default `CommandError` code.                                                                                    | Fix the command line. Never retry it verbatim.                                                                                                                                                                                                                                |
+| `2`  | **Stage 0 failed** — Scryfall reference data could not be verified or refreshed. Nothing was dispatched and nothing was written.                                                                                         | Fix the network / the cache, then relaunch.                                                                                                                                                                                                                                   |
+| `3`  | **Envelope halt** (`halted-open-trip` / `halted-new-trip`) — host load, RSS, a 403 lockout, or a **non-throttle** fetch-failure rate over 1%. A Google 429/503 can no longer reach this code (2026-07-30). Work REMAINS. | STOP. Do **not** auto-relaunch — a human must acknowledge the trip via `resolve_envelope_trip` (runbook above) first, or the relaunch just re-trips. If the pass was being rate-limited, look for a `stage_c_fetch_throttled=` total instead; that path never exits non-zero. |
+| `4`  | **Throttle-retry budget exhausted** — **our own dispatch-slot** concurrency cap never cleared. **Not** a destination rate limit. Work REMAINS.                                                                           | Safe to relaunch later, unattended, once the cap is free. If it recurs, look for wedged dispatches.                                                                                                                                                                           |
+| `5`  | **`--max-batches` bound reached** with cards still in the cohort. Work REMAINS.                                                                                                                                          | Expected if the flag was passed on purpose. Relaunch to continue from the printed resume pk.                                                                                                                                                                                  |
+| `6`  | **Streaming disabled** (`settings.STAGE_E_STREAMING_ENABLED` is False). The WHOLE cohort remains.                                                                                                                        | Flip the setting, then relaunch. The pass never started.                                                                                                                                                                                                                      |
 
 Distinct codes rather than a single `1` because each maps to a **different**
 supervisor action, and the differences are the operationally expensive kind:
