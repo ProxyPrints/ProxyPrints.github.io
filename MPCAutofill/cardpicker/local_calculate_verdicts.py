@@ -555,6 +555,24 @@ JOIN_KEY_PROXY_MARKER_VETO_SKIP_REASON = "proxy-marker-veto"
 # HISTORICAL rows only - see its own module-level comment for why it is retired, not removed.
 JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({JOIN_KEY_NO_EVIDENCE_SKIP_REASON, TRANSFERRED_INTERIM_GUARD_SKIP_REASON})
 
+# THE FRAME AGREEMENT VETO'S OWN REQUIRED EXTRACTORS (2026-07-30). `classify_frame_style` takes
+# exactly two inputs and each comes from a DIFFERENT extractor: `collector_line_collector_number`
+# from `collector_line_ocr`, and `illus_anchor_fired` from `artist_ocr`. This calculator's
+# eligibility query only ever guaranteed the first.
+#
+# PER-CHECK, NOT PER-CALCULATOR, deliberately. `local_detect_ai_art`/`local_lands_identify`/
+# `local_layout_class_cast` each declare ONE module-level `REQUIRED_EXTRACTOR_KEYS` because each
+# runs one check. This calculator runs several with genuinely different needs - the join-key
+# deduction itself needs only the collector line - so a calculator-wide gate would drop cards that
+# have everything their own decision requires. Scoping the requirement to the check that has it is
+# what keeps the gate from costing coverage it has no reason to cost.
+#
+# See `calculate_join_key_verdict`'s own call site for why THIS check, of the six ungated reads the
+# 2026-07-29 composition audit found, is the one that had to be gated: it is the only one whose
+# missing-data degradation is STRICT, and the skip reason it produces is not rescannable, so its
+# wrong answer is permanent for that content hash.
+FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS = frozenset({"collector_line_ocr", "artist_ocr"})
+
 # THE SET-CODE LEXICON GATE (module docstring) - a parsed `set_code` that matches no
 # `CanonicalExpansion.code` at all, same permanent-conclusion category as "no-text"/"ambiguous"
 # (re-selecting the same card against the same stored evidence would deterministically reproduce
@@ -796,14 +814,46 @@ def _apply_agreement_checks(
         # live-pilot pass already uses to compute it: whether a collector NUMBER was parsed
         # (post-2003 templates print one; pre-M15 templates never do) and whether the "Illus."
         # anchor fired (artist_ocr's own byproduct). PROTECTED CORE call, not a reimplementation.
-        frame_class = classify_frame_style(
-            parsed_a_collector_number=bool(evidence.collector_line_collector_number),
-            illus_anchor_fired=bool(evidence.illus_anchor_fired),
-        )
-        if not frame_style_is_consistent(frame_class, metadata.frame):
-            # THE FRAME AGREEMENT VETO (module docstring) - mirrors
-            # local_identify_printing_tags.py's own frame-mismatch-withholding exactly.
-            return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON, detail=detail)
+        #
+        # GATED ON `artist_ocr` HAVING ACTUALLY RUN (2026-07-30, closing the 2026-07-29 composition
+        # audit's §5 second row). This calculator's eligibility query filters on
+        # `extractor_versions__has_key="collector_line_ocr"` and then reads SIX extractors' fields
+        # ungated. Most of those degrade PERMISSIVELY when their extractor never ran - a blank
+        # legal line reads as "nothing to compare", a null `image_is_truncated` reads as "not
+        # truncated" - and a permissive degradation is recoverable, because the human-backed
+        # consensus gate still stands between it and any resolution.
+        #
+        # THIS ONE DEGRADES STRICT, WHICH IS WHY IT IS THE ONE FIXED FIRST. `illus_anchor_fired` is
+        # NULLABLE, and `bool(None)` is `False`, which is indistinguishable from "artist_ocr ran
+        # and found no anchor". With no collector number either, `classify_frame_style` then
+        # returns "modern" for a card it has no anchor evidence about at all - and a genuine
+        # OLD-frame printing is vetoed `frame-mismatch`. That reason is deliberately NOT in
+        # `JOIN_KEY_RESCANNABLE_SKIP_REASONS`, so the wrong conclusion is PERMANENT for that
+        # content hash: the card never becomes eligible again, and no later Stage C pass can undo
+        # it. A wrong answer nothing can revisit is strictly worse than a missing one.
+        #
+        # So an absent `artist_ocr` skips the frame check entirely rather than evaluating it on
+        # invented input. That is not a new rule - it is the "missing data is not evidence" rule
+        # this function's own docstring already states, and which the copyright-year check and the
+        # `metadata is None` case above already follow. The card keeps its match at its
+        # already-computed confidence, and once Stage C fills `artist_ocr` in, the check runs for
+        # real. `artist_ocr` is at 220,579/220,579 coverage in production today, so this changes
+        # nothing about the current catalogue: it removes a trap, it does not loosen a live gate.
+        #
+        # `REQUIRED_EXTRACTOR_KEYS` is the pattern `local_detect_ai_art`, `local_lands_identify`
+        # and `local_layout_class_cast` already use, applied here per-CHECK rather than
+        # per-calculator: this calculator's other checks have genuinely different key
+        # requirements, and one calculator-wide gate would drop cards that only ever needed the
+        # collector line.
+        if FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS <= evidence.extractor_versions.keys():
+            frame_class = classify_frame_style(
+                parsed_a_collector_number=bool(evidence.collector_line_collector_number),
+                illus_anchor_fired=bool(evidence.illus_anchor_fired),
+            )
+            if not frame_style_is_consistent(frame_class, metadata.frame):
+                # THE FRAME AGREEMENT VETO (module docstring) - mirrors
+                # local_identify_printing_tags.py's own frame-mismatch-withholding exactly.
+                return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON, detail=detail)
 
         # THE COPYRIGHT-YEAR ERA CHECK (module docstring) - reuses the SAME metadata row the
         # border/frame checks above already fetched, no second query. Skipped entirely (not a
@@ -2470,6 +2520,7 @@ __all__ = [
     "JOIN_KEY_CONFIDENCE_SYMBOL_TIEBREAK",
     "JOIN_KEY_NO_MATCH_CONFIDENCE",
     "JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT",
+    "FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS",
     "JOIN_KEY_RESCANNABLE_SKIP_REASONS",
     "TRANSFERRED_INTERIM_GUARD_SKIP_REASON",
     "JOIN_KEY_NO_HIT_SKIP_REASONS",

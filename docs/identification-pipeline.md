@@ -218,6 +218,31 @@ identity, and (safety) nothing already resolved. Then five stages per card:
   catalog-required on every genuine upload, so presence proves nothing about
   which printing this is. (Until the #294 re-scan it wrongly vetoed 1,552
   validated matches — the re-scan un-blocks them.)
+
+  **A check whose extractor never ran does not run (2026-07-30).** The
+  calculator's eligibility query only guarantees `collector_line_ocr`, and it
+  then reads six extractors' fields. Most degrade _permissively_ when their
+  extractor is absent — a blank legal line is "nothing to compare", a null
+  truncation flag is "not truncated" — and permissive is recoverable, because
+  the human-backed gate below still stands in the way.
+
+  The frame check was the exception, and it is now gated on `artist_ocr`.
+  `illus_anchor_fired` is nullable, so `bool(None)` reads as "the anchor did
+  not fire" — indistinguishable from "the extractor never looked". On a card
+  with no collector number either, the classifier then answers `modern` about
+  a card it has no anchor evidence for, and a genuine old-frame printing is
+  withheld as `frame-mismatch`. That reason is deliberately **not**
+  rescannable, so the wrong conclusion is _permanent_ for that content hash:
+  no later pass can revisit it. A wrong answer nothing can revisit is worse
+  than a missing one, so an absent `artist_ocr` now skips the check and leaves
+  the match standing — the same "missing data is not evidence" rule the
+  copyright-year check already follows. Skipping the _check_ is not skipping
+  the _card_.
+
+  The requirement is declared per-check, not per-calculator: the join-key
+  deduction itself needs only the collector line, and one calculator-wide gate
+  would drop cards that have everything their own decision requires.
+
 - **g5 — the vote, never the verdict.** A match casts one machine
   CardPrintingTag vote: weight 0.5, with an ordinal confidence label
   (0.85/0.75/0.65 — a pipeline-state rank, _not_ a probability, and verified
