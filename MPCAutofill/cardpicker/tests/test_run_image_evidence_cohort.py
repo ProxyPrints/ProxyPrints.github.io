@@ -186,22 +186,29 @@ def test_empty_cohort_still_exits_cleanly(capsys: pytest.CaptureFixture) -> None
 
 
 @pytest.mark.django_db(transaction=True)
-def test_card_ids_file_bypasses_the_resume_filter(
+def test_card_ids_file_re_extracts_a_card_a_prior_run_already_completed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, tmp_path: Any
 ) -> None:
-    """issue #259's targeted re-extraction path: a card already carrying a FULL
-    `ImageEvidence.extractor_versions` (normally excluded by the resume filter, see the module
-    docstring's step 2) must still be picked up when it's named explicitly via
-    `--card-ids-file` - that's the whole point of the flag (a forced re-run against cards whose
-    evidence already exists, e.g. to re-OCR with issue #259's improved preprocessing)."""
-    from cardpicker.management.commands.run_image_evidence_cohort import (
-        MANIFEST_EXTRACTOR_KEYS,
-    )
+    """issue #259's targeted re-extraction path: a card already carrying a FULL, CURRENT-VERSION
+    `ImageEvidence.extractor_versions` written by SOME EARLIER run must still be picked up when
+    it's named explicitly via `--card-ids-file`.
+
+    2026-07-30: this used to be a property of the flag itself, which hardcoded a bypass of the
+    resume filter. It is now a property of run-scoping - the stored row carries another run's
+    `run_id`, so THIS run has not done it - and the flag reduced to a pure scope narrowing. The
+    observable outcome asserted here is deliberately unchanged; only the mechanism moved.
+    `--only-never-extracted` is what suppresses this card now, and `TestResumeFilterRunScoping`
+    proves that half. Note the fixture uses the CURRENT version map, not `{key: "v1"}`: under the
+    old literal this test passed for the wrong reason (a `"v1"` value fails the version-aware
+    filter regardless, so the bypass it claimed to prove was never actually exercised)."""
     from cardpicker.tests.factories import ImageEvidenceFactory
 
     card = CardFactory(content_phash=123456789)
     ImageEvidenceFactory(
-        card=card, content_hash=123456789, extractor_versions={key: "v1" for key in MANIFEST_EXTRACTOR_KEYS}
+        card=card,
+        content_hash=123456789,
+        extractor_versions=dict(cohort_command.MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
+        run_id="some-earlier-run",
     )
 
     ids_file = tmp_path / "ids.txt"
@@ -224,6 +231,161 @@ def test_card_ids_file_bypasses_the_resume_filter(
     out = capsys.readouterr().out
     assert "explicit card ids" in out
     assert "completed=1/1" in out
+
+
+class TestResumeFilterRunScoping:
+    """
+    Stage C's resume filter is RUN-scoped, not identity-scoped (2026-07-30 owner directive: "a bulk
+    run redoes everything from scratch; flags tell it to narrow" / "prior runs cannot pollute, but
+    the current run can be resumed"). The Stage D half of the same directive landed in PR #604
+    (`local_calculate_verdicts._eligible_cards_queryset`) and never reached Stage C; this is that
+    predicate applied one layer up. See `already_extracted_card_ids`' own docstring.
+
+    Every test here exercises the predicate directly rather than through `call_command`, plus two
+    end-to-end cases that prove the command actually consults it - the split
+    `TestFetchOneCard`/`TestCohortStats` already use in this file.
+    """
+
+    @staticmethod
+    def _evidence(card_id: int, content_hash: int, run_id: object, **overrides: Any) -> None:
+        from cardpicker.tests.factories import ImageEvidenceFactory
+
+        versions = dict(cohort_command.MANIFEST_EXTRACTOR_CURRENT_VERSIONS)
+        versions.update(overrides.pop("versions", {}))
+        for key in overrides.pop("drop_keys", ()):
+            versions.pop(key)
+        ImageEvidenceFactory(card_id=card_id, content_hash=content_hash, extractor_versions=versions, run_id=run_id)
+
+    @pytest.mark.django_db
+    def test_a_prior_runs_completed_card_is_redone_from_scratch(self) -> None:
+        """THE HEADLINE BEHAVIOUR CHANGE. A card fully extracted at current versions by run A is
+        NOT skipped by run B. Before run-scoping this was skipped forever, which is what made a
+        field added without a version bump (`bleed_diff_mm`, NULL on 97.9% of rows) permanently
+        unreachable: every historical row read as current."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a")
+
+        assert cohort_command.already_extracted_card_ids("run-b") == set()
+
+    @pytest.mark.django_db
+    def test_this_runs_completed_card_is_skipped_so_a_killed_run_resumes(self) -> None:
+        """THE HARD REQUIREMENT the change must not break: within-run resume. A crashed 220k-card
+        run re-invoked with its own `--run-id` must not restart from zero."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a")
+
+        assert cohort_command.already_extracted_card_ids("run-a") == {card.pk}
+
+    @pytest.mark.django_db
+    def test_a_partially_extracted_card_from_this_run_is_not_skipped(self) -> None:
+        """Run-scoping narrows WHICH rows count as done; it does not weaken the manifest-
+        completeness half. A card this run got partway through is still outstanding work."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a", drop_keys=("artbox_phash",))
+
+        assert cohort_command.already_extracted_card_ids("run-a") == set()
+
+    @pytest.mark.django_db
+    def test_a_stale_version_from_this_run_is_not_skipped(self) -> None:
+        """The version-aware half of the predicate (issue #509) survives run-scoping: a row with
+        the KEY but an OLD VALUE is outstanding even when this run wrote it."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a", versions={"collector_line_ocr": "collector-line-ocr-v1"})
+
+        assert cohort_command.already_extracted_card_ids("run-a") == set()
+
+    @pytest.mark.django_db
+    def test_only_never_extracted_restores_the_identity_scoped_predicate(self) -> None:
+        """The narrowing flag, and the proof it is a genuine opt-in rather than decoration: the
+        SAME fixture that `test_a_prior_runs_completed_card_is_redone_from_scratch` says is redone
+        is skipped under the flag."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a")
+
+        assert cohort_command.already_extracted_card_ids("run-b", only_never_extracted=True) == {card.pk}
+
+    @pytest.mark.django_db
+    def test_only_never_extracted_still_rejects_a_stale_version(self) -> None:
+        """The narrowing flag narrows the RUN predicate only - it never weakens the version check.
+        A `collector-line-ocr-v1` row is outstanding under either scope."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a", versions={"collector_line_ocr": "collector-line-ocr-v1"})
+
+        assert cohort_command.already_extracted_card_ids("run-b", only_never_extracted=True) == set()
+
+    @pytest.mark.django_db
+    def test_a_null_run_id_row_is_never_this_runs_work(self) -> None:
+        """Historical rows predating `run_id` stamping carry NULL. They are somebody's completed
+        work but never THIS run's, so the default redoes them and only the flag skips them - the
+        conservative direction, and it must not be an accidental `None == ""` match."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, None)
+
+        assert cohort_command.already_extracted_card_ids("run-a") == set()
+        assert cohort_command.already_extracted_card_ids("run-a", only_never_extracted=True) == {card.pk}
+
+    @pytest.mark.django_db(transaction=True)
+    def test_the_command_reprocesses_a_prior_runs_card_end_to_end(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """`handle()` actually consults the run-scoped predicate - not just the helper in
+        isolation."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "some-earlier-run")
+
+        monkeypatch.setattr(cohort_command, "_fetch_one_card", _stub_fetch_ok)
+        monkeypatch.setattr(cohort_command, "_compute_one_card", _stub_compute_ok)
+        call_command(
+            "run_image_evidence_cohort", "--limit", "5", "--workers", "1", "--run-id", "fresh", "--skip-dryrun-check"
+        )
+
+        assert "completed=1/1" in capsys.readouterr().out
+
+    @pytest.mark.django_db(transaction=True)
+    def test_the_command_resumes_within_a_run_end_to_end(self, capsys: pytest.CaptureFixture) -> None:
+        """The resume contract end-to-end: re-invoking with the killed run's own `--run-id` finds
+        nothing left to do rather than re-paying the whole cohort's fetch+OCR cost."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a")
+
+        call_command(
+            "run_image_evidence_cohort", "--limit", "5", "--workers", "1", "--run-id", "run-a", "--skip-dryrun-check"
+        )
+
+        out = capsys.readouterr().out
+        assert "Resume filter (run_id=run-a): skipping 1 already-fully-processed cards" in out
+        assert "Nothing to do." in out
+
+    @pytest.mark.django_db(transaction=True)
+    def test_card_ids_file_now_resumes_within_a_run_instead_of_always_forcing(
+        self, capsys: pytest.CaptureFixture, tmp_path: Any
+    ) -> None:
+        """THE GENERALISATION (brief: "--card-ids-file already forces re-extraction for an explicit
+        id list - the ability exists but is the wrong shape... extend or generalise; do not
+        duplicate"). Forcing re-extraction is now the DEFAULT for every path, so the flag's own
+        hardcoded bypass is gone and the run-scoped filter applies to it too. That is a strict
+        gain: a killed TARGETED re-extraction resumes, which under the bypass it could never do.
+        The complementary case - another run's card IS still re-extracted through this flag - is
+        `test_card_ids_file_re_extracts_a_card_a_prior_run_already_completed` above."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a")
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text(f"{card.pk}\n")
+
+        call_command(
+            "run_image_evidence_cohort",
+            "--card-ids-file",
+            str(ids_file),
+            "--workers",
+            "1",
+            "--run-id",
+            "run-a",
+            "--skip-dryrun-check",
+        )
+
+        out = capsys.readouterr().out
+        assert "0 explicit card ids after the resume filter" in out
+        assert "Nothing to do." in out
 
 
 @pytest.mark.django_db(transaction=True)

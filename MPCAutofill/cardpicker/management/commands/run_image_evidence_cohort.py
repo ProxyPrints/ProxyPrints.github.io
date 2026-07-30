@@ -150,10 +150,14 @@ however many (id, name) pairs are in scope - no per-row DB round trip.
 
 Resume/kill-safety: `persist_evidence` is already idempotent per (card, content_hash) - a
 re-run overwrites the same row rather than erroring or duplicating. This command ALSO applies a
-resume filter up front (skip any card whose ImageEvidence row already carries every manifest
-extractor's version key) so a re-invocation after a kill does not re-pay the fetch+OCR cost for
+resume filter up front so a re-invocation after a kill does not re-pay the fetch+OCR cost for
 cards already done, matching task #147's resume-contract spirit without building its full
 run-ledger machinery (explicitly out of scope for this bounded run per its own directive).
+SINCE 2026-07-30 THAT FILTER IS RUN-SCOPED: it skips cards THIS `run_id` already finished, not
+cards SOME run once finished, so a plain invocation redoes the catalogue from scratch and a
+resume is `--run-id <the killed run's id>`. `--only-never-extracted` narrows back to the old
+identity-scoped predicate. See `already_extracted_card_ids`' own docstring for the full argument
+and for the `bleed_diff_mm` case that made the old predicate a permanent blind spot.
 `MANIFEST_EXTRACTOR_KEYS` and `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` are kept in sync with
 `image_evidence.compute_card_evidence`'s own `extractor_versions` assignments (11 keys as of
 color_profile's retirement 2026-07-27) - stale here would silently under-count "already done"
@@ -332,6 +336,53 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "legal_line": "legal-line-v2",
     "quality_signals": "quality-signals-v1",
 }
+
+
+def already_extracted_card_ids(run_id: str, only_never_extracted: bool = False) -> set[int]:
+    """
+    RUN-SCOPED RESUME (2026-07-30 owner directive: "a bulk run redoes everything from scratch;
+    flags tell it to narrow" / "prior runs cannot pollute, but the current run can be resumed").
+    This is `local_calculate_verdicts._eligible_cards_queryset`'s run-scoping (PR #604) applied one
+    layer up, to Stage C. Read that function's docstring first - the argument is the same one and
+    is not restated in full here.
+
+    THE DEFAULT (`only_never_extracted=False`) SCOPES TO `run_id`. A card counts as done only when
+    its `ImageEvidence` row carries every `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` entry AND was last
+    written by THIS run (`ImageEvidence.run_id`, which `image_evidence.persist_evidence` and
+    `evidence_transfer.transfer_evidence` both stamp unconditionally on every write). Since
+    `--run-id` defaults to a fresh timestamp, a plain invocation finds nothing already done and
+    redoes the catalogue from scratch; re-invoking with the SAME `--run-id` skips exactly the cards
+    that run already completed. That is the whole mechanism, and it is what "within-run resume must
+    keep working" reduces to: a killed 220k-card run resumes with `--run-id <its own id>`.
+
+    WHAT THIS FIXES, beyond the from-scratch ruling. The previous predicate was IDENTITY-scoped -
+    "has this card ever been extracted at these versions" - which made a FIELD ADDED WITHOUT A
+    VERSION BUMP permanently unreachable. `ImageEvidence.bleed_diff_mm` is the measured case: NULL
+    on 215,921 of 220,579 rows (97.9%), 213,131 of those on rows whose `bleed_class` is a confident
+    `bleed` (so `compute_bleed_diff_mm`'s abstain path did not apply). Every row carries the one
+    and only `geometry_bleed` version, `geometry-bleed-v1`, so a v1 manifest written BEFORE the
+    field existed is indistinguishable from a v1 manifest written after, reads as current, and is
+    skipped forever. Run-scoping removes the "forever": the next from-scratch run re-extracts it.
+
+    `only_never_extracted=True` restores the pre-2026-07-30 identity-scoped predicate verbatim, as
+    a NARROWING flag - the direction the owner's rule requires ("default the default things,
+    disable them with flags"). Note the stale-v1 trap above still applies under that flag, and a
+    version bump is still the correct tool for it there; run-scoping only takes the trap off the
+    DEFAULT path.
+
+    Scoped in SQL rather than in Python (`ImageEvidence.run_id` is `db_index=True`) so the default
+    path no longer streams all 220,579 `extractor_versions` blobs through this process just to
+    discard them - `.iterator()` is kept for the `only_never_extracted` path, which still must.
+    """
+    rows = ImageEvidence.objects.all()
+    if not only_never_extracted:
+        rows = rows.filter(run_id=run_id)
+    return {
+        card_id
+        for card_id, extractor_versions in rows.values_list("card_id", "extractor_versions").iterator()
+        if MANIFEST_EXTRACTOR_CURRENT_VERSIONS.items() <= extractor_versions.items()
+    }
+
 
 DEFAULT_LIMIT = 3000
 # Usable compute OCPUs (owner-confirmed hardware, 2026-07-20): 8 OCPU total, 1 pinned to network
@@ -989,9 +1040,25 @@ class Command(BaseCommand):
             help="Path to a newline-separated file of explicit card pks to (re-)extract - "
             "issue #259's targeted re-extraction path (reparse_collector_evidence's own "
             "--selector no-text runbook calls for this to refresh a specific no-text cohort's "
-            "OCR read with improved preprocessing). When given, BOTH the edhrec_rank priority "
-            "ordering AND the resume/'already fully processed' filter are bypassed for exactly "
-            "these ids - a forced re-run, not a normal cohort slice - and --limit is ignored.",
+            "OCR read with improved preprocessing). When given, the edhrec_rank priority ordering "
+            "is bypassed and --limit is ignored. Since 2026-07-30 this flag is PURELY a scope "
+            "narrowing: forcing re-extraction is now the DEFAULT for every path (see "
+            "--only-never-extracted), so this no longer needs its own bypass of the resume "
+            "filter - the run-scoped filter applies here too, which is a strict gain (a killed "
+            "targeted re-extraction now resumes instead of restarting).",
+        )
+        parser.add_argument(
+            "--only-never-extracted",
+            action="store_true",
+            default=False,
+            help="NARROW the cohort to cards NO run has ever extracted at the current manifest "
+            "versions - the pre-2026-07-30 identity-scoped resume filter, now opt-in. The default "
+            "is run-scoped: a fresh --run-id redoes the catalogue from scratch, and re-invoking "
+            "with the SAME --run-id resumes exactly where the previous invocation stopped (owner "
+            "ruling: 'a bulk run redoes everything from scratch; flags tell it to narrow'). Use "
+            "this to top up coverage cheaply when you are confident no field or classifier "
+            "changed under a fixed extractor version - see already_extracted_card_ids' own "
+            "docstring for the bleed_diff_mm case where that confidence was misplaced.",
         )
         parser.add_argument(
             "--no-shortcircuit",
@@ -1018,8 +1085,10 @@ class Command(BaseCommand):
             "in-flight work drains and exits non-zero, instead of running until the OS OOM-killer "
             "intervenes. Off by default (no ceiling) - the underlying leak this guards against is "
             "fixed in this same change, so this is defense-in-depth, not the primary fix. Safe to "
-            "set because a re-invocation picks up exactly where a stopped run left off (the "
-            "resume filter - see module docstring's 'Resume/kill-safety' section).",
+            "set because a re-invocation CARRYING THIS RUN'S --run-id picks up exactly where the "
+            "stopped run left off (the resume filter is run-scoped since 2026-07-30 - see module "
+            "docstring's 'Resume/kill-safety' section; the run prints its own resume line at "
+            "startup). A re-invocation WITHOUT --run-id starts the cohort over, by design.",
         )
         # Forced-dry-run guard (issue #362, Phase 0 rails, narrowed per owner decision on PR #373's
         # review - see the guard's own call site in handle() for the full reasoning): applies ONLY
@@ -1046,13 +1115,19 @@ class Command(BaseCommand):
         # image_evidence.compute_card_evidence's own STAGE_C_NO_SHORTCIRCUIT env-var default
         # (short-circuit ON unless that env var is set) - see this flag's own --help.
         short_circuit: Optional[bool] = False if options["no_shortcircuit"] else None
+        only_never_extracted: bool = options["only_never_extracted"]
 
         self.stdout.write(
             f"run_id={run_id} limit={limit} workers={workers} fetch_threads={fetch_threads} "
             f"queue_depth={queue_depth} dry_run={dry_run} profile={profile} "
             f"no_shortcircuit={options['no_shortcircuit']} max_rss_mb={max_rss_mb} "
+            f"only_never_extracted={only_never_extracted} "
             "(decoupled fetch/compute pipeline)"
         )
+        # The resume filter is run-scoped by default (see already_extracted_card_ids), so a
+        # re-invocation must carry this run_id back or it starts over. Printed up front, where an
+        # operator watching a run that is about to be killed can still copy it.
+        self.stdout.write(f"To resume this run after a stop: --run-id {run_id}")
         if profile:
             self.stdout.write(f"Profile JSONL: {profile_output}")
 
@@ -1097,15 +1172,28 @@ class Command(BaseCommand):
         )
 
         try:
+            # Resume filter, computed for BOTH selection paths (2026-07-30). It used to be built
+            # only inside the --limit branch, so --card-ids-file carried its own hardcoded "force
+            # a re-run" bypass. Under run-scoping that bypass is redundant - forcing re-extraction
+            # is what the DEFAULT does now - and keeping it would have left the targeted path the
+            # one path that cannot resume after a kill. One predicate, both paths.
+            already_done_ids = already_extracted_card_ids(run_id, only_never_extracted=only_never_extracted)
+            if already_done_ids:
+                self.stdout.write(
+                    f"Resume filter ({'never-extracted-by-any-run' if only_never_extracted else f'run_id={run_id}'}): "
+                    f"skipping {len(already_done_ids)} already-fully-processed cards"
+                )
+
             card_ids_file: Optional[str] = options["card_ids_file"]
             if card_ids_file:
-                # Targeted re-extraction path (issue #259) - explicit ids, priority ordering AND
-                # the resume filter both bypassed (see this flag's own --help): the whole point of
-                # using it is to force a re-run against cards whose ImageEvidence already exists.
-                cohort_ids = read_card_ids_file(card_ids_file)
+                # Targeted re-extraction path (issue #259) - explicit ids, priority ordering
+                # bypassed (see this flag's own --help).
+                cohort_ids = [
+                    card_id for card_id in read_card_ids_file(card_ids_file) if card_id not in already_done_ids
+                ]
                 self.stdout.write(
-                    f"--card-ids-file given: {len(cohort_ids)} explicit card ids "
-                    "(priority ordering and the resume filter are bypassed for these)"
+                    f"--card-ids-file given: {len(cohort_ids)} explicit card ids after the resume filter "
+                    "(priority ordering bypassed)"
                 )
             else:
                 # Step 1: cheap name -> min(edhrec_rank) map - see module docstring for why this
@@ -1126,22 +1214,8 @@ class Command(BaseCommand):
                     f"Built name->edhrec_rank map ({len(name_rank)} names) in {time.monotonic() - t0:.2f}s"
                 )
 
-                # Step 2: resume filter - cards whose ImageEvidence row already has every manifest key.
-                # .iterator() (2026-07-24 IO audit finding 4): without it, Django caches the FULL
-                # result set (every ImageEvidence row's extractor_versions JSON blob) in memory
-                # before this loop can even start, instead of streaming via server-side cursor -
-                # matching Step 1's own rank_rows.iterator() just above, and worth being
-                # deliberate about given this exact command's own OOM history (see module
-                # docstring's "PARENT-PROCESS MEMORY LEAK" section) and that ImageEvidence is the
-                # fastest-growing table in this pipeline.
-                already_done_ids: set[int] = set()
-                for card_id, extractor_versions in ImageEvidence.objects.values_list(
-                    "card_id", "extractor_versions"
-                ).iterator():
-                    if MANIFEST_EXTRACTOR_CURRENT_VERSIONS.items() <= extractor_versions.items():
-                        already_done_ids.add(card_id)
-                if already_done_ids:
-                    self.stdout.write(f"Resume filter: skipping {len(already_done_ids)} already-fully-processed cards")
+                # Step 2 (the resume filter) is now computed above, once, for both selection
+                # paths - see already_extracted_card_ids.
 
                 # Step 3: candidate (id, name) pairs, cheapest possible shape for the Python-side sort.
                 candidates = (

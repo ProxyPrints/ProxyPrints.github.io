@@ -1014,15 +1014,44 @@ Before scheduling a bulk extraction run (`run_image_evidence_cohort`,
    resume until the trip is cleared — forgetting this is the most common
    post-bulk-run surprise.
 
-3. **Version-aware resume filter.** The `MANIFEST_EXTRACTOR_CURRENT_VERSIONS`
-   dict (`run_image_evidence_cohort.py`) maps each extractor key to its
-   current expected version string. A card whose `ImageEvidence` row has all
-   keys present but at an older version (e.g. `collector_line_ocr` at
-   `"collector-line-ocr-v1"` when the current version is `"v2"`) is
-   re-processed, not skipped. This means a version bump in
-   `image_evidence.py` (e.g. the OCR engine flip, issue #480) correctly
-   triggers a full re-extraction of affected cards on the next bulk pass —
-   no manual row deletion needed.
+3. **Run-scoped, version-aware resume filter.** Two independent halves; a card
+   is skipped only if BOTH say so.
+
+   - **Run scope (2026-07-30).** A card counts as done only when THIS run's
+     `run_id` last wrote its `ImageEvidence` row. `--run-id` defaults to a
+     fresh timestamp, so **a plain invocation redoes the catalogue from
+     scratch**, and **you resume a killed run by re-invoking it with that
+     run's own `--run-id`** — which the command prints on its second startup
+     line for exactly this purpose. This is the Stage C half of the owner
+     ruling PR #604 implemented for Stage D: _a bulk run redoes everything
+     from scratch; flags tell it to narrow._ Re-invoking WITHOUT `--run-id`
+     starts over; that is the design, not a regression.
+
+     `--only-never-extracted` narrows back to the pre-2026-07-30 predicate
+     ("has any run ever extracted this at current versions"). Reach for it to
+     top up coverage cheaply, and only when you are confident nothing changed
+     under a fixed extractor version — see the next bullet for why that
+     confidence is not free.
+
+   - **Version awareness.** The `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` dict
+     (`run_image_evidence_cohort.py`) maps each extractor key to its current
+     expected version string. A card whose `ImageEvidence` row has all keys
+     present but at an older version (e.g. `collector_line_ocr` at
+     `"collector-line-ocr-v1"` when the current version is `"v2"`) is
+     re-processed. So a version bump in `image_evidence.py` (e.g. the OCR
+     engine flip, issue #480) correctly triggers re-extraction of affected
+     cards — no manual row deletion needed.
+
+   **Why run scope was added.** Version awareness only catches what somebody
+   remembered to version. A FIELD added to an extractor WITHOUT a version bump
+   leaves every historical row reading as current, so the old identity-scoped
+   filter skipped it forever. `ImageEvidence.bleed_diff_mm` is the measured
+   case: NULL on 215,921 of 220,579 rows (97.9%), and 213,131 of those sit on
+   rows whose `bleed_class` is a confident `bleed`, so the extractor's own
+   abstain path does not explain it. All rows carry the single version
+   `geometry-bleed-v1`. Under run scope the next from-scratch pass reaches it.
+   Under `--only-never-extracted` it is still stranded, and a version bump is
+   still the right tool there.
 
 4. **Fresh git SHA.** Every `PilotRunLedger` row records
    `git_sha=get_baked_git_sha()`. If a bulk run spans a deploy, ledger rows
