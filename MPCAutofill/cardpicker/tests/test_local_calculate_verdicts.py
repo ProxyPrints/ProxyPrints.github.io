@@ -35,14 +35,18 @@ from cardpicker.local_calculate_verdicts import (
     FALLBACK_NO_EVIDENCE_SKIP_REASON,
     FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
     FALLBACK_RESCANNABLE_SKIP_REASONS,
+    FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS,
     JOIN_KEY_ANONYMOUS_ID,
     JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON,
+    JOIN_KEY_BORDER_MISMATCH_SKIP_REASON,
     JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT,
     JOIN_KEY_CONFIDENCE_BOTH,
     JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY,
     JOIN_KEY_CONFIDENCE_SYMBOL_TIEBREAK,
+    JOIN_KEY_FRAME_MISMATCH_SKIP_REASON,
     JOIN_KEY_NO_HIT_SKIP_REASONS,
     JOIN_KEY_NO_MATCH_CONFIDENCE,
+    JOIN_KEY_RESCANNABLE_SKIP_REASONS,
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
     RESOLUTION_FLOOR_DPI,
     SLOW_PATH_ANONYMOUS_ID,
@@ -122,7 +126,13 @@ def _hash_of(expansion_code: str) -> int:
 def _evidence(card, **overrides):
     defaults = dict(
         content_hash=card.content_phash or 0,
-        extractor_versions={"collector_line_ocr": "collector-line-ocr-v1"},
+        # BOTH OCR extractors by default (2026-07-30). Production has `artist_ocr` at
+        # 220,579/220,579 coverage, so the default fixture must too - the frame agreement veto
+        # reads `illus_anchor_fired` and is now gated on `artist_ocr` having actually run
+        # (`FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS`), and a default that silently omitted it would
+        # turn every frame-veto test into a no-op. `TestFrameVetoRequiresArtistOcr` overrides this
+        # to exercise the absent case deliberately.
+        extractor_versions={"collector_line_ocr": "collector-line-ocr-v1", "artist_ocr": "artist-ocr-v2"},
         collector_line_raw_text="",
         collector_line_set_code="",
         collector_line_collector_number="",
@@ -3434,3 +3444,119 @@ class TestSlowPathIllustrationExclusion:
         assert not CardScanLog.objects.filter(
             card=resolved, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
         ).exists()
+
+
+class TestFrameVetoRequiresArtistOcr:
+    """
+    THE ONE UNGATED READ THAT DEGRADES STRICT (2026-07-30, closing the 2026-07-29 composition
+    audit's §5 second row).
+
+    `run_join_key_calculator` filters eligibility on
+    `extractor_versions__has_key="collector_line_ocr"` and then reads SIX extractors' fields
+    ungated. Five of those degrade PERMISSIVELY when their extractor never ran - a blank legal line
+    reads as "nothing to compare", a null `image_is_truncated` reads as "not truncated" - and a
+    permissive degradation is recoverable, because the human-backed consensus gate still stands
+    between it and any resolution.
+
+    The frame veto is the exception. `illus_anchor_fired` is NULLABLE and `bool(None)` is `False`,
+    which is indistinguishable from "artist_ocr ran and found no anchor". With no collector number
+    either, `classify_frame_style` returns "modern" for a card it has no anchor evidence about, and
+    a genuine OLD-frame printing is vetoed `frame-mismatch` - a reason deliberately NOT in
+    `JOIN_KEY_RESCANNABLE_SKIP_REASONS`, so the wrong conclusion is PERMANENT for that content
+    hash. That is why this read, of the six, is the one gated.
+    """
+
+    def _old_frame_setup(self, extractor_versions):
+        """A pre-M15 printing: `frame="1993"` (old), and NO collector number on the card face -
+        exactly the shape whose frame class is decided entirely by `illus_anchor_fired`. The match
+        itself comes from a unique collector-number-free candidate, so the frame veto is the only
+        thing that can withhold it."""
+        printing = CanonicalCardFactory(name="Frame Gate Card", expansion__code="lea", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, frame="1993")
+        card = CardFactory(name="Frame Gate Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="lea", collector_number="158")]
+        evidence = _evidence(
+            card,
+            extractor_versions=extractor_versions,
+            collector_line_set_code="lea",
+            collector_line_collector_number="158",
+            illus_anchor_fired=None,
+        )
+        return printing, card, candidates, evidence
+
+    def test_a_missing_artist_ocr_does_not_permanently_veto_a_genuine_old_frame_card(self, db):
+        """THE DEFECT. `artist_ocr` never ran, so `illus_anchor_fired` is NULL - unknown, not
+        False. The frame check must not run at all rather than manufacture "modern" from it."""
+        printing, card, candidates, evidence = self._old_frame_setup({"collector_line_ocr": "collector-line-ocr-v2"})
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.skip_reason != JOIN_KEY_FRAME_MISMATCH_SKIP_REASON
+        assert verdict.printing_pk == printing.pk
+
+    def test_the_same_card_is_still_vetoed_once_artist_ocr_has_run(self, db):
+        """THE CONTROL, and the half that stops this being a licence to drop the veto. With
+        `artist_ocr` present, a NULL `illus_anchor_fired` means the extractor ran and found no
+        anchor - a real negative - so "modern" is a genuine reading and the veto fires exactly as
+        it always did. Same card, same evidence, one extra manifest key."""
+        printing, card, candidates, evidence = self._old_frame_setup(
+            {"collector_line_ocr": "collector-line-ocr-v2", "artist_ocr": "artist-ocr-v2"}
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.skip_reason == JOIN_KEY_FRAME_MISMATCH_SKIP_REASON
+        assert verdict.printing_pk is None
+
+    def test_the_frame_mismatch_reason_is_still_not_rescannable(self, db):
+        """WHY THE GATE HAD TO EXIST RATHER THAN THE REASON BEING MADE RESCANNABLE. If
+        `frame-mismatch` were re-selectable, a later Stage C pass could undo a wrong veto and this
+        would be a transient bug. It is not, deliberately - a genuine frame contradiction is a
+        repeatable conclusion about stored evidence. Pinned here so a future change that adds it to
+        the rescannable set has to confront the fact that it is what makes the veto permanent."""
+        assert JOIN_KEY_FRAME_MISMATCH_SKIP_REASON not in JOIN_KEY_RESCANNABLE_SKIP_REASONS
+
+    def test_the_gate_names_both_extractors_the_classifier_actually_reads(self, db):
+        """`classify_frame_style`'s two arguments come from two DIFFERENT extractors, and the
+        eligibility query only ever guaranteed the first. Pinning both means a future extractor
+        rename cannot quietly shrink the gate to the half that was never the problem."""
+        assert FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS == frozenset({"collector_line_ocr", "artist_ocr"})
+
+    def test_an_agreeing_frame_still_matches_when_artist_ocr_is_absent(self, db):
+        """The gate must not turn a good match into a skip either - skipping the CHECK is not
+        skipping the CARD."""
+        printing = CanonicalCardFactory(name="Frame Gate Modern", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, frame="2015")
+        card = CardFactory(name="Frame Gate Modern")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            extractor_versions={"collector_line_ocr": "collector-line-ocr-v2"},
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
+
+    def test_the_border_veto_is_unaffected_by_the_frame_gate(self, db):
+        """The gate is scoped to the frame check alone. A border mismatch on a card with no
+        `artist_ocr` must still withhold - `layout_class` comes from a different extractor and its
+        own degradation is permissive, which is a separate question this PR does not touch."""
+        printing = CanonicalCardFactory(name="Border Still Vetoes", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="white", frame="2015")
+        card = CardFactory(name="Border Still Vetoes")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            extractor_versions={"collector_line_ocr": "collector-line-ocr-v2"},
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            layout_class="black",
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.skip_reason == JOIN_KEY_BORDER_MISMATCH_SKIP_REASON
