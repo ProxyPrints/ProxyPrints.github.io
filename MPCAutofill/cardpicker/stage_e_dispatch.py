@@ -250,6 +250,14 @@ class DispatchOutcome:
     # one just narrows down which completions were transfers vs. real fetch+extraction work.
     stage_c_transferred: int = 0
     stage_c_fetch_failures: int = 0
+    # Cards this batch DEFERRED because the destination answered 429/503 (2026-07-30 owner rate
+    # ruling). Deliberately NOT folded into `stage_c_fetch_failures`, and deliberately NOT recorded
+    # on the operating envelope's fetch-outcome window: a throttled card is not a FAILED card, it
+    # is an UNPROCESSED one that the next pass's own Stage C backlog walk picks up, at a pace the
+    # limiter has already slowed. A non-zero value here is the run reporting "I am being rate-
+    # limited and I am still going" - the graceful degradation the ruling asks for, and what an
+    # operator now reads instead of an exit-3 envelope trip.
+    stage_c_fetch_throttled: int = 0
     stage_d_join_key_votes: int = 0
     stage_d_fallback_votes: int = 0
     stage_d_slow_path_routed: int = 0
@@ -646,6 +654,16 @@ class _StageCFetchOutcome:
     # resolved on the fetch thread, which must stay purely I/O-bound. Defaulted (like every field
     # after `lockout` here) so the two error/lockout constructions above stay keyword-complete.
     card_name: str = ""
+    # `throttled=True` iff this card's own fetch raised `harvest_fetch_limiter
+    # .DestinationThrottledError` (a 429/503 from the destination) - RATE PRESSURE, the third and
+    # mildest of this dataclass's three failure severities, added 2026-07-30 under the owner rate
+    # ruling ("the limit needs to throttle not shut it down"). The other two both STOP the fetch
+    # thread (`lockout` and `error` each set `stop_event` and return); this one does NOT - the
+    # thread proceeds to the next card, and the limiter's own already-widened pacing interval is
+    # what makes that next fetch slower. The compute loop must NOT record a throttled outcome onto
+    # the fetch-outcome window: doing so is exactly what used to let sustained rate pressure trip
+    # `EnvelopeTrip.Bar.FETCH_FAILURE_RATE` and hard-stop the whole unattended pass.
+    throttled: bool = False
 
 
 def _stage_c_fetch_ahead_worker(
@@ -691,7 +709,18 @@ def _stage_c_fetch_ahead_worker(
     failure the resume contract requires. Caught here as a bare `Exception`, packaged onto the
     outcome's own `error` field, and this thread stops (same "no further cards attempted" posture
     as a lockout) - the compute loop re-raises it in the MAIN thread the instant it's seen.
+
+    A THROTTLE (2026-07-30 owner rate ruling: "the limit needs to throttle not shut it down") is
+    the one severity that does NOT stop this thread. `DestinationThrottledError` means the
+    destination answered 429/503 and `harvest_fetch_limiter` has ALREADY widened its own pacing
+    interval; the correct response is to mark this one card deferred (`throttled=True`) and CARRY
+    ON to the next card, whose fetch will now be slower because of that widening. `stop_event` is
+    deliberately NOT set, no error is packaged, and the run continues at a degraded rate. Note the
+    ordering constraint this creates: `except DestinationThrottledError` must sit ABOVE the broad
+    `except Exception`, or the throttle is swallowed into the stop-the-thread path and the whole
+    conversion is undone.
     """
+    from cardpicker.harvest_fetch_limiter import DestinationThrottledError
     from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
 
     for card in cards:
@@ -716,6 +745,26 @@ def _stage_c_fetch_ahead_worker(
                 )
             )
             return
+        except DestinationThrottledError:
+            # NOT a stop - see this function's own docstring. No `stop_event.set()`, no `return`:
+            # the loop proceeds to the next card at the limiter's newly-widened pace.
+            logger.warning(
+                "Stage E dispatch: throttled fetching card %s - deferring it and continuing at a slower pace",
+                card.pk,
+            )
+            out_queue.put(
+                _StageCFetchOutcome(
+                    card_id=card.pk,
+                    content_hash=card.content_phash,
+                    md5_checksum=card.md5_checksum,
+                    sha256_checksum=card.sha256_checksum,
+                    image_bytes=None,
+                    fetch_latency_ms=0.0,
+                    card_name=card.name,
+                    throttled=True,
+                )
+            )
+            continue
         except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring above
             stop_event.set()
             out_queue.put(
@@ -921,6 +970,22 @@ def _run_stage_c(
                 logger.error("Stage E dispatch: GoogleFetchLockoutError observed - halting Stage C for this batch")
                 trip = check_envelope(_sample_envelope_signals(google_lockout=True), run_id=run_id)
                 break
+
+            if fetch_outcome.throttled:
+                # THE HALT->THROTTLE CONVERSION (2026-07-30 owner rate ruling). This branch MUST
+                # sit above the `image_bytes is None` one below (a throttled outcome also carries
+                # `image_bytes=None`) and MUST NOT touch `_window`. Recording a throttle as a
+                # fetch FAILURE is what used to make sustained rate pressure indistinguishable
+                # from a broken dependency: at >1% of a rolling 500-card window it tripped
+                # `EnvelopeTrip.Bar.FETCH_FAILURE_RATE`, which is a HARD STOP requiring a human
+                # `resolve_envelope_trip` acknowledgement and exits `stream_full_catalog` with
+                # code 3 - killing a 230,753-card unattended pass over a condition whose correct
+                # answer is "go slower". The card is simply not processed this pass; the Stage C
+                # backlog walk re-selects it later, by which time the limiter's pacing has either
+                # decayed back toward the ceiling or settled at a rate the destination tolerates.
+                # The OTHER three bars are untouched: host load, RSS and a 403 lockout still halt.
+                outcome.stage_c_fetch_throttled += 1
+                continue
 
             if fetch_outcome.image_bytes is None:
                 _window.record(success=False)
@@ -1210,6 +1275,9 @@ def dispatch_micro_batch(
                     "stage_c_completed": outcome.stage_c_completed,
                     "stage_c_transferred": outcome.stage_c_transferred,
                     "stage_c_fetch_failures": outcome.stage_c_fetch_failures,
+                    # Rate-pressure deferrals (2026-07-30 owner rate ruling) - recorded alongside, never
+                    # inside, the failure count. See `DispatchOutcome.stage_c_fetch_throttled`.
+                    "stage_c_fetch_throttled": outcome.stage_c_fetch_throttled,
                     "stage_d_join_key_votes": outcome.stage_d_join_key_votes,
                     "stage_d_join_key_already_voted": outcome.stage_d_join_key_already_voted,
                     "stage_d_fallback_votes": outcome.stage_d_fallback_votes,

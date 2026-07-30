@@ -24,9 +24,41 @@ THE FOUR RATIFIED PASSIVE-MODE BARS (§10(a), verbatim numbers - none invented h
      2026-07-28, an owner ops ruling - 768 is THE ratified number, and a 512 found in an older
      doc, report or test is pre-70225df8 history, not a competing bar).
   3. Fetch-failure rate > 1% over a rolling 500-card window.
+
+     WHAT COUNTS AS A "FAILURE" HERE NARROWED ON 2026-07-30 (owner rate ruling: "the limit needs
+     to throttle not shut it down"). The bar itself, its 1% ceiling and its 500-card window are
+     UNCHANGED - what changed is that a destination answering 429/503 no longer feeds it. That
+     was the one bar that halted for what is really RATE PRESSURE rather than a broken system: a
+     Google 429 arrived as `fetch_card_image_bytes() -> None`, indistinguishable from a 404 or a
+     corrupt download, so >1% of them hard-stopped a 230,753-card unattended pass and demanded a
+     human `resolve_envelope_trip` acknowledgement for a condition whose correct answer is "go
+     slower". Rate pressure now travels its own channel end to end
+     (`harvest_fetch_limiter.DestinationThrottledError` -> `_StageCFetchOutcome.throttled` ->
+     `DispatchOutcome.stage_c_fetch_throttled`), widening the limiter's pacing interval and
+     deferring the card, and never reaches `fetch_failures_in_window`. This bar now measures only
+     what it was always meant to measure: fetches failing for reasons SLOWING DOWN WOULD NOT FIX.
+     The other three bars are unchanged and still halt - see the classification note below.
+
   4. INSTANT pause on any Google fetch lockout signal (`GoogleFetchLockoutError` -
      harvest_fetch_limiter.py's existing `lockout_hit` bar, reused unchanged) - no threshold to
      cross, any occurrence trips immediately.
+
+CLASSIFICATION - WHICH BARS HALT AND WHY (2026-07-30 owner rate ruling). The ruling distinguishes
+rate pressure (back off, keep going) from a genuine envelope breach (halt). Applied to the four:
+
+  * HOST_LOAD - GENUINE BREACH, still halts. Load average is this box's own saturation; fetching
+    Google more slowly does not reduce it, and the load is what threatens the co-hosted live site.
+  * RSS - GENUINE BREACH, still halts. A worker over its memory ceiling is a leak or a pathological
+    image, neither of which a slower request cadence addresses.
+  * GOOGLE_LOCKOUT (403) - still halts, and this is the deliberate hard case. A 403 IS terminal
+    rate pressure (Google's endpoints escalate 429 -> 403 under sustained load), so it is tempting
+    to convert. It stays a halt because by the time it arrives, throttling is no longer the
+    available remedy: a 403 is an IP-level lockout on an endpoint SHARED with the live site's own
+    PDF-export/bulk-download image serving, and continuing at any rate risks extending that
+    cooldown for real users. The 429/503 conversion above is precisely what makes reaching a 403
+    less likely, which is the intended relationship between the two.
+  * FETCH_FAILURE_RATE - CONVERTED, as described above. Still halts, but only for failures that
+    are not rate pressure.
 
 BULK mode (backfill work, polled per-batch via `pilot_run_lifecycle.py`'s forced dry-run gate) is
 explicitly NOT governed by this module at all (§10(a)) - this primitive is PASSIVE-mode only.
@@ -79,6 +111,10 @@ class EnvelopeSignals:
     # (failures, total) over the caller's own rolling window - caller owns the windowing, this
     # module only computes the rate and compares it to the ceiling. total=0 means "not enough data
     # yet" - never trips on an empty window (see _bar_breach below).
+    # A 429/503 from the destination is NOT a failure for this purpose and must never be counted
+    # into either number (2026-07-30 owner rate ruling - see the module docstring's bar 3). The
+    # caller's own throttle channel handles it: `stage_e_dispatch._run_stage_c` skips `_window`
+    # entirely for a throttled outcome.
     fetch_failures_in_window: int = 0
     fetch_total_in_window: int = 0
     google_lockout: bool = False

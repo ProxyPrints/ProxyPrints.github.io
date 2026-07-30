@@ -28,6 +28,7 @@ concurrency=6 step's measured 8.116/s ceiling for margin, superseding the earlie
 backfill-derived pacing. That step was clean on every dimension the probe tracked, including its
 independent live-site canary (p95 0.39s, BETTER than the concurrency=3 baseline's 0.81s) - not
 just the remote quota signal, which alone would have missed the next step's problem: concurrency=10
+(see the OWNER RATE RULING note below - the 8.0 probe number is now superseded by a ratified 7.0).
 measured a higher raw throughput (9.59/s) but was REJECTED because the same canary caught a 2.43x
 p95 latency regression (1.97s) on the shared Worker path despite zero Google 429/403 events across
 the entire run. That gap - a clean quota signal shipping a config that would have degraded the live
@@ -38,6 +39,43 @@ live-site canary, not just the former. A 403 on a Google-bound destination is a 
 own image serving, not just this pipeline's own throughput, and Google's lh3/lh4 endpoints are
 externally documented to escalate 429->403 under sustained load. A 429 gets exponential backoff
 instead - a materially milder, more common, recoverable signal.
+
+OWNER RATE RULING (2026-07-30): "the limit needs to be on the amount we are fetching from google
+api 7/s or hardware whichever comes first. and the limit needs to throttle not shut it down."
+
+  * THE CEILING IS 7.0/s. `GOOGLE_IMAGE.rate_per_sec` drops 8.0 -> 7.0. The probe-derived 8.0 was
+    the highest measured-clean step; 7.0 is the owner's own ratified number and is strictly under
+    it, so nothing the probe established is contradicted - only tightened.
+  * "OR HARDWARE, WHICHEVER COMES FIRST" IS ALREADY STRUCTURAL, AND DELIBERATELY NOT RE-DERIVED
+    AS A SECOND NUMBER HERE. `_DestinationLimiter` is a strict MINIMUM-INTERVAL pacer: it can only
+    ever DELAY a request, never issue one the caller didn't ask for. The achieved rate is therefore
+    already `min(7.0, whatever this host + this network actually sustains)` by construction - the
+    hardware term binds without being configured, and `current_rate()` is what reports which of the
+    two is binding right now. A configured hardware-derived RATE would need a per-fetch latency
+    term, and no honest one exists: `stage_e_batch_sizing.HostProfile` (#589) measures usable
+    cores, a memory budget and `aggregate_fetch_threads` - counts, not a rate - and turning a
+    thread count into a req/s requires a mean fetch latency this project has never measured at
+    catalog scale. Inventing one would be exactly the fabricated ceiling #589 removed from
+    `stage_e_batch_sizing` when it deleted its false `GOOGLE_IMAGE.max_concurrency` term. The
+    honest hardware-vs-destination-budget signal is #589's `HostProfile.fetch_overcommitted`,
+    which already exists and is deliberately left alone by this change.
+  * "THROTTLE, DO NOT SHUT DOWN" is `DestinationThrottledError` plus decaying backoff below, and
+    its consumer side in `stage_e_dispatch._run_stage_c`. Rate pressure (429/503) now DEGRADES the
+    run - the pacing interval widens and the run keeps going - instead of accumulating in the
+    operating envelope's fetch-failure window until it hard-stops the whole pass. A genuine
+    envelope breach (host load, RSS, non-throttle fetch failures, a 403 lockout) still halts,
+    unchanged. See `operating_envelope.py` and `docs/features/stage-e-operations.md`.
+
+BACKOFF IS NO LONGER STICKY-FOREVER (same ruling). It was: "the multiplier only grows, never
+resets", on the reasoning that recovering the fast rate mid-run risks re-tripping the same
+undocumented ceiling. That reasoning holds for a SHORT run and fails for the one this project
+actually runs: `stream_full_catalog` is a one-shot 230,753-card unattended pass, where a single
+early 429 blip would otherwise pin the whole multi-hour pass at half speed (or, after four blips,
+1/16th speed) with no way back. The compromise below is asymmetric on purpose - backoff DOUBLES on
+one signal, and only HALVES after `_CLEAN_RESPONSES_BEFORE_DECAY` consecutive clean responses, and
+never below 1.0 (the configured ceiling is a hard cap, decay can never overshoot it). Slow to
+recover, fast to yield: the destination still wins every argument, it just no longer wins it
+permanently on the strength of one response.
 """
 
 import logging
@@ -60,6 +98,23 @@ class GoogleFetchLockoutError(Exception):
     site's own PDF export/bulk-download image serving. Owner notification on this condition is
     the run-orchestrator's responsibility (Stage E/F, not yet built), not this module's - a
     low-level rate limiter has no session/notification access of its own."""
+
+
+class DestinationThrottledError(Exception):
+    """Raised by `rate_limited_get` when a destination answered with one of its configured
+    `backoff_status_codes` (429/503 for Google) - RATE PRESSURE, the mild recoverable severity, as
+    distinct from `GoogleFetchLockoutError`'s hard stop. The limiter has ALREADY widened its own
+    pacing interval by the time this is raised, so the correct caller response is "record that this
+    one card was deferred, then keep going" - the next request through this limiter is already
+    slower. It exists as a distinct exception rather than a returned response for one reason:
+    without it, a 429 is indistinguishable from a 404 or a decode error by the time it reaches
+    `stage_e_dispatch`'s fetch-outcome window (both arrive as `fetch_card_image_bytes() -> None`,
+    via `raise_for_status()` into a broad `except`), and being counted there is what used to let
+    sustained rate pressure trip `EnvelopeTrip.Bar.FETCH_FAILURE_RATE` and HARD-STOP a 230,753-card
+    unattended pass with exit 3 - a human-acknowledgement stop for a condition that wanted a slower
+    pace. A caller catching broad `Exception` around a fetch (as `image_cdn_fetch
+    .fetch_card_image_bytes` does) MUST carve this out explicitly, exactly like the lockout above,
+    or the distinction is lost again at the first `except Exception`."""
 
 
 @dataclass(frozen=True)
@@ -94,12 +149,23 @@ class DestinationLimiterConfig:
 # undocumented ceiling at 218k-image harvest scale remains unmeasured beyond what these probe
 # steps exercised - hence keeping real reactive handling below rather than assuming headroom
 # past the measured-clean step.
+#
+# 2026-07-30 OWNER RATE RULING (module docstring): `rate_per_sec` is 7.0, not the probe's 8.0.
+# 7.0 is the owner's own ratified ceiling and sits strictly UNDER the concurrency=6 step's measured
+# 8.116/s, so it contradicts nothing the probe established - it only tightens it. The "or hardware,
+# whichever comes first" half of the ruling needs no second constant: a minimum-interval pacer can
+# only ever delay, so the achieved rate is `min(7.0, what the host sustains)` by construction (see
+# the module docstring for why a configured hardware RATE term would have to be fabricated).
+# 503 joins 429 in `backoff_status_codes`: both are "this destination wants less traffic right
+# now" - the shared image-cdn Worker path in front of Google answers 503 under its own overload,
+# and treating that as an ordinary per-card failure is the same misclassification the ruling exists
+# to fix. 403 stays a lockout; that severity is unchanged.
 GOOGLE_IMAGE = DestinationLimiterConfig(
     name="google_image",
-    rate_per_sec=8.0,
+    rate_per_sec=7.0,
     max_concurrency=6,
     lockout_status_codes=frozenset({403}),
-    backoff_status_codes=frozenset({429}),
+    backoff_status_codes=frozenset({429, 503}),
 )
 
 # Scryfall's card-image CDN (art-crop fetches, local_phash._fetch_and_hash) - a stable, publicly
@@ -146,6 +212,15 @@ class _DestinationLimiter:
     """
 
     _MAX_BACKOFF_MULTIPLIER = 16.0  # caps exponential backoff at 1/16th speed, not unbounded
+    # Decay floor: 1.0 IS the configured `rate_per_sec`. Decay walks the multiplier back TOWARD the
+    # configured ceiling and can never go past it, so no amount of clean traffic can talk this
+    # limiter into exceeding the number the owner ratified.
+    _MIN_BACKOFF_MULTIPLIER = 1.0
+    # How many CONSECUTIVE clean (non-backoff, non-lockout) responses buy one halving of the
+    # multiplier. Deliberately asymmetric against the doubling on a single backoff signal - see the
+    # module docstring's "BACKOFF IS NO LONGER STICKY-FOREVER" note. At 7/s a full recovery from
+    # x16 back to x1 costs 400 clean responses, minutes of sustained good behaviour, not seconds.
+    _CLEAN_RESPONSES_BEFORE_DECAY = 100
 
     def __init__(self, config: DestinationLimiterConfig) -> None:
         self._config = config
@@ -153,6 +228,7 @@ class _DestinationLimiter:
         self._lock = threading.Lock()
         self._next_allowed = 0.0
         self._backoff_multiplier = 1.0
+        self._clean_streak = 0
         self._locked_out = False
         self._semaphore = threading.Semaphore(config.max_concurrency)
         self._request_count = 0
@@ -186,8 +262,36 @@ class _DestinationLimiter:
     def backoff(self) -> None:
         with self._lock:
             self._backoff_multiplier = min(self._backoff_multiplier * 2.0, self._MAX_BACKOFF_MULTIPLIER)
+            self._clean_streak = 0
             multiplier = self._backoff_multiplier
         logger.warning("%s destination backing off (429) - pacing interval now x%.1f", self._config.name, multiplier)
+
+    def note_clean_response(self) -> None:
+        """One response that was neither a lockout nor a backoff code - the decay half of the
+        adaptive throttle (module docstring's "BACKOFF IS NO LONGER STICKY-FOREVER"). Halves the
+        pacing multiplier once every `_CLEAN_RESPONSES_BEFORE_DECAY` CONSECUTIVE such responses,
+        floored at `_MIN_BACKOFF_MULTIPLIER` (= the configured `rate_per_sec`, never faster). Any
+        backoff resets the streak to zero, so a destination that is still intermittently pushing
+        back never accumulates enough clean responses to recover.
+
+        A no-op while the multiplier is already 1.0, which is the overwhelmingly common case - a
+        run that never sees a 429 never touches the streak counter at all."""
+        with self._lock:
+            if self._backoff_multiplier <= self._MIN_BACKOFF_MULTIPLIER:
+                self._clean_streak = 0
+                return
+            self._clean_streak += 1
+            if self._clean_streak < self._CLEAN_RESPONSES_BEFORE_DECAY:
+                return
+            self._clean_streak = 0
+            self._backoff_multiplier = max(self._backoff_multiplier / 2.0, self._MIN_BACKOFF_MULTIPLIER)
+            multiplier = self._backoff_multiplier
+        logger.info(
+            "%s destination recovering after %d clean responses - pacing interval now x%.1f",
+            self._config.name,
+            self._CLEAN_RESPONSES_BEFORE_DECAY,
+            multiplier,
+        )
 
     def acquire(self) -> "_LimiterSlot":
         if self._locked_out:
@@ -247,7 +351,12 @@ def rate_limited_get(config: DestinationLimiterConfig, url: str, **kwargs: Any) 
     """Shared entrypoint for every destination fetch: paces + bounds concurrency via `config`'s
     limiter, then reacts to the response status - a matching lockout code raises
     GoogleFetchLockoutError immediately (caller must not swallow this, see the exception's own
-    docstring); a matching backoff code escalates future pacing but does not raise. Callers keep
+    docstring); a matching backoff code escalates future pacing AND raises
+    `DestinationThrottledError` (2026-07-30 owner rate ruling - it used to return the 4xx/5xx
+    response and let the caller's own `raise_for_status()` flatten it into an indistinguishable
+    generic failure, which is what let rate pressure hard-stop a run; see that exception's own
+    docstring). Any other response decays the pacing multiplier back toward the configured ceiling
+    via `note_clean_response`. Callers keep
     their own `raise_for_status()`/try-except for ordinary HTTP errors exactly as before; this
     only changes what paces the request ahead of it and adds the two severities above.
 
@@ -263,11 +372,17 @@ def rate_limited_get(config: DestinationLimiterConfig, url: str, **kwargs: Any) 
         raise GoogleFetchLockoutError(f"{config.name} returned {response.status_code} - locking out this destination")
     if response.status_code in config.backoff_status_codes:
         limiter.backoff()
+        raise DestinationThrottledError(
+            f"{config.name} returned {response.status_code} - pacing interval widened to "
+            f"x{limiter.backoff_multiplier:.1f}; this request is deferred, the run continues"
+        )
+    limiter.note_clean_response()
     return response
 
 
 __all__ = [
     "DestinationLimiterConfig",
+    "DestinationThrottledError",
     "GoogleFetchLockoutError",
     "GOOGLE_IMAGE",
     "SCRYFALL_CDN",
