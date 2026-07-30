@@ -252,6 +252,32 @@ slow path — durable review-queue markers carrying the raw signals — where th
 clustering backend (#265) groups them into batchable decisions, and the
 question feed collects the human votes that actually resolve cards.
 
+**Everything RESOLVED does not.** Stage D runs join-key → fallback →
+illustration → slow-path in that order, and each of the three calculators
+ahead of slow-path excludes the cards it confidently voted on from the review
+queue. The exclusion is what makes the ordering real; without it the ordering
+is decorative and slow-path routes the card anyway. Three properties are
+deliberate:
+
+- The qualifier is `is_no_match=False`. A calculator's `is_no_match` vote is
+  it CONCLUDING it cannot identify the card, which is exactly a card a
+  reviewer should see. Excluding those too would trade wrong human work for a
+  silently emptied queue.
+- A card a calculator merely SCANNED and abstained on is not excluded — it
+  still has no confident automated hit from anything.
+- The exclusions are **not run-scoped**. "Calculator X has a confident vote
+  for this card" is a statement about the catalogue, not about a run; scoping
+  it would let slow-path in run B route a card resolved in run A, undoing a
+  solved card. Run-scoping applies to a calculator's own progress, never to an
+  upstream verdict.
+
+The illustration exclusion was **missing until 2026-07-30**, and the command's
+own sequencing comment said so. Consequence is wrong human work, not a no-op —
+a reviewer asked to identify a card the pipeline just identified. Bounded so
+far only because `stage-d-illustration-v2` has never run; the read-only replay
+in [`pipeline-fidelity-gate.md`](pipeline-fidelity-gate.md) projects ~3,233
+printing votes, so it would have fired on the first `-v2` run.
+
 ## Parallel detectors (same evidence, never gate identification)
 
 - **AI-art detector**: generator names in the OCR text → "AI-Generated" tag

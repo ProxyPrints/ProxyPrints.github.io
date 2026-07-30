@@ -342,9 +342,12 @@ class Command(BaseCommand):
             # AFTER the fallback calculator above in the SAME invocation/run_id — uses
             # illustration_id relationships to deduce printing identity from artist-OCR hits.
             # Sequenced before slow-path routing below: a card this calculator resolves must not
-            # also get routed to human review in the same invocation (the slow-path queryset
-            # would need an additional exclusion for this identity's votes, similar to the
-            # fallback-voted-card exclusion it already carries).
+            # also get routed to human review in the same invocation. The exclusion that makes
+            # that sequencing actually take effect now EXISTS (2026-07-30) —
+            # `_slow_path_eligible_cards_queryset`'s `.exclude(pk__in=illustration_voted_card_ids)`,
+            # the sibling of the fallback-voted-card exclusion this comment used to say was
+            # merely needed. Until then the ordering was decorative: slow-path routed the card
+            # anyway.
             illustration_result = run_illustration_calculator(
                 run_id=run_id,
                 dry_run=dry_run,
