@@ -330,6 +330,46 @@ BORDER_COLOR_TO_TAG: dict[str, str] = {
 }
 
 
+def _sample_band(
+    card_image: "Image.Image", box: tuple[float, float, float, float]
+) -> Optional[tuple[tuple[float, float, float], float]]:
+    """One fractional band -> ((mean_r, mean_g, mean_b), red-channel population std dev), or None
+    for a degenerate/zero-area crop (the caller skips those - see normalize_crop_box's note on
+    bands that rescale to at-or-past a trimmed image's own edge).
+
+    Extracted from `classify_border_color`'s own loop with no behaviour change, so that
+    `local_art_edge` can sample bands with the SAME statistic rather than growing a second,
+    silently-divergent copy of it. Shared deliberately: `_BORDER_UNIFORMITY_STD_THRESHOLD` is
+    only meaningful against this exact computation.
+
+    `box` is already in THIS image's own fractional coordinate space: this helper deliberately
+    does NOT call normalize_crop_box, because its two callers get there differently -
+    classify_border_color remaps _BORDER_SAMPLE_BANDS' bleed-inclusive fractions itself, whereas
+    `local_art_edge.classify_art_edge_continuity` derives half its bands from `art_crop_px`,
+    which image_evidence already stored post-remap (see that function's COORDINATE FRAMES note).
+
+    The uniformity statistic is the RED channel's pstdev, not a per-channel max or a luma std.
+    That is not an aesthetic choice - _BORDER_UNIFORMITY_STD_THRESHOLD (18.0) was tuned against
+    exactly this statistic, so every reader of that threshold has to compute it the same way or
+    the threshold silently means something different at the new call site."""
+    import statistics
+
+    width, height = card_image.size
+    left, top, right, bottom = box
+    band = card_image.crop((int(left * width), int(top * height), int(right * width), int(bottom * height))).convert(
+        "RGB"
+    )
+    pixels = list(band.getdata())
+    if not pixels:
+        return None
+    means = (
+        statistics.mean(p[0] for p in pixels),
+        statistics.mean(p[1] for p in pixels),
+        statistics.mean(p[2] for p in pixels),
+    )
+    return means, statistics.pstdev([p[0] for p in pixels])
+
+
 def classify_border_color(card_image: "Image.Image", bleed_class: Optional[str] = None) -> Optional[str]:
     """Returns 'black'/'white'/'silver'/'borderless', or None if the sample is ambiguous
     (non-uniform - e.g. art bleeding right to the edge in a way that doesn't read as a clean
@@ -341,21 +381,15 @@ def classify_border_color(card_image: "Image.Image", bleed_class: Optional[str] 
     margin), so applying it here unconditionally doesn't risk the majority case."""
     import statistics
 
-    width, height = card_image.size
-    samples: list[tuple[int, int, int]] = []
+    samples: list[tuple[float, float, float]] = []
     stds: list[float] = []
-    for left, top, right, bottom in (normalize_crop_box(band, bleed_class) for band in _BORDER_SAMPLE_BANDS):
-        band = card_image.crop(
-            (int(left * width), int(top * height), int(right * width), int(bottom * height))
-        ).convert("RGB")
-        pixels = list(band.getdata())
-        if not pixels:
+    for box in (normalize_crop_box(band, bleed_class) for band in _BORDER_SAMPLE_BANDS):
+        sampled = _sample_band(card_image, box)
+        if sampled is None:
             continue
-        r = statistics.mean(p[0] for p in pixels)
-        g = statistics.mean(p[1] for p in pixels)
-        b = statistics.mean(p[2] for p in pixels)
-        samples.append((r, g, b))
-        stds.append(statistics.pstdev([p[0] for p in pixels]))
+        means, std = sampled
+        samples.append(means)
+        stds.append(std)
 
     if not samples:
         return None
