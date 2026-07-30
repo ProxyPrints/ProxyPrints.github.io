@@ -456,6 +456,41 @@ class TestRunLandsIdentify:
 
         assert result.land_pool_size == 1
 
+    def test_this_run_s_own_VOTE_removes_the_card_from_the_land_pool(self, db, monkeypatch):
+        """`_eligible_base_queryset` run-scopes TWO self-suppressing excludes, and the two above
+        only exercise one of them (the `CardScanLog` abstention half). This pair covers the VOTE
+        half: a lands vote this engine already cast IN THIS RUN still suppresses the card, which is
+        what makes a killed run resume rather than redo the batches it finished.
+
+        ADDED 2026-07-30 AFTER A MUTATION RUN FOUND NOTHING HERE. Deleting `run_id=run_id` from the
+        vote-half narrowing in `local_identify_printing_tags._eligible_base_queryset` left the FULL
+        `cardpicker` suite green - 3381 passed - so the vote half of run-scoping was asserted by no
+        test at all, only its abstention twin was. These two tests are the ones that go red for it."""
+        printing = CanonicalCardFactory(name="Plains")
+        card = CardFactory(name="Plains")
+        CardPrintingTag.objects.create(
+            card=card, printing=printing, anonymous_id=LANDS_ANONYMOUS_ID, source=VoteSource.OCR, run_id="run-a"
+        )
+
+        result = run_lands_identify(run_id="run-a", dry_run=True, sample_size=300, fetch_budget=0)
+
+        assert result.land_pool_size == 0
+
+    def test_a_PRIOR_run_s_vote_does_not_suppress_a_new_run(self, db, monkeypatch):
+        """The other half of the vote pair, and the one the directive is actually about: the
+        identical vote stamped with a DIFFERENT run leaves the card in the new run's pool. Before
+        run-scoping, one lands vote put a card permanently out of reach of every later lands pass -
+        including passes meant to correct that very vote."""
+        printing = CanonicalCardFactory(name="Plains")
+        card = CardFactory(name="Plains")
+        CardPrintingTag.objects.create(
+            card=card, printing=printing, anonymous_id=LANDS_ANONYMOUS_ID, source=VoteSource.OCR, run_id="run-a"
+        )
+
+        result = run_lands_identify(run_id="run-b", dry_run=True, sample_size=300, fetch_budget=0)
+
+        assert result.land_pool_size == 1
+
 
 def _evidence(card, **overrides):
     """Same shape as test_local_calculate_verdicts.py's own `_evidence` helper - a CURRENT
