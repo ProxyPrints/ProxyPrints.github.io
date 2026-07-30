@@ -20,6 +20,7 @@ from .models import (
     CardTagVote,
     DFCPair,
     EnvelopeTrip,
+    ExternalIpIllustration,
     ImageEvidence,
     LandsAmbiguousResidue,
     PilotRunLedger,
@@ -44,6 +45,23 @@ from .tag_consensus import get_contested_tag_pairs
 class AdminTag(admin.ModelAdmin[Tag]):
     list_display = ("name", "display_name")
     search_fields = ("name", "display_name")
+
+
+@admin.register(ExternalIpIllustration)
+class AdminExternalIpIllustration(admin.ModelAdmin[ExternalIpIllustration]):
+    """
+    Read surface for the derived `external-ip` artwork set (`cardpicker.external_ip`). Registered
+    because reviewing a suspected false positive means asking "which Tagger slug put this artwork
+    in the set" - `tagger_slugs` answers that in one screen instead of a 12MB feed re-parse.
+    Ordinary `ModelAdmin`, no custom write path: rows are owned by
+    `manage.py import_external_ip_illustrations` and are re-derivable, so a hand-edit here would
+    be silently overwritten by the next run rather than persisting as a correction - corrections
+    belong in `cardpicker.external_ip`'s named exclusion list, in a diff.
+    """
+
+    list_display = ("illustration_id", "sources", "tagger_slugs", "first_seen_at", "last_seen_at")
+    search_fields = ("illustration_id",)
+    ordering = ("-last_seen_at",)
 
 
 @admin.register(Card)

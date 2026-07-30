@@ -77,9 +77,21 @@ NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
     # Magic printings, so a custom proxy bearing e.g. Warhammer or Lord of the Rings art isn't
     # one of those - it's non-official art drawn from an external IP. There is no
     # "external-ip"-negation counterpart tag here either - that would be an official
-    # product-line distinction (that Wizards line vs. everything else), which issue #505 will
-    # resolve authoritatively from `set_type`/`security_stamp` at the PRINTING level, not as a
-    # human-cast no-match reason.
+    # product-line distinction (that Wizards line vs. everything else), which is resolved at the
+    # ARTWORK level by `cardpicker.external_ip`, not as a human-cast no-match reason.
+    #
+    # CORRECTION (2026-07-29): this comment used to name `set_type`/`security_stamp` as the
+    # authoritative signal that would resolve it (issue #505). `security_stamp` is NOT a UB
+    # marker and never was - the owner's own issue-#437 Phase-1 research measured
+    # `stamp:triangle` at 2,413 against `is:universesbeyond`'s 4,415 on Scryfall's own search,
+    # with LotR, Avatar, Final Fantasy and Assassin's Creed all carrying oval or null stamps,
+    # and a direct measurement across the whole art:external-ip delta found no triangle at all
+    # (`oval` modal). The signal that actually works is `promo_types`, unioned with the Scryfall
+    # Tagger `art:external-ip` subtree and keyed by `illustration_id` - see
+    # `cardpicker/external_ip.py` and docs/features/external-ip.md. Recorded as a correction
+    # rather than a silent deletion because this exact claim propagated into a second docstring
+    # (`views.py`'s `post_submit_printing_tag_vote`, itself retired in PR #615) before anyone
+    # measured it.
     (
         "external-ip",
         "Art is drawn from an external IP (crossover / licensed property) rather than original Magic art",

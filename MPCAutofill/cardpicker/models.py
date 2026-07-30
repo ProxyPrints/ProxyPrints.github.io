@@ -1264,6 +1264,66 @@ class Tag(models.Model):
         return {tag.name: tag.aliases for tag in Tag.objects.all()}
 
 
+class ExternalIpIllustration(models.Model):
+    """
+    ONE ARTWORK THAT IS DRAWN FROM AN EXTERNAL IP. The derived (Scryfall-sourced) half of the
+    `external-ip` tag, stored at the grain the fact actually lives at - the illustration, not the
+    printing. Owner ruling, 2026-07-29: "and I say printing but it is an illustration thing
+    really." See `cardpicker.external_ip` for the predicate that populates it and
+    docs/features/external-ip.md for the union arithmetic behind every row.
+
+    A SET OF IDS, NOT AN ENTITY TABLE - AND THIS DISTINCTION IS LOAD-BEARING. This codebase has
+    twice explicitly refused to create a `CanonicalIllustration` table (see
+    `CardIllustrationVote`'s "NOT A FOREIGN KEY" section and `Card.inferred_illustration_id`),
+    and this model does not create one by the back door. Nothing has a ForeignKey to it; its
+    primary key is a bare `illustration_id` value carrying no relational meaning; it holds no
+    artwork attributes (no artist, no name, no image); and it has exactly one semantic, which is
+    membership. Every row is re-derivable from the Scryfall Tagger feed plus `promo_types` by
+    re-running `import_external_ip_illustrations`, so dropping the table loses nothing that
+    cannot be rebuilt. If a future change wants to hang a second artwork attribute here, that is
+    the moment to stop and design the illustration entity deliberately - not to widen this one.
+
+    NOT VOTES, DELIBERATELY. An imported structured fact is not disputable, and a machine-only
+    vote channel can never resolve in this system regardless of volume
+    (`vote_consensus.resolve_weighted_consensus` gates on `has_human_backed` independently of the
+    weight sum). The predecessor design routed exactly this fact through `PrintingTagVote` and
+    produced zero rows in a month. Disputes about a SPECIFIC CATALOGUE IMAGE remain a vote, on
+    `CardTagVote`, against the same `Tag.name`.
+
+    WHY THIS GRAIN SURVIVES REPRINTS FOR FREE. 3,371 of the 7,916 flagged artworks already appear
+    on more than one printing (1.662 printings per artwork overall). A future set reprinting the
+    Fallout-art Command Tower carries the same `illustration_id` and is flagged the moment it is
+    ingested, with no re-import and no re-decision. A per-printing boolean would have to be
+    recomputed forever.
+    """
+
+    # Scryfall's illustration UUID, matching `CanonicalPrintingMetadata.illustration_id` and
+    # `Card.inferred_illustration_id` exactly - those two are what this joins against. Primary
+    # key rather than a unique column because the id IS the row: there is no other identity a
+    # membership record could have, and a surrogate pk would permit two rows for one artwork.
+    illustration_id = models.UUIDField(primary_key=True)
+    # Which source(s) put this artwork in the union: "scryfall-tagger", "promo-types", or both.
+    # Provenance is kept because the two sources fail in opposite directions - the Tagger lags new
+    # releases, `promo_types` misses everything Wizards did not brand - so "which one found this"
+    # is the first question when a row looks wrong, and re-deriving it means re-downloading and
+    # re-parsing a 12MB feed.
+    sources = models.JSONField(default=list, blank=True)
+    # The Scryfall Tagger leaf slugs that tagged this artwork (e.g. ["fallout-universe"],
+    # ["godzilla", "mothra"]). Empty for a `promo_types`-only row. This is what makes a false
+    # positive reviewable by a human instead of merely reportable - the 21 homage basics were
+    # identified precisely because their slugs said `godzilla` while their type line said
+    # `Basic Land`.
+    tagger_slugs = models.JSONField(default=list, blank=True)
+    # Set on the run that first flagged this artwork and on the most recent run that still did.
+    # `last_seen_at` is how an UN-tagging upstream becomes visible: a row whose `last_seen_at`
+    # falls behind the newest import is one the current union no longer contains.
+    first_seen_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"external-ip artwork {self.illustration_id} ({', '.join(self.sources) or 'no source recorded'})"
+
+
 class VotePolarity(models.IntegerChoices):
     APPLY = 1, gettext_lazy("Apply")
     NOT_APPLICABLE = -1, gettext_lazy("Not applicable")

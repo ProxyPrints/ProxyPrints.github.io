@@ -11,6 +11,7 @@ from django.db import transaction
 from cardpicker import local_phash
 from cardpicker.constants import DEFAULT_LANGUAGE, MAX_SIZE_MB
 from cardpicker.documents import CardSearch
+from cardpicker.external_ip import get_external_ip_card_overlay, merge_external_ip_tag
 from cardpicker.models import Card, CardTypes, Source, VotePolarity
 from cardpicker.search.sanitisation import to_searchable
 from cardpicker.sources.api import Folder, Image
@@ -222,6 +223,26 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
     existing = {card.identifier: card for card in Card.objects.filter(source=source)}
     existing_ids = set(existing.keys())
     common_ids = incoming_ids & existing_ids
+
+    # Merge the DERIVED `external-ip` attribute into the freshly re-extracted tags. This runs
+    # BEFORE the vote overlay below, deliberately: a resolved human vote must be able to overrule
+    # a derived tag on a specific image, never the other way round. `Card.tags` is rebuilt from
+    # the filename on every re-scan, so without this pass a scheduled re-scan would silently drop
+    # a tag that no filename mentions and no vote backs - the same class of loss
+    # `get_resolved_tag_overlay` was added here to prevent, for the other channel.
+    #
+    # ADD-ONLY (see `external_ip.merge_external_ip_tag`): a card the derived channel does not
+    # flag keeps whatever tag it already had, because the derived channel can only see official
+    # printings and the human channel owns everything else.
+    #
+    # `common_ids` only, matching the vote overlay's own scope: a brand-new card being
+    # `bulk_create`d has no PK yet and therefore no `canonical_card`/illustration link to derive
+    # from - it picks the tag up on the next re-scan, once ingestion has matched it.
+    external_ip_card_ids = get_external_ip_card_overlay(existing[identifier].pk for identifier in common_ids)
+    if external_ip_card_ids:
+        for identifier in common_ids:
+            if existing[identifier].pk in external_ip_card_ids:
+                incoming[identifier].tags = merge_external_ip_tag(incoming[identifier].tags, True)
 
     # Merge any resolved tag-vote consensus into the freshly re-extracted tags *before* the
     # change-detection check below runs, so a scheduled re-scan can never silently revert a
