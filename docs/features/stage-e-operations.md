@@ -133,6 +133,56 @@ fabricated ceiling PR #589 **removed** from `stage_e_batch_sizing`. The honest
 hardware-vs-destination signal remains #589's own
 `HostProfile.fetch_overcommitted`.
 
+**7/sec is a GLOBAL cap, not a per-process or per-core one.** This is the part
+two separate readers have now got wrong, so it is stated flatly:
+
+> "to be clear: the 7 fetches per second cap is a global cap, it shouldn't be
+> per process or per core" — owner, 2026-07-30
+
+The number is a budget for **everything this deployment fetches from Google,
+added together**. It is _not_ 7/sec for each django-q2 worker, _not_ 7/sec for
+each dispatch, _not_ 7/sec per core, and _not_ 7/sec for the pooled runner
+plus another 7/sec for the conveyor running beside it. Google sees one IP; the
+budget is that IP's.
+
+Why that needed saying, and what it cost: `harvest_fetch_limiter ._DestinationLimiter` keeps its pacing state — `_next_allowed`, its lock, its
+concurrency semaphore — in **one Python process's memory**. That is a genuine
+7/sec for the **pooled runner** (`run_image_evidence_cohort`: one process, one
+thread pool, one limiter). It was **never** a ceiling for the **conveyor**:
+`stage_e_dispatch` runs under django-q2, whose workers are separate **OS
+processes**, each importing the module fresh and pacing itself in isolation. N
+concurrent dispatches therefore fetched at **N × 7/sec** — 14/sec at the
+shipped `STAGE_E_MAX_CONCURRENT_DISPATCHES = 2`, and rising with that cap, so
+tuning the conveyor's concurrency silently retuned the destination's rate.
+
+The fix is `cardpicker/harvest_rate_coordinator.py`: every process reserves its
+turn from **one cursor row in Postgres**, updated by a single atomic
+`INSERT ... ON CONFLICT DO UPDATE` that runs the same
+`max(now, next_allowed) + interval` arithmetic the in-memory pacer always ran —
+just somewhere every process can see it. One round trip per fetch, no new
+table, no new migration, no new service (the row lives in the existing
+`shared_cache` table). It is on by default with no flag.
+
+**If you are reasoning about the rate, reason about the total.** To ask what
+the destination is actually seeing, add up every fetching process; do not read
+one worker's `current_rate()` log line and multiply nothing by it. Concurrency
+knobs (`STAGE_E_MAX_CONCURRENT_DISPATCHES`, fetch thread counts) now change
+only **how the 7/sec is shared out**, never how much of it there is.
+
+**When coordination is unreachable, the pass degrades — it does not stop, and
+it does not go uncapped.** If Postgres cannot be reached for a reservation,
+each process falls back to its own in-memory pacer running at **7/sec ÷ (the
+maximum number of processes that can fetch at once)**, derived from
+`STAGE_E_MAX_CONCURRENT_DISPATCHES` plus one for a pooled or manual runner.
+Worst case — every process fetching — the total is still 7/sec. Failing _open_
+(per-process pacing at the full rate) was rejected because it restores exactly
+the N × 7/sec defect at the moment nobody is watching; failing _closed_
+(refusing to fetch) was rejected because it hard-stops an unattended
+230,753-card pass over a transient blip, which is the opposite of this ruling.
+A degraded pass therefore fetches **more slowly than it could**, logs a warning
+once per 5-second window, and keeps going. It raises nothing, trips nothing,
+and adds nothing to the fetch-failure window.
+
 **Backoff now decays.** It used to be sticky for the life of the process — the
 multiplier only ever grew. On a one-shot multi-hour pass that meant a single
 early 429 pinned the whole run at half speed with no way back. It is now

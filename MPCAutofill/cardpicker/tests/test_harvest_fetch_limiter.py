@@ -4,6 +4,23 @@ pipeline" section). No network - each destination's shared `requests.Session.get
 per-test (via `get_limiter(config).session`), matching `rate_limited_get`'s own call site (one
 Session per destination limiter, reused across calls - 2026-07-24 IO audit finding 2) rather than
 reaching into `image_cdn_fetch`/`local_phash`'s call sites.
+
+NO DATABASE HERE, AND WHAT THAT MEANS SINCE THE CEILING WENT GLOBAL. As of the 2026-07-30 owner
+clarification ("the 7 fetches per second cap is a global cap, it shouldn't be per process or per
+core"), `_DestinationLimiter.acquire()` takes its pacing decision from `harvest_rate_coordinator` -
+a shared cursor in Postgres. No test in THIS file carries a `django_db` marker, so coordination is
+unavailable to them by construction, and every acquisition here therefore runs the DOCUMENTED
+DEGRADED FALLBACK: the original per-process pacer, widened by
+`harvest_rate_coordinator.degraded_divisor()`. That is deliberate and it is useful - this whole
+file is standing evidence that the fallback keeps working and never raises - but it also means THE
+TIMINGS BELOW ARE THE DEGRADED ONES (slower than configured, by the divisor), and that nothing in
+this file can see the global ceiling at all. Every timing assertion here is a LOWER bound on
+elapsed time, so a wider interval does not invalidate any of them.
+
+The global ceiling has its own file, `test_harvest_rate_coordinator.py`, because proving it needs
+MORE THAN ONE limiter running at once - a single-limiter test cannot tell a global ceiling from a
+per-process one, which is exactly how the per-process defect survived in this file for as long as
+it did.
 """
 
 import threading
