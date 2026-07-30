@@ -198,10 +198,14 @@ from cardpicker.pilot_run_lifecycle import (
     merge_counters,
     resilient_terminal_output,
 )
+from cardpicker.stage_e_batch_sizing import MODE_BULK, resolve_micro_batch_size
 from cardpicker.stage_e_dispatch import (
     DispatchOutcome,
+    _drain_verdict_transfer_queue,
+    _partition_by_md5_verdict,
     _run_stage_d,
     _sample_envelope_signals,
+    dispatch_micro_batch,
 )
 from cardpicker.utils import get_baked_git_sha
 from cardpicker.vote_write import purge_and_write_votes
@@ -330,6 +334,20 @@ class Command(BaseCommand):
                 "write, with no preview mode of its own). Exits 0: it did what was asked."
             ),
         )
+        parser.add_argument(
+            "--batch-size",
+            dest="batch_size",
+            type=int,
+            default=None,
+            help="Override chunk size for the per-chunk C→D loop (default: autoscaled).",
+        )
+        parser.add_argument(
+            "--max-batches",
+            dest="max_batches",
+            type=int,
+            default=None,
+            help="Stop after N micro-batches (default: process all cards).",
+        )
         parser.add_argument("--skip-stage-c", dest="skip_stage_c", action="store_true", default=False)
         parser.add_argument("--skip-stage-d", dest="skip_stage_d", action="store_true", default=False)
         parser.add_argument("--skip-clustering", dest="skip_clustering", action="store_true", default=False)
@@ -409,40 +427,32 @@ class Command(BaseCommand):
             # -- STAGE E PREFLIGHT ------------------------------------------------------------
             self._envelope_preflight(run_id=run_id, skip=options["skip_envelope"])
 
-            # -- STAGE C ----------------------------------------------------------------------
+            # -- STREAMING C→D ----------------------------------------------------------------
+            # Per-chunk loop replaces the subprocess Stage C + bulk Stage D. Each chunk goes
+            # through `dispatch_micro_batch`, which handles both evidence (C) and verdicts (D).
             cohort_ids: Optional[list[int]] = None
-            if options["skip_stage_c"]:
-                self.stdout.write("STAGE C skipped (--skip-stage-c).")
-                counters["stage_c"] = {"skipped": True}
-            else:
-                counters["stage_c"] = self._run_stage_c(run_id=run_id, options=options, dry_run=dry_run)
 
-            # Stage C is the one stage whose inside this command cannot reach: it is delegated
-            # whole to `run_image_evidence_cohort` via `call_command`, and that command owns its
-            # own RSS guard and its own limiter. So the envelope is re-sampled at the seam AFTER
-            # it - the first point where a Stage C that spent hours saturating the box can be
-            # observed by this command at all.
+            if options["skip_stage_c"]:
+                self.stdout.write("STREAMING C→D skipped (--skip-stage-c).")
+                counters["streaming"] = {"skipped": True, "reason": "--skip-stage-c"}
+            else:
+                counters["streaming"] = self._run_streaming_stages(
+                    run_id=run_id,
+                    options=options,
+                    dry_run=dry_run,
+                    envelope_check=envelope_check,
+                )
+
             if envelope_check is not None:
-                envelope_check("stage-d")
+                envelope_check("stage-c-plus")
 
             if options["scope_stage_d"]:
-                # The cards this run has evidence for, read back rather than remembered - Stage C
-                # ran in its own command and this one deliberately does not reach inside it.
                 from cardpicker.models import ImageEvidence
 
                 cohort_ids = list(
                     ImageEvidence.objects.filter(run_id=run_id).values_list("card_id", flat=True).distinct()
                 )
-                self.stdout.write(f"Stage D scoped to this run's own Stage C cohort: {len(cohort_ids)} cards.")
-
-            # -- STAGE D ----------------------------------------------------------------------
-            if options["skip_stage_d"]:
-                self.stdout.write("STAGE D skipped (--skip-stage-d).")
-                counters["stage_d"] = {"skipped": True}
-            else:
-                counters["stage_d"] = self._run_stage_d_bulk(
-                    run_id=run_id, cohort_ids=cohort_ids, dry_run=dry_run, envelope_check=envelope_check
-                )
+                self.stdout.write(f"Cluster propagation scoped to this run's own cohort: {len(cohort_ids)} cards.")
 
             # -- STAGE C+ : CLUSTER VOTE PROPAGATION -------------------------------------------
             if options["skip_clustering"]:
@@ -596,7 +606,17 @@ class Command(BaseCommand):
         # `envelope_check` THREADED IN (2026-07-30). `_run_stage_d` calls it at each seam between
         # its calculators, which is the finest granularity reachable without refactoring all of
         # them - see that function's own docstring for the residual gap that leaves.
-        _run_stage_d(cohort_ids, run_id, outcome, dry_run=dry_run, envelope_check=envelope_check)
+        # Stream B: md5 verdict-transfer gate. When Stage D is scoped to a concrete card list,
+        # partition by md5 verdict status: cards with an existing run_id verdict skip D and
+        # receive their vote via propagation from the batch's rep instead.
+        if cohort_ids is not None:
+            unresolved_ids, resolved_ids, md5_groups = _partition_by_md5_verdict(cohort_ids, run_id)
+            if unresolved_ids:
+                _run_stage_d(unresolved_ids, run_id, outcome, dry_run=dry_run, envelope_check=envelope_check)
+            if resolved_ids:
+                _drain_verdict_transfer_queue(resolved_ids, unresolved_ids, md5_groups, run_id, outcome)
+        else:
+            _run_stage_d(None, run_id, outcome, dry_run=dry_run, envelope_check=envelope_check)
 
         result = {
             "join_key_votes": outcome.stage_d_join_key_votes,
@@ -609,8 +629,135 @@ class Command(BaseCommand):
             "border_chip_votes": outcome.stage_d_border_chip_votes,
             "frame_chip_votes": outcome.stage_d_frame_chip_votes,
             "bleed_chip_votes": outcome.stage_d_bleed_chip_votes,
+            "verdict_transfer_votes": outcome.stage_d_verdict_transfer_votes,
         }
         self.stdout.write(f"STAGE D: {result}")
+        return result
+
+    # ------------------------------------------------------------------------------------------
+    def _run_streaming_stages(
+        self,
+        *,
+        run_id: str,
+        options: dict[str, Any],
+        dry_run: bool = False,
+        envelope_check: Optional[Any] = None,
+    ) -> dict[str, Any]:
+        explicit_batch_size: Optional[int] = options.get("batch_size")
+        batch_decision = resolve_micro_batch_size(explicit=explicit_batch_size, mode=MODE_BULK)
+        batch_size = batch_decision.batch_size
+        self.stdout.write(f"STREAMING C→D: {batch_decision.describe()}")
+        self.stdout.write(f"STAGE C: run_stage_e_streaming (micro-batches of {batch_size})")
+        self.stdout.write(
+            "STAGE D: join-key -> fallback -> illustration -> slow-path, then the border / frame / bleed chips"
+        )
+
+        max_batches: Optional[int] = options.get("max_batches")
+        limit: Optional[int] = options.get("limit")
+        short_circuit = False if options.get("no_shortcircuit") else None
+
+        queryset = Card.objects.filter(content_phash__isnull=False).order_by("pk")
+
+        after_pk = 0
+        batch_count = 0
+        total_cards_scanned = 0
+        acc: dict[str, int] = {
+            "stage_c_completed": 0,
+            "stage_c_transferred": 0,
+            "stage_c_fetch_failures": 0,
+            "stage_c_fetch_throttled": 0,
+            "stage_d_join_key_votes": 0,
+            "stage_d_join_key_already_voted": 0,
+            "stage_d_fallback_votes": 0,
+            "stage_d_fallback_already_voted": 0,
+            "stage_d_illustration_votes": 0,
+            "stage_d_illustration_already_voted": 0,
+            "stage_d_slow_path_routed": 0,
+            "stage_d_border_chip_votes": 0,
+            "stage_d_frame_chip_votes": 0,
+            "stage_d_bleed_chip_votes": 0,
+            "stage_d_verdict_transfer_votes": 0,
+        }
+
+        while True:
+            if max_batches is not None and batch_count >= max_batches:
+                self.stdout.write(f"--max-batches ({max_batches}) reached.")
+                break
+
+            chunk = list(queryset.filter(pk__gt=after_pk).values_list("pk", flat=True)[:batch_size])
+            if not chunk:
+                self.stdout.write("STREAMING C→D: cohort exhausted.")
+                break
+
+            after_pk = chunk[-1]
+            total_cards_scanned += len(chunk)
+            if limit is not None and total_cards_scanned >= limit:
+                excess = total_cards_scanned - limit
+                if excess > 0:
+                    chunk = chunk[:-excess]
+                if not chunk:
+                    break
+                after_pk = chunk[-1]
+
+            if envelope_check is not None:
+                envelope_check(f"streaming-batch-{batch_count}")
+
+            if dry_run and batch_count > 0:
+                break
+
+            batch_outcome = dispatch_micro_batch(
+                card_ids=chunk,
+                trigger_reason="pipeline",
+                run_id=run_id,
+                batch_size=len(chunk),
+                force_stage_c_reextract=False,
+                short_circuit=short_circuit,
+                dry_run=dry_run,
+            )
+
+            batch_count += 1
+
+            for key in acc:
+                acc[key] += getattr(batch_outcome, key, 0)
+
+            batch_info = f"  batch {batch_count - 1}: {len(chunk)} cards, " f"status={batch_outcome.status}"
+            if batch_outcome.stage_c_completed:
+                batch_info += f", C={batch_outcome.stage_c_completed}"
+            if batch_outcome.stage_d_join_key_votes:
+                batch_info += f", D_join={batch_outcome.stage_d_join_key_votes}"
+            if batch_outcome.stage_d_fallback_votes:
+                batch_info += f", D_fb={batch_outcome.stage_d_fallback_votes}"
+            self.stdout.write(batch_info)
+
+            if batch_outcome.status in ("halted-open-trip", "halted-new-trip"):
+                raise CommandError(
+                    f"ENVELOPE HALT during streaming batch {batch_count - 1}: "
+                    f"{batch_outcome.status} trip_id={batch_outcome.trip_id}",
+                    returncode=EXIT_ENVELOPE_HALT,
+                )
+
+        result: dict[str, Any] = {
+            "mode": "streaming",
+            "batch_size": batch_size,
+            "source": batch_decision.source,
+            "bound_by": batch_decision.bound_by,
+            "batches_dispatched": batch_count,
+            "cards_in_cohort": total_cards_scanned,
+        }
+        result.update(acc)
+
+        if dry_run:
+            remaining_count = queryset.filter(pk__gt=after_pk).count()
+            if remaining_count:
+                remaining_batches = (remaining_count + batch_size - 1) // batch_size
+                self.stdout.write(
+                    f"DRY-RUN: first batch dispatched (proves the mechanism). "
+                    f"{remaining_count} cards remaining (~{remaining_batches} more batches)."
+                )
+                result["dry_run_remaining_cards"] = remaining_count
+                result["dry_run_remaining_batches"] = remaining_batches
+
+        self.stdout.write(f"STREAMING C→D: {result}")
         return result
 
     # ------------------------------------------------------------------------------------------
