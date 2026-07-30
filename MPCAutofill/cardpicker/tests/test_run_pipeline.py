@@ -249,12 +249,19 @@ class TestEndToEndPass:
         assert counters["clustering"]["cluster_count"] == 1
         assert counters["clustering"]["cards_absorbed_into_clusters"] == 1
 
-        # The fidelity gate ran and is clear - a machine vote alone must never resolve a card.
+        # The fidelity gate ran, INSPECTED CARDS, and is clear - a machine vote alone must never
+        # resolve a card. Asserting the count alone would survive the gate never being called at
+        # all, since "no violations" and "never looked" produce the same zero.
         assert counters["fidelity_gate"]["violations"] == 0
+        assert "FIDELITY GATE: clear over " in out
 
         # channel_report ran at the end and its verdict is REPORTED, not folded into the exit.
+        # The banner and the exit line are printed by THIS command either way, so they cannot
+        # distinguish "the report ran" from "the call was deleted"; the roster family title is
+        # emitted only by channel_report itself.
         assert "CHANNEL REPORT" in out
         assert "channel_report exit=" in out
+        assert "VOTE CHANNELS" in out
 
     def test_cluster_propagation_gives_an_unfetched_member_its_groups_verdict(self, cohort: dict[str, Any]) -> None:
         """
