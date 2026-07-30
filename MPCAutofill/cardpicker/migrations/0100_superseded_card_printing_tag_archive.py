@@ -13,20 +13,12 @@ fills only from the moment `purge_stale_machine_votes` next supersedes something
 migration drops the table and loses whatever archive it accumulated, which is correct - nothing
 else's integrity depends on it.
 
-DEPENDENCY NUMBERING, AND AN ASSUMPTION THAT IS NOT YET TRUE ON `master`
------------------------------------------------------------------------
-This declares `0099_rename_printings_count_catalogued` (PR #601) as its dependency. AT THE TIME OF
-WRITING THAT MIGRATION DOES NOT EXIST ANYWHERE - not on `master`, and not yet on #601's own branch,
-which still carries the file under its original name `0098_rename_printings_count_catalogued`. The
-name assumed here is #601's file renumbered 0098 -> 0099 with its slug unchanged, which is exactly
-the transformation PR #576 performed on the migration it had to move
-(`0096_freeze_deductive_backfill_zero_weight_cohort` -> `0097_...`, slug preserved). IF #601 LANDS
-UNDER ANY OTHER NAME, THIS DEPENDENCY STRING MUST BE CORRECTED BEFORE MERGE - `migrate` fails with
-`NodeNotFoundError` otherwise, and no test database can be built on any branch.
-
-THE ORDER IS COORDINATOR-ASSIGNED, NOT DERIVED HERE: #573 (`0098_card_illustration_consensus_fields`)
-has merged and holds 0098; #601 takes 0099 on top of it; this takes 0100 on top of #601. The
-consequence is that THIS PR CANNOT MERGE BEFORE #601.
+DEPENDENCY NUMBERING
+-------------------
+Depends on `0099_rename_printings_count_catalogued` (PR #601), which is `cardpicker`'s single leaf
+on `master`. Verified against the real file, not assumed: #601 merged as 7afff071 and its migration
+declares `0098_card_illustration_consensus_fields` as its own sole dependency, so the chain is
+0097 -> 0098 (#573) -> 0099 (#601) -> 0100 (this).
 
 WHY A CHAIN AT ALL, RATHER THAN THREE MIGRATIONS ALL DECLARING 0098. There is no ordering
 constraint between any of these three in substance - #601 renames a column on
@@ -38,14 +30,21 @@ test-database setup on EVERY branch in the repository, not just the offender's. 
 failure PR #576 had to repair by hand after #568 and #570 both declared 0095 as their sole
 dependency.
 
-THIS PR'S OWN HISTORY OF THAT MISTAKE, RECORDED SO THE REASONING IS NOT REPEATED WRONGLY. It was
-first numbered 0098-on-0097, on the then-correct reasoning that #573 was still open and that
-depending on a migration absent from `master` makes a branch unmigratable today, with certainty, to
+THIS MIGRATION'S OWN HISTORY, RECORDED SO THE REASONING IS NOT REPEATED WRONGLY. It was first
+numbered 0098-on-0097, on the then-correct reasoning that #573 was still open and that depending on
+a migration absent from `master` makes a branch unmigratable today, with certainty, in order to
 avoid a collision that might never happen. #573 then merged, which inverted the trade-off: the
-collision stopped being hypothetical and became a fact on `master`, invisible to every normal
-signal - different filenames mean no textual conflict, GitHub still reports the PR mergeable, and
-CI stays green because it ran against the pre-#573 tree. Only `makemigrations --check` and the
-migration loader's leaf count catch it.
+collision stopped being hypothetical and became a fact on `master` - and one invisible to every
+normal signal, since different filenames mean no textual conflict, GitHub still reported the PR
+mergeable, and CI stayed green because it had run against the pre-#573 tree. It was then renumbered
+0100 and pointed at a 0099 that did not exist yet, which is why CI on this branch was legitimately
+red for a while: `NodeNotFoundError`, the honest signal, kept until #601 actually landed rather
+than papered over by pointing at a node that did exist.
+
+THE GENERAL LESSON, now enforced mechanically rather than by attention: a migration's graph
+position is a property of the MERGED result, not of the branch, and every branch-local signal -
+textual conflict, mergeability, CI - is blind to it. PR #611's "One leaf per app (merged with the
+base branch)" job is what checks it now.
 """
 
 import django.db.models.deletion
