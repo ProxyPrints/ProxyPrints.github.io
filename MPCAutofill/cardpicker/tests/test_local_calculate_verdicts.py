@@ -75,6 +75,7 @@ from cardpicker.local_identify_printing_tags import (
     CandidateNameIndex,
     CandidatePrinting,
 )
+from cardpicker.local_illustration import ILLUSTRATION_ANONYMOUS_ID
 from cardpicker.models import (
     ArchivedCardPrintingTag,
     CanonicalPrintingMetadata,
@@ -3224,16 +3225,16 @@ class TestStageDDependencySubqueryScoping:
     # -- slow-path calculator ------------------------------------------------
 
     def test_slow_path_scopes_every_dependency_subquery(self, db):
-        """Four subqueries: the two join-key no-hit populations, this calculator's own
-        already-routed `CardScanLog` exclusion, and the fallback-voted `CardPrintingTag`
-        exclusion."""
+        """Five subqueries: the two join-key no-hit populations, this calculator's own
+        already-routed `CardScanLog` exclusion, the fallback-voted `CardPrintingTag` exclusion,
+        and (2026-07-30) the illustration-voted `CardPrintingTag` exclusion."""
         card_a = CardFactory(name="Slow Path Scope A")
         card_b = CardFactory(name="Slow Path Scope B")
         scope = [card_a.pk, card_b.pk]
 
         sql = str(_slow_path_eligible_cards_queryset(card_ids=scope).query)
 
-        self._assert_every_subquery_scoped(sql, scope, expected_count=4)
+        self._assert_every_subquery_scoped(sql, scope, expected_count=5)
         assert f'"cardpicker_card"."id" IN ({card_a.pk}, {card_b.pk})' in sql
 
     def test_slow_path_bulk_mode_takes_no_scoping_branch(self, db):
@@ -3335,3 +3336,101 @@ class TestStageDDependencySubqueryScoping:
 
         assert set(_fallback_eligible_cards_queryset().values_list("pk", flat=True)) == {card_a.pk, card_b.pk}
         assert set(_slow_path_eligible_cards_queryset().values_list("pk", flat=True)) == {card_a.pk, card_b.pk}
+
+
+class TestSlowPathIllustrationExclusion:
+    """
+    THE ILLUSTRATION -> SLOW-PATH DEPENDENCY (2026-07-30, closing the 2026-07-29 composition
+    audit's §1 Q2 first bullet). `_slow_path_eligible_cards_queryset` excluded `already_routed` and
+    `fallback_voted` and NOTHING for the illustration calculator, and
+    `management/commands/local_calculate_verdicts.py`'s own sequencing comment admitted the gap.
+
+    The failure direction is WRONG HUMAN WORK, not a silent no-op: a card the illustration
+    calculator resolves is routed to a reviewer moments later in the SAME invocation, asking a
+    human to identify a card the pipeline just identified. Bounded today only because
+    `stage-d-illustration-v2` has never run; `docs/pipeline-fidelity-gate.md`'s read-only replay
+    projects ~3,233 printing votes, so it fires on the first `-v2` run.
+    """
+
+    def _no_hit_card(self, name="Illus Exclusion"):
+        card = CardFactory(name=name, content_phash=42)
+        _evidence(card, collector_line_raw_text="garbled")
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="ambiguous")
+        return card
+
+    def _illustration_vote(self, card, *, is_no_match=False, anonymous_id=None):
+        return CardPrintingTag.objects.create(
+            card=card,
+            printing=None if is_no_match else CanonicalCardFactory(name=card.name),
+            is_no_match=is_no_match,
+            anonymous_id=anonymous_id or ILLUSTRATION_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            confidence=0.85,
+        )
+
+    def test_a_card_the_illustration_calculator_resolved_is_not_routed_to_a_human(self, db):
+        """The defect itself."""
+        resolved = self._no_hit_card("Illustration Resolved")
+        self._illustration_vote(resolved)
+
+        eligible_ids = set(_slow_path_eligible_cards_queryset().values_list("pk", flat=True))
+
+        assert resolved.pk not in eligible_ids
+
+    def test_a_card_the_illustration_calculator_abstained_on_is_still_routed(self, db):
+        """THE CONTROL, and the half that makes the test able to fail in both directions. The
+        exclusion qualifies on `is_no_match=False` exactly as the fallback one does: an
+        illustration `is_no_match` vote is the calculator CONCLUDING it cannot identify the card,
+        which is precisely a card a reviewer should see. Excluding those too would trade wrong
+        human work for a silently emptied review queue."""
+        abstained = self._no_hit_card("Illustration Abstained")
+        self._illustration_vote(abstained, is_no_match=True)
+
+        eligible_ids = set(_slow_path_eligible_cards_queryset().values_list("pk", flat=True))
+
+        assert abstained.pk in eligible_ids
+
+    def test_a_card_only_the_legacy_v1_identity_voted_on_is_still_routed(self, db):
+        """`stage-d-illustration-v1`'s 3 legacy rows were cast by a calculator whose border-colour
+        gate was wrong (see `local_illustration`'s v1 -> v2 section). They are not evidence the
+        LIVE calculator resolved anything, so they must not suppress routing."""
+        legacy = self._no_hit_card("Illustration Legacy")
+        self._illustration_vote(legacy, anonymous_id="stage-d-illustration-v1")
+
+        eligible_ids = set(_slow_path_eligible_cards_queryset().values_list("pk", flat=True))
+
+        assert legacy.pk in eligible_ids
+
+    def test_an_untouched_no_hit_card_is_still_routed(self, db):
+        """The exclusion must not empty the queue wholesale."""
+        untouched = self._no_hit_card("Illustration Untouched")
+
+        assert untouched.pk in set(_slow_path_eligible_cards_queryset().values_list("pk", flat=True))
+
+    def test_the_exclusion_is_not_run_scoped(self, db):
+        """A card illustration resolved in run A must not be routed to human review by slow-path in
+        run B - "illustration has a confident vote for this card" is a statement about the
+        catalogue, not about a run. Same asymmetry `_fallback_eligible_cards_queryset`'s docstring
+        establishes: `run_id` narrows a calculator's OWN progress, never an upstream verdict."""
+        resolved = self._no_hit_card("Illustration Cross Run")
+        vote = self._illustration_vote(resolved)
+        vote.run_id = "run-a"
+        vote.save()
+
+        eligible_ids = set(_slow_path_eligible_cards_queryset(run_id="run-b").values_list("pk", flat=True))
+
+        assert resolved.pk not in eligible_ids
+
+    def test_the_full_calculator_writes_no_routing_row_for_an_illustration_resolved_card(self, db):
+        """End-to-end through `run_slow_path_calculator`, not just the queryset: the observable
+        the reviewer actually sees is a `CardScanLog(to-review)` row, and that is what must not
+        appear."""
+        resolved = self._no_hit_card("Illustration End To End")
+        self._illustration_vote(resolved)
+
+        result = run_slow_path_calculator(run_id="r1", dry_run=False)
+
+        assert result.routed_written == 0
+        assert not CardScanLog.objects.filter(
+            card=resolved, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
+        ).exists()

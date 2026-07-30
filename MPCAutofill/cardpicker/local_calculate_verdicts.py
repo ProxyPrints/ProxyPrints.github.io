@@ -427,6 +427,17 @@ from cardpicker.local_identify_printing_tags import (
     CandidatePrinting,
     generate_run_id,
 )
+
+# IMPORTED, NOT DUPLICATED AS A LITERAL (2026-07-30). This module's convention elsewhere is to
+# duplicate a sibling engine's constant rather than take a hard import-time dependency on it
+# (`JOIN_KEY_CONFIDENCE_BOTH`, `RESOLUTION_FLOOR_DPI`). That convention is deliberately NOT followed
+# here, for a reason specific to this constant: `_slow_path_eligible_cards_queryset` uses it to
+# EXCLUDE the illustration calculator's own rows, so a copy that drifted from the live identity - a
+# `-v3` bump, say - would silently stop matching anything and reopen the exact defect the exclusion
+# closes, with no error anywhere. A duplicated literal would need a tripwire test to catch that; an
+# import cannot drift at all. No cycle: `local_illustration` imports `local_identify_printing_tags`
+# and `image_evidence`, never this module.
+from cardpicker.local_illustration import ILLUSTRATION_ANONYMOUS_ID
 from cardpicker.local_ocr import (
     OcrParseResult,
     find_matching_candidates,
@@ -2186,6 +2197,7 @@ JOIN_KEY_NO_HIT_SKIP_REASONS = frozenset(
     }
 )
 
+
 # The ImageEvidence fields packaged into a SlowPathVerdict's raw_signals for human review - every
 # extracted signal a reviewer might use to disambiguate a card with no confident join-key hit,
 # EXCLUDING candidate-matching fields (collector_line_set_code/collector_line_collector_number are
@@ -2288,6 +2300,26 @@ def _slow_path_eligible_cards_queryset(
     still has no confident automated hit from either calculator and belongs in the review queue
     exactly as before this PR.
 
+    AND excludes any card the ILLUSTRATION calculator (`_ILLUSTRATION_ANONYMOUS_ID`, issue #507)
+    already successfully voted on, on exactly the same reasoning and with exactly the same
+    `is_no_match=False` qualifier (2026-07-30). This exclusion was ABSENT until then, and this
+    function's own caller admitted it in a comment - "the slow-path queryset would need an
+    additional exclusion for this identity's votes, similar to the fallback-voted-card exclusion it
+    already carries". The management command sequences join-key -> fallback -> illustration ->
+    slow-path, so without it a card the illustration calculator resolves is routed to a human
+    reviewer moments later in the SAME invocation. That is wrong human work, not a no-op: the
+    reviewer is asked to identify a card the pipeline just identified.
+
+    The consequence was bounded only because `stage-d-illustration-v2` has never run. The
+    read-only replay in `docs/pipeline-fidelity-gate.md` projects ~3,233 printing votes, so this
+    fires on the FIRST `-v2` run - which makes it a pre-fire fix, not a cleanup.
+
+    LIKE THE FALLBACK EXCLUSION, THIS ONE IS DELIBERATELY NOT RUN-SCOPED. "The illustration
+    calculator has a confident vote for this card" is a statement about the catalogue, not about a
+    run. Scoping it would mean a card illustration resolved in run A gets routed to human review by
+    slow-path in run B, undoing a solved card - see this function's own opening paragraph and
+    `_fallback_eligible_cards_queryset`'s docstring for the general form of that argument.
+
     `card_ids` (2026-07-24, Stage E Phase 2): a pure scope narrowing, same convention as
     `_eligible_cards_queryset`'s own `card_ids` parameter - see that function's own docstring.
     Since 2026-07-29 it is ALSO pushed into all FOUR dependency subqueries below (the two join-key
@@ -2306,11 +2338,16 @@ def _slow_path_eligible_cards_queryset(
         # replaces) PR #579's `card_ids` pushdown applied to the same queryset just below.
         already_routed = already_routed.filter(run_id=run_id)
     fallback_voted = CardPrintingTag.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, is_no_match=False)
+    illustration_voted = CardPrintingTag.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID, is_no_match=False)
     if card_ids is not None:
         already_routed = already_routed.filter(card_id__in=card_ids)
         fallback_voted = fallback_voted.filter(card_id__in=card_ids)
+        # Same PR #579 pushdown as the two above - an uncorrelated `IN (SELECT ...)` over a
+        # 167k-row table on every 25-card micro-batch otherwise.
+        illustration_voted = illustration_voted.filter(card_id__in=card_ids)
     already_routed_card_ids = already_routed.values_list("card_id", flat=True)
     fallback_voted_card_ids = fallback_voted.values_list("card_id", flat=True)
+    illustration_voted_card_ids = illustration_voted.values_list("card_id", flat=True)
     queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
@@ -2320,6 +2357,7 @@ def _slow_path_eligible_cards_queryset(
         .filter(Q(pk__in=join_key_no_match_card_ids) | Q(pk__in=join_key_no_hit_scanned_card_ids))
         .exclude(pk__in=already_routed_card_ids)
         .exclude(pk__in=fallback_voted_card_ids)
+        .exclude(pk__in=illustration_voted_card_ids)
         .distinct()
         .select_related("source")
     )

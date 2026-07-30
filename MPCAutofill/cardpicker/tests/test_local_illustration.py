@@ -2161,3 +2161,126 @@ class TestCalculatorVersionBump:
         assert votes.count() == 1
         assert votes.get().anonymous_id == ILLUSTRATION_ANONYMOUS_ID
         assert votes.get().illustration_id == illustration
+
+
+class TestNameOnlyFaceIllustrations:
+    """
+    THE NAME-ONLY ENTRY: a `face_illustrations` list that is NON-EMPTY but carries no usable
+    illustration on any face — every entry shaped `{"name": ..., "illustration_id": None}`.
+
+    WHY IT EXISTS AND MUST NOT BE COLLAPSED TO `[]`. A name-only entry is the RECORD THAT WE
+    LOOKED AT THAT FACE AND SCRYFALL PUBLISHES NO ILLUSTRATION FOR IT. Emptying the list would
+    make "we looked and found nothing" indistinguishable from "we never looked" — the same
+    abstention-versus-silence collapse that let frame-style and bleed-edge chips sit at zero rows
+    unnoticed until the 2026-07-29 composition audit. Nor may the `None` entries be FILTERED out
+    of a partly-populated list: indices are positional, and index N must stay face N (see
+    `printing_metadata_import.PrintingMetadataRow.face_illustrations`' own docstring). The data is
+    correct; only a careless READING of it would be wrong.
+
+    THE HAZARD THIS PINS. Such a row satisfies the partial index `cpm_face_illustrations_present`
+    (`condition=~Q(face_illustrations=[])`), so any consumer testing LIST TRUTHINESS as a proxy
+    for "has back-face art" is wrong for exactly these rows. Only a test of
+    `illustration_id is not None` is correct. Measured expectation for the authorised importer
+    run: 1,594 of 113,224 printings get a non-empty list, of which 1,534 carry a real
+    `illustration_id` on every face and **60 are name-only**. The column is empty everywhere
+    today, so nothing can be wrong yet — that changes on the next import.
+
+    AUDIT RESULT (2026-07-30): every consumer of the field is ALREADY CORRECT. Both real readers
+    are pinned below. Stated plainly rather than left implied, because "we checked and found
+    nothing to fix" is a result, and an unpinned correct-by-accident reading is one refactor away
+    from being a wrong one.
+    """
+
+    def _name_only(self, artist_name="Artist NameOnly", card_name="N Front // N Back"):
+        artist = CanonicalArtistFactory(name=artist_name)
+        expansion = CanonicalExpansionFactory(code="mid")
+        cc = CanonicalCardFactory(name=card_name, artist=artist, expansion=expansion)
+        front = uuid.uuid4()
+        metadata = CanonicalPrintingMetadataFactory(
+            canonical_card=cc,
+            illustration_id=front,
+            face_illustrations=[
+                {"name": "N Front", "illustration_id": None},
+                {"name": "N Back", "illustration_id": None},
+            ],
+        )
+        return artist, cc, front, metadata
+
+    def test_the_index_files_no_per_face_key_for_a_name_only_row(self, db):
+        """CONSUMER 1 — `IllustrationIndex._build`. It tests `illustration_id is None`, not list
+        truthiness, so a name-only face contributes nothing. Under a truthiness reading the loop
+        would still run and file keys under `"None"`, which would then match every OTHER name-only
+        printing by the same artist and read as ambiguity that does not exist."""
+        artist, cc, front, _ = self._name_only()
+
+        index = IllustrationIndex()
+
+        assert index.illustration_printings(artist.pk, "n front") == {}
+        assert index.illustration_printings(artist.pk, "n back") == {}
+
+    def test_the_combined_name_key_still_carries_the_scalar_front_illustration(self, db):
+        """THE CONTROL. The row is not invisible — the scalar `illustration_id` column still
+        indexes normally. Without this, the test above would pass just as well against a consumer
+        that ignored the row entirely, which is a different (and also wrong) behaviour."""
+        artist, cc, front, _ = self._name_only()
+
+        index = IllustrationIndex()
+
+        assert index.illustration_printings(artist.pk, "n front n back") == {str(front): [cc.pk]}
+
+    def test_printings_for_illustration_never_matches_a_name_only_row_on_the_face_term(self, db):
+        """CONSUMER 2 — `printings_for_illustration`'s JSONB containment term, which asks for
+        `{"illustration_id": "<uuid>"}`. A `None` entry cannot satisfy it. Asserted against a
+        SECOND printing that legitimately carries the id, so the query is proven to be finding
+        real matches while excluding the name-only row, rather than finding nothing at all."""
+        artist, name_only_cc, front, _ = self._name_only()
+        real_back = uuid.uuid4()
+        other = CanonicalCardFactory(
+            name="R Front // R Back", artist=artist, expansion=CanonicalExpansionFactory(code="vow")
+        )
+        _dfc_metadata(other, uuid.uuid4(), real_back, "R Front", "R Back")
+
+        matched = set(printings_for_illustration(real_back).values_list("pk", flat=True))
+
+        assert matched == {other.pk}
+        assert name_only_cc.pk not in matched
+
+    def test_a_partly_name_only_row_keeps_its_populated_face_and_its_positions(self, db):
+        """The mixed shape, and the reason `None` is retained rather than dropped: index N must
+        stay face N. The populated face still indexes; the name-only one still does not."""
+        artist = CanonicalArtistFactory(name="Artist Mixed")
+        cc = CanonicalCardFactory(
+            name="M Front // M Back", artist=artist, expansion=CanonicalExpansionFactory(code="mid")
+        )
+        back = uuid.uuid4()
+        metadata = CanonicalPrintingMetadataFactory(
+            canonical_card=cc,
+            illustration_id=uuid.uuid4(),
+            face_illustrations=[
+                {"name": "M Front", "illustration_id": None},
+                {"name": "M Back", "illustration_id": str(back)},
+            ],
+        )
+
+        index = IllustrationIndex()
+
+        assert index.illustration_printings(artist.pk, "m back") == {str(back): [cc.pk]}
+        assert index.illustration_printings(artist.pk, "m front") == {}
+        # The position of the populated face is preserved in storage, not compacted away.
+        metadata.refresh_from_db()
+        assert [face["illustration_id"] for face in metadata.face_illustrations] == [None, str(back)]
+
+    def test_the_cache_version_stamp_counts_a_name_only_row_as_present(self, db):
+        """DELIBERATE, and the one place a truthiness-shaped test IS correct. The stamp's job is
+        CHANGE DETECTION so a per-worker-cached index is rebuilt — not "does this row carry usable
+        art". A name-only entry appearing where there was none IS a change to the column, and
+        under-counting it would leave a stale index cached. Rebuilding on a row that turns out to
+        contribute no key is harmless; missing the write is not."""
+        from cardpicker.local_illustration import _illustration_index_version_stamp
+
+        before = _illustration_index_version_stamp()
+        self._name_only()
+        after = _illustration_index_version_stamp()
+
+        assert after != before
+        assert after[5] == before[5] + 1
