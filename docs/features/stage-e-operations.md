@@ -1666,6 +1666,136 @@ guarantees the stale row is gone rather than merely superseded, and it is still
 required whenever the stale row must stop counting toward consensus
 immediately.
 
+## `channel_report` — what every channel produced, after a run
+
+`manage.py channel_report` answers one question for one run: **what did
+every channel in this pipeline actually produce?** It is the command form of
+the per-channel table in
+[`docs/reports/2026-07-29-pipeline-coverage-composition-audit.md`](../reports/2026-07-29-pipeline-coverage-composition-audit.md),
+which was assembled by hand, one channel at a time, against production. Run
+it after any pass that writes votes, evidence or scan-log rows; a failed run
+should produce a **list**, not another hand audit.
+
+```
+python manage.py channel_report
+```
+
+No flags required (owner directive: default the default things, disable them
+with flags). A bare invocation derives the roster, picks the most recently
+started `PilotRunLedger` run, reports every channel, and gates.
+
+### What a channel is — and why it is not an `anonymous_id`
+
+A channel is **one thing the pipeline is supposed to produce**. For
+`CardTagVote` that means `(identity, TAG)`, not just the identity.
+`local-fallback-v1` casts border-colour, frame-style and bleed-edge chips
+under one `anonymous_id`, and the composition audit found border chips
+healthy while frame-style and bleed-edge sat at **zero** under that same
+identity. An identity-level count reports the identity as fine while two
+thirds of it is dead, so the report splits it into seven channels.
+
+The roster is **derived from code**, never typed out — see
+`cardpicker/channel_roster.py`. Vote channels come from the actual vote
+construction sites, the Stage C manifest from `image_evidence.py`'s own
+`extractor_versions[...]` stores, and the skip-reason roster from
+module-level `*_SKIP_REASON` declarations, the same source of truth
+`.github/scripts/docs_lint.py` tethers the docs to. Adding a calculator adds
+a channel with no edit to any list.
+
+### Five outcomes, and only one of them is a failure
+
+Every unit of work a channel does ends in one of these. They are reported
+separately because collapsing them is how a working channel reads as dead:
+
+| outcome            | what it is                                                                          | is it a failure?  |
+| ------------------ | ----------------------------------------------------------------------------------- | ----------------- |
+| **positive vote**  | a row asserting a claim                                                             | no                |
+| **negative vote**  | `is_no_match` / `is_unknown` / `polarity=NOT_APPLICABLE` — the channel ruled it out | no — a conclusion |
+| **abstention**     | a `CardScanLog` row with a named skip reason, reported **by reason**                | no — a conclusion |
+| **value written**  | a populated `ImageEvidence` **field** (Stage C)                                     | no                |
+| **nothing at all** | no vote, no negative, no abstention, no value                                       | **yes**           |
+
+A channel that abstained 200,000 times for `no-evidence` is working and
+telling you something. A channel that produced silence is broken or unwired.
+
+**Stage C success is a populated field, not a manifest key.** All eleven
+extractors report 100% key presence in `extractor_versions` while
+`bleed_diff_mm` is NULL on 97.9% of rows and `artist_ocr_name` is blank on
+206,629 — a key-presence count reports "gap 0" for every one of them. The
+report counts fields.
+
+**Resolutions are not measured.** A machine vote is the unit of success here.
+`vote_consensus.resolve_weighted_consensus` enforces a human-backed gate, so
+no volume of machine votes resolves anything on its own — the catalogue has 4
+resolved cards out of 230,770 and that is the system working as designed. A
+report keyed on `printing_tag_status` or any consensus outcome would show
+~100% failure across a fully healthy pipeline.
+
+### Why a channel is silent — four states, four fixes
+
+Reported in the `why=` column, derived from a static call graph plus the
+ledger. "Run it again" and "wire it first" are not the same instruction, and
+one of them can never work:
+
+- **`NEVER-WIRED`** — the code exists and nothing calls it. No amount of
+  running changes this.
+- **`WIRED-NEVER-RUN`** — a management command reaches it, but no
+  `PilotRunLedger` row for that command exists, ever.
+- **`RAN`** — it was invoked. If it is also silent, that is a real defect in
+  the channel.
+- **`RAN-AND-PURGED`** — a ledger row for a reaching command carries
+  `purged_at`. An explanation, not an excuse: the row still fails.
+
+The reachability derivation is honest about its limits. It resolves calls
+through module-qualified imports, but `getattr`-style and dynamically
+dispatched calls are not modelled, so a channel reported **reachable** may
+not truly be. A channel reported **`NEVER-WIRED`** is the strong claim —
+nothing anywhere calls it — and that is the one worth acting on.
+
+### The gate, and how to declare a legitimate zero
+
+Exit codes follow `soak_gate_report`'s three-verdict split:
+
+| code  | verdict           | what to do                                                                            |
+| ----- | ----------------- | ------------------------------------------------------------------------------------- |
+| **0** | PASS              | nothing                                                                               |
+| **1** | FAIL              | at least one channel produced nothing, or a declared-silent channel started producing |
+| **2** | INSUFFICIENT-DATA | the **roster itself** could not be derived — nothing was measured                     |
+
+Exit code 2 is the important one. If a derivation returns an empty roster —
+a renamed constant convention, a broken regex, a reintroduced non-recursive
+scan — the report must not print "all clear" for a pipeline it never
+inspected. The empty derivation is itself the finding.
+
+A channel that legitimately produces nothing needs an entry in
+`channel_report.ZERO_DECLARATIONS`, which **cannot be added without a
+reason**: `ZeroDeclaration` rejects an empty, token, or unsigned reason at
+construction (per `OPS-CORR-0008` — "treat zero as a run failure rather than
+a quiet outcome"). A declared-silent channel that later **starts** producing
+also fails, because a stated expectation just became false.
+
+The table ships **empty on purpose**. The audit found real, undeclared zeros
+and this instrument exists to report them, so they show up red on the first
+run rather than being silenced in the same change that built the meter.
+
+### Relationship to `build_reconciliation_report`
+
+The Stage C half of this report **calls**
+`image_evidence.build_reconciliation_report` once per derived extractor key
+rather than reimplementing it, and inherits its rule: query the persisted
+rows directly, never a separately-maintained counter, so the report can
+never drift from what was actually written. Its deliberate `run_id`
+asymmetry is preserved — the `CardScanLog` side is run-scoped, the
+`ImageEvidence` side is not, because a card's evidence may have been written
+by an earlier run and merely skipped in this one.
+
+### Other flags
+
+- `--run-id <id>` — scope the run columns to a specific run instead of the latest.
+- `--family vote|extractor|abstention` — report one family only.
+- `--json` — machine-readable output for a wrapper script.
+- `--no-gate` — report without failing the exit code.
+
 ## See also
 
 - [`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)
