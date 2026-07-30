@@ -70,6 +70,15 @@ not described here so it doesn't get re-derived.)
   by that doc's own mechanical tether in `docs_lint.py`, but only after the
   fact; get the judgment right at the row's creation instead of relying on
   CI to catch a wrong one later.
+- **Constant renames**: did this branch rename, extract, move or retire a
+  module-level constant (`*_SKIP_REASON`, `*_ANONYMOUS_ID`, a weight, a
+  threshold)? Run
+  `python3 .github/scripts/constant_rename_equivalence.py` before pushing.
+  It proves the touched modules normalise to identical ASTs once constants
+  are inlined, and separately resolves every matching reference — the check
+  that a clean textual auto-merge cannot do for you. Motivating incident and
+  limits:
+  [`docs/reference/constant-rename-equivalence.md`](docs/reference/constant-rename-equivalence.md).
 - **Push policy**: commit and push straight to `master` for solo work on
   this repo, no PR needed. PRs (+ user approval before merge) are reserved
   for upstreaming to `chilli-axe/mpc-autofill`. Never `git push --force` as

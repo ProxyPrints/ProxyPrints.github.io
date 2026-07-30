@@ -1,0 +1,106 @@
+name: Constant-rename equivalence
+
+# Two checks over module-level constants, both from
+# .github/scripts/constant_rename_equivalence.py. Motivating incident and
+# full rationale: docs/reference/constant-rename-equivalence.md.
+#
+# PR #567 renamed SLOW_PATH_TO_REVIEW_REASON -> SLOW_PATH_TO_REVIEW_SKIP_REASON
+# while PR #568 concurrently added NEW code using the OLD name. Git
+# auto-merged with no conflict (#568 only added lines; #567 only touched a
+# nearby docstring), and the merged result would have raised ImportError at
+# module-import time in a module reached by the catalog-stats view and the
+# hourly warm_catalog_stats job. Neither branch was broken on its own — only
+# their merge was, which is precisely the revision a `pull_request` checkout
+# hands you.
+#
+# ============================================================================
+# NO `paths:` FILTER ON `pull_request`. THIS IS DELIBERATE. DO NOT ADD ONE.
+# ============================================================================
+# GitHub leaves a REQUIRED status check that never RUNS in `pending` forever,
+# rather than treating it as passed. A `paths: "**/*.py"` filter therefore
+# makes any docs-only or frontend-only PR permanently unmergeable the moment
+# an owner marks one of these jobs required — and this repo merges plenty of
+# both. `references` is intended to be required (owner ruling, 2026-07-29),
+# so the filter is gone from every job here rather than only from that one:
+# leaving it on the siblings would just relocate the same trap for whoever
+# marks the next one required.
+#
+# The cost is paid the right way instead — the jobs are cheap and gate
+# THEMSELVES, in the script, where the log can say why:
+#
+#   `references` is an unconditional invariant. A matching constant imported
+#   from, or read in, a module that declares it nowhere is an ImportError or
+#   NameError, always, with no judgment call. `--changed-since` short-circuits
+#   it to well under a second on a PR that touches no Python, printing
+#   "nothing to check — no *.py file changed between ...". When Python HAS
+#   changed it scans the whole tree in ~7s and reports the number of
+#   references it resolved, so a green log is evidence rather than silence.
+#   Same posture as protected-core-license: it passes with zero findings
+#   today, correctly, and exists to catch the day that stops being true.
+#
+#   `equivalence` is the expensive proof, and its natural trigger is a PR
+#   that RENAMES a constant, which is not most PRs. Rather than run always
+#   and pass always (which teaches people to ignore it), the script gates
+#   itself: with no renamed or removed constant in the diff it prints
+#   "nothing to prove" and exits 0. When it does fire, its output names the
+#   renamed constants and the exact differing AST node.
+#
+# Stdlib only — reads source text via `git cat-file`, never imports or
+# executes it, so no Django/third-party deps are needed in these jobs.
+
+on:
+  pull_request:
+  push:
+    branches: ["master"]
+    paths:
+      - "**/*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  references:
+    name: Every matching constant reference resolves
+    # SAFE TO REQUIRE in branch protection: runs on every pull_request with no
+    # path filter, and exits 0 quickly (with an explicit reason in the log)
+    # when the PR changes no Python.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Needed only so --changed-since can resolve the base commit. If it
+          # cannot, the script says so and runs the full check rather than
+          # failing — the gate is an optimisation, never a correctness input.
+          fetch-depth: 0
+      - name: Resolve every *_SKIP_REASON / *_ANONYMOUS_ID / threshold reference
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          python3 .github/scripts/constant_rename_equivalence.py \
+            --check-references ${BASE:+--changed-since "$BASE"}
+
+  equivalence:
+    name: Renamed constants are behaviour-preserving
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Needs both sides of the comparison, and the merge-base.
+          fetch-depth: 0
+      - name: Prove the rename changed no behaviour
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then BASE="$(git rev-parse HEAD~1)"; fi
+          python3 .github/scripts/constant_rename_equivalence.py --base "$BASE" --head HEAD
+
+  unit-tests:
+    name: constant_rename_equivalence.py unit tests
+    # Fixture git repos exercising each normalisation rule's passing AND
+    # failing case, plus real-repo regression pins for the #567 rename.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Run constant-rename equivalence unit tests
+        run: python3 .github/scripts/tests/test_constant_rename_equivalence.py

@@ -42,6 +42,16 @@ and `MPCAutofill/cardpicker/tests/test_skip_reason_roster.py` pins every
 declared value against an explicit expected set so a future rename cannot
 silently alter production data.
 
+That sweep is also where
+[`constant-rename-equivalence.md`](constant-rename-equivalence.md) came
+from: the rename half of it collided with a concurrently-merged PR that had
+added new code using an old constant name, and git auto-merged the two with
+no conflict into a tree that raised `ImportError` at module-import time.
+Run `.github/scripts/constant_rename_equivalence.py` on any branch that
+renames, extracts or retires a `*_SKIP_REASON` — the roster tether above
+checks that a value is DOCUMENTED, which is a different question from
+whether the code still resolves and still evaluates to the same string.
+
 ## How this doc is tethered
 
 `check_skip_reason_roster_tether()` in `.github/scripts/docs_lint.py`

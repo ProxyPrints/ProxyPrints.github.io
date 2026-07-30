@@ -1023,3 +1023,28 @@ cards the broken gate already logged - they stay excluded forever. The fix has t
 `-vN` bump (family-keyed behaviour follows automatically via `models.calculator_family`), which
 makes "is this repair reachable by the population it is for?" a standing question for any Stage D
 predicate change, not an afterthought.
+
+## A clean textual auto-merge can still produce an unresolvable name — git, the test suite and mypy all agree, and all three are wrong
+
+A branch renamed `SLOW_PATH_TO_REVIEW_REASON` to `SLOW_PATH_TO_REVIEW_SKIP_REASON`. Concurrently,
+another branch added BRAND NEW code importing and using the OLD name. Git auto-merged with no
+conflict, and could not have done otherwise: one side only ADDED lines, the other only touched a
+nearby docstring, so the rename and the new references never textually collided. The merged
+result would have raised `ImportError: cannot import name 'SLOW_PATH_TO_REVIEW_REASON'` at
+module-**import** time, in a module reached by both a live view and an hourly scheduled job. The
+full backend suite passed on each branch, because **neither branch was broken** — only their
+merge was, and no CI job ran against that merge result with a checker that resolves names.
+
+The generalisation is the useful part: **a textual merge cannot see a name graph.** Two changes
+that never touch the same lines can still produce a tree in which a name no longer resolves, or
+resolves to a different value. Rename/extract/move refactors are the standing generator of this
+because they are exactly the changes whose diff is spread thinly over many files while carrying
+one indivisible semantic edit. Green CI on both branches is not evidence about the merge.
+
+Promoted to a gate, per this file's own triage ritual:
+[`reference/constant-rename-equivalence.md`](reference/constant-rename-equivalence.md) —
+`.github/scripts/constant_rename_equivalence.py` resolves every matching constant reference at
+the merge revision (which is what a `pull_request` checkout hands you), and, when a PR actually
+renames something, proves the touched modules normalise to identical ASTs once constants are
+inlined. Run it on any branch that renames a constant; do not weaken its normaliser to make a
+real repo pass — the one time a reported difference looked spurious, it was this bug.
