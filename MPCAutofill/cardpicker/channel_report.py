@@ -347,6 +347,22 @@ def _populated_field_counts(fields: tuple[str, ...]) -> tuple[dict[str, int], li
     return counts, unknown
 
 
+#: Above this many cards, the per-extractor reconciliation is SKIPPED rather
+#: than run.
+#:
+#: `build_reconciliation_report` takes an explicit card list and filters
+#: `card_id__in=[...]`. A whole-catalogue Stage C pass touches ~220,000 cards,
+#: so running it per extractor would send eleven 220,000-element IN clauses at
+#: Postgres. The lifetime field counts above already answer "did this extractor
+#: write values", which is what the gate needs; the reconciliation adds the
+#: run-scoped attempted/ran/dropped split, which is a nice-to-have.
+#:
+#: The cap SAYS SO in the channel's notes rather than silently reporting no
+#: reconciliation - an omitted measurement that looks like a clean one is the
+#: defect this whole instrument exists to remove.
+RECONCILIATION_CARD_CAP = 20_000
+
+
 def _run_card_ids(run_id: str) -> list[int]:
     """The cards a run touched, derived from the run itself rather than a flag.
 
@@ -486,10 +502,17 @@ def build_channel_report(run_id: Optional[str] = None, roster: Optional[Roster] 
     for channel in roster.extractor:
         counts, unknown = _populated_field_counts(channel.fields)
         by_reason, run_abstentions = _abstention_counts(channel.identity, run_id)
-        reconciliation = (
-            build_reconciliation_report(channel.identity, run_cards, run_id) if run_cards and run_id else None
-        )
+        reconciliation = None
         notes = []
+        if run_cards and run_id:
+            if len(run_cards) <= RECONCILIATION_CARD_CAP:
+                reconciliation = build_reconciliation_report(channel.identity, run_cards, run_id)
+            else:
+                notes.append(
+                    f"run touched {len(run_cards)} cards, above the {RECONCILIATION_CARD_CAP} cap for the "
+                    f"per-extractor attempted/ran/dropped reconciliation - it was NOT computed. The field "
+                    f"counts below are lifetime and unaffected."
+                )
         if channel.shares_fields_with:
             notes.append(
                 "shares one block of field writes with "
