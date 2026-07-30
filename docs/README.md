@@ -34,6 +34,23 @@ The methodology and the systems it governs.
   declarations in code by `check_skip_reason_roster_tether()` in
   `.github/scripts/docs_lint.py`, on the same terms as the calculator
   roster: code is the source of truth, the doc is the thing checked.
+- [`reference/self-referential-reasoning.md`](reference/self-referential-reasoning.md)
+  — the register of every place the pipeline measures itself against
+  itself, or consumes its own output as independent evidence: eight named
+  _shapes_ (a "ground truth" fixture recorded from the thing it grades; a
+  gate that drops uncomputable criteria instead of failing; an eligibility
+  filter that deletes rows another calculator counts; an agreement rate
+  between two channels that share a decoder; a test whose fixture is built
+  from the constant the implementation reads; a tether that checks a
+  string appears rather than that the claim is true; a denominator that is
+  the run's own output; a field that reads as a fact about the world and
+  is a fact about our import completeness), then the 20 findings and the 5
+  checked-and-sound non-findings that ground them, each with its
+  measurement. From the 2026-07-29 read-only audit (production `85d88bfe`,
+  code `origin/master` 6bc3e166). **Read its "Eight shapes" section before
+  writing any new gate, tether, golden fixture, agreement statistic or
+  coverage percentage.** Companion to the fidelity-gate recheck report
+  (PR #586), which covers one named gate; this one is cross-cutting.
 - [`reference/vote-weight-matrix.md`](reference/vote-weight-matrix.md) —
   the owner-ratified 2026-07-22 vote-weight scenario matrix (raw decision
   record, implemented in PR #325) that `theory.md`'s §4/§7a and
