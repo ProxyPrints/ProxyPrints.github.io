@@ -890,6 +890,31 @@ contains the follow-up work (`git show <merge-commit> --stat`, or just checking 
 line is present on the target branch) instead of assuming "merged" means everything on the branch
 landed.
 
+**The narrowest version of this: a push that loses a race with the merge.** A squash-merge takes
+whatever the branch tip is _at merge time_. A commit pushed after the merge fires is silently
+orphaned - the PR shows MERGED, CI shows green, and the commit simply is not on master. Nothing
+in GitHub or CI reports this. The window is small enough to be measured in seconds and it has
+still happened twice here: PR #604's `82360a9b` (recovered as PR #641) and PR #646's `1fa8d168`,
+pushed 76 seconds after the merge (recovered as PR #650). Both were the author's own final
+commit, landing while the merge was already in flight.
+
+**How to detect it**: for each merged PR, compare its `mergedAt` against the branch tip's commit
+date; a branch timestamp later than the merge means stranded work.
+
+```bash
+gh pr list --state merged --limit 25 --json number,headRefName,mergedAt \
+  --jq '.[] | "\(.number) \(.headRefName) \(.mergedAt)"' |
+while read -r num branch merged; do
+  tip=$(git log -1 --format=%cI "origin/$branch" 2>/dev/null) || continue
+  [ -n "$tip" ] && [ "$tip" \> "$merged" ] && echo "PR #$num: tip $tip > merged $merged"
+done
+```
+
+Run it after `git fetch --all --prune`, and note it can only see branches that still exist
+locally or on the remote - a squash-and-delete removes the evidence, so sweep before the branch
+is reaped, or recover the commit from the PR's own timeline (`gh pr view <n> --json commits`) or
+a local checkout's reflog.
+
 ## Converting a thread pool to a process pool for CPU-bound work has to re-derive every piece of state threads were sharing for free
 
 `docs/reports/2026-07-20-pipeline-compute-profile.md` found Stage C's OCR-heavy extraction 3.25x
