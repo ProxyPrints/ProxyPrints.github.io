@@ -75,7 +75,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import Iterable, Literal, Optional, cast
+from typing import Any, Iterable, Literal, Optional, cast
 
 from PIL import Image
 
@@ -504,14 +504,30 @@ def _eligible_base_queryset(
     equivalent.
 
     `run_id=None` (the default) is EXACTLY the pre-2026-07-29 behaviour, and today it is still what
-    most callers get. Only `local_lands_identify._land_pool_selected_cards` passes a run_id, because
-    lands is the one caller of this function named in the Stage D printing-channel directive. The
-    remaining callers - `run_pilot`'s `select_candidates`, `count_below_resolution_floor`,
-    `run_name_frequency_elimination` - are the OCR/phash pilot, a different workload with its own
-    fetch budgets and its own resume semantics, and flipping them is a separate decision with a
-    separate blast radius rather than a free ride on this one. That is a deliberate scoping of the
-    change, not an oversight, and it is recorded here so the asymmetry is visible from this
-    function rather than only from its callers.
+    most callers get. Two callers pass a run_id: `local_lands_identify._land_pool_selected_cards`
+    (lands is the one caller of this function named in the Stage D printing-channel directive) and
+    `run_name_frequency_elimination` (2026-07-30 - see the SECOND reason below, which is a
+    different and stronger argument than the resume one). The remaining callers - `run_pilot`'s
+    `select_candidates` and `count_below_resolution_floor` - are the OCR/phash pilot, a different
+    workload with its own fetch budgets and its own resume semantics, and flipping them is a
+    separate decision with a separate blast radius rather than a free ride on this one. That is a
+    deliberate scoping of the change, not an oversight, and it is recorded here so the asymmetry is
+    visible from this function rather than only from its callers.
+
+    THE SECOND REASON TO PASS `run_id`, WHICH IS NOT ABOUT RESUMING (2026-07-30). For most callers
+    the own-vote exclude is a per-card idempotence checkpoint, and leaving it lifetime only costs
+    work that a later run skips. For a caller whose PREDICATE IS A COUNT OVER THE RETURNED
+    POPULATION, a lifetime exclude is not a missed vote - it is a source of FRESH WRONG POSITIVES,
+    because the calculator is taking a census over a population it is itself permanently shrinking.
+    `run_name_frequency_elimination` is exactly that caller: it votes only when a name has exactly
+    ONE unresolved eligible card, so every card it votes on leaves the pool forever under a
+    lifetime exclude, and a name that correctly ABSTAINED on run 1 (two eligible cards, so
+    elimination says nothing about which is which) can pass the gate on run 2 purely because run 1
+    removed one of them. Its own docstring calls that count "the difference between a sound
+    inference and a coin flip"; a self-depleting pool turns it back into the coin flip. Any FUTURE
+    caller whose gate is a count over this queryset must pass `run_id` for the same reason - the
+    distinction to apply is the same one the BATCH SCOPING note below draws, and it points the
+    opposite way for `run_id` than it does for `card_ids`.
 
     THE DEDUCTIVE-BACKFILL EXCLUDE BELOW IS NEVER RUN-SCOPED, whatever `run_id` says: it is a
     workload choice about ANOTHER identity's votes ("don't pile a weaker vote onto a card the
@@ -585,6 +601,11 @@ def _eligible_base_queryset(
     Narrowing this queryset to a micro-batch would silently reinterpret that count as "exactly
     one WITHIN THE BATCH" and cast votes for names whose other unresolved cards merely sat
     outside it; `compute_covered_printing_pks()` alongside it is catalog-wide in the same way.
+    NOTE THAT `run_id` IS THE OPPOSITE CASE AND MUST NOT BE READ OFF THIS PARAGRAPH: `card_ids`
+    narrows the population by a slice that has nothing to do with the question being asked, which
+    corrupts the count; `run_id` REMOVES a narrowing the calculator inflicted on itself in an
+    earlier run, which RESTORES the count to the catalog-wide one the gate is specified against.
+    One must not be passed here and the other must, for the same underlying reason.
     `run_lands_identify` (the caller scoped under issue #533's first prerequisite) is safe
     because its own predicate is strictly per-card - `is_lands_target` on that card's own name
     and candidate count - never a count over the returned population. Any further caller must be
@@ -1246,6 +1267,78 @@ class AttributeReport:
     # cardpicker.local_clustering.compute_two_threshold_clusters.
     cluster_count: int = 0
     cards_absorbed_into_clusters: int = 0
+
+
+# THE BORDER/FRAME AGREEMENT CHECK'S OWN VOCABULARY AND EXTRACTOR REQUIREMENT (2026-07-30).
+# `printing_attribute_disagreement` below is the single implementation of "does this card's
+# already-stored evidence CONTRADICT this candidate printing"; these are the two answers it gives.
+# The strings match `local_calculate_verdicts`' own `JOIN_KEY_BORDER_MISMATCH_SKIP_REASON` /
+# `JOIN_KEY_FRAME_MISMATCH_SKIP_REASON` values, deliberately rather than incidentally - they name
+# the same finding, and the per-calculator constants stay separate only because each calculator
+# owns its own skip vocabulary under a different `anonymous_id`.
+ATTRIBUTE_BORDER_MISMATCH = "border-mismatch"
+ATTRIBUTE_FRAME_MISMATCH = "frame-mismatch"
+
+# `classify_frame_style` takes exactly two inputs and each comes from a DIFFERENT extractor:
+# `collector_line_collector_number` from `collector_line_ocr`, `illus_anchor_fired` from
+# `artist_ocr`. `local_calculate_verdicts.FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS` is now an alias for
+# this, so the requirement has one definition and cannot drift between callers.
+FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS = frozenset({"collector_line_ocr", "artist_ocr"})
+
+
+def printing_attribute_disagreement(evidence: Any, metadata: Any) -> Optional[str]:
+    """
+    DOES THIS CARD'S ALREADY-STORED EVIDENCE CONTRADICT THIS CANDIDATE PRINTING? Returns the
+    disagreement's name (`ATTRIBUTE_BORDER_MISMATCH` / `ATTRIBUTE_FRAME_MISMATCH`) or `None` for
+    "nothing contradicts it". NO IMAGE FETCH, no OCR, no new extraction - every input is a field
+    already sitting on the row.
+
+    Lifted verbatim out of `local_calculate_verdicts._apply_agreement_checks` (2026-07-30) so it
+    has ONE implementation and two callers: that function, unchanged in behaviour, and
+    `run_name_frequency_elimination`, which needed exactly this check and had no visual cross-check
+    of any kind. It lives HERE rather than beside its original caller purely because of import
+    direction - `local_calculate_verdicts` already imports this module and never the reverse, so
+    this is the only side of the pair both callers can reach without a cycle.
+
+    "MISSING DATA IS NOT EVIDENCE" throughout, which is this check's oldest rule and the one most
+    easily broken by accident:
+      * no `metadata` sidecar at all -> nothing to compare, no disagreement.
+      * a blank `layout_class` or a blank `metadata.border_color` -> that half is skipped.
+      * `frame_style_is_consistent` returns True whenever either side is unresolved (see its own
+        docstring), so an unclassifiable frame never manufactures a mismatch.
+
+    THE FRAME HALF IS GATED ON `artist_ocr` HAVING ACTUALLY RUN (PR #656), and that gate is the
+    single best reason this is shared rather than re-derived. `illus_anchor_fired` is NULLABLE and
+    `bool(None)` is `False`, indistinguishable from "artist_ocr ran and found no anchor". With no
+    collector number either, `classify_frame_style` then confidently answers "modern" for a card it
+    has no anchor evidence about at all, and a genuine OLD-frame printing gets vetoed. That is the
+    one degradation here that is STRICT rather than permissive, so an absent `artist_ocr` skips the
+    frame half entirely rather than evaluating it on invented input. A second implementation of
+    this check would very likely have re-introduced that trap.
+
+    BORDER IS A DIRECT STRING COMPARISON, FRAME IS NOT. `layout_class` mirrors
+    `local_fallback.classify_border_color`'s return convention ("black"/"white"/"silver"/
+    "borderless"), the SAME value space Scryfall's own `border_color` uses - so no remapping is
+    correct there. `frame` is a Scryfall frame YEAR ("1993"/"2015"/...) and must go through
+    `FRAME_VALUE_TO_CLASS`, which is what `frame_style_is_consistent` owns.
+    """
+    if metadata is None or evidence is None:
+        return None
+
+    layout_class = getattr(evidence, "layout_class", None)
+    border_color = getattr(metadata, "border_color", None)
+    if layout_class and border_color and layout_class != border_color:
+        return ATTRIBUTE_BORDER_MISMATCH
+
+    if FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS <= (evidence.extractor_versions or {}).keys():
+        frame_class = local_fallback.classify_frame_style(
+            parsed_a_collector_number=bool(evidence.collector_line_collector_number),
+            illus_anchor_fired=bool(evidence.illus_anchor_fired),
+        )
+        if not local_fallback.frame_style_is_consistent(frame_class, getattr(metadata, "frame", None)):
+            return ATTRIBUTE_FRAME_MISMATCH
+
+    return None
 
 
 def build_propagated_cluster_votes(
@@ -1972,6 +2065,42 @@ class NameFrequencyResult:
     run_id: str = ""
     votes_written: int = 0
     gate_violations: list[int] = field(default_factory=list)
+    # THE VISUAL CONJUNCT'S OWN ABSTENTION COUNTERS (2026-07-30). Reported separately from
+    # `votes_written` so the cost of the new gate is legible on the first run rather than
+    # inferred from a smaller total: `abstained_no_evidence` is "we have never looked at this
+    # image", `abstained_attribute_mismatch` is "we looked and it contradicts the printing".
+    # Those are very different findings and collapsing them would hide which one is doing the work.
+    abstained_no_evidence: int = 0
+    abstained_attribute_mismatch: int = 0
+
+
+def _current_evidence_for(card_id: int) -> Optional[Any]:
+    """This card's CURRENT `ImageEvidence` row, or `None` when it has never been extracted (or its
+    only row is stale against the card's live hash/checksum). `current_evidence_queryset` is THE
+    shared definition of "current" - content hash matches the card's live `content_phash`, and a
+    stamped md5 agrees wherever both sides carry one - reused rather than re-expressed, since this
+    module would otherwise become the Nth inline copy of a rule that already got centralised once.
+
+    Imported at CALL time, not module scope: `image_evidence` imports `local_fallback`, which
+    TYPE_CHECKING-imports this module, so a module-scope import here would turn a type-only cycle
+    into a real one. Same posture `evidence_transfer`'s own call-time import documents.
+
+    Only reached for a name that has ALREADY passed both counting gates (measured live 2026-07-16:
+    1,678 names catalogue-wide qualify), so this per-name fetch is bounded by that number rather
+    than by the eligible card population."""
+    from cardpicker.image_evidence import current_evidence_queryset
+
+    card = Card.objects.filter(pk=card_id).first()
+    if card is None:
+        return None
+    return current_evidence_queryset(card).first()
+
+
+def _printing_metadata_for(printing_pk: int) -> Optional[Any]:
+    """The candidate printing's `CanonicalPrintingMetadata` sidecar, or `None` when it has none -
+    which `printing_attribute_disagreement` already treats as "nothing to compare"."""
+    canonical = CanonicalCard.objects.filter(pk=printing_pk).select_related("printing_metadata").first()
+    return getattr(canonical, "printing_metadata", None) if canonical is not None else None
 
 
 def run_name_frequency_elimination(
@@ -2000,6 +2129,90 @@ def run_name_frequency_elimination(
     match, card_type=CARD, not deductive-backfill-covered, no custom-art/non-english tag) plus
     this function's own anonymous_id for idempotence, and the SAME batch-flush + gate-check
     pattern as run_pilot (a kill loses at most one batch; a plain re-invocation resumes cleanly).
+
+    THE DEDUCTION MUST LOOK AT THE IMAGE (owner ruling, 2026-07-30): "just because a card was
+    printed exactly once doesn't mean that the image in our catalogue is an accurate depiction of
+    that card, it may have a different border or another issue."
+
+    Everything the 1:1 gate above checks is a COUNT. Counting establishes that IF this card is a
+    depiction of one of this name's printings, THEN it must be the uncovered one. It establishes
+    NOTHING about the antecedent, and the only filters that spoke to it at all were the DECLARED
+    `custom-art` / non-English tags - so an altered border, a custom frame or a misnamed upload
+    that nobody had tagged yet sailed straight through and got a full-confidence structural vote.
+
+    "IT IS ONLY A VOTE" IS NOT THE DEFENCE IT SOUNDS LIKE, which is why this was worth fixing
+    rather than tolerating. Issue #593 established that a machine vote is what the question feed
+    renders as THE SUGGESTION TO CONFIRM, and a human's click returns as a full-weight USER vote.
+    A visually-unverified deduction therefore becomes a one-click rubber stamp, and the human-
+    backed consensus gate - the thing that normally makes a wrong machine vote recoverable - is
+    exactly the mechanism that launders it.
+
+    SO THE MISSING CONJUNCT IS ADDED: the card's ALREADY-STORED evidence must be consistent with
+    the candidate printing (`printing_attribute_disagreement` - border class and frame style, the
+    same check `local_calculate_verdicts._apply_agreement_checks` has always applied to the
+    join-key channel, now shared rather than re-derived). This is the same shape as the D1 fix: a
+    tier claimed a cross-check it never performed, and adding the real one made it sound.
+
+    NO NEW FETCH, NO NEW EXTRACTION. Every input is a field already on the card's current
+    `ImageEvidence` row. That matters for what this function IS - a pure structural deduction that
+    costs no network - and it is why the conjunct is affordable at catalogue scale.
+
+    NO STORED EVIDENCE MEANS ABSTAIN, NOT PROCEED. If the card has no current `ImageEvidence` row
+    at all, we have never looked at this image, so the antecedent is exactly as unestablished as it
+    was before - and "we have no evidence" must not read as "no evidence against". This is the one
+    place where this module's usual "missing data is not evidence" rule points the other way, and
+    deliberately: that rule protects a match from being VETOED by silence, whereas here silence is
+    being asked to ESTABLISH something. Counted as `abstained_no_evidence` so the size of that
+    population is visible on the first run rather than inferred.
+
+    WHY NOT SIMPLY DROP THIS CALCULATOR. It has never run in production (zero `PilotRunLedger`
+    rows for `local_name_frequency_elimination`, ever), so nothing is contaminated and there is no
+    retraction to plan - dropping it would have been clean. It is kept because the deduction is
+    genuinely sound ONCE the antecedent is established, and elimination reaches a population the
+    image-based channels structurally cannot: a name whose single uncovered printing has no
+    distinguishing collector line to read. Deleting a sound tier because it was missing a guard is
+    a worse trade than adding the guard.
+
+    THE CENSUS MUST BE RUN-SCOPED (2026-07-30). `_eligible_base_queryset` is called with THIS
+    run's `run_id`, and that argument is a soundness fix, not a resume convenience. The gate above
+    is a COUNT OVER THE POPULATION THIS QUERYSET RETURNS - "exactly one unresolved eligible card
+    for this name, catalog-wide" - while one of that queryset's exclusions is "cards already
+    carrying THIS calculator's vote". Left unscoped, that exclusion is LIFETIME, so the calculator
+    is taking a census over a population it is itself permanently shrinking:
+
+        run 1   name N has TWO unresolved eligible cards, A and B. len(card_ids) != 1, so the
+                gate correctly ABSTAINS - elimination cannot say which of A and B is the
+                uncovered printing, and voting for either would be a coin flip.
+        (later) some other channel votes on A, or A is resolved/confirmed by a human, or this
+                calculator votes on A for some OTHER name it also qualifies under.
+        run 2   A is gone from the pool. Name N now returns exactly ONE card, B. The gate PASSES
+                and votes B for the printing - not because anything new was learned about B, but
+                because the pool was depleted underneath the question.
+
+    That is a FRESH WRONG POSITIVE, which is a strictly worse failure than the stale-vote and
+    missed-vote cases the 2026-07-29 run-scoping directive was written for: nothing about B's
+    image, evidence or name changed between the two runs, only the size of the population the
+    gate counts. Passing `run_id` narrows the self-suppressing excludes to rows THIS run wrote, so
+    a fresh run_id restores the catalog-wide count the gate is specified against and name N
+    abstains on run 2 exactly as it did on run 1. Within-run resume is unaffected and still works:
+    re-invoking with the SAME run_id still sees this run's own already-voted cards excluded, so a
+    killed run picks up where it stopped rather than redoing completed batches.
+
+    WHAT THIS DOES *NOT* CHANGE, deliberately. `compute_covered_printing_pks()` above stays
+    catalog-wide and un-scoped, and must: "covered" is a fact about the CATALOGUE (a confirmed
+    `canonical_card`, or a RESOLVED `inferred_canonical_card`), not about this calculator's
+    progress, and run-scoping it would make every run re-derive coverage from an empty set and
+    treat every printing as uncovered. The two halves of the gate are therefore scoped
+    DIFFERENTLY, on purpose: the coverage half asks a question about the world, the census half
+    asks a question about a population this calculator mutates. It also means a name whose single
+    uncovered printing genuinely got covered between runs drops out of the gate naturally on the
+    coverage half, which is why restoring the census half does not simply re-vote everything.
+
+    `run_pilot`'s own `select_candidates` and `count_below_resolution_floor` are LEFT UNSCOPED -
+    neither gates on a count over the returned population (the pilot's predicate is per-card and
+    its selection is a fetch-budget ordering; the floor count is a report metric), so neither has
+    the defect this fixes, and flipping them is the separate decision with the separate blast
+    radius `_eligible_base_queryset`'s own docstring already records.
     """
     # a separate invocation entrypoint from run_pilot (own management command, own gate-check
     # loop) - generates its OWN run_id, never one shared with a run_pilot() call.
@@ -2010,7 +2223,10 @@ def run_name_frequency_elimination(
 
     cards_by_name: dict[str, list[int]] = collections.defaultdict(list)
     for card_id, name in (
-        _eligible_base_queryset(NAME_FREQUENCY_ANONYMOUS_ID)
+        # `run_id` PASSED (2026-07-30) - THE CENSUS LEAK. See this function's own docstring's
+        # "THE CENSUS MUST BE RUN-SCOPED" section for why this one argument is a correctness fix
+        # and not a resume convenience.
+        _eligible_base_queryset(NAME_FREQUENCY_ANONYMOUS_ID, run_id=run_id)
         .values_list("pk", "name")
         .order_by("pk")
         .iterator(chunk_size=5000)
@@ -2050,6 +2266,18 @@ def run_name_frequency_elimination(
             continue
         uncovered = [c for c in candidates if c.pk not in covered_printing_pks]
         if len(uncovered) != 1:
+            continue
+
+        # THE MISSING CONJUNCT (owner ruling, 2026-07-30) - see this function's own docstring's
+        # "THE DEDUCTION MUST LOOK AT THE IMAGE" section. Everything above is a COUNT; nothing
+        # above establishes that this card is a depiction of that printing at all.
+        evidence = _current_evidence_for(card_ids[0])
+        if evidence is None:
+            result.abstained_no_evidence += 1
+            continue
+        disagreement = printing_attribute_disagreement(evidence, _printing_metadata_for(uncovered[0].pk))
+        if disagreement is not None:
+            result.abstained_attribute_mismatch += 1
             continue
 
         votes_batch.append(

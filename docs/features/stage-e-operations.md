@@ -120,6 +120,58 @@ and never touches that window.
 **This is a narrowing, not a weakening.** Every bar still halts for everything
 it ever halted for, _except_ a destination asking us to slow down.
 
+### The monolith re-samples the envelope during a pass (2026-07-30)
+
+Owner ruling: _"host resampling is likely required (for steps that aren't
+fetch) as the same monolith will run for small datasets and large ones so needs
+to fit the available compute appropriately."_
+
+`manage.py run_pipeline` shipped (PR #660) with the envelope checked **once**,
+as a preflight, before Stage C — and never again. That is correct for a
+200-card run and wrong for a 230,000-card one: the same command has to fit
+whatever compute is free **during** the pass, not what happened to be free at
+launch.
+
+The envelope is now re-sampled at every stage seam: after Stage C, between each
+of Stage D's calculators and chip casters, and before each Stage C+ propagation
+tier. `PilotRunLedger.counters["envelope"]` records `samples` and
+`skipped_by_interval`, so a run reporting one sample is visibly a run that never
+re-sampled.
+
+**Three separate protections, and this is only the middle one.** They are easy
+to conflate:
+
+| protection       | protects        | where it lives                             |
+| ---------------- | --------------- | ------------------------------------------ |
+| 7/sec ceiling    | Google          | `harvest_rate_coordinator`, per request    |
+| **the envelope** | **this host**   | **`operating_envelope`, sampled per seam** |
+| compute gating   | everything else | `stage_e_batch_sizing` / concurrency slots |
+
+**Halt semantics are unchanged, and a re-sample is not a throttle.** A genuine
+breach found mid-pass still persists an `EnvelopeTrip`, still exits 3, and still
+requires `resolve_envelope_trip` — no self-resume. Converting a host-load breach
+into a throttle would undo the 429/503 distinction above from the opposite
+direction: going slower on Google does not reduce this box's own load.
+
+**What a mid-pass halt leaves behind differs from the preflight's, and the
+message says so.** The preflight can honestly say "nothing was written"; by the
+time a re-sample fires, real rows exist. They stay — every one stamped with the
+run's `run_id` — and the run resumes with `--run-id <same>` once the trip is
+acknowledged.
+
+**Cadence: 60 seconds minimum between samples**, interval-gated so the check
+cannot become its own load. The number is derived rather than tuned by feel: the
+host-load bar compares against the **one-minute** load average
+(`os.getloadavg()[0]`), so sampling faster re-reads a number that has not
+finished moving — it cannot detect a breach any earlier, it only multiplies DB
+round trips.
+
+**Known residual.** The seams are _between_ calculators, not inside them. Each
+Stage D calculator owns its own internal batching, so at catalogue scale a
+single calculator can run for a long time between checks. Closing that gap means
+threading a progress callback into each calculator's own batch loop — a real
+refactor of shared code, deliberately not done here.
+
 **The ceiling itself is now 7 req/sec** (`harvest_fetch_limiter.GOOGLE_IMAGE .rate_per_sec`, down from 8.0). The "**or hardware, whichever comes first**"
 half of the ruling needs no second number and deliberately does not get one:
 the limiter is a strict _minimum-interval_ pacer, so it can only ever **delay**

@@ -416,16 +416,18 @@ from cardpicker.local_fallback import (
     FALLBACK_CONFIDENCE_SINGLE_EVIDENCE,
     SYMBOL_DISTANCE_THRESHOLD,
     SYMBOL_MARGIN,
-    classify_frame_style,
     filter_by_border_color,
-    frame_style_is_consistent,
     match_artist,
     render_set_symbol,
 )
 from cardpicker.local_identify_printing_tags import (
+    ATTRIBUTE_BORDER_MISMATCH,
+    ATTRIBUTE_FRAME_MISMATCH,
+    FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS,
     CandidateNameIndex,
     CandidatePrinting,
     generate_run_id,
+    printing_attribute_disagreement,
 )
 
 # IMPORTED, NOT DUPLICATED AS A LITERAL (2026-07-30). This module's convention elsewhere is to
@@ -571,7 +573,12 @@ JOIN_KEY_RESCANNABLE_SKIP_REASONS = frozenset({JOIN_KEY_NO_EVIDENCE_SKIP_REASON,
 # 2026-07-29 composition audit found, is the one that had to be gated: it is the only one whose
 # missing-data degradation is STRICT, and the skip reason it produces is not rescannable, so its
 # wrong answer is permanent for that content hash.
-FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS = frozenset({"collector_line_ocr", "artist_ocr"})
+#
+# RE-EXPORTED, NOT REDEFINED (2026-07-30). The value now lives beside the check it gates, in
+# `local_identify_printing_tags.printing_attribute_disagreement`, because that check acquired a
+# SECOND caller (`run_name_frequency_elimination`) and a requirement defined twice is a
+# requirement that can be raised in one place and not the other. The name stays exported from this
+# module because that is where every existing reader looks for it; it is an alias, never a copy.
 
 # THE SET-CODE LEXICON GATE (module docstring) - a parsed `set_code` that matches no
 # `CanonicalExpansion.code` at all, same permanent-conclusion category as "no-text"/"ambiguous"
@@ -801,59 +808,24 @@ def _apply_agreement_checks(
     metadata = getattr(canonical, "printing_metadata", None) if canonical is not None else None
 
     if metadata is not None:
-        if evidence.layout_class and metadata.border_color and evidence.layout_class != metadata.border_color:
-            # THE BORDER AGREEMENT VETO (module docstring) - layout_class mirrors
-            # local_fallback.classify_border_color's own return convention ("black"/"white"/
-            # "silver"/"borderless"), the SAME value space Scryfall's own border_color field uses
-            # (confirmed via BORDER_COLOR_TO_TAG's own key set), so a direct string comparison is
-            # correct - no value-to-class remapping needed, unlike frame below.
+        # THE BORDER AND FRAME AGREEMENT VETOES (module docstring), both of them, in one shared
+        # call. The implementation moved to `local_identify_printing_tags.
+        # printing_attribute_disagreement` on 2026-07-30 - unchanged in behaviour, and moved for a
+        # specific reason rather than for tidiness: `run_name_frequency_elimination` deduces a
+        # printing purely by COUNTING, with no look at the image at all, and the owner-ruled fix
+        # for that unsoundness is to require this exact cross-check. Two implementations of a
+        # check whose frame half has a STRICT missing-data degradation (PR #656, and that
+        # function's own docstring) is precisely the shape that has drifted three times in this
+        # project, so there is now ONE implementation and two callers.
+        #
+        # The mapping back to THIS calculator's own skip vocabulary stays here: the shared helper
+        # names the FINDING, each calculator names its own SKIP. The two constants below are
+        # unchanged and still what `question_feed` reads.
+        disagreement = printing_attribute_disagreement(evidence, metadata)
+        if disagreement == ATTRIBUTE_BORDER_MISMATCH:
             return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_BORDER_MISMATCH_SKIP_REASON, detail=detail)
-
-        # frame_class is re-derived here (not read from a stored ImageEvidence field - no such
-        # field exists) via the SAME two OCR-derived inputs local_identify_printing_tags.py's own
-        # live-pilot pass already uses to compute it: whether a collector NUMBER was parsed
-        # (post-2003 templates print one; pre-M15 templates never do) and whether the "Illus."
-        # anchor fired (artist_ocr's own byproduct). PROTECTED CORE call, not a reimplementation.
-        #
-        # GATED ON `artist_ocr` HAVING ACTUALLY RUN (2026-07-30, closing the 2026-07-29 composition
-        # audit's §5 second row). This calculator's eligibility query filters on
-        # `extractor_versions__has_key="collector_line_ocr"` and then reads SIX extractors' fields
-        # ungated. Most of those degrade PERMISSIVELY when their extractor never ran - a blank
-        # legal line reads as "nothing to compare", a null `image_is_truncated` reads as "not
-        # truncated" - and a permissive degradation is recoverable, because the human-backed
-        # consensus gate still stands between it and any resolution.
-        #
-        # THIS ONE DEGRADES STRICT, WHICH IS WHY IT IS THE ONE FIXED FIRST. `illus_anchor_fired` is
-        # NULLABLE, and `bool(None)` is `False`, which is indistinguishable from "artist_ocr ran
-        # and found no anchor". With no collector number either, `classify_frame_style` then
-        # returns "modern" for a card it has no anchor evidence about at all - and a genuine
-        # OLD-frame printing is vetoed `frame-mismatch`. That reason is deliberately NOT in
-        # `JOIN_KEY_RESCANNABLE_SKIP_REASONS`, so the wrong conclusion is PERMANENT for that
-        # content hash: the card never becomes eligible again, and no later Stage C pass can undo
-        # it. A wrong answer nothing can revisit is strictly worse than a missing one.
-        #
-        # So an absent `artist_ocr` skips the frame check entirely rather than evaluating it on
-        # invented input. That is not a new rule - it is the "missing data is not evidence" rule
-        # this function's own docstring already states, and which the copyright-year check and the
-        # `metadata is None` case above already follow. The card keeps its match at its
-        # already-computed confidence, and once Stage C fills `artist_ocr` in, the check runs for
-        # real. `artist_ocr` is at 220,579/220,579 coverage in production today, so this changes
-        # nothing about the current catalogue: it removes a trap, it does not loosen a live gate.
-        #
-        # `REQUIRED_EXTRACTOR_KEYS` is the pattern `local_detect_ai_art`, `local_lands_identify`
-        # and `local_layout_class_cast` already use, applied here per-CHECK rather than
-        # per-calculator: this calculator's other checks have genuinely different key
-        # requirements, and one calculator-wide gate would drop cards that only ever needed the
-        # collector line.
-        if FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS <= evidence.extractor_versions.keys():
-            frame_class = classify_frame_style(
-                parsed_a_collector_number=bool(evidence.collector_line_collector_number),
-                illus_anchor_fired=bool(evidence.illus_anchor_fired),
-            )
-            if not frame_style_is_consistent(frame_class, metadata.frame):
-                # THE FRAME AGREEMENT VETO (module docstring) - mirrors
-                # local_identify_printing_tags.py's own frame-mismatch-withholding exactly.
-                return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON, detail=detail)
+        if disagreement == ATTRIBUTE_FRAME_MISMATCH:
+            return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON, detail=detail)
 
         # THE COPYRIGHT-YEAR ERA CHECK (module docstring) - reuses the SAME metadata row the
         # border/frame checks above already fetched, no second query. Skipped entirely (not a
