@@ -21,6 +21,7 @@ from cardpicker.operating_envelope import HOST_LOAD_CEILING, RSS_MB_PER_WORKER_C
 from cardpicker.stage_e_batch_sizing import (
     BATCH_WORKING_SET_RSS_MB,
     FETCH_BOUND_CARD_SECONDS,
+    FETCH_THREADS_PER_DISPATCH,
     INCREMENTAL_BATCH_SIZE,
     MARGINAL_RSS_MB_PER_CARD,
     MIN_BATCH_SIZE,
@@ -38,7 +39,7 @@ from cardpicker.stage_e_batch_sizing import (
 
 def host(
     cpu_count: int = 8,
-    dispatch_streams: int = 3,
+    concurrent_dispatches: int = 3,
     available_rss_mb: Optional[float] = 18000.0,
     usable_cores: Optional[int] = None,
 ) -> HostProfile:
@@ -48,7 +49,7 @@ def host(
     return HostProfile(
         cpu_count=cpu_count,
         usable_cores=usable_cores if usable_cores is not None else max(1, cpu_count - 1),
-        dispatch_streams=dispatch_streams,
+        concurrent_dispatches=concurrent_dispatches,
         available_rss_mb=available_rss_mb,
     )
 
@@ -68,9 +69,10 @@ class TestSaturationCap:
         self, cpus: int, memory_mb: float
     ) -> None:
         # The owner directive is "scale with available hardware UP TO the fetch saturation limit".
-        # A 256-core host with 4 TB of RAM must still choose the saturation cap: the limiter that
-        # sets the cap (GOOGLE_IMAGE.max_concurrency) is a property of the destination, not of this
-        # machine, so past the cap a larger batch buys no throughput and only costs memory.
+        # A 256-core host with 4 TB of RAM must still choose the saturation cap: the cap is set by
+        # ONE dispatch's own serial fetch floor (a single fetch-ahead thread, so `1 / c` cards per
+        # second whatever the batch size), which is a property of the network round trip and not of
+        # this machine - so past the cap a larger batch buys no throughput and only costs memory.
         decision = autoscale_batch_size(mode=MODE_BULK, host=host(cpu_count=cpus, available_rss_mb=memory_mb))
         assert decision.batch_size == SATURATION_BATCH_SIZE
 
@@ -85,11 +87,11 @@ class TestMemoryGuard:
     """The memory term against the ratified 768 MB per-worker RSS bar. It is a GUARD - on any host
     that can hold the working set it is worth hundreds of thousands of cards and cannot bind - so
     what is worth testing is that it engages at all when the host really is small, and that it
-    divides the host's memory between concurrent dispatch streams rather than handing the whole
-    machine to each one."""
+    divides the host's memory between every concurrent dispatch PROCESS rather than handing the
+    whole machine to each one."""
 
     def test_a_host_that_cannot_hold_the_working_set_collapses_to_the_floor(self) -> None:
-        # 900 MB available across 3 streams is 300 MB per stream - under the ~320 MB a warm
+        # 900 MB available across 3 dispatches is 300 MB each - under the ~320 MB a warm
         # dispatch process needs to exist at all. The batch cannot be made to fit by shrinking it,
         # so the rule floors rather than returning something absurd like 0 or a negative.
         decision = autoscale_batch_size(mode=MODE_BULK, host=host(available_rss_mb=900.0))
@@ -97,13 +99,13 @@ class TestMemoryGuard:
         assert decision.bound_by == "floor"
         assert decision.memory_limit == 0
 
-    def test_the_budget_is_divided_between_concurrent_dispatch_streams(self) -> None:
-        # Same machine, same memory; only the number of streams sharing it changes. One stream can
-        # use the whole 1000 MB and clears the working set easily; four streams get 250 MB each and
-        # cannot. A rule that handed every stream the whole machine would return the same answer to
+    def test_the_budget_is_divided_between_concurrent_dispatch_processes(self) -> None:
+        # Same machine, same memory; only the number of dispatch processes sharing it changes. One
+        # can use the whole 1000 MB and clears the working set easily; four get 250 MB each and
+        # cannot. A rule that handed every process the whole machine would return the same answer to
         # both, which is the failure this pins.
-        roomy = autoscale_batch_size(mode=MODE_BULK, host=host(available_rss_mb=1000.0, dispatch_streams=1))
-        crowded = autoscale_batch_size(mode=MODE_BULK, host=host(available_rss_mb=1000.0, dispatch_streams=4))
+        roomy = autoscale_batch_size(mode=MODE_BULK, host=host(available_rss_mb=1000.0, concurrent_dispatches=1))
+        crowded = autoscale_batch_size(mode=MODE_BULK, host=host(available_rss_mb=1000.0, concurrent_dispatches=4))
         assert roomy.memory_limit is not None and crowded.memory_limit is not None
         assert roomy.memory_limit > crowded.memory_limit
         assert crowded.memory_limit == 0
@@ -113,10 +115,23 @@ class TestMemoryGuard:
         # that bar is what the operating envelope actually trips on - sizing against the machine's
         # free memory instead would produce batches the envelope halts.
         limit = autoscale_batch_size(
-            mode=MODE_BULK, host=host(available_rss_mb=10_000_000.0, dispatch_streams=1)
+            mode=MODE_BULK, host=host(available_rss_mb=10_000_000.0, concurrent_dispatches=1)
         ).memory_limit
         implied = int((RSS_MB_PER_WORKER_CEILING - BATCH_WORKING_SET_RSS_MB) / MARGINAL_RSS_MB_PER_CARD)
         assert limit == implied
+
+    def test_the_divisor_counts_processes_the_fetch_semaphore_would_have_hidden(self) -> None:
+        # The sizing consequence of the discovery fix, on a host small enough for the memory term to
+        # be the binding one. 12 concurrent dispatches on a 8 GB box get 683 MB each; the old
+        # expression clamped the count to `GOOGLE_IMAGE.max_concurrency` = 6 and handed each one
+        # 1366 MB - over the 768 MB per-worker bar, and twice the memory the batch may really take.
+        # The semaphore that clamp appealed to is per-PROCESS and cannot see the other eleven.
+        honest = autoscale_batch_size(mode=MODE_BULK, host=host(available_rss_mb=8192.0, concurrent_dispatches=12))
+        as_the_semaphore_would_have_had_it = autoscale_batch_size(
+            mode=MODE_BULK, host=host(available_rss_mb=8192.0, concurrent_dispatches=GOOGLE_IMAGE.max_concurrency)
+        )
+        assert honest.memory_limit is not None and as_the_semaphore_would_have_had_it.memory_limit is not None
+        assert honest.memory_limit < as_the_semaphore_would_have_had_it.memory_limit
 
     def test_unreadable_memory_skips_the_guard_rather_than_failing(self) -> None:
         # `process_metrics.get_process_rss_mb`'s established convention: a best-effort signal that
@@ -138,7 +153,7 @@ class TestDurationGuard:
         # start at, on every host, because HOST_LOAD_CEILING is flat) gives each task 3/7 of a core,
         # so every card stretches 2.33x and the same batch would run 2.33x longer. This is the
         # "behaves sensibly on a maintainer's laptop" case.
-        laptop = autoscale_batch_size(mode=MODE_BULK, host=host(cpu_count=4, dispatch_streams=3))
+        laptop = autoscale_batch_size(mode=MODE_BULK, host=host(cpu_count=4, concurrent_dispatches=3))
         assert laptop.batch_size < SATURATION_BATCH_SIZE
         assert laptop.bound_by == "duration"
         assert laptop.batch_size == int(TARGET_BATCH_SECONDS / (FETCH_BOUND_CARD_SECONDS * (HOST_LOAD_CEILING / 3)))
@@ -158,13 +173,13 @@ class TestDurationGuard:
     def test_spare_cores_do_not_inflate_the_batch_past_saturation(self) -> None:
         # Contention below 1.0 is clamped to 1.0: extra cores cannot make a card arrive faster than
         # the fetch limiter allows, so a wide host must not talk itself into a longer batch.
-        wide = autoscale_batch_size(mode=MODE_BULK, host=host(cpu_count=64, dispatch_streams=2))
+        wide = autoscale_batch_size(mode=MODE_BULK, host=host(cpu_count=64, concurrent_dispatches=2))
         assert wide.duration_limit == int(TARGET_BATCH_SECONDS / FETCH_BOUND_CARD_SECONDS)
         assert wide.batch_size == SATURATION_BATCH_SIZE
 
     def test_a_severely_contended_host_is_still_floored_not_driven_to_one(self) -> None:
         starved = autoscale_batch_size(
-            mode=MODE_BULK, host=host(cpu_count=2, usable_cores=1, dispatch_streams=1, available_rss_mb=8000.0)
+            mode=MODE_BULK, host=host(cpu_count=2, usable_cores=1, concurrent_dispatches=1, available_rss_mb=8000.0)
         )
         assert starved.batch_size >= MIN_BATCH_SIZE
 
@@ -252,20 +267,55 @@ class TestPrecedence:
 class TestHostDiscovery:
     """Real discovery, asserted only on invariants that hold on ANY host."""
 
-    def test_streams_never_exceed_any_of_the_three_ceilings(self) -> None:
-        with override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=99):
+    def test_concurrent_dispatches_is_the_advisory_lock_cap_and_nothing_else(self) -> None:
+        # THE REGRESSION THIS PINS (2026-07-30). `discover_host` used to compute
+        #     dispatch_streams = min(STAGE_E_MAX_CONCURRENT_DISPATCHES,
+        #                            GOOGLE_IMAGE.max_concurrency,   # <- 6
+        #                            usable_cores)
+        # and then divide the host's memory by it. Both of the extra terms are wrong for this
+        # number. `GOOGLE_IMAGE.max_concurrency` is enforced by a `threading.Semaphore` built once
+        # PER PROCESS (`harvest_fetch_limiter._DestinationLimiter.__init__`), and concurrent
+        # dispatches are separate OS PROCESSES, so it constrains nothing across them; `usable_cores`
+        # bounds who is SCHEDULED, not who is RESIDENT, and a descheduled dispatch process still
+        # holds its whole RSS. The only thing that caps how many dispatch processes exist at once is
+        # `stage_e_concurrency`'s Postgres advisory-lock slot count, i.e. the setting itself.
+        #
+        # Under the old expression this assertion reads 6 (min(12, 6, usable_cores) on any host with
+        # >= 7 usable cores), i.e. the rule believed half as many processes were sharing the box as
+        # really are, and handed each one twice the memory budget it may actually take.
+        with override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=12):
             profile = discover_host()
-        assert 1 <= profile.dispatch_streams <= GOOGLE_IMAGE.max_concurrency
-        assert profile.dispatch_streams <= profile.usable_cores
+        assert profile.concurrent_dispatches == 12
+        assert profile.concurrent_dispatches > GOOGLE_IMAGE.max_concurrency
         assert profile.usable_cores <= profile.cpu_count
+
+    def test_the_real_aggregate_fetch_concurrency_is_per_process_multiplied(self) -> None:
+        # The other half of the same falsehood, stated as a number. N concurrent dispatches each
+        # construct their OWN `threading.Semaphore(GOOGLE_IMAGE.max_concurrency)`, so the aggregate
+        # the destination actually sees is N x (this dispatch's fetch threads) - it is NOT clamped
+        # to 6 by anything. The old code asserted the opposite by construction (its
+        # `min(..., GOOGLE_IMAGE.max_concurrency, ...)` could never exceed 6).
+        with override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=12):
+            profile = discover_host()
+        assert profile.aggregate_fetch_threads == 12 * FETCH_THREADS_PER_DISPATCH
+        assert profile.fetch_overcommitted is True
+
+    def test_a_conveyor_sized_cap_is_within_the_destination_budget(self) -> None:
+        # The production setting (2) and the largest cap that still fits the destination budget are
+        # NOT flagged - the flag has to mean something, so it must be quiet in the normal case.
+        for cap in (1, 2, GOOGLE_IMAGE.max_concurrency // FETCH_THREADS_PER_DISPATCH):
+            with override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=cap):
+                profile = discover_host()
+            assert profile.aggregate_fetch_threads <= GOOGLE_IMAGE.max_concurrency
+            assert profile.fetch_overcommitted is False
 
     def test_the_configured_concurrency_cap_is_honoured_when_it_is_the_smallest(self) -> None:
         with override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1):
-            assert discover_host().dispatch_streams == 1
+            assert discover_host().concurrent_dispatches == 1
 
     def test_a_garbage_concurrency_cap_does_not_raise(self) -> None:
         with override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES="not-a-number"):
-            assert discover_host().dispatch_streams >= 1
+            assert discover_host().concurrent_dispatches >= 1
 
     def test_discovery_reports_a_plausible_machine(self) -> None:
         profile = discover_host()
@@ -290,6 +340,19 @@ class TestDecisionReporting:
         assert "cpus=12" in text
         assert "available_mb=4321" in text
         assert f"saturation={SATURATION_BATCH_SIZE}" in text
+        # The two numbers the 2026-07-30 correction added. `dispatches` is the memory divisor and
+        # `fetch_threads` is what the destination really sees; an operator reading a run's log has
+        # to be able to tell the second one is not 6-by-construction.
+        assert "dispatches=3" in text
+        assert f"fetch_threads={3 * FETCH_THREADS_PER_DISPATCH}" in text
+
+    def test_describe_shouts_when_the_configured_cap_overcommits_the_destination(self) -> None:
+        # An over-committed fetch aggregate is an operational fact the run's own first line must
+        # state, not something an operator has to derive from the setting and the limiter config.
+        text = autoscale_batch_size(
+            mode=MODE_BULK, host=host(concurrent_dispatches=GOOGLE_IMAGE.max_concurrency + 1)
+        ).describe()
+        assert "FETCH-OVERCOMMIT" in text
 
     def test_describe_names_the_flag_when_the_flag_decided(self) -> None:
         text = resolve_micro_batch_size(explicit=42, mode=MODE_BULK).describe()

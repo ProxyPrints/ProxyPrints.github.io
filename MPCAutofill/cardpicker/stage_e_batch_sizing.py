@@ -20,10 +20,19 @@ One dispatch costs `F + (m + c) * N` seconds, where `N` is the batch size:
   * `c` - Stage C's per-card floor: one fetch overlapped with one extraction
     (`_stage_c_fetch_ahead_worker` is a SINGLE fetch thread feeding a SINGLE sequential compute
     loop), so `c ~= max(fetch, compute)`. Unaffected by batch size, and it is by far the largest
-    term. Aggregate throughput across dispatches is capped by
-    `harvest_fetch_limiter.GOOGLE_IMAGE.max_concurrency = 6`, not by how much work each dispatch
-    carries - which is why a bigger batch cannot buy throughput past the point where `F / N` has
-    already vanished into `c`. THAT is the fetch-saturation limit, expressed as a batch size.
+    term. A dispatch's throughput is therefore `1 / c` cards per second NO MATTER HOW BIG ITS BATCH
+    IS - one in-flight fetch at a time is one in-flight fetch at a time - which is why a bigger
+    batch cannot buy throughput past the point where `F / N` has already vanished into `c`. THAT is
+    the fetch-saturation limit, expressed as a batch size.
+
+    CORRECTED 2026-07-30. This paragraph used to say aggregate throughput across dispatches was
+    "capped by `harvest_fetch_limiter.GOOGLE_IMAGE.max_concurrency = 6`". It is not: that ceiling
+    is a per-PROCESS `threading.Semaphore` and concurrent dispatches are separate OS processes (see
+    `HostProfile.aggregate_fetch_threads`). The saturation cap does not depend on that claim and is
+    unchanged by its removal - it rests on the measured per-card `c` floor within ONE dispatch,
+    which is a serial property of the single fetch-ahead thread and needs no cross-process
+    guarantee. The claim was load-bearing for nothing but was still false, and a false statement
+    next to a correct number is how the same number gets re-derived wrongly later.
 
 Measured on the live catalog, 2026-07-29, against a tree with PR #579 applied (see VERIFICATION
 below for why that qualifier is load-bearing) - median of 3 reps per point, fresh process per
@@ -50,10 +59,12 @@ SATURATION_BATCH_SIZE = 250 is read straight off that table by a stated criterio
 tested size whose residual per-card fixed-cost overhead is under 1 ms, which is an order of
 magnitude below the run-to-run spread of the `c` floor itself (561 median vs 653 mean). N=100
 misses it at 1.92 ms. Going on to N=500 buys a further 0.24 ms/card - 0.04% of `c` - while
-doubling how long the batch runs unobserved. It is deliberately NOT a hardware-scaled number: it
-is set by the fetch limiter, and a bigger host does not raise the limiter. A bigger host buys more
-concurrent dispatch STREAMS, not a bigger batch, which is precisely the owner's "up to the fetch
-saturation limit".
+doubling how long the batch runs unobserved. It is deliberately NOT a hardware-scaled number: it is
+set by ONE dispatch's own serial fetch floor, and a bigger host does not make a remote image arrive
+faster. A bigger host buys more concurrent DISPATCHES, not a bigger batch, which is precisely the
+owner's "up to the fetch saturation limit" - and how many dispatches may run at once is
+`STAGE_E_MAX_CONCURRENT_DISPATCHES`, an operator setting enforced by `stage_e_concurrency`'s
+cross-process advisory locks, not something this module gets to raise.
 
 WHY THE OTHER TWO TERMS SCALE DOWN AND NEVER UP
 ------------------------------------------------
@@ -70,7 +81,7 @@ maintainer's laptop, or on a box under real memory pressure, without being tuned
     RSS_MB_PER_WORKER_CEILING = 768` and a measured warm working set of ~300 MB, the memory term
     is worth hundreds of thousands of cards and cannot bind at any size this rule would choose.
     It is kept anyway, and stated as a guard rather than dressed up as a tuning knob: on a host
-    where the working set does not fit the per-stream budget at all it collapses the batch to
+    where the working set does not fit the per-process budget at all it collapses the batch to
     MIN_BATCH_SIZE, which is the correct behaviour and the only behaviour it will ever exhibit.
   * DURATION. This is the term with real teeth on slow hardware, and it is the one the envelope
     cares about. `dispatch_micro_batch` samples the operating envelope EXACTLY ONCE per dispatch,
@@ -166,7 +177,7 @@ MARGINAL_RSS_MB_PER_CARD = 0.002
 # Measured 2026-07-29: a warm dispatch process (process-level candidate-name index, artist
 # lexicon, printing-artist lookup, ORM machinery, all built) sat at 298 MB current RSS with a
 # 313 MB lifetime high-water mark, flat from N=10 to N=2000. 320 rounds the high-water mark up.
-# Subtracted from the per-stream budget before the marginal term is divided in, so the guard
+# Subtracted from the per-process budget before the marginal term is divided in, so the guard
 # reasons about the memory a batch may ADD, not the memory the process needs to exist.
 BATCH_WORKING_SET_RSS_MB = 320.0
 
@@ -189,6 +200,14 @@ TARGET_BATCH_SECONDS = 300.0
 # established one, not a new judgement made here.
 CORES_RESERVED_FOR_NETWORK = 1
 
+# Fetch threads ONE `dispatch_micro_batch` call runs: exactly one. `stage_e_dispatch` starts a
+# single `threading.Thread` running `_stage_c_fetch_ahead_worker`, which fetches serially into a
+# `queue.Queue(maxsize=_STAGE_C_FETCH_AHEAD_DEPTH)` while THIS dispatch's own loop does the
+# sequential OCR/phash compute. Declared as a named constant rather than left as an implicit 1
+# because it is the multiplicand in the aggregate-fetch arithmetic below, and an aggregate that
+# silently assumed 1 would be wrong the day the fetch stage grows a pool.
+FETCH_THREADS_PER_DISPATCH = 1
+
 
 @dataclass(frozen=True)
 class HostProfile:
@@ -197,12 +216,57 @@ class HostProfile:
     best-effort and `None` on a platform without a readable `/proc/meminfo` - callers must treat
     `None` as "skip the memory guard", never as an error, matching
     `process_metrics.get_process_rss_mb`'s own documented convention for exactly the same reason.
+
+    `concurrent_dispatches` IS A PROCESS COUNT, NOT A THREAD COUNT, and everything below depends on
+    that distinction - see `discover_host`.
     """
 
     cpu_count: int
     usable_cores: int
-    dispatch_streams: int
+    concurrent_dispatches: int
     available_rss_mb: Optional[float]
+
+    @property
+    def aggregate_fetch_threads(self) -> int:
+        """
+        Concurrent fetches this pipeline can really have in flight against
+        `harvest_fetch_limiter.GOOGLE_IMAGE`, across every dispatch at once.
+
+        READ THE MULTIPLICATION LITERALLY. It is NOT clamped to `GOOGLE_IMAGE.max_concurrency`, and
+        the reason is one line of `harvest_fetch_limiter._DestinationLimiter.__init__`:
+
+            self._semaphore = threading.Semaphore(config.max_concurrency)
+
+        A `threading.Semaphore` coordinates THREADS INSIDE ONE PROCESS. Concurrent dispatches are
+        separate OS PROCESSES (`stage_e_concurrency`'s module docstring: django-q2's workers are
+        "separate OS PROCESSES (`multiprocessing`, not threads)"), so each one constructs its own
+        full-strength `Semaphore(6)` that cannot see - and is not blocked by - the other N-1. The
+        aggregate the destination experiences is therefore N x this dispatch's fetch threads, and
+        `min(..., GOOGLE_IMAGE.max_concurrency, ...)` anywhere in this module would be asserting a
+        cross-process guarantee that no cross-process mechanism provides. This is the same defect
+        `run_image_evidence_cohort`'s docstring records having had to compensate for with a
+        per-worker "descaling hack" back when fetching lived inside N compute processes; that hack
+        was retired when fetching moved into ONE process, where the semaphore is honest. The
+        conveyor is the multi-process case, so the honest number here is the product.
+        """
+        return self.concurrent_dispatches * FETCH_THREADS_PER_DISPATCH
+
+    @property
+    def fetch_overcommitted(self) -> bool:
+        """
+        True when this host's configured dispatch concurrency puts more concurrent fetches on
+        `GOOGLE_IMAGE` than the destination budget task #165's probe ratified (`max_concurrency=6`,
+        the concurrency=10 step having been REJECTED on a 2.43x p95 canary regression).
+
+        This module CANNOT fix that by shrinking a batch - the overcommit is a function of process
+        count, and the batch size is what each process does once it is running. What it can do, and
+        does, is refuse to hide it: the flag is surfaced in `BatchSizeDecision.describe()`, so an
+        unattended run states the condition on its own first line instead of leaving it to be
+        rediscovered from an envelope trip. The lever is `STAGE_E_MAX_CONCURRENT_DISPATCHES`
+        (production default 2, i.e. 2 concurrent fetches against a budget of 6 - comfortably
+        inside it, which is why this is a guard rather than a live problem).
+        """
+        return self.aggregate_fetch_threads > GOOGLE_IMAGE.max_concurrency
 
 
 @dataclass(frozen=True)
@@ -228,13 +292,27 @@ class BatchSizeDecision:
         if self.source != "autoscale":
             return f"batch_size={self.batch_size} (source={self.source}, mode={self.mode})"
         host = self.host
+        # An over-committed fetch aggregate is prepended, not appended, and shouted: it is the one
+        # thing in this line that is a WARNING about the run rather than a description of it, and
+        # an unattended multi-hour run's operator must see it without parsing the rest. It cannot
+        # be fixed by any number this rule chooses - see `HostProfile.fetch_overcommitted`.
+        overcommit = ""
+        if host is not None and host.fetch_overcommitted:
+            overcommit = (
+                f"FETCH-OVERCOMMIT: {host.aggregate_fetch_threads} concurrent fetches against "
+                f"{GOOGLE_IMAGE.name} budget {GOOGLE_IMAGE.max_concurrency} - "
+                f"per-process semaphores do not clamp this; lower "
+                f"STAGE_E_MAX_CONCURRENT_DISPATCHES. "
+            )
         return (
+            f"{overcommit}"
             f"batch_size={self.batch_size} (source=autoscale, mode={self.mode}, "
             f"bound_by={self.bound_by}; saturation={self.saturation_limit}, "
             f"memory={self.memory_limit}, duration={self.duration_limit}; "
             f"cpus={host.cpu_count if host else '?'}, "
             f"usable_cores={host.usable_cores if host else '?'}, "
-            f"streams={host.dispatch_streams if host else '?'}, "
+            f"dispatches={host.concurrent_dispatches if host else '?'}, "
+            f"fetch_threads={host.aggregate_fetch_threads if host else '?'}, "
             f"available_mb={round(host.available_rss_mb) if host and host.available_rss_mb else '?'})"
         )
 
@@ -273,13 +351,37 @@ def _discover_available_rss_mb() -> Optional[float]:
 def discover_host() -> HostProfile:
     """
     The runtime hardware discovery the owner directive asks for ("scale with available hardware
-    ... discovered at runtime, not hardcoded to this box"). `dispatch_streams` is the number of
-    micro-batch dispatches that can genuinely proceed at once, and it is the MINIMUM of three
-    independent ceilings, because exceeding any one of them buys nothing:
-    `STAGE_E_MAX_CONCURRENT_DISPATCHES` (the concurrency cap `stage_e_concurrency` actually
-    enforces), `GOOGLE_IMAGE.max_concurrency` (each dispatch runs exactly one fetch-ahead thread,
-    so a stream past the limiter's sixth just blocks on its semaphore), and the usable compute
-    cores (each dispatch's compute loop is sequential and occupies one).
+    ... discovered at runtime, not hardcoded to this box").
+
+    `concurrent_dispatches` is how many `dispatch_micro_batch` calls can be RESIDENT AT ONCE, and
+    it is `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` alone. Not a minimum of anything.
+
+    CORRECTED 2026-07-30 - IT USED TO BE A `min()` OF THREE TERMS AND TWO OF THEM WERE WRONG FOR
+    THIS QUESTION. The old expression was:
+
+        min(STAGE_E_MAX_CONCURRENT_DISPATCHES, GOOGLE_IMAGE.max_concurrency, usable_cores)
+
+    - `GOOGLE_IMAGE.max_concurrency` was justified as "a stream past the limiter's sixth just
+      blocks on its semaphore". IT DOES NOT. That limiter's ceiling is a `threading.Semaphore`
+      built per process (`harvest_fetch_limiter._DestinationLimiter.__init__`), and concurrent
+      dispatches are separate OS PROCESSES, so each holds its own independent `Semaphore(6)`.
+      Nothing blocks on anyone else's. See `HostProfile.aggregate_fetch_threads`, which now states
+      the real cross-process aggregate instead of a number that could never exceed 6 by
+      construction, and `HostProfile.fetch_overcommitted`, which reports when it exceeds the
+      destination budget rather than pretending arithmetic prevented it.
+    - `usable_cores` bounds who is SCHEDULED, not who EXISTS. A dispatch process waiting for a core
+      still holds its entire RSS, so it must still be counted by the memory guard below.
+
+    The only thing that actually caps the number of concurrent dispatch processes is
+    `stage_e_concurrency`'s Postgres advisory-lock slot count, which IS this setting (its
+    `_slot_count()` reads exactly the same value, floored at 1) - a cross-process mechanism, which
+    is what the question needs and the semaphore is not. So the setting is the whole answer, and
+    under-counting it was the unsafe direction: `_memory_limit` divides by this, and dividing by 6
+    when 12 processes are resident hands each one twice the memory budget it may really take.
+
+    Compute-core pressure has NOT been dropped on the floor - it is still priced, in
+    `_duration_limit`, via the envelope's own `HOST_LOAD_CEILING / usable_cores` contention term,
+    which is where an oversubscribed host belongs. It just is not a process count.
     """
     cpu_count = _discover_cpu_count()
     usable_cores = max(1, cpu_count - CORES_RESERVED_FOR_NETWORK)
@@ -288,11 +390,10 @@ def discover_host() -> HostProfile:
         configured_cap = max(1, int(configured_cap))
     except (TypeError, ValueError):
         configured_cap = 2
-    dispatch_streams = max(1, min(configured_cap, GOOGLE_IMAGE.max_concurrency, usable_cores))
     return HostProfile(
         cpu_count=cpu_count,
         usable_cores=usable_cores,
-        dispatch_streams=dispatch_streams,
+        concurrent_dispatches=configured_cap,
         available_rss_mb=_discover_available_rss_mb(),
     )
 
@@ -301,13 +402,18 @@ def _memory_limit(host: HostProfile) -> Optional[int]:
     """
     How many cards a batch may hold before its own live set threatens the ratified per-worker RSS
     bar. The budget is the SMALLER of that bar and this host's actually-available memory divided
-    between the concurrent dispatch streams - the bar alone would be the wrong question on a host
-    that does not have 768 MB per stream to give. `None` when available memory could not be read.
+    between the concurrent dispatch PROCESSES - the bar alone would be the wrong question on a host
+    that does not have 768 MB per process to give. `None` when available memory could not be read.
+
+    The divisor is `concurrent_dispatches` (the advisory-lock cap), deliberately, and NOT a number
+    trimmed by core count or by the fetch limiter: memory is held by every resident process,
+    including one that is descheduled or blocked on a fetch. See `discover_host` for the 2026-07-30
+    correction that removed those two trims, and why under-counting here was the unsafe direction.
     """
     if host.available_rss_mb is None:
         return None
-    per_stream_mb = min(RSS_MB_PER_WORKER_CEILING, host.available_rss_mb / host.dispatch_streams)
-    headroom_mb = per_stream_mb - BATCH_WORKING_SET_RSS_MB
+    per_process_mb = min(RSS_MB_PER_WORKER_CEILING, host.available_rss_mb / host.concurrent_dispatches)
+    headroom_mb = per_process_mb - BATCH_WORKING_SET_RSS_MB
     if headroom_mb <= 0:
         return 0
     return int(headroom_mb / MARGINAL_RSS_MB_PER_CARD)
