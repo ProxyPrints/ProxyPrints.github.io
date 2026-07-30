@@ -313,7 +313,7 @@ import datetime as dt
 import logging
 import random
 import time
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError, CommandParser
@@ -515,6 +515,125 @@ def deterministic_sample_pks(sample_size: int, source_keys: Optional[List[str]] 
     if sample_size >= len(all_pks):
         return all_pks
     return sorted(random.Random(sample_size).sample(all_pks, sample_size))
+
+
+def run_stage_zero_freshness(
+    *,
+    require_fresh: bool,
+    is_resume: bool,
+    write: Callable[[str], None],
+    warn: Callable[[str], str],
+) -> dict[str, Any]:
+    """
+    STAGE 0 (GitHub issue #513 item 2) - verify Scryfall printing-metadata freshness and
+    refresh it if stale, ONCE, before any batch is dispatched. See this module's own docstring
+    for the three binding properties (once-only and why, fail-before-any-dispatch, report what
+    it decided). Every failure path below raises `CommandError` with
+    `returncode=EXIT_STAGE_ZERO_FAILED` (2, the module docstring's EXIT CODES table), i.e. a
+    non-zero exit with no batch dispatched and nothing written.
+
+    Calls `printing_metadata_import`'s own entry points, never a reimplementation of them.
+    `_get_default_cards_entry` is what makes the remote comparison possible at all (it returns
+    the live `/bulk-data` entry carrying `updated_at`), `_is_fresh` is that module's own
+    verdict, and `import_scryfall_printing_metadata` is the refresh - which repeats the same
+    check internally and so re-downloads only if it agrees the cache is stale.
+    """
+    try:
+        entry = _get_default_cards_entry()
+    except Exception as exc:  # noqa: BLE001 - any failure here must abort the run, loudly
+        raise CommandError(
+            f"STAGE 0 FAILED: could not read Scryfall's /bulk-data entry ({exc!r}). Refusing "
+            "to start a full-catalog pass against reference data of unknown age. Nothing was "
+            "dispatched and nothing was written.",
+            returncode=EXIT_STAGE_ZERO_FAILED,
+        )
+
+    cache_path = _cache_path()
+    age_text = "cache absent"
+    age_days: Optional[float] = None
+    if cache_path.exists():
+        age_days = (time.time() - cache_path.stat().st_mtime) / 86400.0
+        age_text = f"local cache mtime age {age_days:.2f}d"
+    fresh = _is_fresh(cache_path, entry)
+
+    if fresh:
+        write(
+            f"STAGE 0: Scryfall printing metadata is FRESH - skipping refresh "
+            f"(remote updated_at={entry.updated_at}, {age_text}, path={cache_path})."
+        )
+        return _stage_zero_vintage(entry, cache_path, age_days, refreshed=False)
+
+    if require_fresh:
+        raise CommandError(
+            f"STAGE 0 FAILED: Scryfall printing metadata is STALE and --require-fresh was "
+            f"passed (remote updated_at={entry.updated_at}, {age_text}, path={cache_path}). "
+            "Refresh it first, or drop --require-fresh to let stage 0 refresh it. Nothing was "
+            "dispatched and nothing was written.",
+            returncode=EXIT_STAGE_ZERO_FAILED,
+        )
+
+    write(
+        f"STAGE 0: Scryfall printing metadata is STALE - refreshing now, once, before any "
+        f"batch (remote updated_at={entry.updated_at}, {age_text}, path={cache_path})."
+    )
+    if is_resume:
+        # Same early/late inconsistency a mid-run refresh would cause, only spread across two
+        # invocations: whatever the prior invocation already dispatched was deduced against the
+        # OLD reference set, and everything from here on is deduced against the new one.
+        write(
+            warn(
+                "STAGE 0 WARNING: this is a RESUMED run and the reference data CHANGED since "
+                "the previous invocation. Batches already completed under the stored "
+                "high-water mark were deduced against the OLD CanonicalPrintingMetadata; "
+                "everything from here on uses the new one. The completed pass will not be "
+                "internally consistent. Consider restarting with --start-pk 0."
+            )
+        )
+        logger.warning(
+            "stream_full_catalog stage 0: reference data changed on a RESUMED run - "
+            "pre-resume batches used the older CanonicalPrintingMetadata"
+        )
+
+    try:
+        stats = import_scryfall_printing_metadata()
+    except Exception as exc:  # noqa: BLE001 - see this method's own docstring
+        raise CommandError(
+            f"STAGE 0 FAILED: Scryfall printing-metadata refresh raised {exc!r}. Refusing to "
+            "start a full-catalog pass against half-imported reference data. Nothing was "
+            "dispatched.",
+            returncode=EXIT_STAGE_ZERO_FAILED,
+        )
+    write(
+        f"STAGE 0: refresh complete - created={stats.get('created')} "
+        f"updated={stats.get('updated')} deleted={stats.get('deleted')} "
+        f"skipped={stats.get('skipped')} no_matching_card={stats.get('no_matching_card')}. "
+        "This will NOT run again for the lifetime of this invocation."
+    )
+    return _stage_zero_vintage(entry, cache_path, age_days, refreshed=True, import_stats=stats)
+
+
+def _stage_zero_vintage(
+    entry: Any,
+    cache_path: Any,
+    age_days: Optional[float],
+    *,
+    refreshed: bool,
+    import_stats: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """
+    THE BULK-FILE VINTAGE, as a recordable dict rather than only a printed line (2026-07-30). A
+    run's conclusions can only be dated if the run says which Scryfall bulk file it reasoned
+    against - `remote_updated_at` IS that date. Returned by `run_stage_zero_freshness` so a caller
+    can fold it into its own `PilotRunLedger.counters`; `stream_full_catalog`'s own method wrapper
+    discards it and keeps printing exactly what it always printed.
+    """
+    return {
+        "remote_updated_at": str(getattr(entry, "updated_at", "")),
+        "cache_path": str(cache_path),
+        "cache_age_days": round(age_days, 4) if age_days is not None else None,
+        "refreshed": refreshed,
+        "import_stats": import_stats,
+    }
 
 
 class Command(BaseCommand):
@@ -1183,90 +1302,20 @@ class Command(BaseCommand):
             f"(relaunch with the SAME --source flags to continue, or --start-pk {resume_pk})"
         )
 
-    def _run_stage_zero_freshness(self, *, require_fresh: bool, is_resume: bool) -> None:
+    def _run_stage_zero_freshness(self, *, require_fresh: bool, is_resume: bool) -> dict[str, Any]:
         """
-        STAGE 0 (GitHub issue #513 item 2) - verify Scryfall printing-metadata freshness and
-        refresh it if stale, ONCE, before any batch is dispatched. See this module's own docstring
-        for the three binding properties (once-only and why, fail-before-any-dispatch, report what
-        it decided). Every failure path below raises `CommandError` with
-        `returncode=EXIT_STAGE_ZERO_FAILED` (2, the module docstring's EXIT CODES table), i.e. a
-        non-zero exit with no batch dispatched and nothing written.
-
-        Calls `printing_metadata_import`'s own entry points, never a reimplementation of them.
-        `_get_default_cards_entry` is what makes the remote comparison possible at all (it returns
-        the live `/bulk-data` entry carrying `updated_at`), `_is_fresh` is that module's own
-        verdict, and `import_scryfall_printing_metadata` is the refresh - which repeats the same
-        check internally and so re-downloads only if it agrees the cache is stale.
+        Stage 0 for THIS command - a thin wrapper (2026-07-30) over the module-level
+        `run_stage_zero_freshness` the body was lifted into verbatim so a second driver
+        (`run_pipeline`, the one-command monolith) can run the identical stage without a second
+        copy of it. Behaviour, output strings and the `EXIT_STAGE_ZERO_FAILED` contract are
+        unchanged; only the `self.stdout`/`self.style` bindings are passed in rather than closed
+        over. The returned vintage dict is unused here and recorded by the monolith instead.
         """
-        try:
-            entry = _get_default_cards_entry()
-        except Exception as exc:  # noqa: BLE001 - any failure here must abort the run, loudly
-            raise CommandError(
-                f"STAGE 0 FAILED: could not read Scryfall's /bulk-data entry ({exc!r}). Refusing "
-                "to start a full-catalog pass against reference data of unknown age. Nothing was "
-                "dispatched and nothing was written.",
-                returncode=EXIT_STAGE_ZERO_FAILED,
-            )
-
-        cache_path = _cache_path()
-        age_text = "cache absent"
-        if cache_path.exists():
-            age_days = (time.time() - cache_path.stat().st_mtime) / 86400.0
-            age_text = f"local cache mtime age {age_days:.2f}d"
-        fresh = _is_fresh(cache_path, entry)
-
-        if fresh:
-            self.stdout.write(
-                f"STAGE 0: Scryfall printing metadata is FRESH - skipping refresh "
-                f"(remote updated_at={entry.updated_at}, {age_text}, path={cache_path})."
-            )
-            return
-
-        if require_fresh:
-            raise CommandError(
-                f"STAGE 0 FAILED: Scryfall printing metadata is STALE and --require-fresh was "
-                f"passed (remote updated_at={entry.updated_at}, {age_text}, path={cache_path}). "
-                "Refresh it first, or drop --require-fresh to let stage 0 refresh it. Nothing was "
-                "dispatched and nothing was written.",
-                returncode=EXIT_STAGE_ZERO_FAILED,
-            )
-
-        self.stdout.write(
-            f"STAGE 0: Scryfall printing metadata is STALE - refreshing now, once, before any "
-            f"batch (remote updated_at={entry.updated_at}, {age_text}, path={cache_path})."
-        )
-        if is_resume:
-            # Same early/late inconsistency a mid-run refresh would cause, only spread across two
-            # invocations: whatever the prior invocation already dispatched was deduced against the
-            # OLD reference set, and everything from here on is deduced against the new one.
-            self.stdout.write(
-                self.style.WARNING(
-                    "STAGE 0 WARNING: this is a RESUMED run and the reference data CHANGED since "
-                    "the previous invocation. Batches already completed under the stored "
-                    "high-water mark were deduced against the OLD CanonicalPrintingMetadata; "
-                    "everything from here on uses the new one. The completed pass will not be "
-                    "internally consistent. Consider restarting with --start-pk 0."
-                )
-            )
-            logger.warning(
-                "stream_full_catalog stage 0: reference data changed on a RESUMED run - "
-                "pre-resume batches used the older CanonicalPrintingMetadata"
-            )
-
-        try:
-            stats = import_scryfall_printing_metadata()
-        except Exception as exc:  # noqa: BLE001 - see this method's own docstring
-            raise CommandError(
-                f"STAGE 0 FAILED: Scryfall printing-metadata refresh raised {exc!r}. Refusing to "
-                "start a full-catalog pass against half-imported reference data. Nothing was "
-                "dispatched.",
-                returncode=EXIT_STAGE_ZERO_FAILED,
-            )
-        self.stdout.write(
-            f"STAGE 0: refresh complete - created={stats.get('created')} "
-            f"updated={stats.get('updated')} deleted={stats.get('deleted')} "
-            f"skipped={stats.get('skipped')} no_matching_card={stats.get('no_matching_card')}. "
-            "This will NOT run again for the lifetime of this invocation."
+        return run_stage_zero_freshness(
+            require_fresh=require_fresh,
+            is_resume=is_resume,
+            write=self.stdout.write,
+            warn=self.style.WARNING,
         )
 
     def _emit_progress_summary(

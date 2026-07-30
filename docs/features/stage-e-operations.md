@@ -1583,6 +1583,197 @@ Nothing new — every batch gets its own `PilotRunLedger` row via
 is `stage-e-fullcat-b<batch-size>-<microsecond-precision invocation timestamp>`,
 the same collision-safe shape the shakedown driver adopted.
 
+## The monolith — `run_pipeline` (2026-07-30)
+
+`manage.py run_pipeline` — **one command that runs the whole identification
+pipeline end to end.** Owner brief: "1 click". Every stage it runs already
+existed and every stage was already run separately; what did not exist was
+anything that ran them together, in order, under one `run_id`.
+
+```
+Stage 0   Scryfall reference refresh, once, at the front
+Stage E   operating-envelope preflight
+Stage C   evidence extraction (the pooled engine)
+Stage D   join-key → fallback → illustration → slow-path, then the three chips
+Stage C+  distance-0 cluster vote propagation
+Stage E   fidelity gate — machine-only resolutions must be zero
+end       channel_report
+```
+
+**It contains no pipeline logic.** Every stage is reached by importing and
+calling the module that already owned it. If a future change adds an
+inference, a threshold or a calculator to `run_pipeline.py`, that logic is in
+the wrong file.
+
+### Two defaults, both load-bearing
+
+**It writes, and only `--dry-run` prevents that.** Owner ruling: _"the eventual
+intention for the monolith is that default is to write and flags are what
+prevents it. (opposite)"_. This is the inverse of every organ it calls, and
+inheriting their defaults is the dangerous failure — a pass that computes
+everything, logs every card, reports success and **persists nothing** is
+indistinguishable from a working run except by row counts, and on a 230k pass
+that is hours before anyone notices. The command therefore passes `dry_run`
+explicitly at every seam:
+
+| organ                                           | its own gate                      | what `run_pipeline` passes                                                                                |
+| ----------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `import_scryfall_printing_metadata`             | none — always writes              | called; **skipped** under `--dry-run` (no preview mode; a refresh is a real download and a real DB write) |
+| `run_image_evidence_cohort`                     | `--dry-run` (already write-first) | forwards `--dry-run`; nothing overridden                                                                  |
+| `run_join_key_calculator`                       | `dry_run=True` default            | `dry_run=False`                                                                                           |
+| `run_fallback_calculator`                       | `dry_run=True` default            | `dry_run=False`                                                                                           |
+| `run_illustration_calculator`                   | `dry_run=True` default            | `dry_run=False`                                                                                           |
+| `run_slow_path_calculator`                      | `dry_run=True` default            | `dry_run=False`                                                                                           |
+| `run_layout_class_cast` (border chip)           | `dry_run=True` default            | `dry_run=False`                                                                                           |
+| `run_attribute_chip_cast` (frame + bleed chips) | `dry_run=True` default            | `dry_run=False`                                                                                           |
+| cluster vote propagation                        | none (this command's own write)   | gated on `not dry_run`                                                                                    |
+
+All six calculators/casters are reached through
+`stage_e_dispatch._run_stage_d`, which now takes `dry_run` as a parameter
+rather than hard-coding `False`, so there is exactly one Stage D and both
+engines use it.
+
+`enforce_dry_run_precondition` (the **forced** dry-run of issue #362, not just
+a default) is deliberately not added to this command: a command that writes by
+default has no `--write` to gate, and requiring a prior dry-run would put a
+flag back in front of the working run. The one place it still applies is
+inside Stage C's own `--card-ids-file` path
+(`write_mode=(not dry_run) and bool(card_ids_file_for_scope)`), and
+`run_pipeline` forwards `--skip-dryrun-check` for exactly that. A bare
+invocation goes down the `--limit` path and never arms it.
+
+**A dry run is a real pass that withholds the write**, not a plan: every stage
+executes, every calculator reports what it _would_ cast, clustering reports
+what it _would_ propagate, and `channel_report` still runs so the preview
+arrives in the shape it will be read in afterwards. Exits 0.
+
+**It redoes everything from scratch.** A fresh `--run-id` means no earlier run
+suppresses work — Stage C's resume filter is run-scoped (PR #645) and each
+calculator's own eligibility is run-scoped (PR #604). Re-passing an earlier
+`--run-id` resumes that run instead. No flag is required for a working run.
+
+### Stage 0 — the same stage, one implementation
+
+Stage 0 is `stream_full_catalog`'s own freshness stage, whose body was lifted
+to a module-level `run_stage_zero_freshness` so both drivers call one copy.
+Everything the "Stage 0 — Scryfall freshness" section above states — once at
+the start and never during the run, fail before any dispatch with exit 2,
+report what it decided, `--skip-freshness` / `--require-fresh` — applies here
+unchanged.
+
+What is new is that it **returns the bulk-file vintage** rather than only
+printing it: the remote `updated_at` it compared against, the cache path, the
+cache's mtime age, whether it refreshed, and the import's own
+created/updated/deleted counts. `run_pipeline` records all of it under
+`PilotRunLedger.counters["stage_0"]`, so a run's conclusions can be dated
+against the Scryfall bulk file they were reasoned from.
+
+### Stage D — explicit, never by echo
+
+`run_pipeline` calls `stage_e_dispatch._run_stage_d` directly with
+`batch_ids=None` (bulk mode). It deliberately does **not** rely on the pooled
+Stage C runner's `post_save` echo into the conveyor: that route is implicit,
+runs one micro-batch at a time under the streaming envelope, and is what left
+the Stage D route unestablished.
+
+The order is load-bearing and unchanged — join-key → fallback → illustration →
+slow-path, then the three attribute chips. Its asymmetry is the correctness
+argument: a calculator's `run_id` narrows its OWN progress, never an UPSTREAM
+verdict. Run-scoping the upstream selectors would hand downstream calculators
+an empty pool while reporting success.
+
+### Stage C+ — distance-0 cluster vote propagation
+
+`local_clustering.compute_two_threshold_clusters` groups cards by stored
+`content_phash`; a distance-0 cluster is a set of bit-identical images.
+`local_identify_printing_tags.build_propagated_cluster_votes` (lifted out of
+`run_pilot`'s closure so it has one implementation and two callers) then gives
+every absorbed member its representative's printing verdict, under the same
+identity, **without the member ever being fetched or computed**. Correctness
+property first — identity groups must agree — throughput lever second.
+
+Two differences from the pilot's use of the same rule, both deliberate:
+
+- **What is propagated.** `run_pilot` propagates its own OCR/phash votes. The
+  monolith does not carry pilot OCR/phash voting (standing owner deferral;
+  Stage D's join-key superseded the OCR half), so it propagates **Stage D's**
+  printing verdicts — the votes the run actually cast.
+- **What is clustered.** `run_pilot` clusters over its own
+  eligibility-narrowed selection pool, which makes cluster membership a
+  function of what earlier runs already voted on: a genuine 3-card cluster can
+  present as a 2-card one, and dropping the lowest-pk member changes which
+  card becomes representative. `run_pipeline` clusters over `Card` by stored
+  hash — the whole catalogue by default — which is what makes the answer
+  independent of run history. `--scope-stage-d-to-cohort` narrows that, and
+  narrows the independence with it; that is why it is not the default.
+
+### Exit codes
+
+| code | meaning                                                                                                                                                                |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0`  | the pass ran to completion, or previewed one under `--dry-run`. `channel_report`'s verdict is REPORTED, never folded in.                                               |
+| `2`  | **Stage 0 failed** — nothing dispatched, nothing written.                                                                                                              |
+| `3`  | **operating envelope halted the run** — an open trip (no self-resume) or a fresh breach. Nothing written.                                                              |
+| `7`  | the pass completed but the **fidelity gate** found machine-only resolutions. Everything is written; this is a loud "read this run before trusting it", not a rollback. |
+
+`channel_report` runs at the end and is **never** folded into the exit status.
+Expect its own exit 1 on the first run: `ZERO_DECLARATIONS` ships empty and
+there are known-silent channels. That is the instrument working.
+
+### Ledger convention
+
+One `PilotRunLedger` row, `command="run_pipeline"`, `run_id` =
+`<run_id>-pipeline`. The suffix is not cosmetic: `PilotRunLedger.run_id` is
+UNIQUE, and Stage C is delegated to `run_image_evidence_cohort`, which writes
+its own row under the run identity it is given. Two rows cannot share one, so
+the choice is which of the two gets the clean name — this command's summary
+row, or every data row the run produces. **The data wins:** `channel_report`
+scopes a channel's run-column counts by the `run_id` on the rows, and a Stage
+C whose evidence carried a different `run_id` from the votes would read as a
+silent channel, which is exactly the reading "nothing is culled" exists to
+make impossible.
+
+The row's `counters` carry one key per stage — `stage_0` (including the bulk
+file vintage), `stage_c`, `stage_d`, `clustering`, `fidelity_gate`,
+`channel_report`, `elapsed_s`.
+
+### What a fresh run still inherits from an earlier one
+
+The from-scratch default covers **selection** — which cards get looked at.
+It does not cover every route by which a prior run's rows reach a fresh run's
+**answer**, and the following were found while wiring this command. They are
+recorded, not fixed: this command's first run is how the pipeline's real state
+gets measured, and changing what it measures while building it would make that
+first reading untrustworthy.
+
+- **`run_name_frequency_elimination` is a census predicate and it leaks.** Its
+  "exactly one unresolved eligible card for this name" test counts over
+  `_eligible_base_queryset` called with no `run_id`, so the pool is depleted by
+  its own prior votes. A name that gains a second card after run 1 can have
+  that second card voted on in run 2 while an empty-vote catalogue would
+  abstain — a fresh wrong assertion, not a carried-forward one. It has never
+  run in production and `run_pipeline` does **not** wire it.
+- **The attribute-chip and layout casters have no `run_id` scoping at all**
+  and no value-comparison split, so a card whose evidence is later re-extracted
+  can never have its chip re-read under a new run. Monotonic suppression, not a
+  false fire.
+- **`_split_new_printing_tag_votes` compares VALUES**, so a recomputed
+  identical verdict is skipped and the original row survives **with its
+  original `run_id`**. Correct and desirable — but it means a "fresh" run's
+  live output legitimately contains rows stamped with an older run, and
+  `filter(run_id=R)` returns only what R _changed_, not what R concluded.
+- **Fallback / slow-path eligibility read upstream verdicts unscoped**, by
+  design and with the argument recorded in-source: scoping them would hand a
+  downstream calculator an empty pool while reporting success.
+- **Only `CardPrintingTag` is archived on supersession.** `CardTagVote` (all
+  three chip families) and `CardIllustrationVote` are deleted outright —
+  `models.vote_archive_model` maps only that one model. So the printing grain
+  stays diffable across generations via `--generation-diff`; the tag and
+  illustration grains do not. `CardIllustrationVote` is additionally the only
+  production caller of `purge_stale_machine_votes` that bypasses
+  `vote_write.purge_and_write_votes`, so it never records
+  `superseded_by_run_id` either.
+
 ## Phase 3 (not yet built)
 
 Informal shorthand, not a brief-defined phase number — see

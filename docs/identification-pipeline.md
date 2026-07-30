@@ -96,11 +96,56 @@ source of truth for gate status, for how many cards are currently sitting
 at each stage. Absolute counts return to this diagram once real user
 confirmations start accumulating in volume.
 
+## How to run all of it: `run_pipeline` (2026-07-30)
+
+Everything below this heading used to be run **one command at a time**, in an
+order carried in an operator's head. `manage.py run_pipeline` is that order,
+executed:
+
+```
+Stage 0   Scryfall reference refresh, once, at the front
+Stage E   operating-envelope preflight
+Stage C   evidence extraction (the pooled engine)
+Stage D   join-key → fallback → illustration → slow-path, then the three chips
+Stage C+  distance-0 cluster vote propagation
+Stage E   fidelity gate — machine-only resolutions must be zero
+end       channel_report
+```
+
+It contains **no pipeline logic of its own**. Each stage below is reached by
+importing and calling the thing that already owned it; the command is
+sequencing, `run_id` threading and error handling. Everything it writes is
+stamped with one `run_id`, and that `run_id` is the only thing identifying a
+run's output — there is no test mode, no provisional marker and no separate
+table.
+
+Two defaults are load-bearing and are the opposite of every command it calls:
+
+- **It writes.** A bare `manage.py run_pipeline` is a complete, working run
+  that persists rows. `--dry-run` is the only thing that prevents the write,
+  and a dry run still executes every stage and reports what it _would_ write.
+  Every Stage D calculator and attribute-chip caster defaults to
+  `dry_run=True`, so `run_pipeline` passes the flag explicitly at every seam —
+  inheriting those defaults would compute a whole pass and persist nothing
+  while every log line reported success.
+- **It redoes everything from scratch.** A fresh `--run-id` means no prior
+  run suppresses work: Stage C's resume filter is run-scoped and so is each
+  calculator's own eligibility. Flags narrow; nothing is required to get a
+  working run. Re-passing an earlier `--run-id` resumes that run instead.
+
+Operational detail — flags, exit codes, what a dry run reports, and which
+prior-run influences survive a fresh `run_id` — is in
+[`features/stage-e-operations.md`](features/stage-e-operations.md).
+
 ## What exists before anything runs
 
 - A **Card row**: name, source drive, and a content phash of the image.
 - The **reference set**: every real printing of every card name (CanonicalCard /
   CanonicalExpansion, from Scryfall) — set code, collector number, denominator.
+  Refreshed by **Stage 0**, at the front of a `run_pipeline` pass and never
+  during one: Stage D's illustration deduction builds its matching index from
+  exactly the table a refresh rewrites, so refreshing mid-pass would have early
+  and late cards deduced against different reference sets under one `run_id`.
 - **No pixels stored, ever.** Images are fetched transiently, read, discarded.
 
 ## Stage C — evidence extraction (`run_image_evidence_cohort`)
