@@ -37,6 +37,7 @@ import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
+from cardpicker import stage_e_dispatch
 from cardpicker.local_attribute_chip_cast import (
     BLEED_EDGE_CAST_ANONYMOUS_ID,
     FRAME_STYLE_CAST_ANONYMOUS_ID,
@@ -155,6 +156,20 @@ def _stub_compute(
             ),
         )
     return card_id, "ok", None, False
+
+
+@pytest.fixture(autouse=True)
+def _reset_fetch_failure_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    `stage_e_dispatch._window` is a PROCESS-GLOBAL rolling fetch-outcome window, and
+    `_sample_envelope_signals` - which this command's envelope preflight calls - reads it. Without
+    this reset, fetch failures recorded by any earlier test in the same pytest process leak in and
+    trip the `fetch_failure_rate` bar here: running this file alone passed while running it inside
+    the full suite halted every test at the preflight with 4/4 failures inherited from
+    `test_stage_e_dispatch.py`. Same fixture, same reasoning, as that file's own
+    `_reset_fetch_failure_window`.
+    """
+    monkeypatch.setattr(stage_e_dispatch, "_window", stage_e_dispatch._FetchOutcomeWindow())
 
 
 @pytest.fixture(autouse=True)
