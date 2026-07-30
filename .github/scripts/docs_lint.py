@@ -635,6 +635,285 @@ def check_skip_reason_roster_tether() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Roster tether: VoteSource members (2026-07-29)
+#
+# `models.VoteSource` has six members and NOTHING enumerated them in a
+# living, code-tethered document: the only enumeration was
+# docs/reference/vote-weight-matrix.md, which docs/MANIFEST.md marks
+# `historical` and which self-declares "not a living spec" — so the one
+# place a reader would look was explicitly not authoritative.
+# docs/vote-sources.md is that roster; this rule is what binds it.
+#
+# THIS TETHER CHECKS CLAIMS, NOT MENTIONS. Issue #577 records the weakness
+# of the two tethers above: they verify that a string APPEARS in the doc,
+# not that what the doc says about it is TRUE. A row could describe a
+# calculator's behaviour entirely wrongly and stay green. Here the two
+# facts that actually govern behaviour — a source's consensus WEIGHT and
+# whether it is HUMAN-BACKED — are both mechanically derivable, so both
+# are COMPARED, not grepped for. A doc row whose weight column disagrees
+# with `_SOURCE_WEIGHTS` is a finding even though every member name is
+# present.
+#
+# Derivation is STATIC (regex over source text), never `import django`:
+# docs-lint.yml's `lint` job is a bare `python3 .github/scripts/docs_lint.py`
+# with no dependency install, so this module must stay stdlib-only. The
+# cost is that `settings.X` references have to be resolved by reading
+# settings.py's own `env.float("X", default=...)` declaration — i.e. the
+# check compares against the SHIPPED DEFAULTS, which is what the doc
+# documents. A deployment that overrides an env var changes the running
+# weight without changing either the code or the doc, and that is out of
+# scope for a docs linter; the doc says so in its own preamble.
+# ---------------------------------------------------------------------------
+
+VOTE_SOURCE_DOC_REL = "vote-sources.md"
+VOTE_SOURCE_MODELS_REL = "MPCAutofill/cardpicker/models.py"
+VOTE_CONSENSUS_REL = "MPCAutofill/cardpicker/vote_consensus.py"
+DJANGO_SETTINGS_REL = "MPCAutofill/MPCAutofill/settings.py"
+
+# `class VoteSource(models.TextChoices):` ... up to the next column-0
+# statement. Members are the indented `NAME = "value", ...` lines inside it.
+VOTE_SOURCE_CLASS_RE = re.compile(r"^class VoteSource\(.*?\):\n(?P<body>(?:[ \t].*\n|\n)*)", re.MULTILINE)
+VOTE_SOURCE_MEMBER_RE = re.compile(r'^[ \t]+(?P<member>[A-Z][A-Z0-9_]*)\s*=\s*"(?P<value>[^"]+)"', re.MULTILINE)
+
+# `_SOURCE_WEIGHTS: dict[str, float] = {` ... `}` — the dict body, then one
+# `VoteSource.MEMBER: <expr>,` entry per line (comments skipped).
+SOURCE_WEIGHTS_BLOCK_RE = re.compile(r"^_SOURCE_WEIGHTS[^=]*=\s*\{\n(?P<body>.*?)^\}", re.MULTILINE | re.DOTALL)
+SOURCE_WEIGHT_ENTRY_RE = re.compile(r"^\s*VoteSource\.(?P<member>[A-Z][A-Z0-9_]*)\s*:\s*(?P<expr>[^,\n]+),", re.MULTILINE)
+
+# `_MACHINE_DERIVED_SOURCES: set[str] = {VoteSource.A, VoteSource.B, ...}`
+MACHINE_SOURCES_BLOCK_RE = re.compile(r"^_MACHINE_DERIVED_SOURCES[^=]*=\s*\{(?P<body>.*?)\}", re.MULTILINE | re.DOTALL)
+VOTE_SOURCE_REF_RE = re.compile(r"VoteSource\.([A-Z][A-Z0-9_]*)")
+
+# `NAME = env.float("NAME", default=<expr>)` in settings.py. `<expr>` is
+# either a numeric literal or another settings name (ILLUSTRATION_* do
+# defer to the printing values that way), so resolution recurses once.
+SETTINGS_FLOAT_RE = re.compile(r"^(?P<name>[A-Z][A-Z0-9_]*)\s*=\s*env\.float\(\s*\"[^\"]+\"\s*,\s*default=(?P<expr>[^)]+)\)", re.MULTILINE)
+
+# One roster row. Columns, in order and all REQUIRED:
+#   1 `MEMBER`  2 `stored-value`  3 `<number>` (weight)  4 yes|no (human-backed)
+# Everything after column 4 is free prose the linter does not read. The
+# backticks are what make each cell unambiguous to parse; the `yes`/`no`
+# is a closed vocabulary for the same reason.
+VOTE_SOURCE_ROW_RE = re.compile(
+    r"^\|\s*`(?P<member>[A-Z][A-Z0-9_]*)`\s*"
+    r"\|\s*`(?P<value>[^`|]+)`\s*"
+    r"\|\s*`(?P<weight>-?\d+(?:\.\d+)?)`[^|]*"
+    r"\|\s*(?P<human>yes|no)\b",
+    re.MULTILINE,
+)
+
+
+def _declared_vote_sources() -> dict:
+    """
+    DERIVE the `VoteSource` roster from models.py. Returns {member: value}.
+
+    Derived, never hardcoded — same reasoning as
+    `_declared_calculator_identities()`: a hand-maintained copy inside the
+    linter would just move the stale list from the doc into the check.
+    """
+    path = REPO_ROOT / VOTE_SOURCE_MODELS_REL
+    if not path.is_file():
+        return {}
+    match = VOTE_SOURCE_CLASS_RE.search(path.read_text())
+    if not match:
+        return {}
+    return {m.group("member"): m.group("value") for m in VOTE_SOURCE_MEMBER_RE.finditer(match.group("body"))}
+
+
+def _settings_float_defaults() -> dict:
+    """{SETTING_NAME: float} for every `env.float(..., default=...)` in settings.py."""
+    path = REPO_ROOT / DJANGO_SETTINGS_REL
+    if not path.is_file():
+        return {}
+    raw = {m.group("name"): m.group("expr").strip() for m in SETTINGS_FLOAT_RE.finditer(path.read_text())}
+    resolved: dict = {}
+
+    def resolve(expr: str, depth: int = 0):
+        if depth > 4:
+            return None
+        try:
+            return float(expr)
+        except ValueError:
+            pass
+        if expr in raw:
+            return resolve(raw[expr], depth + 1)
+        return None
+
+    for name, expr in raw.items():
+        value = resolve(expr)
+        if value is not None:
+            resolved[name] = value
+    return resolved
+
+
+def _declared_source_weights() -> dict:
+    """
+    DERIVE {member: float} from `vote_consensus._SOURCE_WEIGHTS`, statically.
+
+    A member whose weight expression cannot be resolved maps to `None`
+    rather than being dropped: an unresolvable weight must surface as a
+    finding telling the author to teach this resolver the new form, NOT as
+    a silent pass. A tether that quietly stops checking a column is the
+    #577 failure mode with extra steps.
+    """
+    path = REPO_ROOT / VOTE_CONSENSUS_REL
+    if not path.is_file():
+        return {}
+    block = SOURCE_WEIGHTS_BLOCK_RE.search(path.read_text())
+    if not block:
+        return {}
+    settings_defaults = _settings_float_defaults()
+    weights: dict = {}
+    for entry in SOURCE_WEIGHT_ENTRY_RE.finditer(block.group("body")):
+        expr = entry.group("expr").strip()
+        value = None
+        try:
+            value = float(expr)
+        except ValueError:
+            if expr.startswith("settings."):
+                value = settings_defaults.get(expr[len("settings.") :])
+        weights[entry.group("member")] = value
+    return weights
+
+
+def _declared_machine_derived_sources() -> set:
+    """DERIVE the member names in `vote_consensus._MACHINE_DERIVED_SOURCES`."""
+    path = REPO_ROOT / VOTE_CONSENSUS_REL
+    if not path.is_file():
+        return set()
+    block = MACHINE_SOURCES_BLOCK_RE.search(path.read_text())
+    if not block:
+        return set()
+    return set(VOTE_SOURCE_REF_RE.findall(block.group("body")))
+
+
+def check_vote_source_roster_tether() -> list[str]:
+    """
+    Tether docs/vote-sources.md to `models.VoteSource`, BOTH DIRECTIONS and
+    BY VALUE:
+
+      - a member declared in code with no row in the doc is a finding
+        (the drift the calculator/skip-reason tethers already catch);
+      - a row naming a member that no longer exists in code is a finding
+        (an orphan row describing a retired source reads as authoritative
+        and is not — neither tether above catches this direction at all);
+      - a row whose stored `source` value, consensus WEIGHT or HUMAN-BACKED
+        column disagrees with `_SOURCE_WEIGHTS` /
+        `_MACHINE_DERIVED_SOURCES` is a finding.
+
+    The last bullet is the point. Issue #577: the existing roster tethers
+    check that a name APPEARS, not that the surrounding claim is TRUE, so
+    a row can be wholly wrong and stay green. Both of the columns that
+    actually govern behaviour here are derivable from code, so both are
+    compared. Changing `PRINTING_TAG_IMPLICIT_WEIGHT`'s default from 0.25
+    to 0.5 turns this rule red until the doc follows.
+
+    Deliberately NOT checked: the prose columns (meaning, gate treatment,
+    rationale). Those are judgment, and asserting a linter can verify them
+    would be exactly the "a check that compared nothing must not read as
+    an all-clear" defect this repo has been closing elsewhere.
+    """
+    findings = []
+    doc = DOCS_DIR / VOTE_SOURCE_DOC_REL
+    if not doc.is_file():
+        return findings
+    doc_rel = doc.relative_to(REPO_ROOT)
+    members = _declared_vote_sources()
+    if not members:
+        return findings
+    weights = _declared_source_weights()
+    machine = _declared_machine_derived_sources()
+
+    # Fenced blocks are illustrative (same reasoning as every other check
+    # here) — a table inside one is an example, not the roster.
+    prose = strip_fenced_code(doc.read_text())
+    rows = {m.group("member"): m for m in VOTE_SOURCE_ROW_RE.finditer(prose)}
+
+    fix = (
+        f"The roster row format is: `| `MEMBER` | `stored-value` | `<weight>` | "
+        f"yes|no | ...prose... |`, and it is parsed, not read — see "
+        f"check_vote_source_roster_tether() in .github/scripts/docs_lint.py."
+    )
+
+    for member, value in sorted(members.items()):
+        row = rows.get(member)
+        if row is None:
+            findings.append(
+                f"::error file={doc_rel}::vote-source roster drift: "
+                f"`VoteSource.{member}` (= \"{value}\") is declared in "
+                f"{VOTE_SOURCE_MODELS_REL} but has no row in {doc_rel}. Code is "
+                f"the source of truth for this roster: add a row stating what "
+                f"the source MEANS, its consensus weight, whether it is "
+                f"human-backed, and how the consensus gate treats it. {fix}"
+            )
+            continue
+        line = line_of(prose, row.start())
+        if row.group("value") != value:
+            findings.append(
+                f"::error file={doc_rel},line={line}::vote-source roster is "
+                f"WRONG, not merely stale: the row for `{member}` gives the "
+                f"stored `source` value as \"{row.group('value')}\", but "
+                f"{VOTE_SOURCE_MODELS_REL} declares \"{value}\". That string is "
+                f"the production datum every vote row keys on."
+            )
+        expected_weight = weights.get(member)
+        if member not in weights:
+            findings.append(
+                f"::error file={doc_rel},line={line}::vote-source roster cannot "
+                f"be verified: `VoteSource.{member}` has no entry in "
+                f"{VOTE_CONSENSUS_REL}'s `_SOURCE_WEIGHTS`, so its documented "
+                f"weight `{row.group('weight')}` is unchecked. Every member must "
+                f"carry a weight there — `resolve_vote_weight` indexes that dict "
+                f"directly and would raise KeyError on a vote from this source."
+            )
+        elif expected_weight is None:
+            findings.append(
+                f"::error file={doc_rel},line={line}::vote-source roster cannot "
+                f"be verified: `_SOURCE_WEIGHTS[{member}]` in {VOTE_CONSENSUS_REL} "
+                f"is an expression this check cannot resolve statically (it "
+                f"handles numeric literals and `settings.NAME` backed by an "
+                f"`env.float(..., default=...)` in {DJANGO_SETTINGS_REL}). Teach "
+                f"_declared_source_weights() the new form rather than deleting "
+                f"the column — an unverifiable column that still reads as "
+                f"verified is the defect this rule exists to avoid."
+            )
+        elif float(row.group("weight")) != expected_weight:
+            findings.append(
+                f"::error file={doc_rel},line={line}::vote-source roster is "
+                f"WRONG, not merely stale: the row for `{member}` claims weight "
+                f"{row.group('weight')}, but {VOTE_CONSENSUS_REL}'s "
+                f"`_SOURCE_WEIGHTS` resolves to {expected_weight}. Code is the "
+                f"source of truth; correct the doc (or, if the change was "
+                f"intended, the doc's row is the thing that has to move with it)."
+            )
+        documented_human = row.group("human") == "yes"
+        actual_human = member not in machine
+        if documented_human != actual_human:
+            findings.append(
+                f"::error file={doc_rel},line={line}::vote-source roster is "
+                f"WRONG, not merely stale: the row for `{member}` says "
+                f"human-backed = {row.group('human')}, but "
+                f"`vote_consensus.is_human_backed_source(\"{value}\")` is "
+                f"{actual_human} (membership of `_MACHINE_DERIVED_SOURCES`). "
+                f"This is the bit that decides whether a source can EVER "
+                f"resolve a card unattended — a doc that gets it backwards is "
+                f"worse than no doc."
+            )
+
+    for member in sorted(set(rows) - set(members)):
+        line = line_of(prose, rows[member].start())
+        findings.append(
+            f"::error file={doc_rel},line={line}::vote-source roster orphan: "
+            f"{doc_rel} has a row for `VoteSource.{member}`, which is NOT "
+            f"declared in {VOTE_SOURCE_MODELS_REL}. A row describing a source "
+            f"that no longer exists still reads as authoritative — delete it, "
+            f"or move it under an explicitly-marked retired section outside "
+            f"the roster table."
+        )
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Interconnection rules (2026-07-23 owner ruling: "kill the lettering
 # convention all together ... each subject should have one document or they
 # should at least reference each other"). Decisions now live written-out in
@@ -966,6 +1245,7 @@ def main(argv=None) -> int:
     hard_findings.extend(check_extractable_primitives_tether())
     hard_findings.extend(check_calculator_roster_tether())
     hard_findings.extend(check_skip_reason_roster_tether())
+    hard_findings.extend(check_vote_source_roster_tether())
 
     # Soft findings: the interconnection rules. Emitted as ::warning:: and
     # NOT counted unless --strict / DOCS_LINT_STRICT.
