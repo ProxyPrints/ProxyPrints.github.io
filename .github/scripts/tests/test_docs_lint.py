@@ -322,6 +322,104 @@ class TestCalculatorRosterTether(unittest.TestCase):
             self.assertEqual(docs_lint.check_calculator_roster_tether(), [])
 
 
+class TestRosterScanRecursion(unittest.TestCase):
+    """
+    `_roster_source_files()` — the scan BOTH roster tethers derive from.
+
+    Until 2026-07-29 both tethers globbed `cardpicker/*.py` non-recursively,
+    which silently excluded `management/commands/` and with it
+    `scryfall-tagger-v1`, a real vote-casting identity. These tests pin the
+    two halves that must BOTH hold: the scan reaches subdirectories, and it
+    still excludes `tests/` — which the old glob achieved by accident and
+    which now has to hold on purpose.
+    """
+
+    @contextlib.contextmanager
+    def _repo(self, sources: dict, doc_text: str = "", skip_doc_text: str = ""):
+        with temp_docs() as docs:
+            src = docs_lint.REPO_ROOT / "MPCAutofill" / "cardpicker"
+            src.mkdir(parents=True)
+            for name, text in sources.items():
+                write(src / name, text)  # `name` may be a nested path
+            write(docs / docs_lint.FIDELITY_GATE_DOC_REL, doc_text)
+            write(docs / docs_lint.SKIP_REASON_DOC_REL, skip_doc_text)
+            yield docs
+
+    def test_identity_in_management_commands_is_found(self):
+        # The exact live miss: a management command declaring a real
+        # vote-casting identity.
+        with self._repo(
+            {"management/commands/import_thing.py": 'THING_ANONYMOUS_ID = "thing-importer-v1"\n'},
+            "this doc mentions no identities at all\n",
+        ):
+            self.assertIn("thing-importer-v1", docs_lint._declared_calculator_identities())
+            out = " || ".join(docs_lint.check_calculator_roster_tether())
+            self.assertIn("`thing-importer-v1`", out)
+            self.assertIn("management/commands/import_thing.py:1", out)
+
+    def test_identity_in_migrations_is_found(self):
+        # Deliberately INCLUDED: a migration pinning an identity is
+        # operating on real rows keyed by it.
+        with self._repo(
+            {"migrations/0099_freeze.py": 'COHORT_ANONYMOUS_ID = "frozen-engine-v1"\n'},
+            "this doc mentions no identities at all\n",
+        ):
+            self.assertIn("frozen-engine-v1", docs_lint._declared_calculator_identities())
+
+    def test_identity_in_tests_is_excluded(self):
+        # Deliberately EXCLUDED: fixtures declare identity-shaped literals
+        # that are not production roster members. A rule that demanded doc
+        # entries for test fixtures would fire on honest content.
+        with self._repo(
+            {"tests/test_fixtures.py": 'FIXTURE_ANONYMOUS_ID = "some-other-engine-v1"\n'},
+            "this doc mentions no identities at all\n",
+        ):
+            self.assertEqual(docs_lint._declared_calculator_identities(), {})
+            self.assertEqual(docs_lint.check_calculator_roster_tether(), [])
+
+    def test_identity_in_a_nested_tests_dir_is_excluded(self):
+        with self._repo(
+            {"management/commands/tests/test_cmd.py": 'FIXTURE_ANONYMOUS_ID = "some-other-engine-v1"\n'},
+            "this doc mentions no identities at all\n",
+        ):
+            self.assertEqual(docs_lint._declared_calculator_identities(), {})
+
+    def test_skip_reason_in_a_subdirectory_is_found(self):
+        # No `*_SKIP_REASON` lives outside the top level today; this pins
+        # the widened scan so the hole stays closed when one does.
+        with self._repo(
+            {"management/commands/run_thing.py": 'THING_SKIP_REASON = "thing-unavailable"\n'},
+            skip_doc_text="this doc documents no reasons\n",
+        ):
+            self.assertIn("thing-unavailable", docs_lint._declared_skip_reasons())
+            out = " || ".join(docs_lint.check_skip_reason_roster_tether())
+            self.assertIn("`thing-unavailable`", out)
+
+    def test_skip_reason_in_tests_is_excluded(self):
+        with self._repo(
+            {"tests/test_thing.py": 'FIXTURE_SKIP_REASON = "fixture-only"\n'},
+            skip_doc_text="this doc documents no reasons\n",
+        ):
+            self.assertEqual(docs_lint._declared_skip_reasons(), {})
+
+    def test_scan_is_recursive_but_bounded(self):
+        with self._repo(
+            {
+                "top.py": "",
+                "management/commands/deep.py": "",
+                "tests/excluded.py": "",
+                "__pycache__/excluded.py": "",
+            }
+        ):
+            src = docs_lint.REPO_ROOT / "MPCAutofill" / "cardpicker"
+            names = [str(p.relative_to(src)) for p in docs_lint._roster_source_files(src)]
+            self.assertEqual(names, ["management/commands/deep.py", "top.py"])
+
+    def test_missing_source_dir_returns_empty(self):
+        with temp_docs():
+            self.assertEqual(docs_lint._roster_source_files(docs_lint.REPO_ROOT / "nope"), [])
+
+
 class TestAgainstRealRepo(unittest.TestCase):
     """Invariants against the committed docs/ tree, post de-lettering sweep."""
 
@@ -351,8 +449,19 @@ class TestAgainstRealRepo(unittest.TestCase):
             # tether is keyed on the CURRENT identity, version suffix included.
             "stage-d-illustration-v2",
             "local-name-frequency-v1",
+            # Declared in `management/commands/`, which the pre-2026-07-29
+            # non-recursive glob never read. If this scan ever narrows
+            # again, this is the assertion that says so.
+            "scryfall-tagger-v1",
         ):
             self.assertIn(identity, found)
+
+    def test_fixture_identities_stay_out_of_the_real_roster(self):
+        # The other half of the recursion change: widening the scan must
+        # not sweep `cardpicker/tests/` fixture literals into the roster.
+        found = docs_lint._declared_calculator_identities()
+        for fixture in ("some-other-engine-v1", "unrelated-family-v1", "brand-new-engine-v1"):
+            self.assertNotIn(fixture, found)
 
     def test_merged_corpus_is_fully_clean(self):
         # Sweep landed: no D-number labels, no orphans, no dangling
