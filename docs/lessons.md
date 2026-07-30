@@ -895,7 +895,7 @@ whatever the branch tip is _at merge time_. A commit pushed after the merge fire
 orphaned - the PR shows MERGED, CI shows green, and the commit simply is not on master. Nothing
 in GitHub or CI reports this. The window is small enough to be measured in seconds and it has
 still happened twice here: PR #604's `82360a9b` (recovered as PR #641) and PR #646's `1fa8d168`,
-pushed 76 seconds after the merge (recovered as PR #647). Both were the author's own final
+pushed 76 seconds after the merge (recovered as PR #650). Both were the author's own final
 commit, landing while the merge was already in flight.
 
 **How to detect it**: for each merged PR, compare its `mergedAt` against the branch tip's commit
