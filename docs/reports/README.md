@@ -94,8 +94,10 @@ a `detail` object read only when the summary signals it's needed.
   the Tagger dependency, with the definitional question that would
   invert that recommendation stated explicitly.
 - `2026-07-29-printing-vs-illustration-tag-grain.md` — **decision
-  document, awaiting an owner ruling.** Should `PrintingTagVote` exist?
-  Disambiguates `CardPrintingTag` / `CardTagVote` / `PrintingTagVote` and
+  document; its central question has since been RULED and EXECUTED.**
+  Should `PrintingTagVote` exist? Answer: no — retired in PR #615
+  (2026-07-30), so this reads as the record of that reasoning rather than
+  a live proposal. Disambiguates `CardPrintingTag` / `CardTagVote` / `PrintingTagVote` and
   traces which of them `PRINTING_TAG_MIN_VOTES` /
   `PRINTING_TAG_IMPLICIT_CAP` / `_split_new_printing_tag_votes` actually
   govern (none of them govern `PrintingTagVote`). Measured: the table is

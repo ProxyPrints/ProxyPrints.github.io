@@ -31,6 +31,16 @@ arrived while this was being written and settle questions the
 investigation had open; where a ruling and a measurement disagree, both
 are recorded rather than one being quietly dropped (§8.6).
 
+**Update, 2026-07-30 — open question 1 is CLOSED and EXECUTED.**
+`PrintingTagVote` has been retired: PR #615 ("Retire `PrintingTagVote`:
+the vote channel that had no resolver, no reader and no rows") is merged,
+and the model, its consensus module, and its external-IP import command
+no longer exist on `master`. Read §7.1 and open question 1 below as the
+record of the reasoning that produced that decision, not as a live
+proposal. The analysis is deliberately left as written — the code paths
+and model names it names describe the tree as it stood on 2026-07-29,
+before the retirement landed.
+
 ---
 
 ## 0. The principle this all turns on
@@ -1047,7 +1057,8 @@ not re-asked.**
 1. **Retire `PrintingTagVote`?** It has 0 rows, 0 human votes, no
    resolver, no reader, no frontend, and its only writer has never run.
    The owner has said they are willing; this asks for the go-ahead to
-   dispatch it. Recommendation: yes. _(§7.1, §8)_
+   dispatch it. Recommendation: yes. _(§7.1, §8)_ — **RULED YES and
+   EXECUTED, 2026-07-30, PR #615. No longer open.**
 
 2. **Seed the `external-ip` Tag in production?** One command,
    `manage.py seed_no_match_reason_tags`. Until it runs, the human
