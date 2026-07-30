@@ -150,7 +150,20 @@ action needed.
 ## 2. Protected core
 
 **Scope — the actual files, not just the concept**, since a policy
-nobody can point at doesn't function as one:
+nobody can point at doesn't function as one.
+
+**This list is MACHINE-READ, not just prose.** The markers below bound the
+roster, and `.github/scripts/check_protected_core_license.py` PARSES this
+region at runtime to build its file list — it holds no list of its own.
+There is therefore no second copy to drift: adding a bullet here adds a CI
+gate, and the CI script cannot silently disagree with this section because
+it has nothing to disagree with. Every backtick-quoted path inside the
+markers must resolve to a real file (a typo fails the lint), so paths that
+were previously written as a prose parenthetical — `(+ its test)` — are now
+spelled out explicitly. Keep prose commentary outside the backticks; only
+the backticked spans are read.
+
+<!-- PROTECTED-CORE-ROSTER:BEGIN -->
 
 - `MPCAutofill/cardpicker/vote_consensus.py`
 - `MPCAutofill/cardpicker/printing_consensus.py`
@@ -162,24 +175,42 @@ nobody can point at doesn't function as one:
 - `MPCAutofill/cardpicker/local_fallback.py` — **still protected**; carries
   one authorised exception, 2026-07-29, logged in §2.1. The exception
   covers that one change, not the file.
-- `federation-hash-tool/hash_my_cards.py` (+ its test)
+- `federation-hash-tool/hash_my_cards.py` (+ its test,
+  `federation-hash-tool/tests/test_hash_my_cards.py`)
 - `MPCAutofill/cardpicker/tests/test_federation_hash_tool_parity.py` (the
   parity tether between the previous two)
-- `decrypt-saved-deck-export/decrypt.mjs` (+ its test) — the standalone,
+- `decrypt-saved-deck-export/decrypt.mjs` (+ its test,
+  `decrypt-saved-deck-export/tests/decrypt.test.mjs`) — the standalone,
   zero-import, zero-dependency decrypt tool for a saved-decks export
   bundle (PR #242); same standalone-trust-anchor risk shape as the
   federation hash tool above, not itself part of the vote/federation
-  system. **Not yet in `check_protected_core_license.py`'s
-  `PROTECTED_CORE_FILES`** — that file only exists on PR #242's branch,
-  not yet on `master`; add both paths to the CI script's list in the PR
-  that merges #242 (or immediately after), per this section's own "keep
-  these in sync in the same PR" convention.
-- **Prospectively**: any future verdict schema/signing/export/import/
-  keygen module (`federation-v1.md`/`federation/public-export-v1.md`
-  describe the format; per those docs, "format committed ahead of
-  code" — none of that code exists yet, so there's nothing to list here
-  today beyond the commitment that whatever gets built there joins this
-  list in the same PR).
+  system.
+
+<!-- PROTECTED-CORE-ROSTER:END -->
+
+**Prospectively** (deliberately OUTSIDE the machine-read region — there is
+nothing to gate yet, and a marker region containing an unresolvable path
+would fail the lint): any future verdict schema/signing/export/import/
+keygen module (`federation-v1.md`/`federation/public-export-v1.md`
+describe the format; per those docs, "format committed ahead of code" —
+none of that code exists yet, so there's nothing to list here today beyond
+the commitment that whatever gets built there joins the roster above in
+the same PR).
+
+**Historical note, kept because the gap it describes was real and lasted**:
+this section used to carry a bullet saying the decrypt-tool paths were
+"**Not yet in `check_protected_core_license.py`'s `PROTECTED_CORE_FILES`**
+— that file only exists on PR #242's branch, not yet on `master`; add both
+paths to the CI script's list in the PR that merges #242 (or immediately
+after), per this section's own 'keep these in sync in the same PR'
+convention." PR #242 merged as `5ddf109c`; both files landed on `master`;
+**the CI list was never updated.** Two files this section declares part of
+the trust anchor therefore carried NO gate at all from that merge until
+2026-07-29. The one-line fix would have been to add them to the script's
+list. What actually shipped instead is the derivation above, because "two
+hand-maintained lists, kept in sync by a convention written in prose" is
+the defect, and adding an entry to the second list would have left the
+defect in place for the next entry.
 
 **Explicitly NOT file-level protected here, despite being
 conceptually part of the vote/consensus system**:
@@ -218,13 +249,24 @@ genuinely MIT-permissive). The CI check below enforces the real
 invariant, not the narrower one the directive stated.
 
 **The CI check — built, not just designed**: a new
-`.github/scripts/check_protected_core_license.py` walks each
-protected-core file's local (intra-repo) imports and fails if any
-imported local module carries an `AGPL` mention in a `# PROVENANCE:`
-header comment (the format §3's absorption protocol requires of any
-future external-code intake) — also fails if a protected-core file
-carries that marker on itself directly. Wired into `docs-lint.yml` as a
-new `protected-core-license` job. **Passes today with zero findings**,
+`.github/scripts/check_protected_core_license.py` reads the roster region
+above, then walks each protected-core file's local (intra-repo) imports
+and fails if any imported local module carries an `AGPL` mention in a
+`PROVENANCE:` header comment (the format §3's absorption protocol requires
+of any future external-code intake) — also fails if a protected-core file
+carries that marker on itself directly, and fails if a path listed above
+does not exist. **Both languages on the roster are handled**: Python files
+via `ast`, resolving dotted imports against `MPCAutofill/` and
+`federation-hash-tool/` as package roots; `.mjs` files via ES-module
+`import`/`export ... from` / dynamic `import()` / `require()` extraction,
+resolving only RELATIVE specifiers (`./`, `../`) — a bare specifier is an
+npm package or a `node:` builtin, out of scope for the same reason the
+Python side does not scan PyPI metadata. The comment-marker match accepts
+`#`, `//` and `*` comment leaders so a marker in a `.mjs` file is seen;
+before 2026-07-29 the regex required `#`, which meant a JS file on the
+roster could have carried an AGPL marker in a `// PROVENANCE:` line and
+passed. Wired into `docs-lint.yml` as a new `protected-core-license` job.
+**Passes today with zero findings**,
 correctly — nothing in this repo is AGPL-marked; the check's only job is
 to trip the day that stops being true. Deliberately does NOT attempt to
 scan transitive PyPI/npm dependency license metadata (a much larger,
