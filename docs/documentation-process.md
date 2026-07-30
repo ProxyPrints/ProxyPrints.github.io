@@ -293,8 +293,8 @@ subject should have one document or they should at least reference each
 other"). There is no central decisions register and no label grammar:
 **a decision lives written out in prose in its own subject doc**, and the
 subject doc is the source of truth. `docs_lint.py` enforces that model with
-four rules (hard-fail as of 2026-07-23) on top of the mechanical link/path
-checks:
+five rules (hard-fail; the first four flipped 2026-07-23, the fifth added
+already-hard 2026-07-29) on top of the mechanical link/path checks:
 
 1. **No new D-number decision labels.** The abolished convention wrote a
    decision as a bold `D`-number marker or a "decision D-number" phrase (the
@@ -327,15 +327,35 @@ checks:
    direction, so a reader can navigate between them. This is the
    anti-fragmentation guarantee the "one doc per subject, or they reference
    each other" ruling asks for, replacing the old shared-label heuristic.
+5. **MANIFEST coverage** (added 2026-07-29). Every `docs/**/*.md` must have
+   a row in [`MANIFEST.md`](MANIFEST.md), or be covered by one of its
+   directory rows, or carry a per-entry-justified entry in `docs_lint.py`'s
+   `MANIFEST_COVERAGE_ALLOWLIST` (today: the two index roots only). Checked
+   in the other direction too: every row's path must resolve to a real file
+   or directory — the generic backtick-path rule skips any candidate
+   without a `/`, so a top-level row like `theory.md` was never verified to
+   exist at all.
 
-**Hard-fail (flipped 2026-07-23).** These four rules now print as
+   **Deliberately separate from rule 2, not a duplicate of it.** The orphan
+   rule asks "is this doc REACHABLE"; this one asks "is it ROUTABLE by
+   surface". Every doc in the corpus is reachable, because docs cross-link
+   freely — so the orphan rule passed on all eight real docs that had no
+   MANIFEST row, including
+   [`features/stage-e-operations.md`](features/stage-e-operations.md), an
+   operational runbook. MANIFEST.md's own maintenance note had deferred
+   this gate pending evidence that docs go stale unnoticed; the evidence
+   arrived as those eight docs.
+
+**Hard-fail (rules 1-4 flipped 2026-07-23).** These rules now print as
 `::error::` and count toward the exit code, same as the original
 link/path/tether checks — [`docs-lint.yml`](../.github/workflows/docs-lint.yml)'s
 `Run docs lint` step runs `python3 .github/scripts/docs_lint.py --strict`.
 The de-lettering sweep (PR #357) had already left the whole corpus clean
-under `--strict` (exit 0) before this flip, so promoting the four rules from
+under `--strict` (exit 0) before this flip, so promoting rules 1-4 from
 warn-only to blocking changed no doc content — only what CI enforces going
-forward. `DOCS_LINT_STRICT=1` in the job's env is the equivalent alternate
+forward. Rule 5 was added after that flip and so was blocking from its
+first commit; it did require doc content (nine new MANIFEST rows) to go
+green, which is the point of adding it. `DOCS_LINT_STRICT=1` in the job's env is the equivalent alternate
 trigger, documented here in case a future workflow edit prefers the env-var
 form over the CLI flag.
 

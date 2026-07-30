@@ -688,6 +688,7 @@ def check_skip_reason_roster_tether() -> list[str]:
 #   2. every doc reachable from the index chain (README/MANIFEST)
 #   3. every SUPERSEDED marker carries a pointer
 #   4. same-subject proposals reference each other
+#   5. every doc has a MANIFEST.md row, and every row resolves (2026-07-29)
 #
 # All SOFT findings: they print as ::warning:: and do NOT add to the exit
 # code, so the corpus can't turn master red before the concurrent
@@ -848,6 +849,134 @@ def check_orphans() -> list:
     return findings
 
 
+# --- Rule 5: MANIFEST.md coverage -------------------------------------------
+# The orphan rule above asks "is this doc REACHABLE?" — and every doc in the
+# corpus currently is, because docs cross-link each other freely. That is a
+# weaker property than the one MANIFEST.md exists to provide. MANIFEST.md is
+# the ROUTING table: path / purpose / governs-what-surface / authority, so a
+# task can be routed to its governing docs by topic without anyone
+# remembering which file covers what. A doc reachable only through a
+# see-also link in a sibling is reachable and unroutable at the same time.
+#
+# Eight real docs had no row and no covering directory row, including
+# `features/stage-e-operations.md` — an operational runbook. Nothing said so,
+# because nothing was checking; MANIFEST.md's own maintenance note ("a new
+# `docs/*.md` file gets a row here in the same PR that adds it") was a
+# convention in prose, which is the defect this whole rule family exists to
+# close.
+#
+# Checked BOTH directions: a doc with no row, and a row whose path does not
+# resolve. The second is not covered by the generic backtick-path check —
+# that rule requires a "/" in the candidate, so a top-level row like
+# `theory.md` was never verified to exist at all.
+MANIFEST_DOC_REL = "MANIFEST.md"
+
+# Docs that legitimately have NO MANIFEST row. EXPLICIT and per-entry-
+# justified, same convention as CALCULATOR_ROSTER_ALLOWLIST /
+# SKIP_REASON_ROSTER_ALLOWLIST: an exclusion must be a visible decision, not
+# a silent gap. Nothing goes here merely because it currently fails.
+MANIFEST_COVERAGE_ALLOWLIST = {
+    "README.md": (
+        "one of the two index roots (INDEX_ROOT_DOCS). MANIFEST.md's own "
+        "opening distinguishes the two — README.md is the audience-grouped "
+        "map, MANIFEST.md the by-surface routing table — so a row pointing "
+        "at the other index adds no routing information."
+    ),
+    "MANIFEST.md": ("the routing table itself; a row for the table inside the table " "routes nobody anywhere."),
+}
+
+
+def _manifest_rows() -> list:
+    """The `path` cell of every MANIFEST.md table row, in order.
+
+    DERIVED from the table, never restated: the roster of covered docs is
+    whatever MANIFEST.md actually says, so this rule cannot disagree with
+    the file it is checking. Rows come in two shapes — a doc path
+    (`features/grid-selector.md`) and a directory prefix with a trailing
+    slash (`reports/`), which covers everything beneath it.
+    """
+    manifest = DOCS_DIR / MANIFEST_DOC_REL
+    if not manifest.is_file():
+        return []
+    raw = strip_fenced_code(manifest.read_text())
+    paths = []
+    for m in TABLE_ROW_RE.finditer(raw):
+        cells = [c.strip() for c in m.group(1).split("|")]
+        if not cells or set(cells[0]) <= {"-", ":"}:
+            continue  # header separator row
+        cell = BACKTICK_RE.match(cells[0])
+        if cell:
+            paths.append((cell.group(1), line_of(raw, m.start())))
+    return paths
+
+
+def check_manifest_coverage() -> list:
+    findings = []
+    manifest = DOCS_DIR / MANIFEST_DOC_REL
+    if not manifest.is_file():
+        return findings
+    manifest_rel = _rel(manifest)
+
+    rows = _manifest_rows()
+    if not rows:
+        return [
+            (
+                manifest_rel,
+                None,
+                "MANIFEST.md has no readable table rows — this rule derives the "
+                "covered-doc set from them, so an empty parse would check nothing "
+                "and pass. The empty parse is the finding.",
+            )
+        ]
+
+    dir_prefixes = tuple(p for p, _ in rows if p.endswith("/"))
+    file_rows = {p for p, _ in rows if not p.endswith("/")}
+
+    # Direction 1: a row whose target does not exist. Deliberately checked
+    # here rather than left to the generic backtick-path rule, which skips
+    # any candidate without a "/" and so never verified a top-level row.
+    for path, line in rows:
+        target = DOCS_DIR / path
+        exists = target.is_dir() if path.endswith("/") else target.is_file()
+        if not exists:
+            findings.append(
+                (
+                    manifest_rel,
+                    line,
+                    f"MANIFEST.md row `{path}` does not resolve to a real "
+                    f"{'directory' if path.endswith('/') else 'file'} under docs/. "
+                    f"A routing table pointing at something deleted routes readers "
+                    f"nowhere — update or remove the row.",
+                )
+            )
+
+    # Direction 2: a doc with no row and no covering directory row.
+    for doc in sorted(DOCS_DIR.rglob("*.md")):
+        rel = doc.relative_to(DOCS_DIR).as_posix()
+        if rel in MANIFEST_COVERAGE_ALLOWLIST:
+            continue
+        if rel in file_rows:
+            continue
+        if dir_prefixes and rel.startswith(dir_prefixes):
+            continue
+        findings.append(
+            (
+                _rel(doc),
+                None,
+                f"MANIFEST.md coverage gap: {rel} has no row in docs/MANIFEST.md and "
+                f"is not covered by a directory row. MANIFEST.md is the by-surface "
+                f"ROUTING table — a doc missing from it is unroutable even when it is "
+                f"reachable by a link, which is why the orphan rule passes on it. Add a "
+                f"row (path / purpose / governs-what-surface / authority, per "
+                f"MANIFEST.md's own definitions of BINDING / reference / historical), "
+                f"or add an entry to MANIFEST_COVERAGE_ALLOWLIST in "
+                f".github/scripts/docs_lint.py with a per-entry reason.",
+            )
+        )
+
+    return findings
+
+
 def check_supersession() -> list:
     findings = []
     for path in sorted(DOCS_DIR.rglob("*.md")):
@@ -992,6 +1121,7 @@ def check_wiki_publish_map() -> list:
 SOFT_CHECKS = (
     ("no-letter-labels", check_no_letter_labels),
     ("orphan", check_orphans),
+    ("manifest-coverage", check_manifest_coverage),
     ("supersession", check_supersession),
     ("proposal-crossref", check_proposal_crossrefs),
     ("wiki-publish-map", check_wiki_publish_map),
