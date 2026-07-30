@@ -112,6 +112,15 @@ a `detail` object read only when the summary signals it's needed.
   belongs as a derived attribute, not a vote) and answers what the
   smallest mechanism delivering the UB filter actually is. Folds in three
   owner rulings of 2026-07-29. Eleven numbered open questions.
+- `2026-07-29-pipeline-coverage-composition-audit.md` — the composition
+  audit: every vote and extractor channel enumerated from code, measured
+  against production, and traced to the engine that can reach it. Finds the
+  frame-style and bleed-edge attribute chips at zero rows with no substitute
+  and no engine wiring (142,633 + 2,786 votes re-derivable from stored
+  evidence with no image fetch), `extract_card_evidence` with zero production
+  callers, the missing illustration exclusion in the slow-path queryset, and
+  six Stage C → Stage D dependencies that no `extractor_versions` gate
+  enforces.
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
