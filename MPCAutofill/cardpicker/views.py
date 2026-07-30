@@ -257,7 +257,7 @@ from cardpicker.tag_consensus import (
     resolve_tag,
 )
 from cardpicker.tags import Tags
-from cardpicker.vote_consensus import _PendingPrivileged
+from cardpicker.vote_consensus import _PendingPrivileged, is_human_backed_source
 
 logger = logging.getLogger(__name__)
 
@@ -2821,6 +2821,19 @@ def post_get_shared_deck(request: HttpRequest) -> HttpResponse:
     )
 
 
+#: Every `VoteSource` that clears `vote_consensus`'s human-backed gate, in a form the ORM can
+#: filter on. DERIVED from `is_human_backed_source`, never a second hand-maintained list: this
+#: stays correct by construction if `_MACHINE_DERIVED_SOURCES` ever gains or loses a member.
+#:
+#: This is deliberately the CONSENSUS split (FEDERATED counts as machine-derived), NOT
+#: `catalog_stats.HUMAN_SOURCES`'s stats-page split, per issue #233's owner ruling as quoted in
+#: that module's own docstring: "the consensus set answers 'can this vote resolve a card
+#: unattended', while a public stats page answers 'who is doing the tagging work'". The funnel's
+#: `confirmed` bucket is asking the first question - whether a human, not a machine, stood behind
+#: this card's resolution - so it takes the consensus set.
+HUMAN_BACKED_VOTE_SOURCES = [source for source in VoteSource.values if is_human_backed_source(source)]
+
+
 @csrf_exempt
 @ErrorWrappers.to_json
 def get_funnel_counts(request: HttpRequest) -> HttpResponse:
@@ -2829,12 +2842,56 @@ def get_funnel_counts(request: HttpRequest) -> HttpResponse:
 
     Zones:
       - high_match: cards with at least one machine-cast printing vote (DEDUCTION/OCR,
-        is_no_match=False) at any confidence tier. Confirmed = cards where the machine's
-        suggested printing matches the card's resolved printing (inferred_canonical_card).
+        is_no_match=False) at any confidence tier. Confirmed = of those, the cards whose
+        resolved printing is one a HUMAN-BACKED vote also selected (see below).
       - no_match: cards with at least one machine is_no_match=True vote. Confirmed = 0.
       - ambiguous: cards with a CardScanLog skip_reason='ambiguous'. Confirmed = 0.
       - withheld: cards with a CardScanLog border-mismatch or frame-mismatch veto.
         Confirmed = 0.
+
+    WHAT "CONFIRMED" MEASURES, AND WHY IT ASKS ABOUT HUMANS DIRECTLY (2026-07-29)
+    ----------------------------------------------------------------------------
+    This bucket's first form counted a card as confirmed when a MACHINE vote existed for the
+    same printing the card had already resolved to:
+
+        Exists(CardPrintingTag.objects.filter(source__in=[DEDUCTION, OCR], is_no_match=False,
+                                              printing=OuterRef("inferred_canonical_card"), ...))
+
+    which never consults a human vote at all. It reads two denormalised columns off `Card`
+    (`printing_tag_status`, `inferred_canonical_card`) and asks whether a machine agrees with
+    them - so its answer for a card whose ONLY voter is a machine is "confirmed", and the
+    counter cannot distinguish "a person agreed with the machine's suggestion" from "the
+    machine's own vote is the only vote there is". Reproduced on an otherwise-empty database:
+    one card, one OCR vote for printing P, `printing_tag_status=RESOLVED`,
+    `inferred_canonical_card=P`, zero human votes -> `high_match.confirmed == 1`.
+
+    That such a card SHOULD be unreachable in production is exactly the point, and exactly why
+    the old query was not good enough. Resolution runs through
+    `vote_consensus.resolve_weighted_consensus`, whose human-backed gate means a winning
+    outcome must contain at least one human-backed vote - so on healthy data "resolved to P"
+    already implies a human chose P. But that is an INVARIANT HELD ELSEWHERE, not something
+    this endpoint measured; `soak_gate`'s criterion 4 exists precisely to verify the same
+    invariant empirically against real data rather than assume it. A counter published to the
+    public as "confirmed" should not be the one place that takes it on faith, because the
+    state where the invariant has broken is the exact state where an inflated confirmation
+    count is most misleading.
+
+    So the `Exists` now asks the question the word "confirmed" makes a reader expect: is there
+    a human-backed `CardPrintingTag` selecting this card's resolved printing? On healthy data
+    this changes no number at all (the human vote that let the card resolve is right there);
+    it can only ever REMOVE a card that no human ever voted on. Chosen over renaming the bucket
+    because the endpoint has no consumer yet - it is routed at `1/funnelCounts/` and read by
+    nothing in the tree (checked 2026-07-29), so making the number correct now costs one
+    subquery and no contract break, whereas a rename would leave the homepage funnel with no
+    honest confirmation metric at all. The machine-agreement condition is kept alongside it:
+    this bucket lives inside the `high_match` (machine-suggested) zone, so what it reports is
+    the intersection - of the machine's high-match suggestions, how many did a human confirm.
+
+    The comparison is per-CARD (`card_id=OuterRef("pk")`) on both subqueries, not per md5
+    identity group. `resolve_and_persist_printing` propagates a group's outcome to every
+    member, so a card resolved on a byte-identical sibling's votes is not counted here unless
+    it carries its own votes. That under-counts rather than over-counts, which is the correct
+    direction for a public confirmation figure, and matches how `count` is already scoped.
     """
     if request.method != "GET":
         raise BadRequestException("Expected GET request.")
@@ -2857,9 +2914,23 @@ def get_funnel_counts(request: HttpRequest) -> HttpResponse:
             inferred_canonical_card__isnull=False,
         )
         .filter(
+            # The machine put this printing forward...
             Exists(
                 CardPrintingTag.objects.filter(
                     source__in=[VoteSource.DEDUCTION, VoteSource.OCR],
+                    is_no_match=False,
+                    printing=OuterRef("inferred_canonical_card"),
+                    card_id=OuterRef("pk"),
+                )
+            )
+        )
+        .filter(
+            # ...and a human backed it. Without this clause the bucket asks only whether the
+            # machine agrees with a resolution the machine's own votes fed into - see the
+            # docstring above for the reproduction and the full argument.
+            Exists(
+                CardPrintingTag.objects.filter(
+                    source__in=HUMAN_BACKED_VOTE_SOURCES,
                     is_no_match=False,
                     printing=OuterRef("inferred_canonical_card"),
                     card_id=OuterRef("pk"),
