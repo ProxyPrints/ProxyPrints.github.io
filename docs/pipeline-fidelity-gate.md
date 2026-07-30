@@ -1173,6 +1173,32 @@ buckets:
 - **`ai-art-detector-v1`** (1,183 `CardTagVote` rows) — runs an AI-based
   art-style detector and casts a tag vote indicating whether the card art
   is AI-generated.
+- **`frame-style-cast-v1`** (`local_attribute_chip_cast`, NEW 2026-07-30,
+  **0 rows — never run**) — reads stored `ImageEvidence` and casts the
+  `Old Border`/`Modern Border` chip via
+  `local_fallback.classify_frame_style` over
+  `collector_line_collector_number` + `illus_anchor_fired`. Zero image
+  fetches. Gates on BOTH `collector_line_ocr` and `artist_ocr`, because
+  `bool(None)` on the nullable `illus_anchor_fired` would otherwise read as
+  a real "no anchor" and classify everything `modern`. Reachable from the
+  conveyor (`stage_e_dispatch._run_stage_d`) and from its own management
+  command. Derivable population measured read-only 2026-07-29: 133,627
+  `Modern Border` + 9,006 `Old Border`.
+- **`bleed-edge-cast-v1`** (`local_attribute_chip_cast`, NEW 2026-07-30,
+  **0 rows — never run**) — same module, same pass, separate identity;
+  casts `appropriate-bleed` at polarity `NOT_APPLICABLE` for a confidently
+  `trimmed` `bleed_class`. NEGATIVE-ONLY by design: absence of a vote is the
+  documented convention for normal bleed, so a persistently low row count
+  here is correct, not a coverage gap. The identity is separate from
+  `frame-style-cast-v1` precisely because of that — under one shared
+  identity a card's frame vote would read as "already handled" and
+  permanently strand its bleed chip. Derivable population 2026-07-29: 2,786.
+
+Both were created because the 2026-07-29 composition audit found the only
+casters for these two chips inside the live-fetch pilot and inside
+`image_evidence.extract_card_evidence`, which had zero production callers —
+so both chips sat at zero rows with nothing able to re-derive them. See
+`docs/features/printing-tags.md`, "Who actually casts the attribute chips".
 
 ### Calculator roster — the three identities this page omitted (2026-07-29)
 

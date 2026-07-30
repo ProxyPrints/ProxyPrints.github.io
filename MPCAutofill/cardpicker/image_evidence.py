@@ -9,12 +9,12 @@ module-private.
 
 Persistence (`persist_evidence`) is a separate, thin step so callers control their own
 transaction boundaries (the bulk runner's future atomic-batch-seam, task #147 item 3; a
-lazy-mode task's own single-card transaction) - `extract_card_evidence` itself never touches
+lazy-mode task's own single-card transaction) - `fetch_and_compute_card_evidence_for_tests` itself never touches
 the DB, and image bytes never persist anywhere (CLAUDE.md's "Governing premise": we index, we
 do not store images) - they go out of scope the moment this function returns.
 
 Extend this module (not ImageEvidence's callers) when adding a new extractor: fetch once at
-the top of `extract_card_evidence`, call each new pure extractor function against the same
+the top of `fetch_and_compute_card_evidence_for_tests`, call each new pure extractor function against the same
 in-memory image, and add its fields/version/skip-reason to the result. `fetch_health`,
 `geometry_bleed` (task #147), `layout_class`/`crop_coordinates` (issue #148, the geometry-group),
 and `collector_line_ocr`/`artist_ocr`/`collector_line_tsv` (issue #149, the OCR-group) exist
@@ -252,7 +252,6 @@ from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     SYMBOL_STRIP_BOX,
-    cast_border_attribute_vote,
     classify_bleed_edge,
     classify_border_color,
     classify_frame_style,
@@ -643,7 +642,7 @@ def _confidently_digit_free(tier1_raw_texts: list[str]) -> bool:
     return all(text.strip() for text in tier1_raw_texts) and not any(_contains_digit(text) for text in tier1_raw_texts)
 
 
-def extract_card_evidence(
+def fetch_and_compute_card_evidence_for_tests(
     card: Card,
     dpi: Optional[int] = DEFAULT_FETCH_DPI,
     profile: Optional[dict[str, float]] = None,
@@ -654,18 +653,40 @@ def extract_card_evidence(
     name_artist_lookup: Optional[Callable[[str], tuple[str, ...]]] = None,
 ) -> ExtractionResult:
     """
-    The per-card callable work unit - fetch, then compute. `card.content_phash` (not recomputed
-    here) is the content hash this evidence is keyed against - hash-at-ingest (Part 2) already
-    populates it for essentially every card by the time Stage C runs. If it's still null, the
-    result's `content_hash` is None and `persist_evidence` will refuse to write a row, since
-    ImageEvidence's "computed-once-forever" premise depends on a stable hash to key on.
+    A TEST-ONLY CONVENIENCE WRAPPER. It has no production caller and has not had one since the
+    2026-07-20 fetch/compute decoupling (#228): both engines - `run_image_evidence_cohort` (which
+    splits fetch and compute across two pools) and `stage_e_dispatch._run_stage_c` - call
+    `fetch_card_image` and `compute_card_evidence` + `persist_evidence` themselves. The name says
+    so since 2026-07-30; it was `extract_card_evidence` for the four months this was not true, and
+    that gap is what hid the defect below.
+
+    WHAT WAS DELETED HERE, and why the rename matters. Until 2026-07-30 this function's last act
+    before returning was `cast_border_attribute_vote(...).save()` - a real machine vote, cast from a
+    function nothing calls. The 2026-07-29 composition audit found it: the border chip survived the
+    2026-07-29 purge only because `local_layout_class_cast` independently re-derives it, while the
+    two chips whose only other caster was the live-fetch pilot (frame style, bleed edge) went to
+    zero rows with nothing able to produce another. A vote cast in an uncalled function is
+    indistinguishable from a wired channel by any grep, which is exactly how that stayed invisible.
+    The chips are now cast by `local_attribute_chip_cast` and `local_layout_class_cast`, both of
+    which read stored `ImageEvidence` and are wired into `stage_e_dispatch._run_stage_d`.
+
+    DO NOT ADD A WRITE HERE. Not a vote, not a `persist_evidence` call, not a `CardScanLog` row.
+    Anything this function writes is unreachable in production by construction, and will be read as
+    a live channel by anyone auditing the codebase later. Compute and return; the caller persists.
+
+    Behaviourally: fetch, then compute. `card.content_phash` (not recomputed here) is the content
+    hash this evidence is keyed against - hash-at-ingest (Part 2) already populates it for
+    essentially every card by the time Stage C runs. If it's still null, the result's
+    `content_hash` is None and `persist_evidence` will refuse to write a row, since ImageEvidence's
+    "computed-once-forever" premise depends on a stable hash to key on.
 
     Split into a fetch step (here) + `compute_card_evidence` (2026-07-20, Stage C fetch/compute
     decoupling design, docs/features/catalog-completion-plan.md's Stage C section, #228) so a
     concurrent driver can run the fetch on an I/O-bound thread and the compute on a CPU-bound
-    process, without this function's own single-caller behavior changing at all - every existing
-    caller of `extract_card_evidence` (this pilot's tests, any future direct caller) still gets
-    the exact same fetch-then-compute behavior in one call.
+    process. That split is the reason this wrapper has no production caller: the drivers took the
+    two halves and left the bundle behind. It is kept because ~95 tests exercise the extractors
+    end-to-end through it, and a compute-only equivalent would have to re-stub the fetch at every
+    one of those call sites for no gain.
 
     `profile`, if given, is forwarded straight through to `compute_card_evidence` below and
     populated (in place) there with a `time.monotonic()`-delta timing breakdown - `fetch_ms`,
@@ -725,9 +746,9 @@ def extract_card_evidence(
         md5_checksum=card.md5_checksum,
         sha256_checksum=card.sha256_checksum,
     )
-    vote = cast_border_attribute_vote(card, result.fields.get("layout_class") or None, confidence=0.5)
-    if vote is not None:
-        vote.save()
+    # NO VOTE CAST HERE - see this function's own docstring. A `cast_border_attribute_vote(...)
+    # .save()` used to sit on this line, unreachable in production because nothing calls this
+    # function; removed 2026-07-30.
     return result
 
 
@@ -746,7 +767,7 @@ def compute_card_evidence(
     sha256_checksum: Optional[str] = None,
 ) -> ExtractionResult:
     """
-    Compute-only continuation of `extract_card_evidence` above - everything that function does
+    Compute-only continuation of `fetch_and_compute_card_evidence_for_tests` above - everything that function does
     AFTER its own fetch step, against an already-fetched `image` (a `PIL.Image.Image`, or `None`
     for a failed/skipped fetch) and a `fetch_latency_ms` the caller already measured. Takes a
     plain `card_id`/`content_hash` pair rather than a `Card` instance deliberately: this is the
@@ -762,10 +783,10 @@ def compute_card_evidence(
     the hardware's network-vs-compute core allocation).
 
     `profile` (2026-07-20, docs/reports/2026-07-20-fetch-compute-timing-diagnostic.md): see
-    `extract_card_evidence`'s own docstring for the full field breakdown. `fetch_ms` is set here
+    `fetch_and_compute_card_evidence_for_tests`'s own docstring for the full field breakdown. `fetch_ms` is set here
     directly from the caller-supplied `fetch_latency_ms` (this function never measures its own
     fetch) - so the resulting profile shape is identical regardless of whether the caller is
-    `extract_card_evidence` (bundled fetch+compute, one process/call) or the decoupled compute
+    `fetch_and_compute_card_evidence_for_tests` (bundled fetch+compute, one process/call) or the decoupled compute
     stage calling this directly with a `fetch_latency_ms` its own separate fetch stage already
     measured.
 
@@ -895,7 +916,7 @@ def compute_card_evidence(
          (79.0% of canonical names have exactly one, 93.1% at most two), used to narrow an
          otherwise-ambiguous reading. Passed in as a resolved tuple rather than a callable so this
          function keeps issuing no DB query of its own and stays picklable for the
-         `ProcessPoolExecutor` compute stage; `extract_card_evidence`/`stage_e_dispatch` resolve it
+         `ProcessPoolExecutor` compute stage; `fetch_and_compute_card_evidence_for_tests`/`stage_e_dispatch` resolve it
          from `collector_line_artist.build_name_artist_lookup()`, whose name resolution is
          `local_identify_printing_tags.CandidateNameIndex.candidates_for` - the codebase's existing
          normaliser, not a new one. Empty (the default) means no narrowing.
@@ -1413,7 +1434,7 @@ def current_evidence_queryset(card: Card) -> "QuerySet[ImageEvidence]":
 def persist_evidence(result: ExtractionResult, run_id: Optional[str] = None) -> Optional[ImageEvidence]:
     """
     The thin, separate DB-write step (see module docstring for why this is split from
-    `extract_card_evidence`). Refuses to write if `content_hash` is None. Uses
+    `fetch_and_compute_card_evidence_for_tests`). Refuses to write if `content_hash` is None. Uses
     `get_or_create` + field merge (not a blind create) so a re-run against the SAME (card,
     content_hash) pair updates in place rather than erroring on the unique constraint - this is
     what makes independently-landing extractor PRs additive: each one's own pass only ever
@@ -1525,7 +1546,7 @@ __all__ = [
     "EXTRACTOR_AMBIGUOUS_SKIP_REASON",
     "EXTRACTOR_NO_TEXT_SKIP_REASON",
     "ExtractionResult",
-    "extract_card_evidence",
+    "fetch_and_compute_card_evidence_for_tests",
     "compute_card_evidence",
     "current_evidence_queryset",
     "persist_evidence",

@@ -11,7 +11,7 @@ fast/dependency-light; the real classifier function itself is never mocked, only
 
 layout_class (issue #148) calls `local_fallback.classify_border_color`, which DOES need a real
 image (`.crop()`/`.convert()`/`.getdata()`) - every existing test that feeds a `_StubImage`
-through `extract_card_evidence` now also monkeypatches `classify_border_color` itself (not just
+through `fetch_and_compute_card_evidence_for_tests` now also monkeypatches `classify_border_color` itself (not just
 its input) so those tests keep exercising only what they're actually about (fetch_health/
 geometry_bleed) without needing a real PIL image. `TestExtractCardEvidenceLayoutClass` below is
 the one test class that uses real `PIL.Image` objects, mirroring `test_local_fallback.py`'s own
@@ -25,7 +25,7 @@ patch - it's exercised directly against `_StubImage`/`_TRIMMED_IMAGE` like geome
 collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group) call `image.crop`
 directly on the fetched image (consuming `collector_line_crop_px`/`artist_crop_px`, already
 computed by crop_coordinates above - see image_evidence.py's module docstring) - every existing
-test that feeds a `_StubImage` through `extract_card_evidence` now also stubs the OCR-group's own
+test that feeds a `_StubImage` through `fetch_and_compute_card_evidence_for_tests` now also stubs the OCR-group's own
 crop/tesseract entry points via `_stub_ocr` below (mirroring `_stub_border_color`'s identical
 rationale: `_StubImage` has no `.crop()`/`.convert()` a real PIL image needs).
 `TestExtractCardEvidenceCollectorLineOcr`/`ArtistOcr`/`CollectorLineTsv` below use real PIL images
@@ -34,7 +34,7 @@ tesseract is installed in CI and real OCR tests are expected to run, not be skip
 
 symbol_region (issue #160, "Part 4b: symbol harness") also calls `image.crop(...).convert("L")`
 directly (via `_compute_region_phash`) - every existing test that feeds a `_StubImage` through
-`extract_card_evidence` now also stubs `_compute_region_phash` itself via `_stub_symbol_region`
+`fetch_and_compute_card_evidence_for_tests` now also stubs `_compute_region_phash` itself via `_stub_symbol_region`
 below (same rationale as `_stub_border_color`/`_stub_ocr`). `TestExtractCardEvidenceSymbolRegion`
 below uses real PIL images throughout (mirrors `TestExtractCardEvidenceLayoutClass`'s own style),
 since it's actually testing `_compute_region_phash`'s real output.
@@ -42,7 +42,7 @@ since it's actually testing `_compute_region_phash`'s real output.
 artbox_phash (public issue #480, "Artbox perceptual-hash extractor: evidence-only, rides the
 next whole-catalog pass" - EVIDENCE ONLY, every consumer explicitly out of scope) reuses the same
 `_compute_region_phash` helper `symbol_region` does - every existing test that feeds a
-`_StubImage` through `extract_card_evidence` and already stubs `_compute_region_phash` via
+`_StubImage` through `fetch_and_compute_card_evidence_for_tests` and already stubs `_compute_region_phash` via
 `_stub_symbol_region` (this extractor's own call is covered for free, same shared-function
 rationale). Unlike `symbol_region`, this extractor's CROP BOX SELECTION itself depends on real
 (never stubbed) `classify_frame_style` output, which in turn depends on the OCR-group's own
@@ -68,7 +68,7 @@ throughout, same rationale as the other OCR-group test classes.
 quality_signals (public issue #150's re-spec, the LAST Stage C manifest extractor
 group) calls `local_image_quality.is_image_truncated`/`compute_blur_variance`/`compute_entropy`
 directly on the fetched image - every existing test that feeds a
-`_StubImage` with a non-degenerate width/height through `extract_card_evidence` now also stubs
+`_StubImage` with a non-degenerate width/height through `fetch_and_compute_card_evidence_for_tests` now also stubs
 these via `_stub_quality_signals` below (same rationale as
 `_stub_border_color`/`_stub_ocr`/`_stub_symbol_region`). `TestExtractCardEvidenceQualitySignals`
 below uses real PIL images throughout (mirrors `TestExtractCardEvidenceLayoutClass`/
@@ -100,7 +100,7 @@ from cardpicker.image_evidence import (
     SYMBOL_REGION_EXTRACTOR_VERSION,
     ExtractionResult,
     build_reconciliation_report,
-    extract_card_evidence,
+    fetch_and_compute_card_evidence_for_tests,
     persist_evidence,
 )
 from cardpicker.local_fallback import (
@@ -136,7 +136,7 @@ _AMBIGUOUS_IMAGE = _StubImage(size=(1000, 1000))  # square - far from both known
 
 def _stub_border_color(monkeypatch, value=None):
     """`_StubImage` has no `.crop()`/`.convert()`/`.getdata()`, so any test feeding one through
-    `extract_card_evidence` must stub out `classify_border_color` itself (not just its image
+    `fetch_and_compute_card_evidence_for_tests` must stub out `classify_border_color` itself (not just its image
     input) - it's a different function than `classify_bleed_edge`, which only ever reads
     `.size`. `value` defaults to None (ambiguous) but tests that don't care about layout_class's
     own outcome pass a fixed non-None value to keep skip_reasons/extractor_versions assertions
@@ -146,7 +146,7 @@ def _stub_border_color(monkeypatch, value=None):
 
 def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
     """`_StubImage.crop()` returns a fake crop with no real pixel data - any test feeding one
-    through `extract_card_evidence` must stub the OCR-group's own crop/tesseract entry points
+    through `fetch_and_compute_card_evidence_for_tests` must stub the OCR-group's own crop/tesseract entry points
     (same rationale as `_stub_border_color` above). `preprocess_variants`/
     `run_tesseract_text_and_words` are stubbed unconditionally (they need a real image);
     `run_tesseract`/`run_tesseract_text_and_words` return a caller-supplied raw string so the REAL
@@ -185,7 +185,7 @@ def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
 
 def _stub_symbol_region(monkeypatch, value: int = 123456789):
     """`_StubImage` has no `.crop()`/`.convert()` a real PIL image needs, so any test feeding one
-    through `extract_card_evidence` must stub `_compute_region_phash` itself (same rationale as
+    through `fetch_and_compute_card_evidence_for_tests` must stub `_compute_region_phash` itself (same rationale as
     `_stub_border_color`/`_stub_ocr` above) - `symbol_crop_px` itself is still computed for real
     (it only needs width/height/bleed_class, same as crop_coordinates), only the phash of the
     (fake) cropped region is stubbed out."""
@@ -194,7 +194,7 @@ def _stub_symbol_region(monkeypatch, value: int = 123456789):
 
 def _stub_quality_signals(monkeypatch, truncated: bool = False, blur: float = 42.0, entropy: float = 5.0):
     """`_StubImage` has no `.load()`/`.convert()` a real PIL image needs, so any test feeding one
-    through `extract_card_evidence` (and whose image has a non-degenerate width/height, so the
+    through `fetch_and_compute_card_evidence_for_tests` (and whose image has a non-degenerate width/height, so the
     `quality_signals` extractor's own guard doesn't already skip it - see
     `image_evidence.py`'s module docstring) must stub `is_image_truncated`/`compute_blur_variance`/
     `compute_entropy` themselves (same rationale as `_stub_border_color`/`_stub_ocr`/
@@ -234,7 +234,7 @@ class TestExtractCardEvidence:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.card_id == card.pk
         assert result.content_hash == 12345
@@ -273,7 +273,7 @@ class TestExtractCardEvidence:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["md5_checksum"] == "abc123"
         assert result.fields["sha256_checksum"] is None  # Card.sha256_checksum doesn't exist yet
@@ -282,7 +282,7 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["fetch_ok"] is False
         assert result.fields["fetch_error_class"] == "fetch_failed"
@@ -331,7 +331,7 @@ class TestExtractCardEvidence:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.content_hash is None
 
@@ -344,7 +344,7 @@ class TestExtractCardEvidence:
         monkeypatch.setattr(module, "fetch_card_image", _raise_lockout)
 
         with pytest.raises(GoogleFetchLockoutError):
-            extract_card_evidence(card)
+            fetch_and_compute_card_evidence_for_tests(card)
 
     def test_no_db_writes_happen(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
@@ -354,7 +354,7 @@ class TestExtractCardEvidence:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        extract_card_evidence(card)
+        fetch_and_compute_card_evidence_for_tests(card)
 
         assert ImageEvidence.objects.count() == 0
         assert CardScanLog.objects.count() == 0
@@ -371,7 +371,7 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         width, height = _BLEED_IMAGE.size
         assert result.fields["width"] == width
@@ -388,7 +388,7 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["bleed_class"] == "trimmed"
         assert "geometry_bleed" not in result.skip_reasons
@@ -401,7 +401,7 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         # bleed_class stores "" (not null) for the ambiguous case, matching fetch_error_class's
         # own blank-string-as-sentinel convention (see ImageEvidence's docstring).
@@ -419,7 +419,7 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["aspect_ratio"] is None
         assert result.skip_reasons["geometry_bleed"] == "ambiguous"
@@ -452,7 +452,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "width" not in result.fields
         assert "height" not in result.fields
@@ -522,7 +522,7 @@ class TestExtractCardEvidenceLayoutClass:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: self._bordered_image((5, 5, 5)))
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["bleed_class"] == "bleed"
         assert result.fields["layout_class"] == "black"
@@ -532,7 +532,7 @@ class TestExtractCardEvidenceLayoutClass:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: self._bordered_image((250, 250, 250)))
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["layout_class"] == "white"
 
@@ -542,7 +542,7 @@ class TestExtractCardEvidenceLayoutClass:
         # docstring.
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: self._bordered_image((180, 140, 40)))
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["layout_class"] == ""
         assert result.skip_reasons["layout_class"] == "ambiguous"
@@ -551,7 +551,7 @@ class TestExtractCardEvidenceLayoutClass:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "layout_class" not in result.fields
         assert result.skip_reasons["layout_class"] == "fetch_failed"
@@ -590,7 +590,7 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         left, top, right, bottom = DEFAULT_CROP_BOX
         assert result.fields["collector_line_crop_px"] == [
@@ -608,7 +608,7 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         width, height = _TRIMMED_IMAGE.size
         left, top, right, bottom = normalize_crop_box(ARTIST_CROP_BOX, "trimmed")
@@ -627,7 +627,7 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         width, height = _BLEED_IMAGE.size
         for field_name, box in (
@@ -647,7 +647,7 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "collector_line_crop_px" not in result.fields
         assert "artist_crop_px" not in result.fields
@@ -718,7 +718,7 @@ class TestExtractCardEvidenceSymbolRegion:
         image = self._image_with_symbol_strip(1000, 1000)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         left, top, right, bottom = SYMBOL_STRIP_BOX  # 'ambiguous' bleed_class is a no-op remap
         assert result.fields["symbol_crop_px"] == [
@@ -734,7 +734,7 @@ class TestExtractCardEvidenceSymbolRegion:
         image = self._image_with_symbol_strip(1000, 1000)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert isinstance(result.fields["symbol_phash"], int)
         # a signed 64-bit int (twos_complement's own output range) - not asserting an exact value,
@@ -751,9 +751,9 @@ class TestExtractCardEvidenceSymbolRegion:
         marked_image = self._image_with_symbol_strip(1000, 1000)
 
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: blank_image)
-        blank_result = extract_card_evidence(card)
+        blank_result = fetch_and_compute_card_evidence_for_tests(card)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: marked_image)
-        marked_result = extract_card_evidence(card)
+        marked_result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert blank_result.fields["symbol_phash"] != marked_result.fields["symbol_phash"]
 
@@ -766,7 +766,7 @@ class TestExtractCardEvidenceSymbolRegion:
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "symbol_crop_px" not in result.fields
         assert "symbol_phash" not in result.fields
@@ -776,7 +776,7 @@ class TestExtractCardEvidenceSymbolRegion:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "symbol_crop_px" not in result.fields
         assert "symbol_phash" not in result.fields
@@ -813,7 +813,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["artbox_frame_class"] == "modern"
         width, height = _BLEED_IMAGE.size
@@ -837,7 +837,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["collector_line_collector_number"] == ""
         assert result.fields["illus_anchor_fired"] is True
@@ -863,7 +863,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["artbox_frame_class"] == ""
         assert "artbox_crop_px" not in result.fields
@@ -878,7 +878,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         width, height = _TRIMMED_IMAGE.size
         left, top, right, bottom = normalize_crop_box(ARTBOX_MODERN_CROP_BOX, "trimmed")
@@ -898,7 +898,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_border_color(monkeypatch)
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "artbox_crop_px" not in result.fields
         assert "artbox_phash" not in result.fields
@@ -908,7 +908,7 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "artbox_frame_class" not in result.fields
         assert "artbox_crop_px" not in result.fields
@@ -943,8 +943,8 @@ class TestExtractCardEvidenceArtboxPhash:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
 
-        first = extract_card_evidence(card)
-        second = extract_card_evidence(card)
+        first = fetch_and_compute_card_evidence_for_tests(card)
+        second = fetch_and_compute_card_evidence_for_tests(card)
 
         assert isinstance(first.fields["artbox_phash"], int)
         # a signed 64-bit int (twos_complement's own output range) - not asserting an exact
@@ -963,10 +963,10 @@ class TestExtractCardEvidenceArtboxPhash:
 
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: blank_image)
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
-        blank_result = extract_card_evidence(card)
+        blank_result = fetch_and_compute_card_evidence_for_tests(card)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: marked_image)
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
-        marked_result = extract_card_evidence(card)
+        marked_result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert blank_result.fields["artbox_phash"] != marked_result.fields["artbox_phash"]
 
@@ -1000,7 +1000,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
         image = _build_card_image([(DEFAULT_CROP_BOX, "158/287 R MOM EN")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["collector_line_set_code"] == "mom"
         assert result.fields["collector_line_collector_number"] == "158"
@@ -1012,7 +1012,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
         image = _build_card_image([(DEFAULT_CROP_BOX, "")])  # a blank crop, no text at all
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["collector_line_set_code"] == ""
         assert result.fields["collector_line_collector_number"] == ""
@@ -1046,7 +1046,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", counting)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
         assert len(configs_used) == 8  # blank tier-1 no longer qualifies - every tier tried
@@ -1074,7 +1074,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
         assert len(calls) == 2  # tier 1 only - confidently digit-free, still short-circuits
@@ -1099,7 +1099,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", counting)
 
-        result = extract_card_evidence(card, short_circuit=False)
+        result = fetch_and_compute_card_evidence_for_tests(card, short_circuit=False)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
         assert len(configs_used) == 8
@@ -1132,7 +1132,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
         assert len(calls) == 8  # every tier tried - digit-bearing tier-1 text never short-circuits
@@ -1161,7 +1161,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
         assert len(calls) == 8  # escalated past tier 1 despite attempt 1 alone being digit-free
@@ -1182,7 +1182,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
 
         monkeypatch.setattr(module, "preprocess_fallback_variants", _boom)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["collector_line_collector_number"] == "158"
         assert "collector_line_ocr" not in result.skip_reasons
@@ -1191,7 +1191,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "collector_line_raw_text" not in result.fields
         assert "collector_line_set_code" not in result.fields
@@ -1245,7 +1245,7 @@ class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}))
+        result = fetch_and_compute_card_evidence_for_tests(card, known_set_codes=frozenset({"mom"}))
 
         assert result.fields["collector_line_set_code"] == "mom"
         assert result.fields["collector_line_collector_number"] == "158"
@@ -1270,7 +1270,9 @@ class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}), short_circuit=False)
+        result = fetch_and_compute_card_evidence_for_tests(
+            card, known_set_codes=frozenset({"mom"}), short_circuit=False
+        )
 
         assert result.fields["collector_line_set_code"] == "fak"
         assert result.fields["collector_line_collector_number"] == "158"
@@ -1293,7 +1295,7 @@ class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card)  # known_set_codes not passed - defaults to None
+        result = fetch_and_compute_card_evidence_for_tests(card)  # known_set_codes not passed - defaults to None
 
         assert result.fields["collector_line_set_code"] == "fak"
         assert result.fields["collector_line_collector_number"] == "158"
@@ -1314,7 +1316,7 @@ class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
 
         monkeypatch.setattr(module, "preprocess_fallback_variants", _boom)
 
-        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}))
+        result = fetch_and_compute_card_evidence_for_tests(card, known_set_codes=frozenset({"mom"}))
 
         assert result.fields["collector_line_set_code"] == "mom"
         assert result.fields["collector_line_collector_number"] == "158"
@@ -1336,7 +1338,7 @@ class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card, known_set_codes=frozenset())  # empty lexicon
+        result = fetch_and_compute_card_evidence_for_tests(card, known_set_codes=frozenset())  # empty lexicon
 
         assert result.fields["collector_line_set_code"] == ""
         assert result.fields["collector_line_collector_number"] == "158"
@@ -1361,7 +1363,7 @@ class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}))
+        result = fetch_and_compute_card_evidence_for_tests(card, known_set_codes=frozenset({"mom"}))
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
         assert len(calls) == 2  # tier 1 only - short-circuit fires exactly as without the gate
@@ -1423,7 +1425,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             known_set_codes=frozenset({"mom"}),
             artist_lexicon=self.LEXICON,
@@ -1458,7 +1460,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(card, known_set_codes=frozenset({"mom"}))
+        result = fetch_and_compute_card_evidence_for_tests(card, known_set_codes=frozenset({"mom"}))
 
         assert result.fields["collector_line_collector_number"] == "158"
         assert len(calls) == 1
@@ -1480,7 +1482,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             known_set_codes=frozenset({"mom"}),
             artist_lexicon=self.LEXICON,
@@ -1504,7 +1506,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
         texts = iter(["777/281R\nFAK ¢ EN LINDSEY L"] * 2 + ["158/281R\nMOM ¢ EN LINDSEY L"] * 6)
         monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda image_arg, config: (next(texts), []))
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             known_set_codes=frozenset({"mom"}),
             artist_lexicon=self.LEXICON,
@@ -1530,7 +1532,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             known_set_codes=frozenset({"mom"}),
             artist_lexicon=self.LEXICON,
@@ -1555,7 +1557,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             known_set_codes=frozenset({"mom"}),
             artist_lexicon=self.LEXICON,
@@ -1578,7 +1580,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
             module, "run_tesseract_text_and_words", lambda image_arg, config: ("159/281R\nMOM ¢ EN LINDSEY L", [])
         )
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             known_set_codes=frozenset({"mom"}),
             artist_lexicon=self.LEXICON,
@@ -1600,7 +1602,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
             lambda image_arg, config: ("159/281R\nMOM ¢ EN LINDSEY L\nIllus. Ron Spears", []),
         )
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             known_set_codes=frozenset({"mom"}),
             artist_lexicon=self.LEXICON,
@@ -1629,7 +1631,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
 
         monkeypatch.setattr(module, "run_tesseract_text_and_words", _stub)
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             known_set_codes=frozenset({"mom"}),
             artist_lexicon=ambiguous_lexicon,
@@ -1675,7 +1677,9 @@ class TestExtractCardEvidenceWidenedArtistRead:
         )
         monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "059/274R\nDMR ¢ EN RON SPEARS")
 
-        result = extract_card_evidence(card, artist_lexicon=self.LEXICON, printing_artist_lookup=self._lookup)
+        result = fetch_and_compute_card_evidence_for_tests(
+            card, artist_lexicon=self.LEXICON, printing_artist_lookup=self._lookup
+        )
 
         assert result.fields["artist_ocr_name"] == "Ron Spears"
         assert result.fields["illus_anchor_fired"] is False  # the anchor genuinely never fired
@@ -1692,14 +1696,16 @@ class TestExtractCardEvidenceWidenedArtistRead:
         )
         monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "")
 
-        result = extract_card_evidence(card, artist_lexicon=self.LEXICON, printing_artist_lookup=self._lookup)
+        result = fetch_and_compute_card_evidence_for_tests(
+            card, artist_lexicon=self.LEXICON, printing_artist_lookup=self._lookup
+        )
 
         assert result.fields["artist_ocr_name"] == ""
 
     def test_card_name_narrowing_makes_an_otherwise_ambiguous_read_storable(self, db, monkeypatch):
         """The second lever, on the same ambiguous `RON SPEA` read and with NO legal line at all:
         scoped to the artists who illustrated a printing of this card's own name, the reading is
-        decisive. `name_artist_lookup` is resolved by `extract_card_evidence` against `card.name`
+        decisive. `name_artist_lookup` is resolved by `fetch_and_compute_card_evidence_for_tests` against `card.name`
         (a plain callable here - its real `CandidateNameIndex` backing is covered in
         `test_collector_line_artist.py`)."""
         card = CardFactory(name="Mystic Remora", content_phash=1)
@@ -1716,7 +1722,7 @@ class TestExtractCardEvidenceWidenedArtistRead:
             seen.append(name)
             return ("Ron Spears",)
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             artist_lexicon=self.LEXICON,
             printing_artist_lookup=self._lookup,
@@ -1738,7 +1744,7 @@ class TestExtractCardEvidenceWidenedArtistRead:
         )
         monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "")
 
-        result = extract_card_evidence(
+        result = fetch_and_compute_card_evidence_for_tests(
             card,
             artist_lexicon=self.LEXICON,
             printing_artist_lookup=self._lookup,
@@ -1760,7 +1766,7 @@ class TestExtractCardEvidenceWidenedArtistRead:
             module, "run_tesseract", lambda variant, **kwargs: "\u00a9 2022 Wizards of the Coast NOT FOR SALE"
         )
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["legal_line_raw_text"] == "\u00a9 2022 Wizards of the Coast NOT FOR SALE"
         assert result.fields["legal_line_copyright_year"] == "2022"
@@ -1777,7 +1783,7 @@ class TestExtractCardEvidenceWidenedArtistRead:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.skip_reasons["legal_line"] == "fetch_failed"
         assert "legal_line_raw_text" not in result.fields
@@ -1842,7 +1848,7 @@ class TestExtractCardEvidenceArtistOcr:
 
         monkeypatch.setattr(module, "preprocess_variants", counting_preprocess)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["artist_ocr_name"] == "Jane Doe"
         assert result.fields["illus_anchor_fired"] is True
@@ -1859,7 +1865,7 @@ class TestExtractCardEvidenceArtistOcr:
         image = _build_card_image([((0.0, 0.83, 1.0, 0.88), "Illus. John Smith")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["artist_ocr_name"] == "John Smith"
         assert result.fields["illus_anchor_fired"] is True
@@ -1870,7 +1876,7 @@ class TestExtractCardEvidenceArtistOcr:
         image = _build_card_image([(DEFAULT_CROP_BOX, "158/287 R MOM EN")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["artist_ocr_name"] == ""
         assert result.fields["illus_anchor_fired"] is False
@@ -1880,7 +1886,7 @@ class TestExtractCardEvidenceArtistOcr:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "artist_ocr_raw_text" not in result.fields
         assert "artist_ocr_name" not in result.fields
@@ -1917,7 +1923,7 @@ class TestExtractCardEvidenceCollectorLineTsv:
         image = _build_card_image([(DEFAULT_CROP_BOX, "158/287 R MOM EN")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         word_boxes = result.fields["collector_line_word_boxes"]
         assert isinstance(word_boxes, list)
@@ -1931,7 +1937,7 @@ class TestExtractCardEvidenceCollectorLineTsv:
         image = _build_card_image([(DEFAULT_CROP_BOX, "")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["collector_line_word_boxes"] == []
         # collector_line_tsv "ran to completion" regardless - no skip for an honestly-empty read.
@@ -1941,7 +1947,7 @@ class TestExtractCardEvidenceCollectorLineTsv:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "collector_line_word_boxes" not in result.fields
         assert result.skip_reasons["collector_line_tsv"] == "fetch_failed"
@@ -1976,7 +1982,7 @@ class TestExtractCardEvidenceLegalLine:
         image = _build_card_image([(LEGAL_LINE_CROP_BOX, "TM and (c) 2019 Wizards of the Coast")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["legal_line_copyright_year"] == "2019"
         assert result.fields["legal_line_proxy_marker_detected"] is False
@@ -1990,7 +1996,7 @@ class TestExtractCardEvidenceLegalLine:
         image = _build_card_image([(LEGAL_LINE_CROP_BOX, "MTG EN NOT FOR SALE (c) 2022")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["legal_line_proxy_marker_detected"] is True
         assert result.fields["legal_line_copyright_year"] == "2022"
@@ -2001,7 +2007,7 @@ class TestExtractCardEvidenceLegalLine:
         image = _build_card_image([(LEGAL_LINE_CROP_BOX, "")])  # a blank crop, no text at all
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["legal_line_copyright_year"] == ""
         assert result.fields["legal_line_proxy_marker_detected"] is False
@@ -2011,7 +2017,7 @@ class TestExtractCardEvidenceLegalLine:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "legal_line_crop_px" not in result.fields
         assert "legal_line_raw_text" not in result.fields
@@ -2064,7 +2070,7 @@ class TestExtractCardEvidenceQualitySignals:
         image = self._real_card_image()
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["image_is_truncated"] is False
         assert isinstance(result.fields["blur_variance"], float)
@@ -2074,12 +2080,12 @@ class TestExtractCardEvidenceQualitySignals:
 
     def test_truncated_image_records_flag_and_withholds_blur_entropy(self, db, monkeypatch):
         # is_image_truncated's own REAL behavior against a genuinely truncated JPEG is proven in
-        # test_local_image_quality.py, in isolation - going through the full extract_card_evidence
+        # test_local_image_quality.py, in isolation - going through the full fetch_and_compute_card_evidence_for_tests
         # pipeline with a real truncated file here would also trip up EARLIER real-pixel-reading
         # extractors (layout_class/collector_line_ocr/legal_line, all upstream of quality_signals
         # in extraction order), which is a pre-existing, out-of-scope gap in those extractors, not
         # something this PR's own tests should paper over by picking a truncation point that
-        # happens to dodge it. This test instead proves extract_card_evidence's own WIRING - that a
+        # happens to dodge it. This test instead proves fetch_and_compute_card_evidence_for_tests's own WIRING - that a
         # True `is_image_truncated` result is recorded and blur/entropy are correctly withheld -
         # the same "stub the function being tested elsewhere, prove the wiring here" split
         # TestExtractCardEvidenceSymbolRegion's own degenerate-box test already uses.
@@ -2088,7 +2094,7 @@ class TestExtractCardEvidenceQualitySignals:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
         monkeypatch.setattr(module, "is_image_truncated", lambda image: True)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["image_is_truncated"] is True
         assert "blur_variance" not in result.fields
@@ -2101,7 +2107,7 @@ class TestExtractCardEvidenceQualitySignals:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        result = extract_card_evidence(card)
+        result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert "image_is_truncated" not in result.fields
         assert "blur_variance" not in result.fields
@@ -2125,8 +2131,32 @@ class TestExtractCardEvidenceQualitySignals:
         assert evidence.image_entropy == pytest.approx(6.7)
 
 
-class TestExtractCardEvidenceBorderColorVote:
-    def test_classified_border_casts_one_vote_per_card(self, db, monkeypatch):
+class TestTheTestOnlyWrapperCastsNoVoteAtAll:
+    """
+    THIS CLASS INVERTED ON 2026-07-30, deliberately, and the inversion is the finding.
+
+    It used to assert that `extract_card_evidence` cast one border `CardTagVote` per card - a real
+    machine vote, from a function with ZERO production callers. Both engines
+    (`run_image_evidence_cohort`, `stage_e_dispatch._run_stage_c`) call `fetch_card_image` and
+    `compute_card_evidence` + `persist_evidence` themselves, and have done since the 2026-07-20
+    fetch/compute decoupling - so `test_classified_border_casts_one_vote_per_card` was a green test
+    over a channel that had not existed for four months. That is how the 2026-07-29 composition
+    audit came to find border/frame/bleed chips at zero rows: a vote cast in an uncalled function
+    looks like a wired channel to any grep, and a passing test looks like proof it works.
+
+    The chips are now cast by `local_attribute_chip_cast` and `local_layout_class_cast`, both
+    reading stored `ImageEvidence` with no fetch and both wired into
+    `stage_e_dispatch._run_stage_d`. `test_local_attribute_chip_cast.py` is where the real chip
+    assertions live now. What is left here is the guard against re-adding a write to this wrapper.
+
+    Each case stubs a DIFFERENT border outcome, so this cannot pass merely because the classifier
+    abstained: `test_a_confidently_classified_border_still_casts_nothing` is the one that would go
+    green under the deleted code, and it is the one that must stay red against it.
+    """
+
+    def test_a_confidently_classified_border_still_casts_nothing(self, db, monkeypatch):
+        """THE MUTATION TARGET. A confident `black` reading is exactly the input the deleted
+        `cast_border_attribute_vote(...).save()` acted on."""
         TagFactory(name="Black Border")
         cards = [CardFactory(content_phash=i + 1) for i in range(3)]
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
@@ -2136,11 +2166,11 @@ class TestExtractCardEvidenceBorderColorVote:
         _stub_quality_signals(monkeypatch)
 
         for card in cards:
-            extract_card_evidence(card)
+            fetch_and_compute_card_evidence_for_tests(card)
 
-        assert CardTagVote.objects.count() == len(cards)
+        assert CardTagVote.objects.count() == 0
 
-    def test_ambiguous_border_casts_no_vote(self, db, monkeypatch):
+    def test_an_ambiguous_border_casts_nothing(self, db, monkeypatch):
         TagFactory(name="Black Border")
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
@@ -2149,16 +2179,16 @@ class TestExtractCardEvidenceBorderColorVote:
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
 
-        extract_card_evidence(card)
+        fetch_and_compute_card_evidence_for_tests(card)
 
         assert CardTagVote.objects.count() == 0
 
-    def test_fetch_failure_casts_no_vote(self, db, monkeypatch):
+    def test_a_fetch_failure_casts_nothing(self, db, monkeypatch):
         TagFactory(name="Black Border")
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
 
-        extract_card_evidence(card)
+        fetch_and_compute_card_evidence_for_tests(card)
 
         assert CardTagVote.objects.count() == 0
 

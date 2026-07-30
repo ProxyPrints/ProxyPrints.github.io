@@ -294,6 +294,22 @@ Every value here was already a declared constant before the sweep.
 | `ambiguous`             | `LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON`           | The verdict produced no layout class at all.                                          | Live (~1.5k rows) |
 | `unmapped-layout-class` | `LAYOUT_CLASS_UNMAPPED_SKIP_REASON`            | A layout class WAS read, but it has no tag mapped to it, so there is no vote to cast. | Live, no rows yet |
 
+## Attribute-chip caster — `MPCAutofill/cardpicker/local_attribute_chip_cast.py`
+
+Two `anonymous_id`s, both writing from one pass and sharing this
+vocabulary: `frame-style-cast-v1` (`FRAME_STYLE_CAST_ANONYMOUS_ID`, Old
+Border / Modern Border) and `bleed-edge-cast-v1`
+(`BLEED_EDGE_CAST_ANONYMOUS_ID`, appropriate-bleed). New 2026-07-30 —
+before it, both chip families had no evidence-reading caster at all and
+sat at zero rows.
+
+| Reason                 | Constant                               | Means                                                                                                                                                                                                         | Status            |
+| ---------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `no-evidence`          | `CHIP_NO_EVIDENCE_SKIP_REASON`         | No current `ImageEvidence` row. **Rescannable**.                                                                                                                                                              | Live, no rows yet |
+| `incomplete-evidence`  | `CHIP_INCOMPLETE_EVIDENCE_SKIP_REASON` | The chip family's own required extractor key is absent. **Rescannable**. Load-bearing on the frame side, not defensive: without it a missing `artist_ocr` reads `illus_anchor_fired` as a real `False`.       | Live, no rows yet |
+| `ambiguous`            | `CHIP_ABSTAINED_SKIP_REASON`           | Frame: neither signal fired. Bleed: the reading was not `trimmed` — which includes the ordinary ~97.5% `bleed` case, since this chip is negative-only and absence of a vote IS the "normal bleed" convention. | Live, no rows yet |
+| `unmapped-frame-class` | `CHIP_UNMAPPED_SKIP_REASON`            | A frame class WAS read but has no tag mapped to it. Unreachable against the current closed taxonomy; exercised in tests only.                                                                                 | Live, no rows yet |
+
 ## Evidence transfer — `MPCAutofill/cardpicker/evidence_transfer.py`
 
 `anonymous_id` is `evidence-transfer-v1` (`EVIDENCE_TRANSFER_ANONYMOUS_ID`).

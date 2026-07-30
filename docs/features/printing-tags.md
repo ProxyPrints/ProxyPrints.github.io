@@ -2526,6 +2526,54 @@ Confidence unchanged (0.7). No new tag seeded - the existing-tag check
 (`Tag.objects.filter(name=...).first()`, degrades to no vote if absent)
 was already in place before this change.
 
+### Who actually casts the attribute chips (2026-07-30)
+
+**This replaces the pilot as the answer.** All three chip families —
+border colour, frame style, bleed edge — are cast by **evidence-reading
+casters that fetch no images**, and both modules are wired into the
+streaming conveyor (`stage_e_dispatch._run_stage_d`):
+
+| chip family                           | module                      | identity               |
+| ------------------------------------- | --------------------------- | ---------------------- |
+| Black/White/Silver Border, Borderless | `local_layout_class_cast`   | `layout-class-cast-v1` |
+| Old Border, Modern Border             | `local_attribute_chip_cast` | `frame-style-cast-v1`  |
+| appropriate-bleed                     | `local_attribute_chip_cast` | `bleed-edge-cast-v1`   |
+
+Each also has a standalone `--write`-gated management command of the same
+name. Frame style and bleed edge get **separate identities** because the
+bleed chip is negative-only: under one shared identity a card's frame vote
+would read as "handled" and permanently strand its bleed chip.
+
+**Why this exists.** `local_fallback`'s three `cast_*_vote` functions were
+reachable only from `local_identify_printing_tags.run_pilot` (which
+FETCHES every image, and has one completed run in its history) and from
+`image_evidence.extract_card_evidence`, which had **zero production
+callers** — both engines call `compute_card_evidence`/`persist_evidence`
+directly. So neither engine could cast any chip. After the 2026-07-29
+purge, `Old Border`, `Modern Border` and `appropriate-bleed` sat at zero
+machine rows with nothing able to re-derive them; border colour survived
+only because `local_layout_class_cast` independently computes the same
+thing. `extract_card_evidence` is now
+`fetch_and_compute_card_evidence_for_tests`, named for what it is, and
+casts nothing. The pilot's own casters are unchanged and still fire on a
+pilot run; they are simply no longer the only path.
+
+**Zero image fetches, and that is the point.** Every input is already
+stored on `ImageEvidence`: `classify_frame_style` reads
+`collector_line_collector_number` and `illus_anchor_fired`; the bleed chip
+reads `bleed_class`. Re-deriving these through the pilot would have meant
+re-fetching ~220,000 images to recompute facts already in the database.
+Derivable populations, measured read-only 2026-07-29: `Modern Border`
+133,627, `Old Border` 9,006, `appropriate-bleed` 2,786.
+
+**The frame chip gates on `artist_ocr`, not only on `collector_line_ocr`.**
+`illus_anchor_fired` is nullable and `bool(None)` is `False`, which is
+indistinguishable from "the extractor ran and found no anchor" — so
+without that gate every card missing `artist_ocr` would read `modern`.
+That is a manufactured vote from evidence that does not exist, and it is
+the same failure mode that lets a genuine old-frame card be vetoed
+`frame-mismatch` in Stage D.
+
 ### DPI-tag audit (2026-07-15, addendum item 8 - report only)
 
 Live, read-only cross-reference of `Card.dpi` (computed once at import
