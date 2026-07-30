@@ -1689,6 +1689,37 @@ The table ships **empty on purpose**. The audit found real, undeclared zeros
 and this instrument exists to report them, so they show up red on the first
 run rather than being silenced in the same change that built the meter.
 
+### Run it deliberately — it is not wired into the run-stage sequence
+
+**Current posture (owner ruling, 2026-07-30): `channel_report` is an
+operator step, not an automatic post-command gate.**
+
+The reason is that **the roster is knowingly dirty right now**, and that is
+a deliberate choice rather than an oversight. `ZERO_DECLARATIONS` is empty
+by design, and the coverage audit found at least three genuinely silent
+channels: frame-style and bleed-edge chips (no reachable caster),
+`local-name-frequency-v1` (never invoked in its life), and
+`art-edge-continuity-v1` (reachable from nothing). This command is built to
+**gate**, so wiring it into the run-stage sequence today would turn every
+one of those into a hard stop on unrelated work — an unrelated command
+failing because a channel nobody was touching has been silent for a week.
+
+So the sequence is:
+
+1. run it deliberately;
+2. take the first real reading;
+3. rule on each zero — declare it with a reason, or fix the channel;
+4. **then** wire it into the run-stage sequence.
+
+At step 4 auto-gating becomes cheap and correct, because with a clean
+roster a new zero genuinely means something regressed. Until then it would
+mostly be reporting news from last week.
+
+**The first production reading is expected to exit 1.** That is the
+instrument working, not a defect in it — it is the whole reason the
+declaration table ships empty. Do not read a red first run as a broken
+tool.
+
 ### Relationship to `build_reconciliation_report`
 
 The Stage C half of this report **calls**
