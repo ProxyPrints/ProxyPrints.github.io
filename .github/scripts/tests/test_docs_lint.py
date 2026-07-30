@@ -566,10 +566,17 @@ class TestAgainstRealRepo(unittest.TestCase):
             # tether is keyed on the CURRENT identity, version suffix included.
             "stage-d-illustration-v2",
             "local-name-frequency-v1",
-            # Declared in `management/commands/`, which the pre-2026-07-29
-            # non-recursive glob never read. If this scan ever narrows
-            # again, this is the assertion that says so.
-            "scryfall-tagger-v1",
+            # `scryfall-tagger-v1` stood here from 2026-07-29 as the one
+            # identity declared under `management/commands/` — the subtree the
+            # pre-2026-07-29 non-recursive glob never read. It retired together
+            # with `PrintingTagVote` on 2026-07-30, and no live identity is
+            # declared under `management/commands/` any more, so this list
+            # cannot carry a real-repo witness for the recursion. The recursion
+            # itself stays covered — on fixtures rather than on the real tree —
+            # by `test_scan_is_recursive_but_bounded`, which is the assertion
+            # that fails if the scan ever narrows again. If an identity is ever
+            # declared under `management/commands/` again, add it here and this
+            # list becomes a real-repo witness once more.
         ):
             self.assertIn(identity, found)
 

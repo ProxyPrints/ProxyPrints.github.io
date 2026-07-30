@@ -1274,38 +1274,49 @@ whole subtree with it as a side effect. The scan is now recursive with an
 `_roster_source_files()`), which is the same exclusion stated as a
 decision rather than obtained as an accident.
 
-- **`scryfall-tagger-v1`** (`SCRYFALL_TAGGER_ANONYMOUS_ID`,
-  [`MPCAutofill/cardpicker/management/commands/import_external_ip_tags.py`](../MPCAutofill/cardpicker/management/commands/import_external_ip_tags.py)) —
-  **DORMANT: zero rows written to date.** It imports Scryfall Tagger's
-  `art:external-ip` community art tag (Universes Beyond illustrations —
-  Lord of the Rings, Doctor Who, Warhammer 40K) and casts machine
-  `PrintingTagVote` rows against the `external-ip` tag, at the PRINTING
-  level (`CanonicalCard`), not the catalog-image level. It writes BOTH
-  polarities: `APPLY` for positive Tagger matches, `NOT_APPLICABLE` for
-  confirmed printings absent from the positive set; a printing with no
-  data at all abstains rather than voting. `source=DEDUCTION` with its own
-  `anonymous_id` per the machine-caster convention — pure logical
-  inference over already-trusted structured data, zero image inspection.
-  Weight resolves to `PRINTING_TAG_MACHINE_WEIGHT` (0.5); the 2026-07-23
-  zero-weight override does NOT touch it (that override is scoped to
-  source + the `deductive-backfill` family + one frozen `run_id`, all
-  three together). Re-runs are idempotent via the
-  `(printing, tag, anonymous_id)` uniqueness constraint; retraction is the
-  ordinary `purge_machine_votes --run-id` mechanism. Full behavioural
-  writeup: [`features/printing-tags.md`](features/printing-tags.md) — this
-  entry is the ROSTER entry, recording what the gate can and cannot say
-  about it, and the answer today is **nothing, because it has produced
-  nothing**. Do not read its absence from every vote count on this page as
-  evidence it is working correctly; it has never run against production.
+- **`scryfall-tagger-v1`** (`SCRYFALL_TAGGER_ANONYMOUS_ID`) — **RETIRED
+  2026-07-30, together with `PrintingTagVote` and its importer
+  (`management/commands/import_external_ip_tags.py`, deleted).** It is no
+  longer a calculator identity, and the roster tether no longer derives it
+  from the code, because there is no code. The entry is kept rather than
+  deleted so that a reader meeting the string in an old report, run log or
+  database column can find out what it was; everything below is written in
+  the past tense and describes a design that never ran. Retirement
+  rationale and the full behavioural record:
+  [`features/printing-tags.md`](features/printing-tags.md).
 
-**Open, and an owner call rather than a lint fix**: `PrintingTagVote`
-(`models.py`, added by PR #497) is a **third vote family** alongside
-`CardPrintingTag` and `CardTagVote`, and it appears **zero times** on this
-page and zero times in [`theory.md`](theory.md). Every vote-population
-figure above — the topline counts, the FIG-2 funnel, the recompute
-dry-runs — is silent about it. Whether `PrintingTagVote` belongs inside
-this gate's scope, or is deliberately outside it, has never been decided;
-it is recorded here as an open question, not answered.
+  **It wrote zero rows, ever.** It would have imported Scryfall Tagger's
+  `art:external-ip` community art tag (Universes Beyond illustrations —
+  Lord of the Rings, Doctor Who, Warhammer 40K) and cast machine
+  `PrintingTagVote` rows against the `external-ip` tag, at the PRINTING
+  level (`CanonicalCard`), not the catalog-image level. It was designed to
+  write BOTH polarities: `APPLY` for positive Tagger matches,
+  `NOT_APPLICABLE` for confirmed printings absent from the positive set,
+  with a printing that had no data at all abstaining rather than voting.
+  `source=DEDUCTION` with its own `anonymous_id` per the machine-caster
+  convention — pure logical inference over already-trusted structured
+  data, zero image inspection. Weight resolved to
+  `PRINTING_TAG_MACHINE_WEIGHT` (0.5); the 2026-07-23 zero-weight override
+  did NOT touch it (that override is scoped to source + the
+  `deductive-backfill` family + one frozen `run_id`, all three together).
+  Re-runs would have been idempotent via the
+  `(printing, tag, anonymous_id)` uniqueness constraint, with retraction
+  by the ordinary `purge_machine_votes --run-id` mechanism. What the gate
+  could say about it was always **nothing, because it produced nothing** —
+  and its absence from every vote count on this page was never evidence
+  that it worked.
+
+**Resolved 2026-07-30, previously an open owner call**: `PrintingTagVote`
+(`models.py`, added by PR #497) was a **third vote family** alongside
+`CardPrintingTag` and `CardTagVote`, and it appeared **zero times** on
+this page and zero times in [`theory.md`](theory.md) — every
+vote-population figure above was silent about it. The question recorded
+here was whether it belonged inside this gate's scope or was deliberately
+outside it. It has now been answered by removal rather than by scoping:
+the model, its table and its only writer were retired on the owner's
+ruling, the table having held 0 rows on production throughout its life.
+The figures on this page are therefore complete as they stand, which they
+were not while this question was open.
 
 ### Operational notes
 

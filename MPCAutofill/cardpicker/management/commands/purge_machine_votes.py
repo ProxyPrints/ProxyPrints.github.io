@@ -71,7 +71,6 @@ from cardpicker.models import (
     CardTagVote,
     PilotRunLedger,
     PrintingTagStatus,
-    PrintingTagVote,
     TagVoteStatus,
     VoteSource,
     calculator_family,
@@ -99,7 +98,6 @@ class PurgeResult:
     printing_votes_deleted: int = 0
     artist_votes_deleted: int = 0
     tag_votes_deleted: int = 0
-    printing_tag_votes_deleted: int = 0
     # `CardScanLog` rows removed - always 0 unless the `--anonymous-id` mode was run with
     # `--include-scan-log`. Reported as its OWN number, never folded into the vote totals: it is
     # audit-trail data, not votes, and an operator reading the output needs to see which of the
@@ -136,9 +134,10 @@ def verify_no_machine_only_resolutions(card_ids: list[int]) -> list[int]:
     it means something upstream is broken, not that the purge itself did anything wrong.
 
     NOTE: this function checks Card-level resolution status only (printing_tag_status,
-    artist_vote_status, tag_vote_statuses). PrintingTagVote rows have no persisted per-printing
-    resolution status on CanonicalCard today, so per-printing consensus is not checked here.
-    When a per-printing resolution status field is added, add the analogous check then.
+    artist_vote_status, tag_vote_statuses). There is no per-CanonicalCard resolution status in
+    the schema to check: the one model that would have needed one, `PrintingTagVote`, was
+    retired on 2026-07-29 (migration 0101) having never had a resolver or a row. If a
+    per-printing resolution status field is ever added, add the analogous check then.
 
     Returns the list of violating card pks (empty means clean).
     """
@@ -234,7 +233,6 @@ def purge_by_anonymous_id(anonymous_id: str, dry_run: bool = False, include_scan
     printing_votes = CardPrintingTag.objects.filter(anonymous_id=anonymous_id, source__in=_MACHINE_SOURCES)
     artist_votes = CardArtistVote.objects.filter(anonymous_id=anonymous_id, source__in=_MACHINE_SOURCES)
     tag_votes = CardTagVote.objects.filter(anonymous_id=anonymous_id, source__in=_MACHINE_SOURCES)
-    printing_tag_votes = PrintingTagVote.objects.filter(anonymous_id=anonymous_id, source__in=_MACHINE_SOURCES)
     # NOT source-filtered: CardScanLog has no `source` field at all (it is an abstention record,
     # not a vote - see the model's own docstring). The `calculator_family` guard above is what
     # keeps this exact-id filter off human territory, and only a calculator ever writes here.
@@ -248,7 +246,6 @@ def purge_by_anonymous_id(anonymous_id: str, dry_run: bool = False, include_scan
     printing_count = printing_votes.count()
     artist_count = artist_votes.count()
     tag_count = tag_votes.count()
-    printing_tag_count = printing_tag_votes.count()
     # Counted even when the flag is off, but reported as "would be left behind" rather than
     # "deleted" - see Command.handle. An operator who forgot the flag needs to see the number
     # they are leaving in place, since it is the number that will keep their cards ineligible.
@@ -261,7 +258,6 @@ def purge_by_anonymous_id(anonymous_id: str, dry_run: bool = False, include_scan
             printing_votes_deleted=printing_count,
             artist_votes_deleted=artist_count,
             tag_votes_deleted=tag_count,
-            printing_tag_votes_deleted=printing_tag_count,
             scan_log_rows_deleted=scan_log_count if include_scan_log else 0,
             include_scan_log=include_scan_log,
             affected_card_count=len(affected_card_ids),
@@ -270,9 +266,6 @@ def purge_by_anonymous_id(anonymous_id: str, dry_run: bool = False, include_scan
     printing_votes.delete()
     artist_votes.delete()
     tag_votes.delete()
-    # PrintingTagVote rows are deleted but require no re-resolution - there is no persisted
-    # per-printing resolution status on CanonicalCard today, so consensus is computed on demand.
-    printing_tag_votes.delete()
     if include_scan_log:
         scan_log_rows.delete()
 
@@ -285,7 +278,6 @@ def purge_by_anonymous_id(anonymous_id: str, dry_run: bool = False, include_scan
         printing_votes_deleted=printing_count,
         artist_votes_deleted=artist_count,
         tag_votes_deleted=tag_count,
-        printing_tag_votes_deleted=printing_tag_count,
         scan_log_rows_deleted=scan_log_count if include_scan_log else 0,
         include_scan_log=include_scan_log,
         affected_card_count=len(affected_card_ids),
@@ -310,7 +302,6 @@ def purge_run(run_id: str, dry_run: bool = False) -> PurgeResult:
     printing_votes = CardPrintingTag.objects.filter(run_id=run_id)
     artist_votes = CardArtistVote.objects.filter(run_id=run_id)
     tag_votes = CardTagVote.objects.filter(run_id=run_id)
-    printing_tag_votes = PrintingTagVote.objects.filter(run_id=run_id)
 
     affected_card_ids: set[int] = set()
     affected_card_ids.update(printing_votes.values_list("card_id", flat=True))
@@ -320,7 +311,6 @@ def purge_run(run_id: str, dry_run: bool = False) -> PurgeResult:
     printing_count = printing_votes.count()
     artist_count = artist_votes.count()
     tag_count = tag_votes.count()
-    printing_tag_count = printing_tag_votes.count()
 
     if dry_run:
         return PurgeResult(
@@ -329,16 +319,12 @@ def purge_run(run_id: str, dry_run: bool = False) -> PurgeResult:
             printing_votes_deleted=printing_count,
             artist_votes_deleted=artist_count,
             tag_votes_deleted=tag_count,
-            printing_tag_votes_deleted=printing_tag_count,
             affected_card_count=len(affected_card_ids),
         )
 
     printing_votes.delete()
     artist_votes.delete()
     tag_votes.delete()
-    # PrintingTagVote rows are deleted but require no re-resolution - there is no persisted
-    # per-printing resolution status on CanonicalCard today, so consensus is computed on demand.
-    printing_tag_votes.delete()
 
     cards_unresolved = _re_resolve_and_count_unresolved(affected_card_ids)
     gate_violations = verify_no_machine_only_resolutions(sorted(affected_card_ids))
@@ -351,7 +337,6 @@ def purge_run(run_id: str, dry_run: bool = False) -> PurgeResult:
         printing_votes_deleted=printing_count,
         artist_votes_deleted=artist_count,
         tag_votes_deleted=tag_count,
-        printing_tag_votes_deleted=printing_tag_count,
         affected_card_count=len(affected_card_ids),
         cards_unresolved_by_purge=cards_unresolved,
         gate_violations=gate_violations,
@@ -422,7 +407,13 @@ class Command(BaseCommand):
 
         The per-vote-table line keeps its exact pre-2026-07-28 wording so an operator's (or a
         log scraper's) existing reading of `--run-id` output is unchanged - the new information
-        is added around it, never by rewording it.
+        is added around it, never by rewording it. ONE DELIBERATE EXCEPTION, 2026-07-29: the
+        `printing tag votes: N` field is gone, along with `PurgeResult.printing_tag_votes_deleted`,
+        because `PrintingTagVote` itself is gone (migration 0101). The alternative - keeping the
+        field pinned at 0 forever for output-shape stability - was rejected: a purge report naming
+        a table that no longer exists is a claim about work this command did not do, and this
+        module's whole design premise is that its output must be sufficient on its own to
+        reconstruct what was destroyed. Three vote tables are enumerated here now, not four.
         """
         verb = "WOULD DELETE" if result.dry_run else "DELETED"
         target = f"--anonymous-id={result.anonymous_id}" if result.anonymous_id else f"--run-id={result.run_id}"
@@ -431,7 +422,6 @@ class Command(BaseCommand):
             f"printing votes: {result.printing_votes_deleted}, "
             f"artist votes: {result.artist_votes_deleted}, "
             f"tag votes: {result.tag_votes_deleted}, "
-            f"printing tag votes: {result.printing_tag_votes_deleted}, "
             f"affected cards: {result.affected_card_count}"
         )
         if result.include_scan_log:

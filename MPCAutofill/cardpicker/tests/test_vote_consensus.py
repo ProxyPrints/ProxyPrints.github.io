@@ -94,9 +94,12 @@ class TestResolveVoteWeight:
 
     def test_another_calculator_carrying_the_frozen_run_id_is_unaffected(self):
         # defensive: the run stamp alone is never enough - all three conjuncts must hold, so a
-        # stray re-stamp onto some other calculator's row cannot pull it into a ratified ruling
+        # stray re-stamp onto some other calculator's row cannot pull it into a ratified ruling.
+        # The example identity was "scryfall-tagger-v1" until 2026-07-29; that identity retired
+        # with `PrintingTagVote`, so a LIVE calculator stands in - the assertion is about the
+        # conjunction, but an example nobody can look up is a worse example.
         assert (
-            resolve_vote_weight(VoteSource.DEDUCTION, "scryfall-tagger-v1", DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID)
+            resolve_vote_weight(VoteSource.DEDUCTION, "stage-d-illustration-v1", DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID)
             == _SOURCE_WEIGHTS[VoteSource.DEDUCTION]
         )
 

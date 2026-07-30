@@ -7,7 +7,11 @@ The three properties under test are the three the module docstring commits to: t
 pair is ATOMIC (this project's operator kills long runs mid-flight, and an untransacted
 DELETE-then-INSERT loses votes outright when killed between the two), the purge is SCOPED TO THE
 ROWS ACTUALLY WRITTEN (so a target the caller's already-voted split skipped keeps the winner's
-committed row), and it is correct across all four vote models / both target fields the app uses.
+committed row), and it is correct across every vote model / both target fields the primitive
+supports. The `printing_id` target field had exactly one production caller, the Scryfall-Tagger
+`import_external_ip_tags` command, retired 2026-07-29 along with `PrintingTagVote`; the two tests
+that covered it are re-pointed at `CardPrintingTag.printing_id` rather than deleted, so
+`target_field` stays a tested parameter instead of quietly becoming a `card_id` constant.
 
 `_purge_and_write_printing_tag_votes`' own tests in `test_local_calculate_verdicts.py` are kept as
 they were - they now exercise this function through that binding.
@@ -20,7 +24,6 @@ from cardpicker.models import (
     CardArtistVote,
     CardPrintingTag,
     CardTagVote,
-    PrintingTagVote,
     VotePolarity,
     VoteSource,
 )
@@ -303,64 +306,72 @@ class TestOtherModelsAndTargetFields:
 
         assert CardArtistVote.objects.filter(pk=stale.pk).exists()
 
-    def test_printing_tag_vote_keys_on_printing_id_not_card_id(self, db, monkeypatch):
-        """The only `printing_id`-keyed call site in the app (`import_external_ip_tags`) - the
-        target field is a real parameter, not a card_id assumption baked into the primitive."""
+    def test_target_field_is_a_real_parameter_not_a_card_id_assumption(self, db):
+        """`target_field="printing_id"` genuinely re-keys the purge. Proven the sharp way: the
+        stale row belongs to a DIFFERENT card and the same printing, so it can only be reached by
+        a purge scoped on `printing_id` - a `card_id`-keyed purge would leave it alone.
+
+        This had a production caller until 2026-07-29 (`import_external_ip_tags`, keyed on
+        `PrintingTagVote.printing_id`); both were retired with the model. `CardPrintingTag` also
+        carries a `printing_id` column, so the parameter stays exercised against a live model
+        rather than becoming untested machinery the day its only user left."""
         printing = CanonicalCardFactory(name="Some Card")
-        tag = TagFactory(name="External IP")
-        stale = PrintingTagVote.objects.create(
+        stale_card = CardFactory(name="Some Card (other scan)")
+        fresh_card = CardFactory(name="Some Card")
+        stale = CardPrintingTag.objects.create(
+            card=stale_card,
             printing=printing,
-            tag=tag,
-            polarity=VotePolarity.APPLY,
-            anonymous_id="scryfall-tagger-v0",
-            source=VoteSource.DEDUCTION,
+            is_no_match=False,
+            anonymous_id="local-ocr-v0",
+            source=VoteSource.OCR,
         )
 
         purge_and_write_votes(
-            PrintingTagVote,
+            CardPrintingTag,
             [
-                PrintingTagVote(
+                CardPrintingTag(
+                    card_id=fresh_card.pk,
                     printing_id=printing.pk,
-                    tag_id=tag.pk,
-                    polarity=VotePolarity.APPLY,
-                    anonymous_id="scryfall-tagger-v1",
+                    is_no_match=False,
+                    anonymous_id="local-ocr-v1",
                 )
             ],
-            anonymous_id="scryfall-tagger-v1",
+            anonymous_id="local-ocr-v1",
             target_field="printing_id",
             ignore_conflicts=True,
         )
 
-        assert not PrintingTagVote.objects.filter(pk=stale.pk).exists()
-        assert PrintingTagVote.objects.filter(printing=printing, anonymous_id="scryfall-tagger-v1").count() == 1
+        assert not CardPrintingTag.objects.filter(pk=stale.pk).exists()
+        assert CardPrintingTag.objects.filter(card=fresh_card, anonymous_id="local-ocr-v1").count() == 1
 
-    def test_printing_tag_vote_rolls_back(self, db, monkeypatch):
+    def test_printing_id_keyed_write_rolls_back(self, db, monkeypatch):
         printing = CanonicalCardFactory(name="Some Card")
-        tag = TagFactory(name="External IP")
-        stale = PrintingTagVote.objects.create(
+        stale_card = CardFactory(name="Some Card (other scan)")
+        fresh_card = CardFactory(name="Some Card")
+        stale = CardPrintingTag.objects.create(
+            card=stale_card,
             printing=printing,
-            tag=tag,
-            polarity=VotePolarity.APPLY,
-            anonymous_id="scryfall-tagger-v0",
-            source=VoteSource.DEDUCTION,
+            is_no_match=False,
+            anonymous_id="local-ocr-v0",
+            source=VoteSource.OCR,
         )
 
-        monkeypatch.setattr(PrintingTagVote.objects, "bulk_create", _raise_instead_of_inserting)
+        monkeypatch.setattr(CardPrintingTag.objects, "bulk_create", _raise_instead_of_inserting)
 
         with pytest.raises(RuntimeError):
             purge_and_write_votes(
-                PrintingTagVote,
+                CardPrintingTag,
                 [
-                    PrintingTagVote(
+                    CardPrintingTag(
+                        card_id=fresh_card.pk,
                         printing_id=printing.pk,
-                        tag_id=tag.pk,
-                        polarity=VotePolarity.APPLY,
-                        anonymous_id="scryfall-tagger-v1",
+                        is_no_match=False,
+                        anonymous_id="local-ocr-v1",
                     )
                 ],
-                anonymous_id="scryfall-tagger-v1",
+                anonymous_id="local-ocr-v1",
                 target_field="printing_id",
                 ignore_conflicts=True,
             )
 
-        assert PrintingTagVote.objects.filter(pk=stale.pk).exists()
+        assert CardPrintingTag.objects.filter(pk=stale.pk).exists()

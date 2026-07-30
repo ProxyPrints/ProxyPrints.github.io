@@ -510,10 +510,13 @@ def test_no_importer_declares_its_own_bulk_data_model_any_more():
     """
     root = Path(__file__).resolve().parents[1]
     offenders = []
+    # `management/commands/import_external_ip_tags.py` was the third importer this tether
+    # covered; it was retired on 2026-07-29 with `PrintingTagVote` and is dropped from the list
+    # rather than left behind to `FileNotFoundError`. The assertion's point is unchanged - it
+    # fails if ANY importer re-declares a bulk-data field outside the shared module.
     for relative in (
         "printing_metadata_import.py",
         "integrations/game/mtg.py",
-        "management/commands/import_external_ip_tags.py",
     ):
         source = (root / relative).read_text()
         for line in source.splitlines():

@@ -388,12 +388,16 @@ printings, artists, tags, and moderation from one screen.
   etc.), since one is cast at upload-time from filename parsing and the
   other is a human's queue-time judgment — kept exact-string-distinct so
   the two vote populations don't silently merge. `external-ip` (added
-  2026-07-28, WTC artist question re-frame) is deliberately the same
-  string as `EXTERNAL_IP_TAG_NAME` in
-  `management/commands/import_external_ip_tags.py` — both the human
-  no-match reason and that machine Scryfall-Tagger import converge on one
-  `Tag.name` so `tag:external-ip` is a single predicate over the catalog.
-  Not named after the official "Universes Beyond" Wizards product line:
+  2026-07-28, WTC artist question re-frame) is the string
+  `reason_tags.EXTERNAL_IP_TAG_NAME` — a convergence contract, not just a
+  row in the list: the human no-match reason and any machine channel that
+  ever derives external-IP-ness must write one `Tag.name`, so
+  `tag:external-ip` is a single predicate over the catalog rather than two
+  names that permanently fragment it. The constant lived in
+  `management/commands/import_external_ip_tags.py` until that command was
+  retired on 2026-07-29 (see the retirement record below) and moved to
+  `reason_tags.py` so the contract outlives the code that used to honour
+  it. Not named after the official "Universes Beyond" Wizards product line:
   that name covers OFFICIAL Magic printings, so a custom proxy bearing
   e.g. Warhammer or Lord of the Rings art isn't one of those — it's
   non-official art drawn from an external IP.
@@ -457,67 +461,111 @@ printings, artists, tags, and moderation from one screen.
   check would be. D1's actual claim is the one it can support: the name
   matches exactly one row _in our catalogue_.
 
-- **External-IP tag import (Scryfall Tagger)** (W9 per-printing design,
-  revised 2026-07-27): `manage.py import_external_ip_tags` imports
-  `art:external-ip` — a Scryfall Tagger community art tag identifying
-  Universes Beyond illustrations (Lord of the Rings, Doctor Who, Warhammer
-  40K, etc.) — as machine-cast `PrintingTagVote` rows. Votes target the
-  Scryfall printing (`CanonicalCard`) directly, not the catalog images
-  (`Card`) that depict it. The same physical printing may be depicted by many
-  `Card` images in the catalog; the Tagger community tag belongs to the
-  printing once, not duplicated per image.
+- **External-IP tag import (Scryfall Tagger) — RETIRED 2026-07-29,
+  together with `PrintingTagVote`.** Owner ruling: _"i am willing to not
+  need the printing tag. i am happy to reduce things to the minimum that
+  gives us our expected results."_ This entry is the durable record of
+  what was removed, why, and what any rebuild must carry — the code is
+  gone, so this is the only place the knowledge survives. Full evidence:
+  **PR #599**, whose report lands under `docs/reports/` as
+  `2026-07-29-printing-vs-illustration-tag-grain.md` when it merges (it was
+  still open when this was written, which is why the path is spelled out
+  rather than linked).
 
-  Data flow:
+  **What was removed.** `PrintingTagVote` (model + table, migration
+  `0101_delete_printingtagvote`), `POST 2/submitPrintingTagVote/` and its
+  URL route, the Django admin registration,
+  `manage.py import_external_ip_tags` (579 lines) and its tests, and the
+  `PrintingTagVote` arm of `manage.py purge_machine_votes` (including
+  `PurgeResult.printing_tag_votes_deleted` — the purge report enumerates
+  three vote tables now, not four). The last commit carrying the deleted
+  files is `e6c6429a`; read them with
+  `git show e6c6429a:MPCAutofill/cardpicker/management/commands/import_external_ip_tags.py`.
+  **Not touched, despite the adjacent names**: `CardPrintingTag`
+  (167,229 rows, the entire Stage D printing channel) and `CardTagVote`
+  (223,999 rows, resolves into `Card.tags`). Nor
+  `PRINTING_TAG_MIN_VOTES` / `PRINTING_TAG_IMPLICIT_CAP` /
+  `PRINTING_TAG_MACHINE_WEIGHT`, which are the app-wide consensus weights,
+  nor `_split_new_printing_tag_votes`, which is a `CardPrintingTag`
+  collision guard.
 
-  1. Fetches `https://api.scryfall.com/bulk-data`, finds the `art_tags`
-     entry, and downloads its `jsonl_download_uri` (or reads a local file
-     via `--file`).
-  2. Parses the tag tree: finds the tag with slug `external-ip`, then BFS
-     its `child_ids` to collect the full subtree (~56 child IP tags).
-  3. Collects all `illustration_id` values from `taggings` across the
-     subtree (only leaf tags carry taggings per Scryfall's documentation).
-  4. Joins `illustration_id` → `default_cards.json` `illustration_id` →
-     `CanonicalCard.identifier` **directly** (the same bulk data
-     `import_canonical_card_data`/`import_scryfall_printing_metadata`
-     already maintain). No Card-level effective-printing inference is done —
-     the illustration → printing join is the complete eligibility check.
-  5. Writes `PrintingTagVote` rows: `tag="external-ip"`, `source=DEDUCTION`,
-     `anonymous_id="scryfall-tagger-v1"`, `polarity=APPLY`.
+  **Why.** Measured against production on 2026-07-29: **0 rows, 0 of them
+  human, 0 ever resolved.** There was **no consensus resolver** — the
+  `printing_tag_consensus.py` that two docstrings forward-referenced never
+  existed on any branch in the repo's history — **no reader** outside the
+  Django admin, and **no frontend caller** of the submit endpoint. The
+  importer, its only machine writer, never ran once (`PilotRunLedger` has
+  zero rows for it, and it writes its ledger row before branching on
+  dry-run, so even a dry run would have left a trace). Underneath all of
+  that sits the design principle that makes it unsalvageable rather than
+  merely unused: **an imported Scryfall fact is not a disputable claim, so
+  it must not be modelled as a vote.** `resolve_weighted_consensus`'s
+  `has_human_backed` gate is absolute and independent of the weight sum, so
+  a machine-only channel returns `None` at any volume (verified by
+  execution at n=1…1000). Automatic Scryfall-derived tagging could never
+  have displayed anything through the vote system, at any grain, at any
+  threshold. That gate is the invariant this project is built on, working
+  correctly; the mistake was routing an indisputable fact through it.
 
-  **User vote endpoint**: `POST 2/submitPrintingTagVote/` mirrors the
-  `CardTagVote` submit idiom — `update_or_create` keyed on
-  `(printing, tag, anonymous_id)`, `source=USER`, polarity 1/−1/0 (0 = retract).
-  Frontend UI is out of scope for this commit; the backend is wired and tested.
+  **What serves the use case instead, today, with no new machinery.**
+  `CanonicalPrintingMetadata.promo_types` already carries Scryfall's
+  `universesbeyond` token on **10,407 of 113,224 printings**, at 100%
+  per-set recall on every dedicated UB set and correct partial behaviour on
+  mixed sets (`sld`, `clu`) — it has been ingested all along and nothing
+  read it for this. **3,450 catalogue images already resolve to a UB
+  printing** through the existing ingestion-time `Card.canonical_card`
+  link. For custom/proxy images — which have no Scryfall printing and no
+  `illustration_id` at all, so no Scryfall-derived tag can reach them by
+  construction — the channel is `CardTagVote` on the `external-ip` `Tag`,
+  which already resolves through `tag_consensus` into `Card.tags` and is
+  already Elasticsearch-indexed. Both converge on one `Tag.name` by design.
 
-  **Weighting**: votes carry `PRINTING_TAG_MACHINE_WEIGHT` (default 0.5)
-  through the normal `vote_consensus._SOURCE_WEIGHTS` path — no override
-  applies (the 2026-07-23 zero-weight rule is scoped to
-  `anonymous_id="deductive-backfill-v1"` only). `source=DEDUCTION` is used
-  rather than a bespoke `VoteSource` value because `VoteSource.source` is
-  limited to 10 characters; `anonymous_id` carries the identifiable provenance
-  for purge/re-run.
+  **The algorithm, for whoever rebuilds it.** The reusable core was ~150
+  lines and is worth restating rather than re-derived. Scryfall's Tagger
+  publishes an `art_tags` bulk entry (`scryfall_bulk_data.ART_TAGS`, still
+  defined and still tested against the live endpoint although nothing
+  consumes it today); its `jsonl_download_uri` is ~12 MB gzipped.
+  Pass 1 indexes every tag row's `id -> (slug, child_ids)`, finds the tag
+  whose slug is `external-ip`, and BFS-closes its `child_ids` **to a
+  fixpoint** — not the one level the original plan called for, because the
+  hierarchy can deepen; only leaf tags carry taggings, per Scryfall's own
+  documentation, and slugs are explicitly not permanent identifiers, so a
+  missing slug must fail LOUD rather than import zero rows. Pass 2 re-reads
+  the file collecting `taggings[].illustration_id` for tags in the subtree
+  (kept separate from pass 1 so the much larger taggings payload is never
+  held alongside the tag index). Pass 3 builds
+  `illustration_id -> {scryfall card id}` from the already-on-disk
+  `default_cards` bulk data — top-level `illustration_id` on single-faced
+  rows, one entry per face under `card_faces` for double-faced rows — and
+  joins straight onto `CanonicalCard.identifier`. Measured 2026-07-29
+  against the live feed: the subtree closes over **2,799 tags / 8,332
+  distinct illustrations**, reaching **~13,166** of our printings — about
+  **2,759 more than `promo_types`**, because `art:external-ip` marks the
+  _artwork's IP origin_ while `promo_types` marks Wizards' _product line_.
+  **What that ~2,759 consists of is not established**, and characterising a
+  sample of it is the cheapest thing that would decide whether the Tagger
+  dependency is worth carrying at all.
 
-  **Idempotent re-run**: the `(printing, tag, anonymous_id)` uniqueness
-  constraint on `PrintingTagVote` means a printing this identity has already
-  voted on is skipped. To refresh against updated upstream data (where a
-  printing was un-tagged), purge the old `run_id` via
-  `manage.py purge_machine_votes --run-id <id>` then re-run. Every invocation
-  stamps a fresh `run_id` on its votes for independent lifecycle management.
-  `purge_machine_votes` deletes `PrintingTagVote` rows by `run_id` alongside
-  the other vote models.
-
-  **Gate**: `verify_no_machine_only_resolutions` in `purge_machine_votes`
-  checks Card-level resolution status (printing, artist, tag). PrintingTagVote
-  writes do not affect any Card-level resolution status today — per-printing
-  consensus resolution is a separate concern with no persisted CanonicalCard
-  status field yet (see OPEN ITEMS in PR #497). The function therefore does not
-  apply to PrintingTagVote runs and is omitted from `import_external_ip_tags`'s
-  write path; it remains available for CardTagVote/CardPrintingTag/CardArtistVote.
-
-  **Default dry-run**: like every other Stage 3+ command, `import_external_ip_tags`
-  defaults to dry-run (count-only) and requires an explicit `--write` flag
-  to persist votes. The `--file` argument accepts a local art-tags JSONL(.gz)
-  file (or pretty-printed JSON array) for offline runs and testing.
+  **What a rebuild must NOT carry.** (1) Votes — store it as an imported
+  attribute, readable directly, with no threshold and no resolver.
+  (2) The negative pass: the removed command voted `NOT_APPLICABLE` on
+  every confirmed printing outside the positive set, so a `--write` run
+  would have inserted ~13k `APPLY` plus ~100k negative rows into a table
+  nothing read. An attribute expresses absence by being absent. (3) The
+  vote-system plumbing that went with it — `source=DEDUCTION`,
+  `anonymous_id="scryfall-tagger-v1"`, `run_id` stamping,
+  `purge_machine_votes` integration — which also correctly drops that
+  identity off the calculator roster, since it was never a calculator.
+  (4) `security_stamp` as a UB signal: issue #437's own Phase-1 research
+  established it is not deterministic (`stamp:triangle` 2,413 vs
+  `is:universesbeyond` 4,415; LotR, Avatar, Final Fantasy and Assassin's
+  Creed carry oval or null stamps). Grain note: **UB-ness travels with the
+  artwork** — of 50,828 distinct stored `illustration_id` values, **0**
+  appear on both a UB and a non-UB printing, despite 25,381 being reprinted
+  and 20,542 crossing set boundaries — so an illustration-keyed column is
+  the right shape, not a printing-keyed one, and not a vote either way.
+  Owner direction: fold this into the unified Scryfall importer rather than
+  resurrect a standalone command.
 
 - **Moderation layer**: builds on the same consensus system — see
   [[moderation.md]] for the sensitive-tag taxonomy, privileged-approval

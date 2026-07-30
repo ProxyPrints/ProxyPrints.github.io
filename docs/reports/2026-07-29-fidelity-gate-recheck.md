@@ -1,5 +1,19 @@
 # Pipeline-fidelity gate — artifact-2 re-check and verdict re-test (2026-07-29)
 
+> **PARTLY SUPERSEDED, same day.** Everything this report says about
+> `PrintingTagVote`, `scryfall-tagger-v1` and
+> `management/commands/import_external_ip_tags.py` was accurate when measured
+> and is now history: the owner ruled that day to retire `PrintingTagVote`, and
+> the model, its table, its submit endpoint and that command were all removed
+> (migration `0101_delete_printingtagvote`). This report's own finding — 0 rows,
+> nothing ever resolved, an identity the roster tether could not see — is part
+> of what motivated the removal, so it is left standing rather than rewritten.
+> `scryfall-tagger-v1` is no longer a calculator identity at all and should not
+> be expected on any roster. The retirement record, including the import
+> algorithm deleted with the command, is the External-IP entry in
+> [`../features/printing-tags.md`](../features/printing-tags.md). Nothing else
+> in this report is affected.
+
 Read-only audit. No writes, no management command, no migration, no deploy.
 Every live figure below was queried against production Postgres via
 `sudo docker exec mpcautofill_django python manage.py shell` on 2026-07-29.

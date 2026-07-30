@@ -1468,35 +1468,27 @@ class CardTagVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> {self.tag} ({VotePolarity(self.polarity).label})"
 
 
-class PrintingTagVote(AbstractWeightedVote):
-    """
-    A vote on whether a descriptor `Tag` applies to a `CanonicalCard` (Scryfall printing).
-
-    DISTINCT FROM `CardPrintingTag`: that model votes on WHICH printing a `Card` (catalog image)
-    depicts. This model votes on whether a descriptor tag (e.g., "external-ip") applies to the
-    printing itself — independent of any specific catalog image.
-
-    DISTINCT FROM `CardTagVote`: that model votes per `Card` (catalog image). This model votes
-    per `CanonicalCard` (printing). The same physical printing may be depicted by many `Card`
-    images in this catalog; this vote belongs to the printing once, not duplicated per image.
-
-    Uniqueness is (printing, tag, anonymous_id) — the same `update_or_create` idiom as
-    `CardTagVote`'s own (card, tag, anonymous_id) constraint — so a voter can independently
-    update their opinion on one tag for a printing via update_or_create without affecting any
-    other vote they've cast on the same printing.
-    """
-
-    printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, related_name="printing_tag_votes")
-    tag = models.ForeignKey(to=Tag, on_delete=models.CASCADE, related_name="printing_votes")
-    polarity = models.SmallIntegerField(choices=VotePolarity.choices)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=["printing", "tag", "anonymous_id"], name="printingtagvote_unique_vote"),
-        ]
-
-    def __str__(self) -> str:
-        return f"[{self.source}] {self.printing} -> {self.tag} ({VotePolarity(self.polarity).label})"
+# RETIRED 2026-07-29 (owner ruling): `PrintingTagVote` used to sit here - a vote keyed
+# (CanonicalCard, Tag, anonymous_id) asserting "this descriptor tag applies to this Scryfall
+# printing". It is gone, model and table (migration 0101). It held 0 rows in production, 0 of
+# them human, had no consensus resolver anywhere in the codebase, no reader outside the Django
+# admin, and no frontend caller; its one machine writer (`import_external_ip_tags`) never ran.
+# The full evidence is PR #599 (report: `2026-07-29-printing-vs-illustration-tag-grain.md`, which
+# lands under docs/reports/ when that PR merges; it was still open when this was written);
+# the replacement is `CanonicalPrintingMetadata.promo_types` for imported Scryfall facts (an
+# imported fact is not a disputable claim, so it is not a vote) plus `CardTagVote` at card grain
+# for anything a human genuinely disputes.
+#
+# THE TWO MODELS WITH CONFUSINGLY SIMILAR NAMES ARE BOTH LOAD-BEARING AND STILL HERE:
+#   * `CardPrintingTag` (above) - (Card, CanonicalCard, anonymous_id), "this catalogue IMAGE
+#     depicts this Scryfall PRINTING". 167k rows, read by `printing_consensus` into
+#     `Card.printing_tag_status` / `inferred_canonical_card` / Elasticsearch.
+#   * `CardTagVote` (above) - (Card, Tag, anonymous_id), "this descriptor TAG applies to this
+#     catalogue IMAGE". 224k rows, read by `tag_consensus` into `Card.tags`.
+# Likewise `PRINTING_TAG_MIN_VOTES` / `PRINTING_TAG_IMPLICIT_CAP` / `PRINTING_TAG_MACHINE_WEIGHT`
+# and `local_calculate_verdicts._split_new_printing_tag_votes` never governed the retired model -
+# the first three are the app-wide consensus weights and the fourth is a `CardPrintingTag`
+# collision guard. Do not "finish the job" by touching any of them.
 
 
 class CardReportReason(models.TextChoices):
