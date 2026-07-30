@@ -197,6 +197,42 @@ class TestMTGIntegration:
                     }
                 },
             )
+            # CI baseline cleanup, 2026-07-30: SCRYFALL/SCRYFALL_WITH_WWW made master RED at
+            # f947346b (PR #660) with the same shape as the two above, but a DIFFERENT root cause,
+            # and the difference is the reason this is a mock rather than a skip. The endpoint is
+            # NOT broken: `curl https://api.scryfall.com/decks/71bb2d40-.../export/text` from
+            # outside CI returns the expected `text/plain` body with HTTP 200, and the immediately
+            # preceding master commit (1d433dd6) went green on the identical test 111 minutes
+            # earlier. What CI received instead was an HTML document (`<!DOCTYPE html>` in the
+            # `base.py:64` "Invalid response" log line), i.e. an edge/bot-challenge interstitial
+            # served to the GitHub Actions runner's IP - a property of WHERE the request came from,
+            # not of the code or of Scryfall's contract. That class of failure cannot be fixed by
+            # retrying (the next runner is in the same address space) and cannot be gated on a
+            # config flag, which is exactly the tappedout/manastack situation.
+            #
+            # THE HOST HERE IS `api.scryfall.com`, NOT `Scryfall.get_host_names()`. The two mocks
+            # above build their pattern from `get_host_names()` because those sites fetch from the
+            # same host they are matched on. `Scryfall.retrieve_card_list` does not: it matches
+            # `scryfall.com`/`www.scryfall.com` (the deck page URL a user pastes) but requests
+            # `netloc="api.scryfall.com"`. A `get_host_names()`-derived pattern would silently
+            # match nothing and leave the test exactly as red as before.
+            #
+            # SCOPED TO THE DECK-EXPORT PATH, deliberately. `api.scryfall.com` also serves this
+            # suite's bulk-data and DFC/meld calls (`scryfall_bulk_data`,
+            # `test_get_double_faced_card_pairs`, `test_get_meld_pairs`), and a host-wide mock
+            # would gut them. The `/decks/` prefix is the narrowest pattern that covers
+            # `retrieve_card_list`'s one request and nothing else; `real_http=True` still carries
+            # every other Scryfall call to the real API unchanged.
+            #
+            # BODY IS THE REAL RESPONSE, BYTE FOR BYTE (captured 2026-07-30 by direct curl,
+            # `od -c`-verified CRLF line endings and no trailing newline), so
+            # `retrieve_card_list`'s own `"// Sideboard"` strip still runs on genuine input and
+            # the existing recorded snapshot needs no change - the parsing stays covered, only the
+            # transport is faked.
+            mock.get(
+                re.compile(r"^https://api\.scryfall\.com/decks/"),
+                text="4 Brainstorm\r\n1 Delver of Secrets\r\n3 Past in Flames\r\n\r\n// Sideboard",
+            )
             decklist = MTGIntegration.query_import_site(url)
         assert decklist
         assert Counter(decklist.splitlines()) == snapshot
