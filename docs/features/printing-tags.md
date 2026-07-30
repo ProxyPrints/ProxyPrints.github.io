@@ -38,6 +38,61 @@ printings, artists, tags, and moderation from one screen.
   It was called `printings_count` until 2026-07-29 (migration 0099), and
   this document described it as Scryfall printing data — that was false.
   `CardPrintingTag.printing` FKs directly to `CanonicalCard`.
+- **Artwork identity, per face**: the same model carries `art_crop_url`
+  and two illustration columns at **different grains**, and consumers must
+  pick deliberately. `illustration_id` is a **scalar, front-face-only**
+  value — for a multi-faced row it is `card_faces[0].illustration_id`, so
+  the back face's own artwork is not addressable through it.
+  `face_illustrations` (JSON list, migration 0095) retains **every** face's
+  own `illustration_id` paired with that face's own name, in `card_faces`
+  order, so index 0 is the front and index 1 is the back. The scalar is
+  unchanged and still front-face — the list is purely additive. Two
+  properties of the list are load-bearing, and are pinned by
+  `TestFaceIllustrations` in
+  `cardpicker/tests/test_printing_metadata_import.py`:
+  - It is **`[]` for anything that is not a genuine double-faced card**,
+    gated on the `DOUBLE_FACED_LAYOUTS` allowlist (`transform`,
+    `modal_dfc`, `double_faced_token`, `battle`, `reversible_card`) — the
+    same allowlist `get_back_face_names` uses.
+    `split`/`adventure`/`flip`/`aftermath`/`mutate`/`prototype` also nest
+    several named modes under `card_faces`, but those modes are printed on
+    **one** physical face; giving "Stomp" its own entry would assert a
+    second scannable side of "Bonecrusher Giant" that does not exist, and
+    would let a scan of the creature be attributed to the adventure's
+    artwork. `meld` is out of scope by construction — meld pieces carry no
+    `card_faces` of their own in this bulk data.
+  - A face that Scryfall publishes no `illustration_id` for records
+    **`None` rather than being dropped**, so the list's index keeps
+    corresponding to the face's position — a consumer walking
+    `card_faces[1]` must not have the list silently shift under it.
+- **How this column refreshes** (it is not a one-off backfill):
+  `import_scryfall_printing_metadata` is a **full-set, value-diffing
+  upsert**, not insert-only and not a last-modified diff. Every run
+  re-derives the desired row for every printing in the `default_cards`
+  bulk file and compares it field-by-field against the stored row, joined
+  on `canonical_card_id`: no match → CREATE, any `_METADATA_SYNC_FIELDS`
+  member differs → UPDATE, all equal → SKIP, stored key absent from the
+  desired set → DELETE. `face_illustrations` **is** in
+  `_METADATA_SYNC_FIELDS`, and that membership is what makes an ordinary
+  run populate rows that already exist — so this needs **no backfill
+  command and no flag**; running the importer is the backfill. That
+  membership is the whole load-bearing bit: `bulk_create` writes every
+  column regardless, so had the field been omitted from
+  `_METADATA_SYNC_FIELDS`, newly-seen printings would still have populated
+  while every already-stored row stayed `[]` forever. The column therefore
+  reads `[]` on every row imported before the field existed, until the
+  next import run.
+- **Expected coverage — a mostly-`[]` column is correct, not a bug.**
+  Measured against the on-disk `default_cards` bulk file and production on
+  2026-07-30: of **116,254** bulk rows, **1,594** carry a genuine
+  double-faced layout with two or more faces, and all 1,594 join to a
+  `CanonicalCard` that already has a `CanonicalPrintingMetadata` row. So a
+  first import populates **1,594 of 113,224 rows (1.4%)** — 1,534 of them
+  with a real `illustration_id` on every face, exposing **1,534**
+  back-face illustrations the scalar column cannot address, and 60 with
+  name-only entries whose `illustration_id` is `None` because Scryfall
+  publishes no artwork id for those faces. The remaining ~111,630 rows are
+  single-faced and **correctly** stay `[]`.
 - **Card payload — machine-suggested printing + tag vote status** (Proposal H
   §4.4′, issue #184, PR #195; consumed by the Select Version section, issue
   #167 — see [[grid-selector.md]]'s own "Select Version section" entry):
