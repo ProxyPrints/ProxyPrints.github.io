@@ -22,26 +22,33 @@ briefing this very change, and a closely-related identity-vs-channel confusion d
 vote rows on this project on 2026-07-27 (operations correction log OPS-CORR-0008). The table this
 migration drops is `cardpicker_printingtagvote`. `cardpicker_cardprintingtag` is untouched.
 
-MIGRATION NUMBERING - READ BEFORE MERGING. `cardpicker`'s single leaf on `master` at the time of
-writing is `0098_card_illustration_consensus_fields`, and that is what this depends on, so this
-branch is migratable and single-leaf on its own today. The FILE is numbered 0101 because the
-orchestrator has allocated 0099 to PR #601 (already renumbered to
-`0099_rename_printings_count_catalogued` on its branch) and 0100 to PR #604 (still numbered 0098
-on its branch as `0098_superseded_card_printing_tag_archive`; expected to become
-`0100_superseded_card_printing_tag_archive`).
+MIGRATION NUMBERING - READ BEFORE MERGING, AND WHY THIS BRANCH'S CI IS RED ON PURPOSE.
+This depends on `0100_superseded_card_printing_tag_archive` (PR #604). THAT MIGRATION IS NOT ON
+`master` YET, so `migrate` on this branch alone fails with `NodeNotFoundError` and every test
+errors at `pytest-django`'s test-database setup. That red is expected and correct, and it clears
+the moment #604 merges. Do not "fix" it by repointing at `0099`.
 
-    => WHICHEVER OF #601 / #604 MERGES BEFORE THIS ONE, THIS MIGRATION'S `dependencies` MUST BE
-       REPOINTED AT THE NEW LEAF ON REBASE. Leaving it on 0098 after 0099/0100 land gives
-       `cardpicker` two leaf nodes, which is not a cosmetic problem: `pytest-django` builds its
-       test database by running `migrate`, so a two-leaf graph takes EVERY branch's CI down at
-       test-database setup, not just this one. PR #576 exists to repair exactly that.
+    => MERGE ORDER IS FIXED: #604 FIRST, THEN THIS. Chosen deliberately on 2026-07-30 while
+       repairing both PRs together. #604 is the larger change and the Stage-D monolith's core, so
+       it is the one that gets to be verifiable and green on its own branch; this PR is small and
+       cheap to hold. The two orders are symmetric - exactly one of the two branches can be
+       migratable at a time, because only one of them can own the dependency on `master`'s real
+       leaf - so the choice is which PR to leave unverifiable, not whether to leave one.
 
-Depending on the not-yet-existent `0100_...` instead was considered and rejected for the reason
-`0098_superseded_card_printing_tag_archive`'s own docstring gives: "a dependency on a migration
-that does not exist on `master` makes THIS branch unmigratable today, with certainty, in exchange
-for avoiding a collision that may never happen. A collision, by contrast, is loud and caught at
-merge time by `makemigrations --check`." That is this repo's established convention and it is
-followed here rather than diverged from.
+The rejected alternative, recorded so it is not re-proposed: depend on `0099_rename_printings_count_catalogued`
+(`master`'s real leaf today) and renumber this 0100. That makes THIS branch green immediately, but
+#604 already holds 0100-on-0099, so after both merge `cardpicker` has TWO leaves - 0100 and 0100's
+sibling - and a two-leaf graph is not a cosmetic problem: `pytest-django` builds its test database
+by running `migrate`, so it takes EVERY branch's CI in the repository down at test-database setup,
+not just the offender's. PR #576 exists to repair exactly that, by hand. A local red on one PR
+costs one PR; a forked graph costs the whole repo. The earlier version of this docstring preferred
+the green-now convention, on the then-true premise that no other PR had claimed a number on top of
+`master`'s leaf. #604 has now claimed 0100, which inverts the trade-off.
+
+The chain is therefore 0098 (#573) -> 0099 (#601) -> 0100 (#604) -> 0101 (this), and it is
+verified mechanically rather than by eye: `MigrationLoader(None).graph.leaf_nodes("cardpicker")`
+returns exactly one node on the simulated merge of `master` + #604 + this branch. PR #611's
+"One leaf per app (merged with the base branch)" job is what enforces it from here on.
 """
 
 from django.db import migrations
@@ -49,7 +56,7 @@ from django.db import migrations
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("cardpicker", "0098_card_illustration_consensus_fields"),
+        ("cardpicker", "0100_superseded_card_printing_tag_archive"),
     ]
 
     operations = [
