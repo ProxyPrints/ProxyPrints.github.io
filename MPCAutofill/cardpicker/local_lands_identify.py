@@ -72,7 +72,7 @@ CURRENCY (same convention every other Stage C consumer in this codebase uses - s
 prior image upload is never trusted for a card whose upload has since changed) AND its
 `extractor_versions` carries both `collector_line_ocr` and `artist_ocr` keys (the two extractor
 groups this module actually consumes - both are always written together by
-`image_evidence.extract_card_evidence`'s single OCR-group block, so in practice checking either
+`image_evidence.fetch_and_compute_card_evidence_for_tests`'s single OCR-group block, so in practice checking either
 key alone would suffice, but both are checked so this stays correct even under a future partial-
 extractor-manifest write). See `_current_evidence_for_card`.
 

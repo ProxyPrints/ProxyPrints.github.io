@@ -1,13 +1,13 @@
 """
 Unit tests for cardpicker.local_image_quality (public issue #150's re-spec, "Stage C
 visual-signal extractors") - pure image-math functions, tested in isolation against real PIL
-images, no DB / no `extract_card_evidence` involvement (that wiring is covered by
+images, no DB / no `fetch_and_compute_card_evidence_for_tests` involvement (that wiring is covered by
 test_image_evidence.py's TestExtractCardEvidenceQualitySignals).
 
 is_image_truncated is tested here (rather than through the full extraction pipeline) precisely
 BECAUSE a genuinely truncated real file would also trip up earlier, real-pixel-reading
 extractors (layout_class/collector_line_ocr/legal_line) that run before quality_signals in
-extract_card_evidence's own order - a pre-existing, out-of-scope gap in those extractors, not
+fetch_and_compute_card_evidence_for_tests's own order - a pre-existing, out-of-scope gap in those extractors, not
 something to route around by picking a "safe" truncation point. Testing this function directly
 against a real truncated JPEG is both the correct unit-test boundary and avoids that
 entanglement entirely.

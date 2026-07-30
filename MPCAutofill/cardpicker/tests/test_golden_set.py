@@ -2,12 +2,12 @@
 Golden-set fixture tests (docs/features/catalog-completion-plan.md, task #145).
 
 WHAT THIS FILE DOES NOT DO - read before trusting it as the "hard gate" task #145 names.
-NO EXTRACTOR RUNS HERE. Not one test in this module calls `extract_card_evidence`,
+NO EXTRACTOR RUNS HERE. Not one test in this module calls `fetch_and_compute_card_evidence_for_tests`,
 `compute_card_art_hash`, `classify_border_color`, `classify_bleed_edge` or any other
 extractor, and none can: `golden_set.py` imports no extractor code, the 30 pinned ids are
 real PRODUCTION pks that never exist in pytest's isolated DB, and the expectations are
 values transcribed from manual host-venv runs on dates recorded in `golden_set.py`'s own
-comments. Stubbing `extract_card_evidence` to return None, or forcing `classify_bleed_edge`
+comments. Stubbing `fetch_and_compute_card_evidence_for_tests` to return None, or forcing `classify_bleed_edge`
 to return a constant, leaves every assertion in this file green (verified by mutation,
 2026-07-29). The gate that task #145 describes is the MANUAL re-run of those extractions
 against these ids, not this suite.
@@ -106,7 +106,7 @@ class TestGoldenExpectationsShapeAndCoverage:
         assert all(e.value["fetch_ok"] is True for e in GOLDEN_EXPECTATIONS["fetch_health"])
 
     def test_fetch_health_image_format_is_a_known_format(self):
-        # Recorded 2026-07-20 against a real extract_card_evidence() run over all 30 golden cards
+        # Recorded 2026-07-20 against a real fetch_and_compute_card_evidence_for_tests() run over all 30 golden cards
         # (issue #216) - see TestGeometryBleed's own note above for why this isn't re-verified
         # live in CI. Only PNG/JPEG appeared on this real run.
         assert all(e.value["fetch_image_format"] in ("PNG", "JPEG") for e in GOLDEN_EXPECTATIONS["fetch_health"])
@@ -116,7 +116,7 @@ class TestGoldenExpectationsShapeAndCoverage:
         assert geometry_bleed_card_ids == set(GOLDEN_CARD_IDS)
 
     def test_geometry_bleed_values_are_a_known_bleed_class(self):
-        # Recorded 2026-07-19 against a real extract_card_evidence() run over all 30 golden
+        # Recorded 2026-07-19 against a real fetch_and_compute_card_evidence_for_tests() run over all 30 golden
         # cards (see golden_set.py's own comment for the real fetched dims/counts) - NOT
         # re-verified live here, matching this file's own documented scope (real production Card
         # rows don't exist in pytest's isolated testcontainers DB, so get_golden_cards() can't
@@ -130,7 +130,7 @@ class TestGoldenExpectationsShapeAndCoverage:
         assert layout_class_card_ids == set(GOLDEN_CARD_IDS)
 
     def test_layout_class_values_are_a_known_border_class_or_ambiguous(self):
-        # Recorded 2026-07-19 against a real extract_card_evidence() run over all 30 golden
+        # Recorded 2026-07-19 against a real fetch_and_compute_card_evidence_for_tests() run over all 30 golden
         # cards (issue #148) - see this file's own note on TestGeometryBleed above for why this
         # isn't re-verified live in CI. "" (ambiguous) is a genuine real outcome for one golden
         # card (207913), not a placeholder - see golden_set.py's own comment.
@@ -154,7 +154,7 @@ class TestGoldenExpectationsShapeAndCoverage:
         assert card_ids == set(GOLDEN_CARD_IDS)
 
     def test_collector_line_ocr_values_have_set_code_and_collector_number_keys(self):
-        # Recorded 2026-07-19 against a real extract_card_evidence() run over all 30 golden
+        # Recorded 2026-07-19 against a real fetch_and_compute_card_evidence_for_tests() run over all 30 golden
         # cards (issue #149) - see TestGeometryBleed's own note above for why this isn't
         # re-verified live in CI. "" is a genuine real outcome for most of this sample (only
         # 10/30 produced a parseable collector number), not a placeholder - see golden_set.py's
@@ -193,7 +193,7 @@ class TestGoldenExpectationsShapeAndCoverage:
         assert card_ids == set(GOLDEN_CARD_IDS)
 
     def test_symbol_region_values_have_crop_px_and_phash_present_keys(self):
-        # Recorded 2026-07-20 against a real extract_card_evidence() run over all 30 golden cards
+        # Recorded 2026-07-20 against a real fetch_and_compute_card_evidence_for_tests() run over all 30 golden cards
         # (issue #160) - see TestGeometryBleed's own note above for why this isn't re-verified
         # live in CI. 30/30 produced a real (non-degenerate) hash on this run, zero "ambiguous"
         # skips - a genuine outcome, not a placeholder (see golden_set.py's own comment).
@@ -209,7 +209,7 @@ class TestGoldenExpectationsShapeAndCoverage:
         assert card_ids == set(GOLDEN_CARD_IDS)
 
     def test_legal_line_values_have_copyright_year_and_proxy_marker_keys(self):
-        # Recorded 2026-07-20 against a real extract_card_evidence() run over all 30 golden cards
+        # Recorded 2026-07-20 against a real fetch_and_compute_card_evidence_for_tests() run over all 30 golden cards
         # (issue #151) - see TestGeometryBleed's own note above for why this isn't re-verified
         # live in CI. 10/30 detected a proxy/not-for-sale marker on this real run (this catalog is
         # specifically an MTG-proxy print catalog, so this is a genuinely common real outcome, not
@@ -224,7 +224,7 @@ class TestGoldenExpectationsShapeAndCoverage:
         assert card_ids == set(GOLDEN_CARD_IDS)
 
     def test_quality_signals_values_are_bool(self):
-        # Recorded 2026-07-20 against a real extract_card_evidence() run over all 30 golden cards
+        # Recorded 2026-07-20 against a real fetch_and_compute_card_evidence_for_tests() run over all 30 golden cards
         # (issue #216, closing the golden-gate gap #215 shipped without) - see TestGeometryBleed's
         # own note above for why this isn't re-verified live in CI. False (not truncated) for
         # every card on this real run - a genuine all-negative outcome (see golden_set.py's own

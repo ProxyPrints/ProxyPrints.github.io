@@ -271,6 +271,16 @@ class DispatchOutcome:
     stage_d_fallback_already_voted: int = 0
     stage_d_illustration_votes: int = 0
     stage_d_illustration_already_voted: int = 0
+    # ATTRIBUTE-CHIP CASTERS (2026-07-30, the 2026-07-29 composition audit's §1 Q1 items 1-3).
+    # All three chip families were reachable from NEITHER engine: the border caster only via the
+    # standalone `local_layout_class_cast` command, and frame-style/bleed-edge only via the
+    # live-fetch pilot and via `image_evidence.extract_card_evidence`, which has no production
+    # callers at all - which is why frame-style and bleed-edge sat at literally zero machine rows
+    # after the 2026-07-29 purge with nothing able to re-derive them. Both casters read stored
+    # `ImageEvidence` and fetch nothing, so they cost the conveyor no network budget.
+    stage_d_border_chip_votes: int = 0
+    stage_d_frame_chip_votes: int = 0
+    stage_d_bleed_chip_votes: int = 0
     # Stage C BACKLOG WALK status for this dispatch (issue #468 - `_select_micro_batch` used to
     # discard it, leaving "the Stage C backlog is empty" and "the scan cap was spent finding
     # nothing" indistinguishable to a caller). `stage_c_backlog_found` is how many ids the Stage C
@@ -1062,6 +1072,66 @@ def _run_illustration_calculator(run_id: str, card_ids: list[int]) -> Any:
     return run_illustration_calculator(run_id=run_id, dry_run=False, card_ids=card_ids)
 
 
+def _run_attribute_chip_casters(run_id: str, card_ids: list[int], outcome: DispatchOutcome) -> None:
+    """
+    THE ATTRIBUTE-CHIP CASTERS, wired into the conveyor (2026-07-30, closing the 2026-07-29
+    composition audit's §1 Q1 items 1-3). Same lazy-import posture as
+    `_run_illustration_calculator` above, same reasoning.
+
+    WHAT THIS FIXES. The three attribute-chip families - border colour, frame style, bleed edge -
+    were reachable from NEITHER engine. `local_fallback`'s three casters are called only from
+    `local_identify_printing_tags.run_pilot` (a live-FETCH pilot with ONE completed run in its
+    history, 2026-07-16) and from `image_evidence.extract_card_evidence`, which has ZERO production
+    callers because both engines call `compute_card_evidence` + `persist_evidence` directly. Border
+    colour survived the 2026-07-29 purge only because `local_layout_class_cast` independently
+    re-derives it, and even that was reachable only from its own standalone management command.
+    Frame style and bleed edge had no such twin and sat at literally zero machine rows.
+
+    BOTH CASTERS READ STORED EVIDENCE AND FETCH NOTHING, which is why they can run inside a
+    micro-batch at all: the conveyor's fetch budget and the operating envelope's bars are about
+    network and host load, and these two consume neither. Re-deriving these chips through the only
+    pre-existing path (the pilot) would instead have meant re-fetching ~220,000 images to recompute
+    facts already sitting in the database.
+
+    ORDER IS IRRELEVANT HERE, deliberately, unlike the four printing calculators above: no chip
+    caster reads any other calculator's output. Each reads `ImageEvidence` and its own identity's
+    prior votes/scan-log rows, so there is no dependency to sequence and no empty-upstream-pool
+    failure mode of the kind `_fallback_eligible_cards_queryset`'s docstring describes. They run
+    after Stage D's printing calculators only because the printing verdict is the higher-value work
+    and should not be delayed behind chips.
+
+    A MISSING TAG SEED MUST NOT DESTROY A MICRO-BATCH. Both casters raise `RuntimeError` when their
+    attribute-chip `Tag` rows have not been seeded - the right behaviour for a standalone management
+    command an operator is watching, and the wrong behaviour here: by the time this runs, the four
+    printing calculators above have ALREADY written their votes, and letting the exception out would
+    mark the whole dispatch FAILED (`mark_ledger_failed`) over an operator setup gap in an advisory
+    chip. So the seed gap is caught, logged at ERROR, and leaves the three counters at 0. It is NOT
+    silently swallowed - a persistent zero on a chip counter is precisely the signal the 2026-07-29
+    audit says to read as "this channel never ran", and the log line names the fix. Only that
+    `RuntimeError` is caught; every other exception propagates exactly as the printing calculators'
+    already do.
+    """
+    from cardpicker.local_attribute_chip_cast import run_attribute_chip_cast
+    from cardpicker.local_layout_class_cast import run_layout_class_cast
+
+    try:
+        border_result = run_layout_class_cast(run_id=run_id, dry_run=False, card_ids=card_ids)
+        outcome.stage_d_border_chip_votes = border_result.votes_written
+
+        chip_result = run_attribute_chip_cast(run_id=run_id, dry_run=False, card_ids=card_ids)
+        outcome.stage_d_frame_chip_votes = chip_result.frame_votes_written
+        outcome.stage_d_bleed_chip_votes = chip_result.bleed_votes_written
+    except RuntimeError as exc:
+        logger.error(
+            "Attribute-chip casters skipped for run_id=%s: %s Stage D's printing votes for this "
+            "batch are unaffected and already written. Run `seed_default_tags`/`seed_attribute_tags`"
+            "/`seed_sensitive_tags` to close this - until then the border/frame/bleed chip counters "
+            "stay at zero on every dispatch.",
+            run_id,
+            exc,
+        )
+
+
 def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) -> None:
     """
     Stage D over the SAME micro-batch, scoped via the `card_ids` parameter
@@ -1114,6 +1184,10 @@ def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) ->
 
     slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
     outcome.stage_d_slow_path_routed = slow_path_result.routed_written
+
+    # See `_run_attribute_chip_casters`' own docstring: three chip families that were reachable
+    # from neither engine, two of them at zero rows with no substitute. Zero image fetches.
+    _run_attribute_chip_casters(run_id=run_id, card_ids=batch_ids, outcome=outcome)
 
 
 def dispatch_micro_batch(

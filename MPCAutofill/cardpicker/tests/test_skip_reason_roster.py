@@ -101,6 +101,7 @@ EXPECTED_SKIP_REASONS = {
         "AI_ART_NO_EVIDENCE_SKIP_REASON",
         "NO_EVIDENCE_SKIP_REASON",
         "LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON",
+        "CHIP_NO_EVIDENCE_SKIP_REASON",
     },
     "eliminated": {
         "FALLBACK_ELIMINATED_SKIP_REASON",
@@ -113,6 +114,7 @@ EXPECTED_SKIP_REASONS = {
         "LOCAL_FALLBACK_AMBIGUOUS_SKIP_REASON",
         "OCR_AMBIGUOUS_SKIP_REASON",
         "LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON",
+        "CHIP_ABSTAINED_SKIP_REASON",
     },
     "no-text": {
         "EXTRACTOR_NO_TEXT_SKIP_REASON",
@@ -130,7 +132,20 @@ EXPECTED_SKIP_REASONS = {
     "incomplete-evidence": {
         "AI_ART_INCOMPLETE_EVIDENCE_SKIP_REASON",
         "LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON",
+        "CHIP_INCOMPLETE_EVIDENCE_SKIP_REASON",
     },
+    # Attribute-chip cast — local_attribute_chip_cast.py (frame-style-cast-v1 /
+    # bleed-edge-cast-v1, 2026-07-30). ONE vocabulary shared by two anonymous_ids written from a
+    # single pass, hence the `CHIP_` prefix rather than a per-identity one: the two families
+    # differ in which extractor they gate on, not in what a skip MEANS. Its three shared values
+    # are registered against the multi-calculator entries above; only this one is new.
+    #
+    # APPENDED AT THE END, not filed next to the layout-class caster where it reads better.
+    # `.github/scripts/constant_rename_equivalence.py` inlines this dict into every assert that
+    # references it and compares the resulting trees POSITIONALLY, so inserting a key mid-dict
+    # shifts every later key and reports as a behaviour divergence. A trailing addition shifts
+    # nothing. Keep new entries here.
+    "unmapped-frame-class": {"CHIP_UNMAPPED_SKIP_REASON"},
 }
 
 # The same regex `.github/scripts/docs_lint.py`'s roster tether uses. Kept as a

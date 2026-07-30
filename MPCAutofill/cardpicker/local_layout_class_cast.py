@@ -100,7 +100,7 @@ LAYOUT_CLASS_CAST_ANONYMOUS_ID = "layout-class-cast-v1"
 
 # The one ImageEvidence extractor_versions key this calculator needs - layout_class is the
 # geometry-group extractor's own field (issue #148), computed alongside width/height/bleed_class
-# in the same extract_card_evidence() pass but versioned independently (image_evidence.py).
+# in the same fetch_and_compute_card_evidence_for_tests() pass but versioned independently (image_evidence.py).
 REQUIRED_EXTRACTOR_KEYS: tuple[str, ...] = ("layout_class",)
 
 # Skip reasons that stay eligible for re-selection on a future invocation (same convention as
