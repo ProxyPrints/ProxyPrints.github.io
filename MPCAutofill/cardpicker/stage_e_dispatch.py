@@ -1134,7 +1134,13 @@ def _run_attribute_chip_casters(
         )
 
 
-def _run_stage_d(batch_ids: Optional[list[int]], run_id: str, outcome: DispatchOutcome, dry_run: bool = False) -> None:
+def _run_stage_d(
+    batch_ids: Optional[list[int]],
+    run_id: str,
+    outcome: DispatchOutcome,
+    dry_run: bool = False,
+    envelope_check: Optional[Callable[[str], None]] = None,
+) -> None:
     """
     Stage D over the SAME micro-batch, scoped via the `card_ids` parameter
     `local_calculate_verdicts.py` gained for this module (see that module's own docstring) - the
@@ -1189,24 +1195,59 @@ def _run_stage_d(batch_ids: Optional[list[int]], run_id: str, outcome: DispatchO
     stop eight concurrent dispatches from re-tripping the load bar the moment streaming resumes -
     see `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (companion change) for the actual fix to that,
     and `docs/features/stage-e-operations.md`'s runbook for acknowledging the open trip itself.
+
+    `envelope_check` (2026-07-30, OPTIONAL, DEFAULT `None` = today's behaviour byte for byte).
+    A callable invoked at each seam BETWEEN the calculators below, given the name of the step
+    about to start. It exists for ONE caller, `run_pipeline`, whose pass is whole-catalogue and
+    long: PR #660 checked the operating envelope once as a PREFLIGHT and never again, which is
+    right for a 200-card run and wrong for a 230k one, because the same command has to fit
+    whatever compute is free DURING the pass, not what was free at launch.
+
+    THE CONVEYOR DELIBERATELY PASSES NOTHING. `dispatch_micro_batch` already samples the envelope
+    per micro-batch, above this function, so a second check inside would be redundant sampling on
+    the hot path. `None` therefore means "my caller already owns this", not "nobody is checking".
+
+    THE CALLBACK MAY RAISE, AND RAISING IS THE POINT. A genuine envelope breach HALTS and does not
+    self-resume (`operating_envelope`'s own resume semantics; cleared only by
+    `resolve_envelope_trip`). So this function does not catch, translate or count anything the
+    callback raises - it propagates, and whatever Stage D had already written stays written and
+    stays queryable by `run_id`. This is deliberately NOT the throttle path: rate pressure is
+    handled beneath Stage C by `harvest_fetch_limiter` (PR #644/#649) and never reaches here.
+
+    THE SEAMS ARE BETWEEN CALCULATORS, NOT INSIDE THEM. Each of the steps below is one call into a
+    calculator that owns its own internal batching, so the finest granularity reachable WITHOUT
+    changing all of those calculators is one check per step. At catalogue scale a single
+    calculator can run for a long time between checks; closing that gap means threading a progress
+    callback into each calculator's own batch loop, which is a real refactor of shared code and is
+    deliberately not done here.
     """
+
+    def seam(step: str) -> None:
+        if envelope_check is not None:
+            envelope_check(step)
+
+    seam("stage-d:join-key")
     join_key_result = run_join_key_calculator(run_id=run_id, dry_run=dry_run, card_ids=batch_ids)
     outcome.stage_d_join_key_votes = join_key_result.votes_written + join_key_result.no_match_votes_written
     outcome.stage_d_join_key_already_voted = join_key_result.already_voted
 
+    seam("stage-d:fallback")
     fallback_result = run_fallback_calculator(run_id=run_id, dry_run=dry_run, card_ids=batch_ids)
     outcome.stage_d_fallback_votes = fallback_result.votes_written
     outcome.stage_d_fallback_already_voted = fallback_result.already_voted
 
+    seam("stage-d:illustration")
     illustration_result = _run_illustration_calculator(run_id=run_id, card_ids=batch_ids, dry_run=dry_run)
     outcome.stage_d_illustration_votes = illustration_result.votes_written
     outcome.stage_d_illustration_already_voted = illustration_result.already_voted
 
+    seam("stage-d:slow-path")
     slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=dry_run, card_ids=batch_ids)
     outcome.stage_d_slow_path_routed = slow_path_result.routed_written
 
     # See `_run_attribute_chip_casters`' own docstring: three chip families that were reachable
     # from neither engine, two of them at zero rows with no substitute. Zero image fetches.
+    seam("stage-d:attribute-chips")
     _run_attribute_chip_casters(run_id=run_id, card_ids=batch_ids, outcome=outcome, dry_run=dry_run)
 
 

@@ -70,6 +70,7 @@ from cardpicker.tests.factories import (
     CanonicalPrintingMetadataFactory,
     CardFactory,
     CardPrintingTagFactory,
+    ImageEvidenceFactory,
     SourceFactory,
     TagFactory,
 )
@@ -1518,6 +1519,26 @@ class TestUncoveredPrintingsClosed:
         assert attributes.uncovered_printings_closed == 0
 
 
+def _extracted(card, layout_class="black", illus_anchor_fired=True, collector_number="158"):
+    """A card that has actually been LOOKED AT: a current `ImageEvidence` row carrying a full frame
+    manifest. Required by `run_name_frequency_elimination` as of 2026-07-30 - its visual conjunct
+    abstains outright on a card with no stored evidence, because "we have no evidence" must not
+    read as "no evidence against" for a deduction whose entire weakness is that it never looked at
+    the image. `content_phash` is set on the card so the row satisfies `current_evidence_queryset`'s
+    own currency rule (`content_hash == card.content_phash`); `CardFactory` leaves it NULL by
+    default, which would make the row permanently non-current and silently defeat the fixture."""
+    card.content_phash = card.content_phash or 0x0A0A0A0A0A0A0A0A
+    card.save(update_fields=["content_phash"])
+    return ImageEvidenceFactory(
+        card=card,
+        content_hash=card.content_phash,
+        extractor_versions={"collector_line_ocr": 1, "artist_ocr": 1},
+        layout_class=layout_class,
+        illus_anchor_fired=illus_anchor_fired,
+        collector_line_collector_number=collector_number,
+    )
+
+
 class TestNameFrequencyElimination:
     """Fast-follow (2026-07-16): run_name_frequency_elimination's SAFE 1:1 gate - exactly one
     uncovered printing AND exactly one unresolved-eligible card for that name - not just "one
@@ -1529,6 +1550,7 @@ class TestNameFrequencyElimination:
         uncovered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
         CardFactory(canonical_card=covered_printing)  # confirms "aaa" as covered
         card = CardFactory(name="Forest")  # the single unresolved card for this name
+        _extracted(card)
 
         result = run_name_frequency_elimination(dry_run=False)
 
@@ -1575,25 +1597,200 @@ class TestNameFrequencyElimination:
         covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
         CardFactory(canonical_card=covered_printing)
-        CardFactory(name="Forest")
+        _extracted(CardFactory(name="Forest"))
 
         result = run_name_frequency_elimination(dry_run=True)
 
         assert result.votes_written == 1  # counted, even though nothing is persisted
         assert not CardPrintingTag.objects.exists()
 
-    def test_idempotent_on_a_second_invocation(self, db):
+    def test_a_fresh_run_recasts_the_same_verdict_without_duplicating_the_row(self, db):
+        """2026-07-30, the census-leak fix's deliberate consequence. This test used to assert
+        `second.votes_written == 0` under the name `test_idempotent_on_a_second_invocation`. That
+        property was a SIDE EFFECT of the lifetime own-vote exclusion this calculator's census
+        cannot correctly use (see `test_a_prior_runs_own_vote_does_not_deplete_the_census...`
+        below), not a property anyone specified, and it directly contradicted the 2026-07-29
+        run-scoping directive: "prior runs must not suppress work in a new run".
+
+        The property that MATTERS - and the one an idempotence test should have been asserting all
+        along - is that re-running never DUPLICATES or CHANGES a verdict: one row, same printing,
+        superseded in place by `purge_and_write_votes` rather than accumulated. That is asserted
+        here and is unchanged by the fix."""
         covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
-        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        uncovered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
         CardFactory(canonical_card=covered_printing)
-        CardFactory(name="Forest")
+        card = CardFactory(name="Forest")
+        _extracted(card)
 
         first = run_name_frequency_elimination(dry_run=False)
         second = run_name_frequency_elimination(dry_run=False)
 
         assert first.votes_written == 1
+        # A FRESH run_id reconsiders every card, so the same sound verdict is cast again.
+        assert second.votes_written == 1
+        # ...but the row is superseded, never duplicated, and the verdict never drifts.
+        votes = CardPrintingTag.objects.filter(anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID)
+        assert votes.count() == 1
+        assert votes.get().card_id == card.pk
+        assert votes.get().printing_id == uncovered_printing.pk
+
+    def test_within_run_resume_still_skips_cards_this_run_already_voted_on(self, db):
+        """The half of the own-vote exclusion that run-scoping KEEPS. A killed run re-invoked with
+        the SAME run_id must pick up where it stopped rather than redoing completed batches - so
+        the exclusion is narrowed to this run's rows, not removed."""
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        _extracted(CardFactory(name="Forest"))
+
+        first = run_name_frequency_elimination(dry_run=False, run_id="resume-me")
+        second = run_name_frequency_elimination(dry_run=False, run_id="resume-me")
+
+        assert first.votes_written == 1
         assert second.votes_written == 0
         assert CardPrintingTag.objects.filter(anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).count() == 1
+
+    def test_a_prior_runs_own_vote_does_not_deplete_the_census_for_a_later_run(self, db):
+        """THE CENSUS LEAK (2026-07-30). `_eligible_base_queryset` was called with no `run_id`, so
+        its "exclude cards already carrying this calculator's vote" was LIFETIME. The gate is a
+        COUNT over exactly that population ("exactly one unresolved eligible card for this name"),
+        so the calculator was taking a census over a pool it permanently shrinks itself.
+
+        The sequence below is the concrete defect, and note that the wrong answer is a FRESH WRONG
+        POSITIVE, not a stale or missed vote - nothing about card B changed between the runs, only
+        the size of the population the gate counts:
+
+          run 1   "Forest" has ONE unresolved eligible card (A) and ONE uncovered printing.
+                  Sound: A is that printing by elimination. A is voted.
+          later   a second "Forest" upload, B, arrives from another source - the ordinary way this
+                  catalogue grows.
+          run 2   WITH THE LEAK: A is excluded forever by its own run-1 vote, so the name presents
+                  as having exactly one unresolved card (B) and votes B for the same printing.
+                  That is a coin flip wearing the gate's clothes - either A or B is a redundant
+                  depiction of the already-covered printing and elimination cannot say which.
+                  CORRECTLY: the pool is {A, B}, the count is 2, and the gate ABSTAINS.
+
+        A machine vote does not resolve a card (`compute_covered_printing_pks` counts only
+        confirmed `canonical_card` / RESOLVED `inferred_canonical_card`), so run 1's vote leaves
+        the printing uncovered and the coverage half of the gate still passes on run 2 - which is
+        precisely why the census half has to be the thing that stops it."""
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        card_a = CardFactory(name="Forest")
+        _extracted(card_a)
+
+        first = run_name_frequency_elimination(dry_run=False, run_id="run-1")
+        assert first.votes_written == 1
+        assert CardPrintingTag.objects.filter(
+            card=card_a, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID
+        ).exists(), "precondition: run 1 must have cast the sound vote this test then depletes the pool with"
+
+        card_b = CardFactory(name="Forest")
+        _extracted(card_b)
+
+        second = run_name_frequency_elimination(dry_run=False, run_id="run-2")
+
+        assert second.votes_written == 0, (
+            "run 2 voted despite TWO unresolved eligible cards sharing the name - the census was "
+            "depleted by run 1's own vote, which is the leak this asserts against"
+        )
+        assert not CardPrintingTag.objects.filter(card=card_b, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).exists()
+
+    def test_abstains_when_the_stored_evidence_contradicts_the_candidate_printings_border(self, db):
+        """
+        THE MISSING CONJUNCT (owner ruling, 2026-07-30): "just because a card was printed exactly
+        once doesn't mean that the image in our catalogue is an accurate depiction of that card, it
+        may have a different border or another issue."
+
+        The 1:1 count is entirely satisfied here - one uncovered printing, one unresolved eligible
+        card - and the OLD calculator would have voted. The card's own stored evidence says its
+        border is WHITE while the printing Scryfall describes is BLACK-bordered, so the image is
+        not a faithful depiction of the only printing elimination could assign it. Counting cannot
+        see that; looking can.
+
+        This matters more than "it is only a vote" suggests: issue #593 established that a machine
+        vote is what the question feed renders as the suggestion to confirm, and a human's click
+        returns as a full-weight USER vote - so an unverified deduction becomes a one-click rubber
+        stamp rather than a harmless guess.
+        """
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        uncovered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CanonicalPrintingMetadataFactory(canonical_card=uncovered_printing, border_color="black")
+        CardFactory(canonical_card=covered_printing)
+        card = CardFactory(name="Forest")
+        _extracted(card, layout_class="white")
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.abstained_attribute_mismatch == 1
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).exists()
+
+    def test_votes_when_the_stored_evidence_agrees_with_the_candidate_printing(self, db):
+        """The other side of the conjunct - it must NARROW the tier, not disable it. Same fixture
+        as the border-mismatch test with one field flipped, so the two together prove the check is
+        discriminating rather than uniformly refusing."""
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        uncovered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CanonicalPrintingMetadataFactory(canonical_card=uncovered_printing, border_color="black")
+        CardFactory(canonical_card=covered_printing)
+        card = CardFactory(name="Forest")
+        _extracted(card, layout_class="black")
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 1
+        assert result.abstained_attribute_mismatch == 0
+        assert (
+            CardPrintingTag.objects.get(card=card, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).printing_id
+            == uncovered_printing.pk
+        )
+
+    def test_abstains_when_the_card_has_never_been_extracted_at_all(self, db):
+        """
+        NO STORED EVIDENCE MEANS ABSTAIN, NOT PROCEED. This is the one place where this module's
+        usual "missing data is not evidence" rule points the OTHER way, and deliberately: that rule
+        exists to stop a match being VETOED by silence, whereas here silence is being asked to
+        ESTABLISH that the image depicts one of the name's printings. A card nobody has ever looked
+        at leaves that premise exactly as unestablished as it was before the fix.
+        """
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CardFactory(canonical_card=covered_printing)
+        card = CardFactory(name="Forest")  # deliberately NO _extracted(...)
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.abstained_no_evidence == 1
+        assert not CardPrintingTag.objects.filter(card=card, anonymous_id=NAME_FREQUENCY_ANONYMOUS_ID).exists()
+
+    def test_the_frame_half_of_the_conjunct_is_gated_on_artist_ocr_having_run(self, db):
+        """
+        PR #656's trap, inherited by this caller for free BECAUSE the check is shared rather than
+        re-derived. `illus_anchor_fired` is nullable and `bool(None)` is `False`, which is
+        indistinguishable from "artist_ocr ran and found no anchor" - with no collector number
+        either, `classify_frame_style` then confidently answers "modern" for a card it has no
+        anchor evidence about, and a genuine OLD-frame printing gets vetoed.
+
+        Here `artist_ocr` never ran, so the frame half must be SKIPPED rather than evaluated on
+        invented input: the card still votes. A private second copy of this check would very
+        likely have re-introduced the trap, which is the argument for sharing it.
+        """
+        covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        uncovered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
+        CanonicalPrintingMetadataFactory(canonical_card=uncovered_printing, border_color="", frame="1993")
+        CardFactory(canonical_card=covered_printing)
+        card = CardFactory(name="Forest")
+        evidence = _extracted(card, layout_class="", illus_anchor_fired=None, collector_number="")
+        evidence.extractor_versions = {"collector_line_ocr": 1}  # artist_ocr never ran
+        evidence.save(update_fields=["extractor_versions"])
+
+        result = run_name_frequency_elimination(dry_run=False)
+
+        assert result.votes_written == 1, "an absent artist_ocr must skip the frame half, not veto on it"
+        assert result.abstained_attribute_mismatch == 0
 
     def test_excludes_tokens_and_cardbacks(self, db):
         covered_printing = CanonicalCardFactory(name="Beast", expansion=CanonicalExpansionFactory(code="aaa"))
@@ -1613,7 +1810,7 @@ class TestNameFrequencyEliminationCommand:
         covered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
         CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
         CardFactory(canonical_card=covered_printing)
-        CardFactory(name="Forest")
+        _extracted(CardFactory(name="Forest"))
 
         call_command("local_name_frequency_elimination", "--dry-run")
 
@@ -1629,6 +1826,7 @@ class TestNameFrequencyEliminationCommand:
         CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
         CardFactory(canonical_card=covered_printing)
         card = CardFactory(name="Forest")
+        _extracted(card)
 
         call_command("local_name_frequency_elimination")
 
@@ -1902,7 +2100,7 @@ class TestRunIdStamping:
 
     def test_name_frequency_elimination_gets_its_own_run_id(self, db):
         printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
-        CardFactory(name="Forest")
+        _extracted(CardFactory(name="Forest"))
 
         result = run_name_frequency_elimination()
 
@@ -3628,6 +3826,7 @@ class TestPurgeWriteAtomicity:
         uncovered_printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="bbb"))
         CardFactory(canonical_card=covered_printing)
         card = CardFactory(name="Forest")
+        _extracted(card)
         stale = CardPrintingTag.objects.create(
             card=card,
             printing=uncovered_printing,

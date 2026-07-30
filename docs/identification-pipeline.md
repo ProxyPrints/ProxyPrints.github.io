@@ -104,13 +104,53 @@ executed:
 
 ```
 Stage 0   Scryfall reference refresh, once, at the front
-Stage E   operating-envelope preflight
+Stage E   operating-envelope preflight, then RE-SAMPLED at every stage seam
 Stage C   evidence extraction (the pooled engine)
 Stage D   join-key → fallback → illustration → slow-path, then the three chips
-Stage C+  distance-0 cluster vote propagation
+Stage C+  group vote propagation — md5 first, then phash distance-0
 Stage E   fidelity gate — machine-only resolutions must be zero
 end       channel_report
 ```
+
+### Stage C+ — the md5 group behaves as one unit
+
+An **md5 group** is a set of cards whose stored `Card.md5_checksum` is
+identical: the same bytes, uploaded by different sources. Two things now key on
+that same group, which is the whole point:
+
+- **one fetch per group** — `evidence_transfer` copies an md5-sibling's
+  evidence instead of re-fetching (this half already existed);
+- **one deduction per group** — whichever member Stage D reached casts the
+  verdict, and Stage C+ applies it across the rest of the group, under the
+  casting calculator's own identity and with its already-voted guard intact.
+
+Before this, the fetch half keyed on md5 and the vote half keyed on phash
+distance-0, so _the set that got a fetch saved and the set that got a vote
+propagated were different sets_. Byte-identical files always share a phash;
+files sharing a phash are not necessarily byte-identical.
+
+Propagation is **not** redundant with each member deducing for itself off
+transferred evidence, which is worth stating because it looks like it should
+be. A Stage D printing deduction is not a function of the evidence row alone:
+candidates are resolved from `Card.name`, and md5-identical uploads from
+different sources routinely carry different names. Members therefore reach
+genuinely different conclusions — or none at all — from byte-identical
+evidence.
+
+Propagation **never overrides a member's own ineligibility**. A member that is
+already resolved, already confirmed to a `canonical_card`, not a `CARD`, or
+carrying a resolved `custom-art` / `non-english` tag is skipped. `custom-art` is
+the catalogue declaring the image is _not_ a faithful depiction of a printing,
+and a checksum must not overturn that.
+
+**The phash distance-0 tier still runs, second, unchanged.** Its future is
+issue #661: the intended direction is that phash shares an _illustration_ (same
+artwork, possibly a different printing — a near-identity claim at a grain where
+a weaker claim is appropriate), not a printing verdict. Until that is built it
+stays, because it is the only propagation reaching cards with no md5 at all —
+md5 is NULL for every `LOCAL_FILE` source by design and is never invented. Both
+tiers call one propagation engine that takes the grouping as a parameter, so
+adding the illustration-grain tier later is a new grouping, not a restructure.
 
 It contains **no pipeline logic of its own**. Each stage below is reached by
 importing and calling the thing that already owned it; the command is

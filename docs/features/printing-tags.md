@@ -3611,6 +3611,75 @@ deduction is weaker evidence than an engine that actually looked at the image, e
 resolve - same consensus/gate-check discipline as every other engine in this module, same
 batch-flush checkpointing pattern as `run_pilot`.
 
+#### The counting gate was not sufficient on its own (2026-07-30)
+
+Owner ruling: _"just because a card was printed exactly once doesn't mean that the image in our
+catalogue is an accurate depiction of that card, it may have a different border or another
+issue."_
+
+Everything the 1:1 gate checks is a **count**. Counting establishes that _if_ this card is a
+depiction of one of the name's printings, _then_ it must be the uncovered one. It establishes
+nothing about the antecedent, and the only filters that spoke to it at all were the **declared**
+`custom-art` and non-English tags — so an altered border, a custom frame, or a misnamed upload
+that nobody had tagged yet passed the gate and received a full-confidence structural vote.
+
+"It is only a vote" is a weaker defence than it sounds. Issue #593 established that a machine
+vote is what the question feed renders as _the suggestion to confirm_, and a human's click
+returns as a full-weight USER vote — so a visually-unverified deduction becomes a one-click
+rubber stamp, and the human-backed consensus gate is the mechanism that launders it.
+
+**The missing conjunct is now required**: the card's already-stored evidence must be consistent
+with the candidate printing — border class and frame style, via
+`local_identify_printing_tags.printing_attribute_disagreement`, which is the _same_ check the
+Stage D join-key channel has always applied, now shared between the two callers rather than
+re-derived. No image fetch and no new extraction: every input is a field already sitting on the
+card's current `ImageEvidence` row. Sharing it also inherits PR #656's gate for free — the frame
+half is skipped entirely unless `artist_ocr` actually ran, because `illus_anchor_fired` is
+nullable and `bool(None)` is indistinguishable from "ran and found no anchor".
+
+**No stored evidence means abstain, not proceed.** If the card has never been extracted, we have
+never looked at the image, so the antecedent is exactly as unestablished as before. This is the
+one place where this module's usual "missing data is not evidence" rule points the other way, and
+deliberately so: that rule protects a match from being _vetoed_ by silence, whereas here silence
+is being asked to _establish_ something. The two abstention populations are reported separately
+(`abstained_no_evidence`, `abstained_attribute_mismatch`) so the cost of the gate is legible on
+the first run rather than inferred from a smaller total.
+
+The tier was **not** dropped, although it could have been cleanly: it has never run in production
+(zero `PilotRunLedger` rows for `local_name_frequency_elimination`, ever), so nothing is
+contaminated and no retraction was needed. It is kept because the deduction is genuinely sound
+once the antecedent is established, and elimination reaches a population the image-based channels
+structurally cannot — a name whose single uncovered printing has no distinguishing collector line
+to read. Deleting a sound tier for want of a guard is a worse trade than adding the guard.
+
+#### The census was leaking (2026-07-30)
+
+Separately from soundness, the 1:1 gate was counting over a population it was itself permanently
+shrinking. `_eligible_base_queryset` was called with **no `run_id`**, so its exclusion of cards
+already carrying this calculator's vote was **lifetime** rather than per-run:
+
+- **run 1** — a name has one unresolved eligible card and one uncovered printing. Sound; it votes.
+- **later** — a second upload of that name arrives from another source, the ordinary way this
+  catalogue grows.
+- **run 2** — the run-1 card is excluded _forever_ by its own vote, so the name presents as having
+  exactly one unresolved card again and votes for the new one. Correctly, the pool is two cards
+  and the gate should abstain.
+
+That is a **fresh wrong positive**, not a stale or missed vote: nothing about the second card
+changed, only the size of the population the gate counts. The fix is to pass this run's `run_id`,
+which narrows the self-suppressing excludes to rows _this_ run wrote. Within-run resume is
+unaffected — re-invoking with the same `run_id` still skips cards this run already voted on.
+
+`compute_covered_printing_pks()` stays catalogue-wide and un-scoped, deliberately: "covered" is a
+fact about the world (a confirmed `canonical_card`, or a RESOLVED `inferred_canonical_card`), not
+about this calculator's progress, and run-scoping it would make every run treat every printing as
+uncovered. The two halves of the gate are scoped differently on purpose.
+
+`run_pilot`'s own `select_candidates` and `count_below_resolution_floor` are **left unscoped** —
+neither gates on a count over the returned population (the pilot's predicate is per-card and its
+selection is a fetch-budget ordering; the floor count is a report metric), so neither has this
+defect.
+
 ## Incident: per-chunk thread pool leaked Postgres connections, crashed the live run (2026-07-16)
 
 The second full-catalog relaunch (post cluster-dedup removal) died ~3 minutes in with

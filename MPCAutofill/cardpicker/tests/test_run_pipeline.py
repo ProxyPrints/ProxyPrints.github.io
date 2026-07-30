@@ -207,6 +207,36 @@ def cohort(db: Any) -> dict[str, Any]:
     return {"printing": printing, "representative": representative, "absorbed": absorbed, "lone": lone}
 
 
+SHARED_MD5 = "d41d8cd98f00b204e9800998ecf8427e"
+
+
+@pytest.fixture
+def md5_group(db: Any) -> dict[str, Any]:
+    """
+    An MD5 GROUP WHOSE MEMBERS DO NOT SHARE A PHASH - the whole point of the 2026-07-30 md5 tier,
+    and constructed so the phash tier provably cannot account for the result.
+
+    `unfetchable` is created FIRST, so it holds the LOWER pk and is therefore the group's
+    representative under the `min(pk)` convention - while the card that actually reaches Stage D
+    and casts a vote is `fetched`, a NON-representative. That is deliberate: PR #660 looked for
+    source votes on representatives only, so this fixture is also the regression cover for the
+    "Stage D reached a member that is not the lowest pk and nothing propagated" defect.
+
+    The two carry DIFFERENT `content_phash` values, so no distance-0 phash cluster exists between
+    them and the phash tier contributes nothing here.
+    """
+    call_command("seed_default_tags")
+    call_command("seed_attribute_tags")
+    call_command("seed_sensitive_tags")
+
+    printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+    unfetchable = CardFactory(
+        name=f"{FETCH_FAILS_PREFIX} Some Card", content_phash=0x1111111111111111, md5_checksum=SHARED_MD5
+    )
+    fetched = CardFactory(name="Some Card", content_phash=0x2222222222222222, md5_checksum=SHARED_MD5)
+    return {"printing": printing, "unfetchable": unfetchable, "fetched": fetched}
+
+
 def _run(*argv: str, run_id: str = "test-monolith") -> None:
     call_command("run_pipeline", "--run-id", run_id, *argv)
 
@@ -260,9 +290,12 @@ class TestEndToEndPass:
                 run_id="test-monolith", anonymous_id=identity
             ).exists(), f"no chip votes for {identity}"
 
-        # Clustering ran and found the distance-0 pair.
-        assert counters["clustering"]["cluster_count"] == 1
-        assert counters["clustering"]["cards_absorbed_into_clusters"] == 1
+        # Stage C+ ran BOTH grouping tiers and found the distance-0 pair on the phash one.
+        # (The counters are per-tier as of the 2026-07-30 md5 change - `md5` is the exact-identity
+        # tier that shares a printing vote, `phash_d0` is the pre-existing one #661 holds.)
+        assert counters["clustering"]["phash_d0"]["group_count"] == 1
+        assert counters["clustering"]["phash_d0"]["cards_absorbed_into_groups"] == 1
+        assert "md5" in counters["clustering"], "the md5 tier must run even when it finds no groups"
 
         # The fidelity gate ran, INSPECTED CARDS, and is clear - a machine vote alone must never
         # resolve a card. Asserting the count alone would survive the gate never being called at
@@ -583,12 +616,18 @@ class TestWritesByDefault:
         """
         seen: dict[str, Any] = {}
 
-        def _capture(batch_ids: Any, run_id: str, outcome: Any, dry_run: bool = True) -> None:
+        def _capture(
+            batch_ids: Any, run_id: str, outcome: Any, dry_run: bool = True, envelope_check: Any = None
+        ) -> None:
             seen["dry_run"] = dry_run
+            seen["envelope_check"] = envelope_check
 
         monkeypatch.setattr(pipeline_command, "_run_stage_d", _capture)
         _run()
         assert seen["dry_run"] is False
+        # The mid-pass envelope sentry is handed to Stage D too, not only used between stages -
+        # without it, Stage D's own multi-calculator sequence would be a single unmonitored span.
+        assert seen["envelope_check"] is not None
 
         seen.clear()
         _run("--dry-run", run_id="test-monolith-dry")
@@ -603,3 +642,239 @@ class TestWritesByDefault:
         """
         _run()  # would raise CommandError("FORCED DRY-RUN GUARD: ...") if the guard applied
         assert ImageEvidence.objects.filter(run_id="test-monolith").exists()
+
+
+# ==================================================================================================
+# FIX 1 - THE MD5 GROUP AS ONE UNIT (owner ruling, 2026-07-30)
+# ==================================================================================================
+@pytest.mark.django_db(transaction=True)
+class TestMd5GroupPropagation:
+    """
+    "The md5 dedupe should only fetch each identical image once across sources and then apply votes
+    to the entire group as the fetched card passes through the monolith."
+
+    The fetch half already existed (`evidence_transfer`, keyed on md5). The VOTE half existed only
+    on the phash distance-0 key, so the set that got a fetch saved and the set that got a vote
+    propagated were different sets. These tests pin the md5 key doing the vote half, on a fixture
+    where the phash tier provably cannot be responsible.
+    """
+
+    def test_an_md5_twin_that_shares_no_phash_still_gets_the_groups_verdict(self, md5_group: dict[str, Any]) -> None:
+        """
+        THE FIX, in one assertion. `unfetchable` never fetched, never extracted, and reached no
+        Stage D calculator with evidence - and it shares NO phash with anything, so the pre-existing
+        distance-0 tier cannot reach it. It is byte-identical to `fetched` (same
+        `Card.md5_checksum`), so it must carry `fetched`'s printing verdict, under the same
+        identity, at the same confidence.
+
+        It is also the regression cover for source-vote discovery: `unfetchable` has the LOWER pk
+        and is therefore the group's representative, while the vote is held by `fetched`, a
+        non-representative. Looking for source votes on representatives only - what PR #660 did -
+        finds nothing here.
+        """
+        _run()
+
+        source = CardPrintingTag.objects.get(
+            card_id=md5_group["fetched"].pk, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="test-monolith"
+        )
+        propagated = CardPrintingTag.objects.get(
+            card_id=md5_group["unfetchable"].pk, anonymous_id=JOIN_KEY_ANONYMOUS_ID, run_id="test-monolith"
+        )
+        assert propagated.printing_id == source.printing_id
+        assert propagated.confidence == source.confidence
+        assert propagated.is_no_match is False
+
+        # ...and it came from the md5 tier, not the phash one. Asserting only the row above would
+        # pass if some future change made the phash tier reach this card by another route.
+        ledger = PilotRunLedger.objects.get(command="run_pipeline", run_id="test-monolith-pipeline")
+        assert ledger.counters["clustering"]["md5"]["votes_propagated"] == 1
+        assert ledger.counters["clustering"]["phash_d0"]["votes_propagated"] == 0
+
+    def test_the_unfetched_twin_has_no_verdict_of_its_own_without_propagation(self, md5_group: dict[str, Any]) -> None:
+        """
+        The precondition that makes the test above mean something. With Stage C+ unwired, the md5
+        twin has NO printing vote at all - so the row asserted above is genuinely produced by
+        propagation and is not something Stage D would have reached on its own from transferred
+        evidence. This is the "N independent deductions already agree" hypothesis being falsified
+        on the fixture rather than argued about.
+        """
+        _run("--skip-clustering")
+        assert not CardPrintingTag.objects.filter(card_id=md5_group["unfetchable"].pk).exists()
+
+    def test_propagation_never_overrides_a_members_own_ineligibility(self, md5_group: dict[str, Any]) -> None:
+        """
+        Owner constraint: "a card excluded for a real reason stays excluded." `custom-art` is the
+        catalogue DECLARING that an image is not a faithful depiction of a printing. Byte identity
+        with a card we did identify must not overturn that - otherwise a checksum silently
+        outranks a human-visible declaration.
+        """
+        unfetchable = md5_group["unfetchable"]
+        unfetchable.tags = ["custom-art"]
+        unfetchable.save(update_fields=["tags"])
+
+        _run()
+
+        assert CardPrintingTag.objects.filter(
+            card_id=md5_group["fetched"].pk, anonymous_id=JOIN_KEY_ANONYMOUS_ID
+        ).exists(), "precondition: the source vote must still have been cast"
+        assert not CardPrintingTag.objects.filter(card_id=unfetchable.pk).exists()
+
+        ledger = PilotRunLedger.objects.get(command="run_pipeline", run_id="test-monolith-pipeline")
+        assert ledger.counters["clustering"]["md5"]["members_skipped_ineligible"] == 1
+
+    def test_a_null_md5_is_a_group_of_one(self, md5_group: dict[str, Any]) -> None:
+        """Issue #473's ruling 3, inherited not re-decided: a checksum is copied from the source
+        listing and never invented, so cards without one group with nothing. Two cards with a NULL
+        md5 must NOT be treated as sharing the "same" (absent) checksum - the failure mode that
+        would silently fuse every `LOCAL_FILE` card in the catalogue into one group."""
+        CardFactory(name="Some Card", content_phash=0x3333333333333333, md5_checksum=None)
+        CardFactory(name=f"{FETCH_FAILS_PREFIX} Other", content_phash=0x4444444444444444, md5_checksum=None)
+
+        _run()
+
+        ledger = PilotRunLedger.objects.get(command="run_pipeline", run_id="test-monolith-pipeline")
+        # Only the one real md5 group from the fixture, never a group of NULL-checksum cards.
+        assert ledger.counters["clustering"]["md5"]["group_count"] == 1
+
+
+# ==================================================================================================
+# FIX 3 - THE ENVELOPE IS RE-SAMPLED DURING THE PASS
+# ==================================================================================================
+@pytest.mark.django_db(transaction=True)
+class TestEnvelopeResampling:
+    """
+    Owner: "host resampling is likely required (for steps that aren't fetch) as the same monolith
+    will run for small datasets and large ones so needs to fit the available compute
+    appropriately." PR #660 sampled once, as a preflight, and never again.
+    """
+
+    def test_the_envelope_is_re_sampled_during_the_pass_not_only_at_preflight(
+        self, cohort: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        The interval gate is dropped to 0 so the test does not have to spend a real minute proving
+        the cadence exists. What is asserted is the thing that was missing: MORE THAN ONE sample.
+        A preflight-only command reports exactly one, forever, at any interval.
+        """
+        monkeypatch.setattr(pipeline_command, "ENVELOPE_RESAMPLE_INTERVAL_SECONDS", 0.0)
+        _run()
+
+        ledger = PilotRunLedger.objects.get(command="run_pipeline", run_id="test-monolith-pipeline")
+        assert ledger.counters["envelope"]["samples"] > 1
+
+    def test_the_interval_gate_stops_it_becoming_its_own_load(
+        self, cohort: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other half of the owner's instruction - "do not re-sample so often it becomes its
+        own load". At the real 60s interval a short pass samples ONCE (the forced preflight) and
+        every later seam is gated out, so the seams are counted rather than queried."""
+        monkeypatch.setattr(pipeline_command, "ENVELOPE_RESAMPLE_INTERVAL_SECONDS", 3600.0)
+        _run()
+
+        ledger = PilotRunLedger.objects.get(command="run_pipeline", run_id="test-monolith-pipeline")
+        assert ledger.counters["envelope"]["samples"] == 1
+        assert ledger.counters["envelope"]["skipped_by_interval"] > 1
+
+    def test_a_breach_appearing_mid_pass_halts_the_run_and_says_rows_were_kept(
+        self, cohort: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        A HOST-LOAD BREACH THAT APPEARS AFTER THE PREFLIGHT MUST HALT. It must NOT be converted
+        into a throttle (that is rate pressure's channel, beneath Stage C, PR #644) and it must not
+        self-resume. The halt message must also tell the truth about what is on disk: unlike the
+        preflight's "nothing was written", a mid-pass halt leaves real rows behind.
+        """
+        from cardpicker.operating_envelope import EnvelopeSignals
+
+        monkeypatch.setattr(pipeline_command, "ENVELOPE_RESAMPLE_INTERVAL_SECONDS", 0.0)
+        calls = {"n": 0}
+
+        def _clean_then_breach(*args: Any, **kwargs: Any) -> EnvelopeSignals:
+            calls["n"] += 1
+            if calls["n"] == 1:  # the preflight sees a clear box
+                return EnvelopeSignals(load_avg=0.5, rss_mb_per_worker=128.0)
+            return EnvelopeSignals(load_avg=99.0, rss_mb_per_worker=128.0)
+
+        monkeypatch.setattr(pipeline_command, "_sample_envelope_signals", _clean_then_breach)
+
+        with pytest.raises(CommandError) as excinfo:
+            _run()
+
+        message = str(excinfo.value)
+        assert "ENVELOPE HALT" in message
+        assert "host_load" in message
+        assert "STAYS WRITTEN" in message, "a mid-pass halt must not claim nothing was written"
+        assert "--run-id test-monolith" in message, "the halt must name the resume handle"
+
+        # The trip is DURABLE - the run cannot decide for itself that it is fine now.
+        from cardpicker.models import EnvelopeTrip
+
+        assert EnvelopeTrip.objects.filter(acknowledged_at__isnull=True).exists()
+
+    def test_skip_envelope_disables_the_mid_pass_checks_too(
+        self, cohort: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`--skip-envelope` must turn off the WHOLE bar, not just the preflight - otherwise the
+        flag would silently stop meaning what it says the moment re-sampling landed."""
+        from cardpicker.operating_envelope import EnvelopeSignals
+
+        monkeypatch.setattr(pipeline_command, "ENVELOPE_RESAMPLE_INTERVAL_SECONDS", 0.0)
+        monkeypatch.setattr(
+            pipeline_command,
+            "_sample_envelope_signals",
+            lambda *a, **k: EnvelopeSignals(load_avg=99.0, rss_mb_per_worker=128.0),
+        )
+
+        _run("--skip-envelope")  # must not raise
+
+        from cardpicker.models import EnvelopeTrip
+
+        assert not EnvelopeTrip.objects.exists()
+
+
+@pytest.mark.django_db
+class TestPropagationEligibilityMatchesTheBaseQueryset:
+    """
+    THE DRIFT TRIPWIRE for `_members_eligible_for_a_propagated_vote`.
+
+    That method expresses four CATALOGUE-LEVEL facts (unresolved, no confirmed `canonical_card`,
+    `card_type=CARD`, no resolved `custom-art`/`non-english` tag) which
+    `local_identify_printing_tags._eligible_base_queryset` also expresses. It does not simply CALL
+    that function, for reasons its own docstring gives: that queryset bundles the four with
+    WORKLOAD rules that are wrong for a propagation target (a scan-log exclusion keyed to the
+    pilot's rescannable vocabulary, and a deductive-backfill exclusion that is a "don't spend a
+    scan" choice rather than an ineligibility). Nor can `_eligible_base_queryset` be refactored to
+    expose the four - its own docstring records that several tests and `stream_backstop_sweep`
+    assert against its COMPILED SQL, so re-ordering its `.exclude()` chain would change that SQL
+    for every legacy caller.
+
+    So there are two expressions of the same four facts, and this test is what stops them drifting:
+    over a fixture that triggers each ineligibility reason exactly once - and that deliberately
+    contains NO votes, NO scan logs and NO deductive-backfill rows, so the workload excludes are
+    inert and the two are being compared on the four facts alone - both must return the same set.
+
+    If this fails, the two have diverged. Fix the divergence; do not relax the assertion.
+    """
+
+    def test_the_two_expressions_of_catalogue_level_eligibility_agree(self, db: Any) -> None:
+        from cardpicker.local_identify_printing_tags import _eligible_base_queryset
+        from cardpicker.models import CardTypes, PrintingTagStatus
+
+        eligible = CardFactory(name="Eligible Card")
+        resolved = CardFactory(name="Resolved Card", printing_tag_status=PrintingTagStatus.RESOLVED)
+        confirmed = CardFactory(name="Confirmed Card", canonical_card=CanonicalCardFactory(name="Confirmed Card"))
+        token = CardFactory(name="Token Card", card_type=CardTypes.TOKEN)
+        custom = CardFactory(name="Custom Card", tags=["custom-art"])
+        foreign = CardFactory(name="Foreign Card", tags=["non-english"])
+
+        every_id = {c.pk for c in (eligible, resolved, confirmed, token, custom, foreign)}
+
+        command = pipeline_command.Command()
+        from_propagation = command._members_eligible_for_a_propagated_vote(every_id)
+        from_base = set(
+            _eligible_base_queryset("some-identity-with-no-rows").filter(pk__in=every_id).values_list("pk", flat=True)
+        )
+
+        assert from_propagation == from_base
+        # ...and both actually discriminate, rather than agreeing by returning everything.
+        assert from_propagation == {eligible.pk}

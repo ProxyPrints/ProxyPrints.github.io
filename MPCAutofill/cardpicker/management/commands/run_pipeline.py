@@ -176,6 +176,7 @@ from django.utils import timezone
 
 from cardpicker.local_clustering import compute_two_threshold_clusters
 from cardpicker.local_identify_printing_tags import (
+    EXCLUDED_RESOLVED_TAGS,
     build_propagated_cluster_votes,
     verify_zero_resolutions,
 )
@@ -183,7 +184,14 @@ from cardpicker.management.commands.stream_full_catalog import (
     EXIT_ENVELOPE_HALT,
     run_stage_zero_freshness,
 )
-from cardpicker.models import Card, CardPrintingTag, PilotRunLedger, VoteSource
+from cardpicker.models import (
+    Card,
+    CardPrintingTag,
+    CardTypes,
+    PilotRunLedger,
+    PrintingTagStatus,
+    VoteSource,
+)
 from cardpicker.operating_envelope import check_envelope, current_trip
 from cardpicker.pilot_run_lifecycle import (
     mark_ledger_failed,
@@ -210,6 +218,17 @@ WHOLE_CATALOGUE_LIMIT = 100_000_000
 # invocation writes under the same run identity. See `handle`'s own comment for why the data rows,
 # not the summary row, keep the unsuffixed name.
 LEDGER_RUN_ID_SUFFIX = "-pipeline"
+
+# MINIMUM WALL-CLOCK GAP BETWEEN ENVELOPE SAMPLES during a pass (`_EnvelopeSentry`). Owner brief:
+# "do not re-sample so often it becomes its own load." A sample is one `/proc` load read, one RSS
+# read and one DB query (`current_trip`; `check_envelope` only writes on an actual breach), so the
+# DB round trip is the real cost, not the host reads. 60s is chosen against what the bar actually
+# measures rather than tuned by feel: `HOST_LOAD_CEILING` is compared against the ONE-MINUTE load
+# average (`os.getloadavg()[0]`, see `stage_e_dispatch._sample_envelope_signals`), so sampling
+# faster than 60s re-reads a number that has not finished moving - it cannot detect a breach any
+# earlier, it only multiplies queries. Sampling much slower would let a breach persist for longer
+# than the window the signal is derived from.
+ENVELOPE_RESAMPLE_INTERVAL_SECONDS = 60.0
 
 
 class Command(BaseCommand):
@@ -340,6 +359,19 @@ class Command(BaseCommand):
         self.stdout.write(f"To resume this run after a stop: --run-id {run_id}")
         self.stdout.write("=" * 78)
 
+        # THE ENVELOPE IS SAMPLED THROUGHOUT THE PASS, NOT ONLY BEFORE IT - see `_EnvelopeSentry`.
+        # Constructed here rather than inside the preflight because every stage below shares this
+        # one instance: it is what carries the interval gate, so the whole pass samples at one
+        # cadence instead of each stage re-deciding.
+        # `interval_seconds` passed EXPLICITLY from the module constant rather than inherited from
+        # the parameter default, so the cadence is resolvable (and overridable) at CALL time - a
+        # default bound at `def` time cannot be reached by a test that needs to prove re-sampling
+        # happens at all without making the test sleep for a real minute.
+        self._envelope = _EnvelopeSentry(
+            run_id=run_id, write=self.stdout.write, interval_seconds=ENVELOPE_RESAMPLE_INTERVAL_SECONDS
+        )
+        envelope_check: Optional[Any] = None if options["skip_envelope"] else self._envelope.check
+
         counters: dict[str, Any] = {}
         # THE LEDGER ROW'S OWN id IS SUFFIXED; EVERY DATA ROW'S IS NOT. `PilotRunLedger.run_id` is
         # UNIQUE (models.py), one row per run identity - and Stage C is delegated to
@@ -385,6 +417,14 @@ class Command(BaseCommand):
             else:
                 counters["stage_c"] = self._run_stage_c(run_id=run_id, options=options, dry_run=dry_run)
 
+            # Stage C is the one stage whose inside this command cannot reach: it is delegated
+            # whole to `run_image_evidence_cohort` via `call_command`, and that command owns its
+            # own RSS guard and its own limiter. So the envelope is re-sampled at the seam AFTER
+            # it - the first point where a Stage C that spent hours saturating the box can be
+            # observed by this command at all.
+            if envelope_check is not None:
+                envelope_check("stage-d")
+
             if options["scope_stage_d"]:
                 # The cards this run has evidence for, read back rather than remembered - Stage C
                 # ran in its own command and this one deliberately does not reach inside it.
@@ -400,7 +440,9 @@ class Command(BaseCommand):
                 self.stdout.write("STAGE D skipped (--skip-stage-d).")
                 counters["stage_d"] = {"skipped": True}
             else:
-                counters["stage_d"] = self._run_stage_d_bulk(run_id=run_id, cohort_ids=cohort_ids, dry_run=dry_run)
+                counters["stage_d"] = self._run_stage_d_bulk(
+                    run_id=run_id, cohort_ids=cohort_ids, dry_run=dry_run, envelope_check=envelope_check
+                )
 
             # -- STAGE C+ : CLUSTER VOTE PROPAGATION -------------------------------------------
             if options["skip_clustering"]:
@@ -408,7 +450,7 @@ class Command(BaseCommand):
                 counters["clustering"] = {"skipped": True}
             else:
                 counters["clustering"] = self._propagate_cluster_votes(
-                    run_id=run_id, cohort_ids=cohort_ids, dry_run=dry_run
+                    run_id=run_id, cohort_ids=cohort_ids, dry_run=dry_run, envelope_check=envelope_check
                 )
 
             # -- STAGE E : FIDELITY GATE -------------------------------------------------------
@@ -432,6 +474,10 @@ class Command(BaseCommand):
                 counters["channel_report"] = self._run_channel_report(run_id=run_id)
 
             counters["elapsed_s"] = round(time.monotonic() - started, 1)
+            # How often the envelope actually got sampled, on the run's own ledger row. A pass that
+            # reports one sample is a pass that never re-sampled, which is the PR #660 behaviour
+            # this fix exists to end - so it is recorded rather than left to be inferred.
+            counters["envelope"] = self._envelope.stats()
             ledger.status = PilotRunLedger.Status.COMPLETED
             ledger.finished_at = timezone.now()
             ledger.counters = merge_counters(ledger.counters, counters)
@@ -466,36 +512,15 @@ class Command(BaseCommand):
     # ------------------------------------------------------------------------------------------
     def _envelope_preflight(self, *, run_id: str, skip: bool) -> None:
         """
-        The operating envelope, checked ONCE before anything is written - `operating_envelope`'s
-        own two entry points, called in the order that module's docstring requires (`current_trip`
-        BEFORE `check_envelope`, never the reverse) and with the same no-self-resume rule the
-        conveyor has: an open trip refuses outright and is cleared by an owner action
-        (`resolve_envelope_trip`), never by a run deciding for itself that it is fine now.
-
-        The rate-pressure half of the envelope (PR #644's throttle-instead-of-halt, PR #649's
-        global 7/s ceiling) is NOT checked here and must not be: it lives underneath Stage C in
-        `harvest_fetch_limiter`/`harvest_rate_coordinator`, applies per request, and its whole
-        point is that rate pressure slows the pass rather than stopping it.
+        The operating envelope's PREFLIGHT - the first sample the sentry takes, forced rather than
+        interval-gated, before anything is written. Delegates to `_EnvelopeSentry` so the preflight
+        and every mid-pass re-sample are literally the same check; see that class's own docstring
+        for the bars, the halt semantics, and why re-sampling exists at all.
         """
         if skip:
             self.stdout.write("STAGE E envelope preflight skipped (--skip-envelope).")
             return
-
-        existing = current_trip(run_id=run_id)
-        if existing is not None:
-            raise CommandError(
-                f"ENVELOPE HALT: trip {existing.trip_id} ({existing.bar}) is still open. No "
-                "self-resume - clear it with `resolve_envelope_trip` after investigating. Nothing "
-                "was written.",
-                returncode=EXIT_ENVELOPE_HALT,
-            )
-        fresh = check_envelope(_sample_envelope_signals(), run_id=run_id)
-        if fresh is not None:
-            raise CommandError(
-                f"ENVELOPE HALT: bar {fresh.bar} breached ({fresh.detail}); trip {fresh.trip_id} "
-                "persisted. Nothing was written.",
-                returncode=EXIT_ENVELOPE_HALT,
-            )
+        self._envelope.check("preflight", force=True)
         self.stdout.write("STAGE E: operating envelope clear.")
 
     # ------------------------------------------------------------------------------------------
@@ -542,7 +567,12 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------------------------------
     def _run_stage_d_bulk(
-        self, *, run_id: str, cohort_ids: Optional[list[int]], dry_run: bool = False
+        self,
+        *,
+        run_id: str,
+        cohort_ids: Optional[list[int]],
+        dry_run: bool = False,
+        envelope_check: Optional[Any] = None,
     ) -> dict[str, Any]:
         """
         Stage D, called EXPLICITLY - `stage_e_dispatch._run_stage_d`, the single place the
@@ -563,7 +593,10 @@ class Command(BaseCommand):
         # `dry_run` PASSED EXPLICITLY. All six calculators/casters underneath default to
         # dry_run=True; inheriting that here would compute a whole pass and persist nothing while
         # every log line and counter still reported success. See this module's docstring.
-        _run_stage_d(cohort_ids, run_id, outcome, dry_run=dry_run)
+        # `envelope_check` THREADED IN (2026-07-30). `_run_stage_d` calls it at each seam between
+        # its calculators, which is the finest granularity reachable without refactoring all of
+        # them - see that function's own docstring for the residual gap that leaves.
+        _run_stage_d(cohort_ids, run_id, outcome, dry_run=dry_run, envelope_check=envelope_check)
 
         result = {
             "join_key_votes": outcome.stage_d_join_key_votes,
@@ -582,15 +615,146 @@ class Command(BaseCommand):
 
     # ------------------------------------------------------------------------------------------
     def _propagate_cluster_votes(
-        self, *, run_id: str, cohort_ids: Optional[list[int]], dry_run: bool = False
+        self,
+        *,
+        run_id: str,
+        cohort_ids: Optional[list[int]],
+        dry_run: bool = False,
+        envelope_check: Optional[Any] = None,
     ) -> dict[str, Any]:
         """
-        STAGE C+ - the pilot capability that was reachable from no engine.
+        STAGE C+ - GROUP VOTE PROPAGATION. Two grouping keys, run in a fixed order, sharing ONE
+        propagation engine (`_propagate_over_groups`).
 
-        `compute_two_threshold_clusters` groups cards by their stored `content_phash`; a distance-0
-        cluster is a set of BIT-IDENTICAL images. `build_propagated_cluster_votes` then gives every
-        absorbed member its representative's printing verdict under the same identity, with no
-        fetch and no compute for the member. Both functions are called, never reimplemented.
+        MD5 FIRST, AND MD5 IS THE ONE THAT SHARES A PRINTING VOTE (owner ruling, 2026-07-30:
+        "the md5 dedupe should only fetch each identical image once across sources and then apply
+        votes to the entire group as the fetched card passes through the monolith"). Two cards with
+        the same `Card.md5_checksum` are the SAME BYTES, so they are depictions of the same
+        printing - a claim of exact identity whose correctness argument is trivial. That is the
+        claim a printing verdict needs.
+
+        WHY THE FETCH HALF AND THE VOTE HALF HAD TO BE RE-KEYED ONTO THE SAME GROUP. Before this,
+        the two halves were keyed DIFFERENTLY: `evidence_transfer` saves a FETCH on the md5 group,
+        while this stage saved a DEDUCTION on the phash distance-0 group. Byte-identical files
+        always share a phash, but files sharing a phash are not necessarily byte-identical, so the
+        set that got a fetch saved and the set that got a vote propagated were not the same set -
+        which is exactly the thing that is hard to reason about and easy to get wrong. The md5
+        group now behaves as one unit end to end: fetched once (`evidence_transfer`), deduced once
+        (Stage D on whichever member Stage D reached), and the conclusion applied across the group
+        here, under the casting calculator's own identity.
+
+        PROPAGATION IS NOT REDUNDANT, WHICH WAS CHECKED BEFORE IT WAS BUILT. `evidence_transfer`
+        already gives every md5 sibling its own `ImageEvidence` row with byte-identical extractor
+        field values, so it is reasonable to ask whether each member already reaches the same
+        conclusion independently, making this stage unnecessary. It does not, for a reason that is
+        structural rather than incidental: a Stage D printing deduction is NOT a function of the
+        evidence row alone. `local_calculate_verdicts._resolve_candidates_for_card` keys the
+        candidate list on `Card.name`, and two md5-identical uploads from different sources
+        routinely carry different names (that is the ordinary state of a cross-source catalogue).
+        Members also differ on per-card eligibility. So members genuinely reach DIFFERENT
+        conclusions, or none at all, from identical evidence - and the group's one sound conclusion
+        has to be carried to them deliberately.
+
+        PROPAGATION NEVER OVERRIDES A MEMBER'S OWN INELIGIBILITY. See
+        `_members_eligible_for_a_propagated_vote`: a member that is already RESOLVED, already
+        confirmed to a `canonical_card`, not a `CARD`, or carrying a resolved `custom-art` /
+        `non-english` tag is skipped. Being byte-identical to a card we identified does not entitle
+        this stage to overwrite a fact the catalogue already holds about the member, and the
+        `custom-art` case is the sharp one: that tag is the catalogue DECLARING the image is not a
+        faithful depiction of a printing, so voting a printing onto it would contradict a
+        human-visible declaration on the strength of a checksum.
+
+        THE PHASH TIER IS LEFT EXACTLY AS PR #660 SHIPPED IT, and that is a flagged decision rather
+        than an accreted default. Issue #661 holds the question of what phash grouping is FOR; the
+        owner's stated direction is that phash should eventually share an ILLUSTRATION (same
+        artwork, possibly a DIFFERENT printing - a near-identity claim at a grain where a weaker
+        claim is appropriate), not a printing verdict. Until that is built, removing the existing
+        phash printing propagation would itself be a behaviour change, and it is currently the ONLY
+        propagation reaching cards that have no md5 at all (md5 is NULL for every `LOCAL_FILE`
+        source by design and is never invented - see `Card.md5_checksum`'s own docstring). So it
+        stays, it runs SECOND, and the ordering is the point: md5's exact-identity votes land
+        first, and the phash tier can only fill what md5 did not, because
+        `_propagate_over_groups` re-reads the already-voted set per tier.
+
+        THE SEAM FOR PHASH-AS-ILLUSTRATION IS THE `groups` PARAMETER. `_propagate_over_groups`
+        takes `members_by_representative` and knows nothing about how it was keyed, so adding the
+        illustration-grain tier later means computing a different grouping and calling the same
+        engine - not restructuring this stage. That is the "single grouping abstraction with the
+        key as a parameter" #661 asks for, arrived at here rather than deferred to it.
+        """
+        stats: dict[str, Any] = {}
+
+        md5_groups = self._md5_groups(cohort_ids)
+        stats["md5"] = self._propagate_over_groups(
+            groups=md5_groups,
+            tier="md5",
+            run_id=run_id,
+            dry_run=dry_run,
+            envelope_check=envelope_check,
+        )
+
+        phash_groups = self._phash_distance_zero_groups(cohort_ids)
+        stats["phash_d0"] = self._propagate_over_groups(
+            groups=phash_groups,
+            tier="phash_d0",
+            run_id=run_id,
+            dry_run=dry_run,
+            envelope_check=envelope_check,
+        )
+
+        key = "would_propagate" if dry_run else "votes_propagated"
+        stats[key] = stats["md5"].get(key, 0) + stats["phash_d0"].get(key, 0)
+        self.stdout.write(f"STAGE C+: {stats}")
+        return stats
+
+    # ------------------------------------------------------------------------------------------
+    def _md5_groups(self, cohort_ids: Optional[list[int]]) -> dict[int, list[int]]:
+        """
+        BYTE-IDENTICAL GROUPS, keyed on `Card.md5_checksum` - the same key `evidence_transfer`
+        already groups on, so the fetch saving and the vote saving now describe the same set.
+
+        A NULL OR UNIQUE md5 IS A GROUP OF ONE (issue #473's ruling 3, inherited verbatim rather
+        than re-decided here) and simply does not appear in the result: a checksum is copied from
+        the source listing and is NEVER invented, so a card without one groups with nothing. The
+        empty string is excluded alongside NULL - `md5_checksum` is a `CharField`, and an empty
+        value is an absent checksum, not a value that thousands of cards genuinely share.
+
+        Representative = `min(pk)`, matching `local_clustering._compute_exact_match_clusters`'
+        own convention exactly, so the two tiers cannot disagree about what a representative IS.
+        Note the representative is only a STABLE NAME for the group here - it is NOT required to be
+        the card that holds the vote, because `_propagate_over_groups` looks for source votes
+        across every member. That matters: Stage D reaches whichever member it reaches, and there
+        is no reason that is the lowest pk.
+
+        THE POOL IS THE CATALOGUE, NOT THIS RUN'S SELECTION - the same property the phash tier's
+        own note describes. `--scope-stage-d-to-cohort` narrows it, and narrows that independence
+        with it.
+        """
+        cards = Card.objects.filter(md5_checksum__isnull=False).exclude(md5_checksum="")
+        if cohort_ids is not None:
+            cards = cards.filter(pk__in=cohort_ids)
+        by_checksum: dict[str, list[int]] = {}
+        for pk, checksum in cards.values_list("pk", "md5_checksum").iterator():
+            if not checksum:
+                # Unreachable given the filter above; kept so that "a NULL or empty checksum is a
+                # group of ONE" is true by construction rather than by the queryset alone. Fusing
+                # every checksum-less card into a single group is the worst failure available
+                # here, and it is one narrowed filter away at all times.
+                continue
+            by_checksum.setdefault(checksum, []).append(pk)
+        groups: dict[int, list[int]] = {}
+        for card_ids in by_checksum.values():
+            if len(card_ids) < 2:
+                continue
+            representative = min(card_ids)
+            groups[representative] = sorted(pk for pk in card_ids if pk != representative)
+        return groups
+
+    # ------------------------------------------------------------------------------------------
+    def _phash_distance_zero_groups(self, cohort_ids: Optional[list[int]]) -> dict[int, list[int]]:
+        """
+        The phash distance-0 tier PR #660 shipped, unchanged in behaviour and merely lifted into
+        its own method so both tiers hand the SAME shape to the SAME propagation engine.
 
         THE CLUSTER POOL IS THE CATALOGUE, NOT THIS RUN'S SELECTION. `run_pilot` clusters over its
         own eligibility-narrowed selection pool, which makes membership a function of what earlier
@@ -599,10 +763,6 @@ class Command(BaseCommand):
         stored hash - the whole catalogue by default - is what makes the answer independent of run
         history. When `--scope-stage-d-to-cohort` narrows this, that independence is narrowed too;
         that is the cost of the flag and the reason it is not the default.
-
-        `members_already_voted` is one query, up front, per identity - a member that already holds
-        a vote under the same `anonymous_id` is skipped, because propagating anyway would violate
-        `CardPrintingTag`'s own (card, printing, anonymous_id) uniqueness constraint.
         """
         cards = Card.objects.filter(content_phash__isnull=False)
         if cohort_ids is not None:
@@ -613,47 +773,173 @@ class Command(BaseCommand):
         # runtime contract is only `.card.pk` and `.card.content_phash` (`SelectedCard` is a
         # TYPE_CHECKING-only import there, and it carries a pilot candidate list this command has
         # no use for). Cast rather than widen that pure module's signature for this caller.
-        cluster_result = compute_two_threshold_clusters(cast(Any, selected))
-        members_by_representative = cluster_result.members_by_representative
-        member_ids = {m for members in members_by_representative.values() for m in members}
+        return compute_two_threshold_clusters(cast(Any, selected)).members_by_representative
+
+    # ------------------------------------------------------------------------------------------
+    def _members_eligible_for_a_propagated_vote(self, member_ids: set[int]) -> set[int]:
+        """
+        WHICH GROUP MEMBERS MAY RECEIVE A PROPAGATED PRINTING VOTE AT ALL (owner constraint,
+        2026-07-30: "propagation must not override a member's own ineligibility - a card excluded
+        for a real reason stays excluded").
+
+        These are CATALOGUE-LEVEL facts about the member, not workload preferences:
+          * `printing_tag_status` is still UNRESOLVED - a resolved card's printing is settled.
+          * no confirmed `canonical_card` - a human-confirmed indexing match outranks any machine
+            vote, and contradicting it from a checksum would be the worst available failure.
+          * `card_type=CARD` - tokens and cardbacks are excluded from every printing channel in
+            this codebase for structural reasons (`_eligible_base_queryset`'s own docstring).
+          * no resolved `custom-art` / `non-english` tag - the sharp one. `custom-art` is the
+            catalogue DECLARING this image is not a faithful depiction of a printing. Byte
+            identity with a card we identified does not overturn that declaration.
+
+        DELIBERATELY NOT `local_identify_printing_tags._eligible_base_queryset`, and this is the
+        one place in this change where a predicate is expressed rather than reused. That function
+        computes the same four facts, but bundles them with WORKLOAD rules that are wrong here: a
+        scan-log exclusion keyed to the PILOT's own rescannable vocabulary (a Stage D identity's
+        vocabulary differs), and a deductive-backfill exclusion that is a "don't spend a scan"
+        choice rather than an ineligibility. It also cannot simply be refactored to expose these
+        four: its own docstring records that several tests and `stream_backstop_sweep` assert
+        against its COMPILED SQL, so re-ordering its `.exclude()` chain to share a helper would
+        change that SQL for every legacy caller. `TestPropagationEligibilityMatchesTheBaseQueryset`
+        is the drift tripwire that keeps the two honest instead - see its own docstring.
+
+        DELIBERATELY NOT `local_calculate_verdicts._eligible_cards_queryset` either: that one
+        additionally requires a CURRENT `ImageEvidence` row, and propagating to a member that was
+        never fetched or computed is the entire point of this stage.
+        """
+        return set(
+            Card.objects.filter(
+                pk__in=member_ids,
+                printing_tag_status=PrintingTagStatus.UNRESOLVED,
+                canonical_card__isnull=True,
+                card_type=CardTypes.CARD,
+            )
+            .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[0]])
+            .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[1]])
+            .values_list("pk", flat=True)
+        )
+
+    # ------------------------------------------------------------------------------------------
+    def _propagate_over_groups(
+        self,
+        *,
+        groups: dict[int, list[int]],
+        tier: str,
+        run_id: str,
+        dry_run: bool = False,
+        envelope_check: Optional[Any] = None,
+    ) -> dict[str, Any]:
+        """
+        THE ONE PROPAGATION ENGINE, shared by every grouping key. It is handed
+        `members_by_representative` and knows nothing about how the grouping was computed - which
+        is what makes adding a tier (issue #661's illustration-grain phash) a matter of computing a
+        different grouping, not restructuring this stage.
+
+        THE SOURCE VOTE MAY BE HELD BY ANY MEMBER, NOT ONLY THE REPRESENTATIVE. PR #660 looked for
+        votes on representatives only, which silently propagated nothing whenever Stage D happened
+        to reach a non-representative member - and Stage D has no reason to prefer the lowest pk.
+        This reads this run's votes across EVERY member of every group, then propagates each one to
+        the rest of ITS OWN group.
+
+        ONE SOURCE VOTE PER (GROUP, IDENTITY), CHOSEN DETERMINISTICALLY (lowest card id). Without
+        this, two members of one group both holding a vote would each generate rows for the other
+        members, producing duplicate `(card, printing, anonymous_id)` rows inside a SINGLE write
+        batch - which the already-voted guard cannot catch, because it is computed from the DB
+        before any of this batch is written.
+
+        A GROUP WHOSE MEMBERS DISAGREE IS COUNTED, NOT SILENTLY RESOLVED. Two members of one md5
+        group can hold DIFFERENT printing verdicts under the same identity, because their
+        candidate lists came from different `Card.name`s. Byte-identical images cannot depict two
+        different printings, so a disagreement is a real signal about the upstream deduction, not
+        noise to average away. The deterministic pick keeps the write well-defined; the counter
+        (`groups_with_conflicting_verdicts`) is what makes the condition visible on the ledger
+        rather than lost.
+
+        `members_already_voted` is one query per identity, up front, and is RE-READ for each tier
+        so an earlier tier's writes are visible to a later one. That is what gives md5 precedence
+        over phash without either tier knowing about the other. Propagating to a member that
+        already holds a vote under the same `anonymous_id` would violate `CardPrintingTag`'s own
+        (card, printing, anonymous_id) uniqueness constraint anyway.
+        """
+        absorbed_ids = {m for members in groups.values() for m in members}
         stats: dict[str, Any] = {
-            "cluster_count": len(members_by_representative),
-            "cards_absorbed_into_clusters": len(member_ids),
+            "group_count": len(groups),
+            "cards_absorbed_into_groups": len(absorbed_ids),
             "votes_propagated": 0,
+            "members_skipped_ineligible": 0,
+            "groups_with_conflicting_verdicts": 0,
         }
-        if not member_ids:
-            self.stdout.write(f"STAGE C+: {stats} - nothing to propagate.")
+        if not absorbed_ids:
             return stats
 
-        # The representatives' own verdicts, as cast by THIS run's Stage D.
+        if envelope_check is not None:
+            envelope_check(f"stage-c+:{tier}")
+
+        group_of_member: dict[int, int] = {}
+        for representative, members in groups.items():
+            group_of_member[representative] = representative
+            for member in members:
+                group_of_member[member] = representative
+
+        # EVERY CARD IN EVERY GROUP, REPRESENTATIVES INCLUDED - not just the absorbed members. Two
+        # separate things depend on this and both are wrong if the representative is left out:
+        # a representative can HOLD the source vote (Stage D has no reason to reach the lowest pk
+        # first), and a representative can equally be a propagation TARGET when some other member
+        # holds it. `absorbed_ids` above stays members-only because it reports "how many cards were
+        # absorbed into a group", which is a different question from "who participates here".
+        all_group_card_ids = set(group_of_member.keys())
         source_votes = list(
-            CardPrintingTag.objects.filter(
-                card_id__in=list(members_by_representative.keys()), run_id=run_id, is_no_match=False
-            ).exclude(printing_id=None)
+            CardPrintingTag.objects.filter(card_id__in=all_group_card_ids, run_id=run_id, is_no_match=False).exclude(
+                printing_id=None
+            )
         )
+        if not source_votes:
+            return stats
+
+        # One source vote per (group, identity), lowest card id wins; disagreements counted.
+        chosen: dict[tuple[int, str], CardPrintingTag] = {}
+        conflicted: set[tuple[int, str]] = set()
+        for vote in sorted(source_votes, key=lambda v: v.card_id):
+            if vote.printing_id is None or vote.confidence is None:
+                # Cannot happen given the queryset above; asserted here so a later change to that
+                # filter cannot silently start propagating a vote with no printing or no weight.
+                continue
+            key = (group_of_member[vote.card_id], vote.anonymous_id)
+            incumbent = chosen.get(key)
+            if incumbent is None:
+                chosen[key] = vote
+            elif incumbent.printing_id != vote.printing_id:
+                conflicted.add(key)
+        stats["groups_with_conflicting_verdicts"] = len({group for group, _identity in conflicted})
+
+        eligible_member_ids = self._members_eligible_for_a_propagated_vote(all_group_card_ids)
+        stats["members_skipped_ineligible"] = len(all_group_card_ids) - len(eligible_member_ids)
+
         already_voted_by_identity: dict[str, set[int]] = {}
-        for anonymous_id in {vote.anonymous_id for vote in source_votes}:
+        for anonymous_id in {vote.anonymous_id for vote in chosen.values()}:
             already_voted_by_identity[anonymous_id] = set(
-                CardPrintingTag.objects.filter(card_id__in=member_ids, anonymous_id=anonymous_id).values_list(
+                CardPrintingTag.objects.filter(card_id__in=all_group_card_ids, anonymous_id=anonymous_id).values_list(
                     "card_id", flat=True
                 )
             )
 
         rows: list[CardPrintingTag] = []
-        for vote in source_votes:
-            if vote.printing_id is None or vote.confidence is None:
-                # Cannot happen given the queryset above; asserted here so a later change to that
-                # filter cannot silently start propagating a vote with no printing or no weight.
-                continue
+        for (representative, anonymous_id), vote in chosen.items():
+            assert vote.printing_id is not None and vote.confidence is not None
+            # Every card in the group EXCEPT the one holding the source vote. Built here rather
+            # than reusing `groups` directly because the source vote is not necessarily the
+            # representative, so "the others" is relative to the VOTE, not to the group's name.
+            others = [pk for pk in ([representative] + groups[representative]) if pk != vote.card_id]
+            skip = already_voted_by_identity.get(anonymous_id, set()) | (set(others) - eligible_member_ids)
             rows.extend(
                 build_propagated_cluster_votes(
                     representative_card_id=vote.card_id,
                     printing_pk=vote.printing_id,
-                    anonymous_id=vote.anonymous_id,
+                    anonymous_id=anonymous_id,
                     confidence=vote.confidence,
                     run_id=run_id,
-                    members_by_representative=members_by_representative,
-                    members_already_voted=already_voted_by_identity.get(vote.anonymous_id, set()),
+                    members_by_representative={vote.card_id: others},
+                    members_already_voted=skip,
                     source=VoteSource(vote.source),
                 )
             )
@@ -663,7 +949,6 @@ class Command(BaseCommand):
             # archived into `ArchivedCardPrintingTag` before deletion.
             purge_and_write_votes(CardPrintingTag, rows, target_field="card_id")
         stats["would_propagate" if dry_run else "votes_propagated"] = len(rows)
-        self.stdout.write(f"STAGE C+: {stats}")
         return stats
 
     # ------------------------------------------------------------------------------------------
@@ -712,6 +997,101 @@ class Command(BaseCommand):
             )
         )
         return {"exit_code": exit_code}
+
+
+class _EnvelopeSentry:
+    """
+    THE OPERATING ENVELOPE, RE-SAMPLED DURING THE PASS (2026-07-30) - not just before it.
+
+    PR #660 shipped Stage E as a PREFLIGHT ONLY: `current_trip`/`check_envelope` once, before
+    Stage C, never again. Owner brief: "host resampling is likely required (for steps that aren't
+    fetch) as the same monolith will run for small datasets and large ones so needs to fit the
+    available compute appropriately." A single check at launch is right for a 200-card run and
+    wrong for a 230k one - the box's free compute at hour six is not what it was at hour zero, and
+    this command's whole point is that ONE invocation serves both sizes.
+
+    THREE SEPARATE PROTECTIONS, AND THIS CLASS IS ONLY THE MIDDLE ONE. They are easy to conflate
+    and must not be:
+      * the 7/s ceiling protects GOOGLE, applies per request, and lives beneath Stage C in
+        `harvest_rate_coordinator` (PR #649). Nothing here.
+      * THE ENVELOPE protects THIS HOST. That is this class.
+      * compute gating paces everything else. Also not here.
+
+    HALT SEMANTICS ARE PRESERVED EXACTLY, and this is the sharp edge. A genuine breach HALTS and
+    never self-resumes: `check_envelope` persists an `EnvelopeTrip`, this raises, and the only way
+    back is an owner action through `resolve_envelope_trip`. A re-sample is NOT a throttle and must
+    never become one - PR #644 converted RATE PRESSURE (429/503) to a throttle precisely so that it
+    would stop masquerading as an envelope breach, and converting a host-load breach the other way
+    would undo that distinction from the opposite direction. Load average is this box's own
+    saturation; going slower on Google does not reduce it.
+
+    WHAT A MID-PASS HALT LEAVES BEHIND, stated plainly because it differs from the preflight's
+    "nothing was written". By the time a re-sample fires, real rows exist. They stay - every one of
+    them carries this run's `run_id` and is queryable by it, and the run resumes with
+    `--run-id <same>` once the trip is acknowledged. That is the same posture the fidelity gate
+    already takes (exit 7 is "read this run before trusting it", not a rollback), and it is why
+    this raises rather than attempting any unwind.
+
+    INTERVAL-GATED so it cannot become its own load (see `ENVELOPE_RESAMPLE_INTERVAL_SECONDS` for
+    why 60s is derived from the one-minute load average rather than picked). `check(..., force=True)`
+    bypasses the gate and is used for the preflight, which must always sample.
+
+    `current_trip` BEFORE `check_envelope`, never the reverse - the order `operating_envelope`'s own
+    docstring requires. An OPEN trip refuses outright, including a trip some OTHER process opened
+    while this pass was running, which is the case a preflight-only design could not see at all.
+    """
+
+    __slots__ = ("_run_id", "_write", "_interval", "_last_sampled_at", "samples", "skipped")
+
+    def __init__(self, *, run_id: str, write: Any, interval_seconds: float = ENVELOPE_RESAMPLE_INTERVAL_SECONDS):
+        self._run_id = run_id
+        self._write = write
+        self._interval = interval_seconds
+        self._last_sampled_at: Optional[float] = None
+        self.samples = 0
+        self.skipped = 0
+
+    def check(self, step: str, *, force: bool = False) -> None:
+        """
+        Sample the envelope unless the interval gate says it is too soon. Raises `CommandError`
+        with `EXIT_ENVELOPE_HALT` on an open trip or a fresh breach; returns silently otherwise.
+        `step` names the stage about to start and appears in the halt message, so an operator
+        reading a halted run knows where in the pass it stopped without correlating timestamps.
+        """
+        now = time.monotonic()
+        if not force and self._last_sampled_at is not None and (now - self._last_sampled_at) < self._interval:
+            self.skipped += 1
+            return
+        self._last_sampled_at = now
+        self.samples += 1
+
+        existing = current_trip(run_id=self._run_id)
+        if existing is not None:
+            raise CommandError(
+                f"ENVELOPE HALT before {step}: trip {existing.trip_id} ({existing.bar}) is still "
+                "open. No self-resume - clear it with `resolve_envelope_trip` after investigating. "
+                + self._written_so_far(step),
+                returncode=EXIT_ENVELOPE_HALT,
+            )
+        fresh = check_envelope(_sample_envelope_signals(), run_id=self._run_id)
+        if fresh is not None:
+            raise CommandError(
+                f"ENVELOPE HALT before {step}: bar {fresh.bar} breached ({fresh.detail}); trip "
+                f"{fresh.trip_id} persisted. " + self._written_so_far(step),
+                returncode=EXIT_ENVELOPE_HALT,
+            )
+
+    def _written_so_far(self, step: str) -> str:
+        if step == "preflight":
+            return "Nothing was written."
+        return (
+            f"Everything this run wrote before {step} STAYS WRITTEN and is queryable by "
+            f"run_id={self._run_id}; resume with --run-id {self._run_id} once the trip is "
+            "acknowledged."
+        )
+
+    def stats(self) -> dict[str, Any]:
+        return {"samples": self.samples, "skipped_by_interval": self.skipped, "interval_s": self._interval}
 
 
 class _ClusterInput:
