@@ -1489,8 +1489,31 @@ produces an empty `counters={}` record.
 
 `MPCAutofill/cardpicker/management/commands/rejudge_fallback_channel.py` re-evaluates the
 `stage-d-fallback-v1` channel's existing conclusions against **current stored**
-`ImageEvidence` and retracts the rows where the conclusion changed, making
-those cards eligible for a fresh `local_calculate_verdicts` pass.
+`ImageEvidence` and retracts the rows where the conclusion changed.
+
+> **What retraction is for, revised 2026-07-29.** This command (and
+> `reparse_collector_evidence`) used to be described as "making those cards
+> eligible for a fresh `local_calculate_verdicts` pass", and that WAS the
+> mechanism: a stale vote or non-rescannable skip locked a card out of its own
+> calculator permanently. Under **run-scoped eligibility** it no longer does —
+> a calculator's exclusions now match only rows carrying the CURRENT run's
+> `run_id`, so every new run reconsiders the card whether or not anything was
+> retracted.
+>
+> The command is not obsolete, and the distinction matters when deciding
+> whether to run it. Retraction still removes a stale **record**, and for a
+> **vote** that is load-bearing: an un-retracted stale vote keeps its weight in
+> `resolve_printing`'s consensus until something overwrites it. What retraction
+> no longer does is unlock eligibility. Read this as "correct the record", not
+> as "let the calculator look again".
+>
+> Note the calculator will overwrite a stale vote by itself on its next run
+> **if its conclusion has changed** — `_split_new_printing_tag_votes` compares
+> the verdict VALUE, and a changed one goes through a purge-and-rewrite with the
+> superseded row moved to `ArchivedCardPrintingTag`. Retraction remains the tool
+> for the case where you want the stale row GONE rather than superseded, or
+> where the fresh conclusion is an abstention (which writes no vote and
+> therefore overwrites nothing).
 
 ### What it does
 
@@ -1546,6 +1569,13 @@ Two-step sequence to bring retracted cards back into the active population:
    → review counters and `gate_refused_card_ids`) → rerun with `--write`
 2. `python manage.py local_calculate_verdicts` (unchanged) to fill the
    retracted cards through the normal calculator chain.
+
+Step 2 no longer depends on step 1 having run for the cards to be CONSIDERED
+(see the revision note at the top of this section) — a fresh
+`local_calculate_verdicts` run reconsiders them either way. Step 1 is what
+guarantees the stale row is gone rather than merely superseded, and it is still
+required whenever the stale row must stop counting toward consensus
+immediately.
 
 ## See also
 

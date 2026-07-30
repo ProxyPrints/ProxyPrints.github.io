@@ -969,7 +969,7 @@ when one more link tips it to a second line) — the hook picks that jump
 up correctly via its own `ResizeObserver`, but the wrapping itself is
 still exactly the layout fragility this entry describes.
 
-## A `reparse_collector_evidence`/Stage D retraction pass silently never routes its own newly-touched cards to slow-path review
+## A `reparse_collector_evidence`/Stage D retraction pass silently never routes its own newly-touched cards to slow-path review (FIXED 2026-07-29 — see Fix)
 
 **Symptom**: `manage.py local_calculate_verdicts --write` runs cleanly
 over a cohort that was previously retracted/re-scanned (e.g. via
@@ -1020,14 +1020,31 @@ fully visible and correctly clusterable today. The gap only becomes a
 real bug for a FUTURE consumer that reads something more specific from
 that row (e.g. a per-card routing reason, which doesn't exist yet).
 
-**Fix** (spec'd, not yet built — see
-`docs/features/catalog-completion-plan.md`'s "Recovery-arc lessons"
-section): extend `reparse_and_retract` to also delete the retracted
-card's own `stage-d-slow-path-v1` `CardScanLog` row in the same pass it
-deletes the `stage-d-join-key-v1` rows, mirroring the existing delete
-and reusing the same safety gate. Until that ships, treat any retraction
-pass as needing a manual check of whether its cohort also needs its
-slow-path marker cleared before the next `local_calculate_verdicts --write` can actually re-route it under its new conclusion.
+**Fix (2026-07-29 — RESOLVED, and not by the mechanism originally
+spec'd)**: `_slow_path_eligible_cards_queryset`'s exclusion is no longer
+unconditional. Under run-scoped eligibility it matches only
+`stage-d-slow-path-v1` rows carrying the CURRENT run's `run_id`, so a
+stale marker from an older routing pass no longer excludes anything: the
+next `local_calculate_verdicts --write` (a new run, hence a new `run_id`)
+re-routes the card under its new conclusion with no manual intervention
+and no cohort bookkeeping. The card's own marker from THIS run still
+excludes it, which is what keeps a killed run resuming rather than
+double-routing.
+
+The originally-spec'd fix — extend `reparse_and_retract` to delete the
+retracted card's `stage-d-slow-path-v1` row alongside its
+`stage-d-join-key-v1` rows — was **not** built, and should not be: it
+made every retraction command responsible for knowing which downstream
+calculators had left markers, which is exactly the coupling that produced
+this symptom. Removing the permanence of the marker fixes the whole class
+rather than this one instance of it.
+
+**Still true, and the reason retraction commands have not gone away**:
+retraction removes a stale RECORD (and, for votes, stops a stale row
+being counted by consensus). It is no longer what UNLOCKS eligibility.
+Read `reparse_collector_evidence`/`rejudge_fallback_channel` as
+"correct the record", not as "let the calculator look again" — the
+calculator looks again regardless, on every new run.
 
 ## Playwright tests behave like a 1280×720 desktop viewport even though `playwright.config.ts` sets 800×600
 

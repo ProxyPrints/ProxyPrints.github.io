@@ -556,8 +556,31 @@ def _eligible_illustration_cards_queryset(
     join_key_scanned_card_ids: Iterable[int],
     chunk_size: int = 500,
     card_ids: Optional[Iterable[int]] = None,
+    run_id: Optional[str] = None,
 ) -> "QuerySet[Card]":
     """
+    RUN-SCOPED SELF-SUPPRESSION (``run_id``, 2026-07-29 owner directive: "prior runs must not
+    suppress work in a new run; the CURRENT run's own output must"). Both of this calculator's own
+    self-suppressing excludes — its printing-tag vote exclude and its non-rescannable
+    ``CardScanLog`` exclude — are narrowed to rows carrying THIS run's ``run_id`` when one is
+    given. ``local_calculate_verdicts._eligible_cards_queryset``'s docstring carries the full
+    reasoning; this is the same change applied to this calculator's own duplicated copy of that
+    shape.
+
+    THE JOIN-KEY POPULATION PASSED IN BY THE CALLER IS NOT, AND MUST NOT BE, RUN-SCOPED. It is an
+    upstream verdict, not this calculator's progress, and a converged join-key pass writes no rows
+    under a fresh run_id at all — so a run-scoped version of it is empty on every re-run and this
+    calculator would consider zero cards while reporting success. See
+    ``local_calculate_verdicts._fallback_eligible_cards_queryset``'s own docstring, which spells
+    the same trap out for the identical pair.
+
+    THIS CALCULATOR IS THE WORKED EXAMPLE OF WHY RUN-SCOPING WAS NEEDED. ``stage-d-illustration-v1``
+    had to be renamed to ``-v2`` (module docstring) purely to escape its OWN scan-log exclusion
+    after its layout_class gate was found to be wrong: 3,409 wrongly-skipped cards were
+    unreachable to a repaired v1 because v1 had already written a non-rescannable row for each.
+    Under run-scoping the repair alone would have sufficed, and the version bump would have been a
+    choice rather than a workaround.
+
     Cards the join-key calculator already concluded have no confident hit, plus the same base
     eligibility filters as every other Stage D calculator (via a fresh queryset matching
     ``_eligible_cards_queryset``'s exact shape).
@@ -591,6 +614,9 @@ def _eligible_illustration_cards_queryset(
     non_rescannable_scanned = CardScanLog.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID).exclude(
         skip_reason__in=RESCANNABLE_SKIP_REASONS
     )
+    if run_id is not None:
+        # The abstention half of run-scoping — see this function's own docstring.
+        non_rescannable_scanned = non_rescannable_scanned.filter(run_id=run_id)
     if card_ids is not None:
         # Issue #469 (Tron §8 gate finding, 2026-07-25), carried over to this calculator: CardScanLog
         # is 2,093,147 rows live and append-only, growing — when the caller has already narrowed the
@@ -603,13 +629,39 @@ def _eligible_illustration_cards_queryset(
         # before this fix — unscoped over the whole table.
         non_rescannable_scanned = non_rescannable_scanned.filter(card_id__in=card_ids)
 
+    # The vote half of run-scoping.
+    # WHY AN EXPLICIT `pk__in` SUBQUERY AND NOT `.exclude(printing_tags__anonymous_id=...,
+    # printing_tags__run_id=...)`. The latter is the obvious spelling and it is WRONG - verified
+    # against this project's own Postgres by compiling it, not reasoned about. Django does NOT
+    # combine the two conditions into one subquery the same related row must satisfy; it emits
+    #   NOT (EXISTS(... U1.anonymous_id = X ...) AND EXISTS(... U1.run_id = Y ...))
+    # - two INDEPENDENT `EXISTS` clauses over the same table. A card carrying THIS identity's vote
+    # from an OLD run plus some OTHER identity's vote from THIS run satisfies both halves and is
+    # excluded, even though this identity has done nothing in this run - silently re-creating
+    # exactly the cross-run suppression run-scoping exists to remove, and in the hardest direction
+    # to notice (fewer cards processed, no error). This is the same negated-multi-valued-lookup
+    # trap `local_identify_printing_tags._eligible_base_queryset`'s own docstring already documents
+    # for the scan-log exclusion, which is why that one has always been an explicit subquery too.
+    #
+    # The `run_id is None` branch keeps the ORIGINAL relation exclude verbatim rather than routing
+    # through the subquery as well. The two are semantically equivalent (`NOT EXISTS` vs `NOT IN`
+    # over the same rows), but "equivalent" is not "identical", and several tests plus
+    # `stream_backstop_sweep` assert against this query's compiled SQL; a legacy caller should get
+    # byte-identical SQL, not a plausible replacement.
+    if run_id is None:
+        own_vote_exclusion = Q(printing_tags__anonymous_id=ILLUSTRATION_ANONYMOUS_ID)
+    else:
+        own_voted_card_ids_qs = CardPrintingTag.objects.filter(anonymous_id=ILLUSTRATION_ANONYMOUS_ID, run_id=run_id)
+        if card_ids is not None:
+            own_voted_card_ids_qs = own_voted_card_ids_qs.filter(card_id__in=card_ids)
+        own_vote_exclusion = Q(pk__in=own_voted_card_ids_qs.values_list("card_id", flat=True))
     queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
             canonical_card__isnull=True,
             card_type=CardTypes.CARD,
         )
-        .exclude(printing_tags__anonymous_id=ILLUSTRATION_ANONYMOUS_ID)
+        .exclude(own_vote_exclusion)
         .exclude(pk__in=non_rescannable_scanned.values_list("card_id", flat=True))
         .exclude(Q(dpi__lt=RESOLUTION_FLOOR_DPI) & Q(dpi__isnull=False))
         .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[0]])
@@ -1043,6 +1095,10 @@ def run_illustration_calculator(
         join_key_voted_card_ids=join_key_no_match_card_ids,
         join_key_scanned_card_ids=join_key_no_hit_scanned_card_ids,
         card_ids=card_ids,
+        # Run-scoped self-suppression (2026-07-29): a vote or abstention THIS calculator recorded
+        # under an earlier run no longer hides the card; one recorded under this run still does,
+        # which is what makes a killed run resume instead of redoing completed batches.
+        run_id=run_id,
     )
 
     for card in queryset.iterator(chunk_size=chunk_size):

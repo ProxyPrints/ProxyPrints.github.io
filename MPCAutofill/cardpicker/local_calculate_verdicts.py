@@ -395,6 +395,7 @@ issue #340's 373-card cohort, or any other prod extraction/write - both remain s
 owner-gated prod steps.
 """
 
+import collections
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1072,8 +1073,38 @@ def _eligible_cards_queryset(
     anonymous_id: str,
     rescannable_skip_reasons: frozenset[str] = JOIN_KEY_RESCANNABLE_SKIP_REASONS,
     card_ids: Optional[Iterable[int]] = None,
+    run_id: Optional[str] = None,
 ) -> "QuerySet[Card]":
     """
+    RUN-SCOPED SELF-SUPPRESSION (`run_id`, 2026-07-29 owner directive: "prior runs must not
+    suppress work in a new run; the CURRENT run's own output must, so a killed run resumes rather
+    than redoing completed batches"). Both self-suppressing excludes below - the vote exclude and
+    the non-rescannable-scan-log exclude - are narrowed to rows carrying THIS run's `run_id` when
+    one is given. That is the whole mechanism: a vote or an abstention this calculator recorded
+    under some EARLIER run_id no longer removes the card from a new run's pool, while one recorded
+    under the CURRENT run_id still does, which is exactly resumption.
+
+    Why this was worth changing: before it, a calculator's own history permanently narrowed every
+    future run of that calculator. "Have I ever voted on this card?" is a monotonically growing
+    predicate, so each pass could only ever see a subset of the previous pass's pool, and a fix to
+    an engine could never re-examine anything that engine had already answered - which is how
+    `stage-d-illustration-v1` ended up needing a VERSION BUMP (see `local_illustration`'s module
+    docstring) purely to sidestep its own scan-log exclusion after a bug was fixed. Under
+    run-scoping that bump would not have been necessary.
+
+    `run_id=None` (the default) keeps the pre-2026-07-29 identity-scoped behaviour EXACTLY, and it
+    is not a vestige: `management/commands/stream_backstop_sweep.verify_chunk` imports this
+    function to ask "is there any Stage D backlog left at all", a question about the catalogue's
+    total state rather than about one run's progress, and answering it run-scoped would report the
+    whole catalogue as backlog on every fresh run_id. Callers that mean "this run's remaining work"
+    pass their run_id; callers that mean "anything this identity has never touched" do not.
+
+    NOT A LICENCE TO RE-VOTE WITHOUT LIMIT. Un-suppressing eligibility only gets the card back in
+    front of the calculator; whether anything is WRITTEN is still decided downstream by
+    `_split_new_printing_tag_votes`, which skips a recomputed verdict identical to the stored one.
+    The two are a pair and neither works alone - see that function's own docstring, which is where
+    the other half of this directive is implemented.
+
     Mirrors `local_identify_printing_tags._eligible_base_queryset`'s shape (unresolved, no
     confirmed indexing match, card_type=CARD only, no existing vote from this calculator's own
     anonymous_id, no non-rescannable scan-log row for it) - a fresh, independent eligibility
@@ -1130,6 +1161,12 @@ def _eligible_cards_queryset(
     non_rescannable_scanned_card_ids_qs = CardScanLog.objects.filter(anonymous_id=anonymous_id).exclude(
         skip_reason__in=rescannable_skip_reasons
     )
+    if run_id is not None:
+        # The abstention half of run-scoping (see this function's own docstring). Applied to the
+        # SUBQUERY, so the exclusion set itself shrinks to this run's own abstentions rather than
+        # every abstention this identity has ever recorded. Note this also narrows the subquery's
+        # own scan on a 2.7M-row append-only table, but that is a side effect, not the point.
+        non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(run_id=run_id)
     if card_ids is not None:
         # Issue #469 (Tron §8 gate finding, 2026-07-25): CardScanLog is 2,093,147 rows live and
         # append-only, growing - when the caller has already narrowed the outer Card queryset to
@@ -1141,13 +1178,41 @@ def _eligible_cards_queryset(
         # was before this fix - unscoped over the whole table - byte-identical to pre-fix behaviour.
         non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(card_id__in=card_ids)
     non_rescannable_scanned_card_ids = non_rescannable_scanned_card_ids_qs.values_list("card_id", flat=True)
+    # The vote half of run-scoping.
+    # WHY AN EXPLICIT `pk__in` SUBQUERY AND NOT `.exclude(printing_tags__anonymous_id=...,
+    # printing_tags__run_id=...)`. The latter is the obvious spelling and it is WRONG - verified
+    # against this project's own Postgres by compiling it, not reasoned about. Django does NOT
+    # combine the two conditions into one subquery the same related row must satisfy; it emits
+    #   NOT (EXISTS(... U1.anonymous_id = X ...) AND EXISTS(... U1.run_id = Y ...))
+    # - two INDEPENDENT `EXISTS` clauses over the same table. A card carrying THIS identity's vote
+    # from an OLD run plus some OTHER identity's vote from THIS run satisfies both halves and is
+    # excluded, even though this identity has done nothing in this run - silently re-creating
+    # exactly the cross-run suppression run-scoping exists to remove, and in the hardest direction
+    # to notice (fewer cards processed, no error). This is the same negated-multi-valued-lookup
+    # trap `local_identify_printing_tags._eligible_base_queryset`'s own docstring already documents
+    # for the scan-log exclusion, which is why that one has always been an explicit subquery too.
+    #
+    # The `run_id is None` branch keeps the ORIGINAL relation exclude verbatim rather than routing
+    # through the subquery as well. The two are semantically equivalent (`NOT EXISTS` vs `NOT IN`
+    # over the same rows), but "equivalent" is not "identical", and several tests plus
+    # `stream_backstop_sweep` assert against this query's compiled SQL; a legacy caller should get
+    # byte-identical SQL, not a plausible replacement.
+    if run_id is None:
+        own_vote_exclusion = Q(printing_tags__anonymous_id=anonymous_id)
+    else:
+        own_voted_card_ids_qs = CardPrintingTag.objects.filter(anonymous_id=anonymous_id, run_id=run_id)
+        if card_ids is not None:
+            # Same cost narrowing, and the same "equivalent for THIS caller either way" argument,
+            # as the CardScanLog subquery above.
+            own_voted_card_ids_qs = own_voted_card_ids_qs.filter(card_id__in=card_ids)
+        own_vote_exclusion = Q(pk__in=own_voted_card_ids_qs.values_list("card_id", flat=True))
     queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
             canonical_card__isnull=True,
             card_type=CardTypes.CARD,
         )
-        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .exclude(own_vote_exclusion)
         .exclude(pk__in=non_rescannable_scanned_card_ids)
         .exclude(Q(dpi__lt=RESOLUTION_FLOOR_DPI) & Q(dpi__isnull=False))
         .exclude(tags__contains=[EXCLUDED_RESOLVED_TAGS[0]])
@@ -1237,28 +1302,70 @@ def _split_new_printing_tag_votes(
     own per-touch consensus recompute if a third dispatch raced in between the retract and the
     recast, for no correctness benefit in that common case.
 
+    KEY *AND* VALUE, NOT KEY ALONE (2026-07-29, the run-scoped-eligibility work). Until this
+    change the comparison was `(card_id, anonymous_id)` alone, and that made this function a
+    SECOND, INDEPENDENT suppression layer that silently defeated any fix to the first one. Making
+    `_eligible_cards_queryset` run-scoped lets a card this calculator voted on in a PRIOR run reach
+    the calculator again and get a fresh verdict computed - and a key-only split then dropped that
+    verdict on the floor before it could be written, because a row for the pair already existed. A
+    CHANGED conclusion could never land: the split removed the card from `new_votes`, so
+    `_purge_and_write_printing_tag_votes` purged nothing for it (the purge is deliberately scoped
+    to the rows being written - see its docstring's property 2), and the stale row survived
+    verbatim, with no error, no counter moving, and a recomputation's worth of work discarded.
+    Un-suppressing eligibility ALONE would therefore have bought exactly nothing.
+
+    The shape adopted here is `local_illustration._split_new_illustration_votes`', whose own
+    docstring calls the value comparison "THE ONE DIFFERENCE, AND IT IS LOAD-BEARING" and which has
+    had it since it was written. Three cases:
+
+      - existing rows, SAME verdict -> genuinely redundant. Skipped, counted in `already_voted`.
+        Re-running over an unchanged catalogue stays a no-op, which is the idempotence property the
+        whole Stage D framework depends on and which run-scoped eligibility would otherwise have
+        turned into an overwrite-everything churn machine.
+      - existing rows, DIFFERENT verdict -> a changed conclusion, not a collision. Kept, so the
+        purge moves the stale generation into `ArchivedCardPrintingTag` and the new one lands.
+      - no existing row -> a fresh vote. Kept.
+
+    COMPARED PER (card_id, anonymous_id) GROUP, AS A SET, ALL-OR-NOTHING. One identity can hold
+    MORE than one row for a card: `cardprintingtag_unique_printing_vote` constrains the (card,
+    printing, anonymous_id) triple, so several printing votes for one card are legal, and
+    `run_illustration_calculator`'s own loop over `verdict.printing_pks` is a live caller shaped
+    that way. So the unit of comparison is the whole set of `(printing_id, is_no_match)` pairs the
+    batch proposes for a group against the whole set already stored, and a group is kept or dropped
+    in its entirety. Keeping PART of a group would be a data-destruction bug of exactly the kind
+    `_purge_and_write_printing_tag_votes`' property 2 warns about: the purge is family-keyed on
+    `card_id`, so it deletes ALL that card's rows for the family, and any group member left out of
+    `new_votes` would be deleted and never re-inserted. The pre-2026-07-29 key-only comparison was
+    already all-or-nothing per group by construction; this preserves that rather than introducing it.
+
+    STILL SKIP-AND-COUNT FOR A GENUINE RACE. The "SKIP-AND-COUNT, NOT RETRACT-AND-RECAST" reasoning
+    above is untouched and still holds, because it is explicitly conditioned on both racing
+    invocations computing the SAME verdict from the same inputs - exactly the case the value
+    comparison still skips. What it stops swallowing is the case that reasoning already named as
+    NOT covered: a genuinely changed conclusion.
+
     One batched existence query (not one query per card), scoped to just the card_ids/anonymous_ids
     actually present in this batch - same "wasteful full-table scan" avoidance
-    `_split_new_votes`'s own docstring already cites. Checks (card_id, anonymous_id) only (not the
-    full (card, printing, anonymous_id) triple `_split_new_votes` checks) because this module's own
-    established invariant is stricter: `_eligible_cards_queryset`'s exclude already enforces AT MOST
-    ONE vote per (card, anonymous_id) regardless of match/no-match outcome (see that function's own
-    docstring's "Idempotence... comes entirely from the stable, per-calculator anonymous_id
-    exclusion" - matching CardPrintingTag's own two partial-unique constraints, which together
-    enforce exactly the same "one vote per identity" invariant, just via two different partial
-    indexes depending on is_no_match).
+    `_split_new_votes`'s own docstring already cites. It now selects two more columns than it used
+    to; that is a wider row, not a wider scan.
     """
     if not votes_batch:
         return [], 0
 
     card_ids = {vote.card_id for vote in votes_batch}
     anonymous_ids = {vote.anonymous_id for vote in votes_batch}
-    already_voted_pairs = set(
-        CardPrintingTag.objects.filter(card_id__in=card_ids, anonymous_id__in=anonymous_ids).values_list(
-            "card_id", "anonymous_id"
-        )
-    )
-    new_votes = [vote for vote in votes_batch if (vote.card_id, vote.anonymous_id) not in already_voted_pairs]
+    stored_by_key: dict[tuple[int, str], set[tuple[Optional[int], bool]]] = collections.defaultdict(set)
+    for card_id, anonymous_id, printing_id, is_no_match in CardPrintingTag.objects.filter(
+        card_id__in=card_ids, anonymous_id__in=anonymous_ids
+    ).values_list("card_id", "anonymous_id", "printing_id", "is_no_match"):
+        stored_by_key[(card_id, anonymous_id)].add((printing_id, is_no_match))
+
+    proposed_by_key: dict[tuple[int, str], set[tuple[Optional[int], bool]]] = collections.defaultdict(set)
+    for vote in votes_batch:
+        proposed_by_key[(vote.card_id, vote.anonymous_id)].add((vote.printing_id, vote.is_no_match))
+
+    unchanged_keys = {key for key, proposed in proposed_by_key.items() if stored_by_key.get(key) == proposed}
+    new_votes = [vote for vote in votes_batch if (vote.card_id, vote.anonymous_id) not in unchanged_keys]
     return new_votes, len(votes_batch) - len(new_votes)
 
 
@@ -1517,7 +1624,12 @@ def run_join_key_calculator(
     scan_log_batch: list[CardScanLog] = []
     touched_card_ids: list[int] = []
 
-    for card in _eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID, card_ids=card_ids).iterator(chunk_size=chunk_size):
+    # `run_id=run_id`: run-scoped self-suppression (2026-07-29 owner directive). Prior runs'
+    # votes/scan-logs no longer remove a card from this pass; THIS run's do, so a killed run
+    # resumes rather than redoing completed batches. See `_eligible_cards_queryset`'s docstring.
+    for card in _eligible_cards_queryset(JOIN_KEY_ANONYMOUS_ID, card_ids=card_ids, run_id=run_id).iterator(
+        chunk_size=chunk_size
+    ):
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
@@ -1845,8 +1957,30 @@ def _join_key_no_hit_subqueries(
     return join_key_no_match, join_key_no_hit_scanned
 
 
-def _fallback_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
+def _fallback_eligible_cards_queryset(
+    card_ids: Optional[Iterable[int]] = None, run_id: Optional[str] = None
+) -> "QuerySet[Card]":
     """
+    THE POSITIVE DEPENDENCY ON JOIN-KEY IS DELIBERATELY *NOT* RUN-SCOPED, AND THAT ASYMMETRY IS THE
+    WHOLE CORRECTNESS ARGUMENT (2026-07-29). `run_id` narrows this calculator's SELF-suppression
+    (forwarded to `_eligible_cards_queryset`, which is the only thing that consumes it); the two
+    join-key populations selected FOR below stay unscoped, because they are not this calculator's
+    own progress - they are the upstream verdict this calculator exists to act on.
+
+    Scoping them would be a silent near-no-op. Under run-scoped eligibility, a join-key pass that
+    re-derives an UNCHANGED no-hit verdict writes NOTHING (see `_split_new_printing_tag_votes`:
+    an identical recomputed verdict is skipped, and the stored row keeps the run_id of whichever
+    earlier run first cast it). So "cards join-key voted no-match IN THIS RUN" is empty on every
+    run over a converged catalogue, and a fallback pass keyed on it would consider zero cards while
+    reporting success. The honest predicate is "cards join-key has concluded have no confident hit",
+    with no run in it at all - which is what this is.
+
+    The same reasoning is why the calculators must run join-key -> fallback -> illustration ->
+    slow-path IN ORDER within a batch rather than in parallel after a purge: three of the four
+    select POSITIVELY from join-key's output, so an empty join-key output means an empty pool for
+    all three. See `management/commands/local_calculate_verdicts.py`'s own sequencing comments and
+    `test_run_scoped_eligibility.TestDependencyOrdering`, which asserts the empty-set failure.
+
     Cards the join-key calculator already concluded have no confident hit - the SAME population
     `_slow_path_eligible_cards_queryset` below selects from (a real `is_no_match` vote, or a
     non-rescannable skip in `JOIN_KEY_NO_HIT_SKIP_REASONS`) - that this calculator's own
@@ -1864,7 +1998,10 @@ def _fallback_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) 
     join_key_no_match_card_ids = join_key_no_match.values_list("card_id", flat=True)
     join_key_no_hit_scanned_card_ids = join_key_no_hit_scanned.values_list("card_id", flat=True)
     return _eligible_cards_queryset(
-        STAGE_D_FALLBACK_ANONYMOUS_ID, rescannable_skip_reasons=FALLBACK_RESCANNABLE_SKIP_REASONS, card_ids=card_ids
+        STAGE_D_FALLBACK_ANONYMOUS_ID,
+        rescannable_skip_reasons=FALLBACK_RESCANNABLE_SKIP_REASONS,
+        card_ids=card_ids,
+        run_id=run_id,
     ).filter(Q(pk__in=join_key_no_match_card_ids) | Q(pk__in=join_key_no_hit_scanned_card_ids))
 
 
@@ -1898,7 +2035,9 @@ def run_fallback_calculator(
     scan_log_batch: list[CardScanLog] = []
     touched_card_ids: list[int] = []
 
-    for card in _fallback_eligible_cards_queryset(card_ids=card_ids).iterator(chunk_size=chunk_size):
+    # `run_id=run_id` - run-scoped SELF-suppression only; the join-key population this pass
+    # selects from stays unscoped. See `_fallback_eligible_cards_queryset`'s own docstring.
+    for card in _fallback_eligible_cards_queryset(card_ids=card_ids, run_id=run_id).iterator(chunk_size=chunk_size):
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 
@@ -2114,8 +2253,23 @@ class SlowPathCalculatorResult:
     audit: list[dict[str, object]] = field(default_factory=list)
 
 
-def _slow_path_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
+def _slow_path_eligible_cards_queryset(
+    card_ids: Optional[Iterable[int]] = None, run_id: Optional[str] = None
+) -> "QuerySet[Card]":
     """
+    RUN-SCOPED SELF-SUPPRESSION (`run_id`, 2026-07-29). Exactly ONE of the four sub-populations
+    below is this calculator's own progress - `already_routed_card_ids`, the scan-log rows it wrote
+    itself - and that is the only one `run_id` narrows. The other three are deliberately left
+    unscoped, for the reason `_fallback_eligible_cards_queryset`'s own docstring gives at length:
+    the two join-key populations and the fallback-voted exclusion are UPSTREAM verdicts, not this
+    calculator's progress, and a converged upstream calculator writes no rows under a new run_id at
+    all - so scoping them would make this pass consider zero cards while reporting success.
+
+    The fallback exclusion in particular must stay unscoped or the ordering guarantee breaks in the
+    subtle direction: a card fallback resolved in run A would be routed to human review by
+    slow-path in run B, undoing a solved card. "Fallback has a confident vote for this card" is a
+    statement about the catalogue, not about a run.
+
     Cards the join-key calculator (JOIN_KEY_ANONYMOUS_ID) already concluded have no confident
     hit - either a real `is_no_match` vote, or a non-rescannable skip in
     JOIN_KEY_NO_HIT_SKIP_REASONS - and that this calculator's own SLOW_PATH_ANONYMOUS_ID hasn't
@@ -2146,6 +2300,11 @@ def _slow_path_eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None)
     join_key_no_match_card_ids = join_key_no_match.values_list("card_id", flat=True)
     join_key_no_hit_scanned_card_ids = join_key_no_hit_scanned.values_list("card_id", flat=True)
     already_routed = CardScanLog.objects.filter(anonymous_id=SLOW_PATH_ANONYMOUS_ID)
+    if run_id is not None:
+        # This calculator's own resume marker, and the ONLY sub-population here that run-scoping
+        # applies to - see this function's docstring. Narrowing it composes with (rather than
+        # replaces) PR #579's `card_ids` pushdown applied to the same queryset just below.
+        already_routed = already_routed.filter(run_id=run_id)
     fallback_voted = CardPrintingTag.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, is_no_match=False)
     if card_ids is not None:
         already_routed = already_routed.filter(card_id__in=card_ids)
@@ -2203,7 +2362,9 @@ def run_slow_path_calculator(
 
     scan_log_batch: list[CardScanLog] = []
 
-    for card in _slow_path_eligible_cards_queryset(card_ids=card_ids).iterator(chunk_size=chunk_size):
+    # `run_id=run_id` - narrows only this calculator's own already-routed scan logs; the join-key
+    # and fallback populations stay unscoped. See `_slow_path_eligible_cards_queryset`'s docstring.
+    for card in _slow_path_eligible_cards_queryset(card_ids=card_ids, run_id=run_id).iterator(chunk_size=chunk_size):
         if card.content_phash is None:
             continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
 

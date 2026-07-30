@@ -101,6 +101,14 @@ def purge_and_write_votes(
 
     Returns nothing and does nothing at all for an empty `rows` - an all-collided batch must purge
     NOTHING (property 2 above), so the early return is part of the contract, not an optimisation.
+
+    4. THE SUPERSEDED GENERATION IS ARCHIVED, NOT DESTROYED (2026-07-29 owner ruling: "keep at
+    least one prior generation of votes, whose votes are NOT counted"). That copy happens inside
+    `purge_stale_machine_votes` - see its docstring for why it lives at the model layer rather
+    than here - and is covered by the SAME `transaction.atomic()` below as the purge and the
+    insert, so property 3 (cancel-safety) now spans three statements instead of two. All this
+    function contributes is the answer to "which run overwrote it": `_superseding_run_id`, read
+    off the rows being written.
     """
     if not rows:
         return
@@ -110,7 +118,32 @@ def purge_and_write_votes(
         identity = anonymous_id if anonymous_id is not None else row.anonymous_id
         targets_by_anonymous_id[identity].append(getattr(row, target_field))
 
+    superseded_by_run_id = _superseding_run_id(rows)
     with transaction.atomic():
         for identity, target_ids in targets_by_anonymous_id.items():
-            purge_stale_machine_votes(model_class, identity, target_field, target_ids)
+            purge_stale_machine_votes(
+                model_class, identity, target_field, target_ids, superseded_by_run_id=superseded_by_run_id
+            )
         model_class.objects.bulk_create(rows, ignore_conflicts=ignore_conflicts)
+
+
+def _superseding_run_id(rows: Sequence[Any]) -> Optional[str]:
+    """
+    The `run_id` to stamp on rows this write archives, or None when the batch cannot name one.
+
+    A batch is normally one calculator invocation's output and therefore carries exactly one
+    `run_id`; that value is the honest answer to "which run overwrote the generation this write
+    replaces". Anything else - a batch with no `run_id` at all (`local_lands_identify`'s pre-#570
+    shape, an import command, a test fixture), or one mixing several - gets None rather than an
+    arbitrary pick, because a WRONG run stamp on an archived row is worse than a missing one: the
+    `--generation-diff` report and issue #575's retention janitor both select on it, and a
+    plausible-looking wrong value cannot be distinguished from a right one after the fact.
+
+    `getattr(..., None)` rather than `row.run_id` because this primitive is model-agnostic and
+    `run_id` lives on `AbstractWeightedVote`, not on every model a caller could pass.
+    """
+    run_ids = {getattr(row, "run_id", None) for row in rows}
+    if len(run_ids) != 1:
+        return None
+    only = next(iter(run_ids))
+    return only if only else None

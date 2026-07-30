@@ -79,7 +79,7 @@ from typing import Iterable, Literal, Optional, cast
 
 from PIL import Image
 
-from django.db.models import Count, QuerySet
+from django.db.models import Count, Q, QuerySet
 from django.utils import timezone
 
 from cardpicker import (
@@ -491,8 +491,33 @@ def _eligible_base_queryset(
     anonymous_id: str,
     exclude_source_pks: Optional[Iterable[int]] = None,
     card_ids: Optional[Iterable[int]] = None,
+    run_id: Optional[str] = None,
 ) -> "QuerySet[Card]":
     """
+    RUN-SCOPED SELF-SUPPRESSION (`run_id`, OPT-IN, 2026-07-29 owner directive: "prior runs must not
+    suppress work in a new run; the CURRENT run's own output must, so a killed run resumes rather
+    than redoing completed batches"). When given, the two self-suppressing excludes below - this
+    engine's own vote exclude and its own non-rescannable `CardScanLog` exclude - are narrowed to
+    rows carrying THIS run's run_id, so an answer this engine gave in an EARLIER run no longer
+    removes the card from a new run's pool. `local_calculate_verdicts._eligible_cards_queryset`'s
+    docstring carries the full reasoning; this is the same change applied to the pilot's own
+    equivalent.
+
+    `run_id=None` (the default) is EXACTLY the pre-2026-07-29 behaviour, and today it is still what
+    most callers get. Only `local_lands_identify._land_pool_selected_cards` passes a run_id, because
+    lands is the one caller of this function named in the Stage D printing-channel directive. The
+    remaining callers - `run_pilot`'s `select_candidates`, `count_below_resolution_floor`,
+    `run_name_frequency_elimination` - are the OCR/phash pilot, a different workload with its own
+    fetch budgets and its own resume semantics, and flipping them is a separate decision with a
+    separate blast radius rather than a free ride on this one. That is a deliberate scoping of the
+    change, not an oversight, and it is recorded here so the asymmetry is visible from this
+    function rather than only from its callers.
+
+    THE DEDUCTIVE-BACKFILL EXCLUDE BELOW IS NEVER RUN-SCOPED, whatever `run_id` says: it is a
+    workload choice about ANOTHER identity's votes ("don't pile a weaker vote onto a card the
+    exact-by-construction backfill already covered"), not this engine's own progress, and narrowing
+    it to this run would empty it on every run.
+
     unresolved, no confirmed indexing match, no existing vote from this engine's own
     anonymous_id (the idempotence/checkpoint mechanism - see module docstring and
     cardpicker.deductive_backfill's identical pattern), not already covered by the deductive
@@ -568,14 +593,43 @@ def _eligible_base_queryset(
     non_rescannable_scanned_card_ids_qs = CardScanLog.objects.filter(anonymous_id=anonymous_id).exclude(
         skip_reason__in=RESCANNABLE_SKIP_REASONS
     )
+    if run_id is not None:
+        # The abstention half of run-scoping - see this function's own docstring.
+        non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(run_id=run_id)
     if card_ids is not None:
         non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(card_id__in=card_ids)
     non_rescannable_scanned_card_ids = non_rescannable_scanned_card_ids_qs.values_list("card_id", flat=True)
+    # The vote half of run-scoping.
+    # WHY AN EXPLICIT `pk__in` SUBQUERY AND NOT `.exclude(printing_tags__anonymous_id=...,
+    # printing_tags__run_id=...)`. The latter is the obvious spelling and it is WRONG - verified
+    # against this project's own Postgres by compiling it, not reasoned about. Django does NOT
+    # combine the two conditions into one subquery the same related row must satisfy; it emits
+    #   NOT (EXISTS(... U1.anonymous_id = X ...) AND EXISTS(... U1.run_id = Y ...))
+    # - two INDEPENDENT `EXISTS` clauses over the same table. A card carrying THIS identity's vote
+    # from an OLD run plus some OTHER identity's vote from THIS run satisfies both halves and is
+    # excluded, even though this identity has done nothing in this run - silently re-creating
+    # exactly the cross-run suppression run-scoping exists to remove, and in the hardest direction
+    # to notice (fewer cards processed, no error). This is the same negated-multi-valued-lookup
+    # trap `local_identify_printing_tags._eligible_base_queryset`'s own docstring already documents
+    # for the scan-log exclusion, which is why that one has always been an explicit subquery too.
+    #
+    # The `run_id is None` branch keeps the ORIGINAL relation exclude verbatim rather than routing
+    # through the subquery as well. The two are semantically equivalent (`NOT EXISTS` vs `NOT IN`
+    # over the same rows), but "equivalent" is not "identical", and several tests plus
+    # `stream_backstop_sweep` assert against this query's compiled SQL; a legacy caller should get
+    # byte-identical SQL, not a plausible replacement.
+    if run_id is None:
+        own_vote_exclusion = Q(printing_tags__anonymous_id=anonymous_id)
+    else:
+        own_voted_card_ids_qs = CardPrintingTag.objects.filter(anonymous_id=anonymous_id, run_id=run_id)
+        if card_ids is not None:
+            own_voted_card_ids_qs = own_voted_card_ids_qs.filter(card_id__in=card_ids)
+        own_vote_exclusion = Q(pk__in=own_voted_card_ids_qs.values_list("card_id", flat=True))
     queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED, canonical_card__isnull=True, card_type=CardTypes.CARD
         )
-        .exclude(printing_tags__anonymous_id=anonymous_id)
+        .exclude(own_vote_exclusion)
         # Left keyed on the EXACT id, unchanged by the 2026-07-29 re-scoping of the
         # deductive-backfill zero-weight ruling: this exclusion is a workload choice ("don't
         # spend a scan piling a weaker vote onto a card the exact-by-construction deductive

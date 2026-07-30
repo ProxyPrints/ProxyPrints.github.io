@@ -913,10 +913,38 @@ def calculator_family(anonymous_id: str) -> "str | None":
     return m.group("family") if m else None
 
 
-def purge_stale_machine_votes(model_class: Any, anonymous_id: str, target_field: str, target_ids: Sequence[Any]) -> int:
+def purge_stale_machine_votes(
+    model_class: Any,
+    anonymous_id: str,
+    target_field: str,
+    target_ids: Sequence[Any],
+    *,
+    superseded_by_run_id: "str | None" = None,
+) -> int:
     """Before a calculator writes votes for target_ids, delete existing
     rows from the SAME CALCULATOR FAMILY (any version, including the
     current one) for those targets. Returns rows deleted.
+
+    ARCHIVE-BEFORE-DELETE (owner ruling, 2026-07-29: "keep at least one
+    prior generation of votes, whose votes are NOT counted"). For a model
+    that has an archive table (`vote_archive_model` — `CardPrintingTag`
+    only, today) every row this function is about to delete is copied into
+    it first. This is THE choke point for that ruling deliberately: it is
+    the single place a machine vote is superseded by a later machine vote,
+    so putting the copy here means no caller can supersede a vote without
+    archiving it, and no new caller has to remember to. `superseded_by_run_id`
+    is stamped onto the archived copies to record WHICH run overwrote them —
+    `vote_write.purge_and_write_votes` derives it from the batch it is about
+    to insert, and passes None if that batch carries anything other than
+    exactly one run_id.
+
+    The copy and the delete are two statements. Every production caller
+    reaches this through `vote_write.purge_and_write_votes`, whose
+    `transaction.atomic()` already covers both plus the insert, so a
+    process killed mid-purge cannot leave rows archived-but-not-deleted or
+    deleted-but-not-archived — the same cancel-safety property that
+    function's own docstring documents, now covering one more statement.
+
 
     Purges nothing and returns 0 if calculator_family() returns None
     (i.e. anonymous_id is a UUID — human votes are never touched).
@@ -943,10 +971,39 @@ def purge_stale_machine_votes(model_class: Any, anonymous_id: str, target_field:
     if family is None:
         return 0
     escaped = re.escape(family)
-    deleted, _ = model_class.objects.filter(
+    doomed = model_class.objects.filter(
         anonymous_id__regex=rf"^{escaped}-v\d+$",
         **{f"{target_field}__in": list(target_ids)},
-    ).delete()
+    )
+    archive_model = vote_archive_model(model_class)
+    if archive_model is not None:
+        # Materialised BEFORE the DELETE, obviously, and deliberately as a `bulk_create` of full
+        # copies rather than an `INSERT ... SELECT`: the archive table's columns are a superset of
+        # the live table's (`original_id`, `superseded_by_run_id`, `archived_at`), so there is no
+        # column-for-column SELECT to write, and the batch here is bounded by the caller's own
+        # chunk size (500 in BULK mode, 25 per Stage E micro-batch), not by the table.
+        archive_model.objects.bulk_create(
+            [
+                archive_model(
+                    card_id=vote.card_id,
+                    printing_id=vote.printing_id,
+                    is_no_match=vote.is_no_match,
+                    anonymous_id=vote.anonymous_id,
+                    user_id=vote.user_id,
+                    source=vote.source,
+                    confidence=vote.confidence,
+                    peer=vote.peer,
+                    run_id=vote.run_id,
+                    vote_surface=vote.vote_surface,
+                    created_at=vote.created_at,
+                    original_id=vote.pk,
+                    superseded_by_run_id=superseded_by_run_id,
+                )
+                for vote in doomed
+            ],
+            batch_size=1000,
+        )
+    deleted, _ = doomed.delete()
     return deleted
 
 
@@ -1042,6 +1099,108 @@ class CardPrintingTag(AbstractWeightedVote):
     def __str__(self) -> str:
         outcome = "NO MATCH" if self.is_no_match else str(self.printing)
         return f"[{self.source}] {self.card.name} -> {outcome}"
+
+
+class ArchivedCardPrintingTag(models.Model):
+    """
+    A `CardPrintingTag` row that a LATER machine vote superseded - moved here by
+    `purge_stale_machine_votes` instead of being destroyed (owner ruling, 2026-07-29: "keep at
+    least one prior generation of votes, whose votes are NOT counted").
+
+    WHY AN ARCHIVE TABLE AND NOT RETAINED GENERATIONS IN THE LIVE TABLE. This is a measured
+    decision, not a stylistic one. Thirteen modules read `CardPrintingTag.objects` (or walk
+    `Card.printing_tags`); NINE of them bypass `vote_consensus.resolve_vote_weight` entirely -
+    `views.py`, `catalog_stats.py`, `local_calculate_verdicts.py`, `models.py` (this file's own
+    `suggested_printing_votes_prefetch`), `local_identify_printing_tags.py`, `soak_gate.py`,
+    `harvest_probe.py`, `illustration_vote.py`, `local_lands_identify.py`. So the "give the old
+    generation zero weight, keyed on run_id" pattern that migration 0097 established for the
+    frozen deductive-backfill cohort protects only the four consumers that route through weight
+    resolution. A retained generation left sitting in the live table would still be DISPLAYED by
+    the views layer, still COUNTED by catalog-stats, and - fatally for the work this table exists
+    to enable - would still make `_eligible_cards_queryset`'s `.exclude(printing_tags__...)` treat
+    the card as already voted, re-creating exactly the suppression run-scoped eligibility removes.
+
+    Keeping the live table strictly single-generation means no consumer can be wrong about it: no
+    unique-constraint change, no audit of thirteen modules, and no new rule any future reader has
+    to know. Rows here are unreachable from `Card` (`related_name="+"` on both FKs), are not an
+    `AbstractWeightedVote` subclass, and are read by exactly one thing today - the opt-in
+    `--generation-diff` debug report on `manage.py local_calculate_verdicts`. Nothing in
+    `vote_consensus`/`printing_consensus`/`catalog_stats`/`views` can see them even by accident.
+
+    APPEND-ONLY, NO UNIQUE CONSTRAINTS - deliberately the same shape as `CardScanLog`. A card
+    superseded by five successive runs holds five archive rows, in `archived_at` order; that IS
+    the paper trail. Growth is a retention question, and it is issue #575's janitor's ("keep the N
+    most recent runs per calculator, sweep the oldest, operator-authorised with a dry run") - both
+    `run_id` (the superseded generation's own run) and `superseded_by_run_id` (the run that
+    overwrote it) are indexed so that janitor can select a generation without a table scan.
+
+    NOT A RETRACTION LOG. Only the family-keyed machine purge in `purge_stale_machine_votes`
+    writes here, so a row appearing means "some later run of this calculator family said something
+    else about this card". Human votes never reach it (`calculator_family` returns None for the
+    UUID anonymous_ids humans use, and that path returns before any purge). Deliberate operator
+    retractions - `purge_machine_votes`, `retract_stage_d_by_run_id` - are a different act with
+    their own audit trail and are not routed here.
+    """
+
+    # `related_name="+"` on BOTH FKs is load-bearing, not tidiness: it is what makes these rows
+    # structurally unreachable from a `Card`/`CanonicalCard` instance, so no existing consumer can
+    # traverse into them and no future `prefetch_related`/`filter(...__...)` can pick them up by
+    # guessing an accessor name. CASCADE matches the live table: when a card leaves the catalogue
+    # its votes go with it, and an archive of votes for a card that no longer exists is not a
+    # paper trail anybody can read.
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="+")
+    printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, null=True, blank=True, related_name="+")
+    is_no_match = models.BooleanField(default=False)
+    # Every remaining field is a verbatim copy of the superseded row's own value - including
+    # `created_at`, which is copied rather than re-stamped (this is NOT `auto_now_add`) so the
+    # archived row still records when the VOTE was cast, not when it was archived. `archived_at`
+    # below is the separate, honest answer to "when did this stop being live".
+    anonymous_id = models.CharField(max_length=40)
+    user = models.ForeignKey(to=User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    source = models.CharField(max_length=10, choices=VoteSource.choices, default=VoteSource.USER)
+    confidence = models.FloatField(null=True, blank=True)
+    peer = models.CharField(max_length=64, null=True, blank=True)
+    run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    vote_surface = models.CharField(max_length=64, null=True, blank=True)
+    created_at = models.DateTimeField()
+    # The live row's primary key before it was deleted. Kept so a debug report can tie an archive
+    # row back to a `run_id`-scoped query somebody ran against the live table earlier; the pk is
+    # NOT reused by Postgres, so it stays a stable historical identifier rather than a live one.
+    original_id = models.BigIntegerField()
+    # The run whose write superseded this row, where knowable - `purge_and_write_votes` derives it
+    # from the rows it is about to insert, and leaves it NULL if that batch somehow carries more
+    # than one run_id (or none). Indexed because the `--generation-diff` report and issue #575's
+    # janitor both select by it.
+    superseded_by_run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    archived_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            # The generation-diff read: "everything ever archived for this card by this identity",
+            # newest first. Also the shape a per-calculator retention sweep needs.
+            models.Index(fields=["card", "anonymous_id"], name="archived_printing_tag_idx"),
+        ]
+
+    def __str__(self) -> str:
+        outcome = "NO MATCH" if self.is_no_match else str(self.printing)
+        return f"[archived {self.source}] card={self.card_id} -> {outcome}"
+
+
+# Which live vote model archives its superseded rows where. Consulted by
+# `purge_stale_machine_votes`; a model absent from this mapping keeps the pre-2026-07-29 behaviour
+# of deleting outright. Only `CardPrintingTag` is in it today, and that is the scope of the owner
+# ruling that created the archive - `CardTagVote`/`CardArtistVote`/`PrintingTagVote`/
+# `CardIllustrationVote` are deliberately NOT archived, since nothing has asked to diff their
+# generations and four more append-only tables is real storage for a hypothetical.
+#
+# Populated lazily via a function rather than a module-level dict literal only because
+# `ArchivedCardPrintingTag` has to be defined before it can be referenced, and
+# `purge_stale_machine_votes` sits ABOVE it in this file (it is a helper the vote models'
+# docstrings refer to, and moving it below them would make those references read backwards).
+def vote_archive_model(model_class: Any) -> Any:
+    """The archive model for `model_class`, or None if that model's superseded rows are deleted
+    outright. See `VOTE_ARCHIVE_MODELS`' own comment above for why only `CardPrintingTag` has one."""
+    return {CardPrintingTag: ArchivedCardPrintingTag}.get(model_class)
 
 
 def suggested_printing_votes_prefetch() -> models.Prefetch:

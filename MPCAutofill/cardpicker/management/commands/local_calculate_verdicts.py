@@ -20,7 +20,7 @@ from cardpicker.local_illustration import (
     ILLUSTRATION_ANONYMOUS_ID,
     run_illustration_calculator,
 )
-from cardpicker.models import CardPrintingTag, PilotRunLedger
+from cardpicker.models import ArchivedCardPrintingTag, CardPrintingTag, PilotRunLedger
 from cardpicker.pilot_run_lifecycle import (
     add_dry_run_guard_arguments,
     enforce_dry_run_precondition,
@@ -75,6 +75,68 @@ def _write_diff_report_lines(diff_file: Any, calculator: str, audit: list[dict[s
     diff_file.flush()
 
 
+def _write_generation_diff(path: str, run_id: str) -> int:
+    """
+    THE OPT-IN DEBUG READ OF `ArchivedCardPrintingTag` (2026-07-29 owner ruling: generation-diffing
+    is "available as an opt-in debug flag, NOT a default write path"). One JSONL line per vote THIS
+    run superseded: the archived generation's value, and the value that replaced it. Returns the
+    number of lines written.
+
+    The distinction the ruling draws, spelled out because it is easy to collapse: the ARCHIVE WRITE
+    is unconditional - `purge_stale_machine_votes` moves a superseded row rather than deleting it
+    on every run, with no flag, because a paper trail that only exists when somebody remembered to
+    ask for it is not a paper trail. What is opt-in is this READ. Nothing in the pipeline consults
+    the archive; it is inert until an operator points this flag at it.
+
+    Runs AFTER all four calculators and only in --write mode, since a dry run supersedes nothing.
+    Selects on `superseded_by_run_id`, which `vote_write.purge_and_write_votes` stamps from the
+    batch it is writing, so the report is exactly "what did THIS run change its mind about" and
+    never picks up another run's overwrites. Rows whose superseding batch could not name a single
+    run_id carry NULL there and are correctly absent - see `vote_write._superseding_run_id` for why
+    a missing stamp is preferred to a guessed one.
+
+    The `live` side is re-read per archived row rather than joined, because the interesting cases
+    are few by construction (a converged catalogue supersedes almost nothing - an identical
+    recomputed verdict is skipped by `_split_new_printing_tag_votes` and never reaches the purge at
+    all) and a card with no live row at all is itself a finding worth showing rather than dropping.
+    """
+    archived = (
+        ArchivedCardPrintingTag.objects.filter(superseded_by_run_id=run_id)
+        .order_by("card_id", "anonymous_id", "pk")
+        .iterator(chunk_size=1000)
+    )
+    written = 0
+    with open(path, "w") as handle:
+        for row in archived:
+            live = list(
+                CardPrintingTag.objects.filter(card_id=row.card_id, anonymous_id=row.anonymous_id)
+                .order_by("pk")
+                .values("printing_id", "is_no_match", "confidence", "run_id")
+            )
+            handle.write(
+                json.dumps(
+                    {
+                        "card_id": row.card_id,
+                        "anonymous_id": row.anonymous_id,
+                        "superseded_by_run_id": row.superseded_by_run_id,
+                        "archived": {
+                            "printing_id": row.printing_id,
+                            "is_no_match": row.is_no_match,
+                            "confidence": row.confidence,
+                            "run_id": row.run_id,
+                            "created_at": row.created_at.isoformat(),
+                            "original_id": row.original_id,
+                        },
+                        "live": live,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+            )
+            written += 1
+    return written
+
+
 class Command(BaseCommand):
     help = (
         "Stage D (docs/features/catalog-completion-plan.md, public issue #152): the join-key "
@@ -116,6 +178,15 @@ class Command(BaseCommand):
             "identifier, calculator, would-cast verdict, and the card's existing vote value if "
             "any) to the given path, for reviewing would-cast vs existing before authorizing "
             "--write. Stream-written (appended/flushed after each calculator), not buffered.",
+        )
+        parser.add_argument(
+            "--generation-diff",
+            type=str,
+            default=None,
+            help="Debug-only, --write mode only: after the run, write one JSONL line per vote this "
+            "run SUPERSEDED - the archived previous generation (from ArchivedCardPrintingTag) "
+            "alongside the value that replaced it. Reads the archive; never writes to it. Ignored "
+            "in dry-run mode, which supersedes nothing.",
         )
         parser.add_argument(
             "--allow-missing-scryfall-cache",
@@ -378,6 +449,15 @@ class Command(BaseCommand):
                 },
             )
             ledger.save(update_fields=["status", "finished_at", "votes_written", "counters"])
+
+            # AFTER the COMPLETED save, deliberately: this is a debug report over data the run has
+            # already committed, and a failure to write it (a bad path, a full disk) must not make
+            # a successful run look failed. Same counters-before-output ordering rule as the
+            # terminal summary below - see cardpicker.pilot_run_lifecycle's module docstring.
+            generation_diff_lines = 0
+            if kwargs["generation_diff"] and not dry_run:
+                generation_diff_lines = _write_generation_diff(kwargs["generation_diff"], run_id)
+
             with resilient_terminal_output():
                 print(
                     f"[{mode}] done. run_id={run_id} "
@@ -385,6 +465,13 @@ class Command(BaseCommand):
                 )
                 if kwargs["diff_report"]:
                     print(f"[{mode}] diff report written to {kwargs['diff_report']}")
+                if kwargs["generation_diff"] and not dry_run:
+                    print(
+                        f"[{mode}] generation diff written to {kwargs['generation_diff']} "
+                        f"({generation_diff_lines} superseded vote(s))"
+                    )
+                elif kwargs["generation_diff"]:
+                    print(f"[{mode}] --generation-diff ignored: a dry run supersedes nothing.")
         except Exception as exc:
             # Shared FAILED-transition rail (cardpicker.pilot_run_lifecycle.mark_ledger_failed,
             # docs/proposals/stage-e-streaming.md §3 decision (6)/§10) - a no-op if this invocation

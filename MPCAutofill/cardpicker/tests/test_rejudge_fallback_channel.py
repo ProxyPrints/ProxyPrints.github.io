@@ -145,17 +145,26 @@ class TestRejudgeAndRetract:
         _join_key_no_hit(card)
         # recorded state: an "ambiguous" skip from BEFORE the stored evidence gained its current
         # border reading - the fresh verdict is a real vote, so the skip row is retracted.
-        CardScanLog.objects.create(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, skip_reason="ambiguous")
+        CardScanLog.objects.create(
+            card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID, skip_reason="ambiguous", run_id="old-run"
+        )
 
-        before = run_fallback_calculator(dry_run=False)
-        assert before.cards_considered == 0  # excluded: a non-rescannable fallback row exists
+        # RUN-SCOPED ELIGIBILITY (2026-07-29) changed what this precondition means, and the test
+        # says so rather than quietly pinning the weaker version. The stale scan-log row no longer
+        # excludes the card from a NEW run at all - prior runs do not suppress work - so the
+        # exclusion is asserted under the row's OWN run_id, which is where it still holds and
+        # which is what makes a killed run resume. The retraction runbook is NOT obsoleted by
+        # that: its job was always to remove the stale RECORD (and, in the vote case, to stop a
+        # stale row being counted by consensus), and un-suppressing eligibility does neither.
+        before = run_fallback_calculator(run_id="old-run", dry_run=False)
+        assert before.cards_considered == 0  # excluded: THIS run's own non-rescannable row exists
 
         result = rejudge_and_retract([card.pk], run_id="rejudge-2", dry_run=False)
         assert result.changed == 1
         assert result.retracted == 1
         assert result.transitions == {f"skip:ambiguous -> vote:{printing_black.pk}": 1}
 
-        after = run_fallback_calculator(dry_run=False)
+        after = run_fallback_calculator(run_id="a-fresh-run", dry_run=False)
         assert after.cards_considered == 1
         assert after.votes_written == 1
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)

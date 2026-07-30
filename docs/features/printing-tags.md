@@ -84,6 +84,67 @@ printings, artists, tags, and moderation from one screen.
   `tagVoteStatuses` (references the new `TagVoteDisplayStatus.json` enum) —
   both purely additive, no existing field renamed or removed.
 
+- **Run-scoped eligibility + the vote archive** (2026-07-29, owner
+  directive: _"prior runs must not suppress work in a new run; the CURRENT
+  run's own output must, so a killed run resumes rather than redoing
+  completed batches"_). Every Stage D printing-channel calculator used to
+  ask _"have I EVER voted on / abstained on this card?"_, so a calculator's
+  own history permanently narrowed every future run of it — a repaired
+  engine could never re-examine anything the broken one had answered, which
+  is why `stage-d-illustration` had to be version-bumped v1→v2 purely to
+  escape its own scan-log rows. Both self-suppressing excludes
+  (`.exclude(printing_tags__anonymous_id=…)` and the non-rescannable
+  `CardScanLog` exclusion) now additionally match on the CURRENT `run_id`
+  in `local_calculate_verdicts._eligible_cards_queryset` /
+  `_slow_path_eligible_cards_queryset`,
+  `local_illustration._eligible_illustration_cards_queryset` and
+  `local_identify_printing_tags._eligible_base_queryset` (opt-in there;
+  only lands passes a run_id today). `run_id=None` keeps the old behaviour
+  for callers that genuinely mean "anything this identity has never
+  touched" — `stream_backstop_sweep.verify_chunk` is the live one.
+
+  Two things make this safe rather than a churn machine:
+
+  - **The pre-write split compares the VALUE, not just the key.**
+    `local_calculate_verdicts._split_new_printing_tag_votes` now compares
+    the whole set of `(printing_id, is_no_match)` a batch proposes for a
+    `(card, anonymous_id)` group against what is stored — the shape
+    `local_illustration._split_new_illustration_votes` has always had. An
+    unchanged verdict is still skipped (so a re-run over a converged
+    catalogue writes nothing), and a CHANGED verdict now reaches the
+    delete-then-insert instead of being dropped before it. Without this,
+    un-suppressing eligibility buys nothing at all: the calculator
+    recomputes the verdict and throws it away, and because the purge is
+    scoped to the rows being written, a dropped row purges nothing and the
+    stale vote survives verbatim.
+  - **A superseded vote is ARCHIVED, not destroyed.**
+    `models.purge_stale_machine_votes` copies every row it is about to
+    delete into `ArchivedCardPrintingTag` first, stamped with the run that
+    overwrote it. A separate table rather than retained generations in the
+    live one because **nine of the thirteen modules that read
+    `CardPrintingTag` bypass `resolve_vote_weight` entirely** — a
+    zero-weight-by-run_id rule would not stop a retained generation being
+    displayed by `views.py`, counted by `catalog_stats.py`, or treated as
+    "already voted" by the eligibility query this work exists to
+    un-suppress. Nothing in the pipeline reads the archive; the only
+    consumer is the opt-in `manage.py local_calculate_verdicts --generation-diff <path>` debug report (generation-diffing is a debug
+    flag, never a default write path — owner ruling). Retention is issue
+    #575's janitor's ("keep the N most recent runs, sweep the oldest,
+    never delete wholesale"), which is why both `run_id` and
+    `superseded_by_run_id` are indexed.
+
+  **Order within a batch is a CORRECTNESS constraint, not a performance
+  one**: `fallback`, `illustration` and `slow-path` all select POSITIVELY
+  from join-key's output, so "purge everything, then run them in parallel"
+  gives three of the four an EMPTY eligible set — a silent near-no-op that
+  looks like it worked. Required order stays join-key → fallback →
+  illustration → slow-path. The upstream populations those three select
+  from, and slow-path's fallback-voted exclusion, are deliberately NOT
+  run-scoped: a converged upstream calculator writes no rows under a fresh
+  run_id, so a run-scoped version of them is empty on every re-run.
+  `cardpicker/tests/test_run_scoped_eligibility.py` pins all of the above,
+  including the out-of-order empty-set failure.
+
 - **Consensus**: `cardpicker/printing_consensus.py::resolve_printing(card)`
   — weighted-vote formula, weight by source (user 1, admin
   `PRINTING_TAG_ADMIN_WEIGHT` default 5, machine (deduction/OCR)
