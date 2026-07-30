@@ -120,15 +120,18 @@ from cardpicker.operating_envelope import (
 )
 from cardpicker.pilot_run_lifecycle import mark_ledger_failed, merge_counters
 from cardpicker.process_metrics import get_process_rss_mb
+from cardpicker.stage_e_batch_sizing import MODE_INCREMENTAL, resolve_micro_batch_size
 from cardpicker.stage_e_concurrency import try_acquire_dispatch_slot
 from cardpicker.stage_e_signals import suppress_evidence_change_echo
 from cardpicker.utils import get_baked_git_sha
 
 logger = logging.getLogger(__name__)
 
-# Placeholder pending §10(c)'s own measurement (see MPCAutofill/settings.py's own
-# STAGE_E_MICRO_BATCH_SIZE comment for the full citation) - not invented precision, a
-# conservative default inside the brief's own "roughly 10-100" sanity range.
+# RETAINED FOR BACKWARD COMPATIBILITY ONLY (2026-07-29). This module no longer reads it: batch
+# size is now decided by `cardpicker.stage_e_batch_sizing` (see that module's docstring for the
+# rule and the measurements behind it), and its `MIN_BATCH_SIZE`/`INCREMENTAL_BATCH_SIZE` carry
+# this same 25 forward with a stated reason rather than as the §10(c) placeholder it used to be.
+# Left in place because three management commands import it by name for their `--help` text.
 DEFAULT_MICRO_BATCH_SIZE = 25
 
 # Persistent sweep cursor defaults (issue #458 - see MPCAutofill/settings.py's own
@@ -1108,11 +1111,15 @@ def dispatch_micro_batch(
         )
         return DispatchOutcome(status="halted-new-trip", run_id=run_id, trip_id=fresh_trip.trip_id)
 
-    effective_batch_size = (
-        batch_size
-        if batch_size is not None
-        else getattr(settings, "STAGE_E_MICRO_BATCH_SIZE", DEFAULT_MICRO_BATCH_SIZE)
-    )
+    # BATCH SIZE (2026-07-29 - `cardpicker.stage_e_batch_sizing`'s own module docstring carries the
+    # rule, the measurements it was read off, and the precedence order). An explicit `batch_size`
+    # still wins outright, exactly as before. What changed is the FALLBACK: it used to be a flat
+    # `settings.STAGE_E_MICRO_BATCH_SIZE` read, and is now MODE_INCREMENTAL - because the only
+    # caller that ever reaches this fallback is `dispatch_for_card`, the event echo, whose single
+    # triggering card must not turn into a bulk-sized django-q task. Every DRIVER
+    # (`stream_full_catalog`, `stream_backstop_sweep`, `stage_e_shakedown`) resolves its own size
+    # up front and passes it explicitly, so none of them lands here.
+    effective_batch_size = resolve_micro_batch_size(explicit=batch_size, mode=MODE_INCREMENTAL).batch_size
     batch_ids, stage_c_fill = _select_micro_batch_with_backlog_status(card_ids or (), effective_batch_size)
     if not batch_ids:
         # "empty" now CARRIES the Stage C walk's own status (issue #468) instead of flattening

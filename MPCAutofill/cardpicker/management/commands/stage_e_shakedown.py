@@ -115,7 +115,12 @@ from cardpicker.management.commands.stream_backstop_sweep import (
     _THROTTLED_STATUS,
 )
 from cardpicker.models import ImageEvidence
-from cardpicker.stage_e_dispatch import DEFAULT_MICRO_BATCH_SIZE, dispatch_micro_batch
+from cardpicker.stage_e_batch_sizing import (
+    INCREMENTAL_BATCH_SIZE,
+    MODE_INCREMENTAL,
+    resolve_micro_batch_size,
+)
+from cardpicker.stage_e_dispatch import dispatch_micro_batch
 
 # Issue #418's own wave-1 phasing (docs/pipeline-fidelity-gate.md §15): the top 4 sources, 10,437 of
 # the 16,972-card blank-tier-1 pool, already re-scanned + reparsed + landed + Stage D'd and CLOSED -
@@ -218,7 +223,11 @@ class Command(BaseCommand):
             default=None,
             help="Micro-batch chunk size - both the chunk size this driver slices the cohort into "
             "AND the explicit batch_size passed to dispatch_micro_batch for each chunk. Default: "
-            f"settings.STAGE_E_MICRO_BATCH_SIZE ({DEFAULT_MICRO_BATCH_SIZE} if unset).",
+            "Pins the micro-batch size for this invocation, overriding both "
+            "settings.STAGE_E_MICRO_BATCH_SIZE and the autoscale rule. Default: "
+            f"cardpicker.stage_e_batch_sizing's INCREMENTAL size ({INCREMENTAL_BATCH_SIZE}) - see "
+            "this command's own handle() for why a driven diagnostic cohort does not take the "
+            "bulk pass's autoscaled size.",
         )
         parser.add_argument(
             "--max-batches",
@@ -245,9 +254,15 @@ class Command(BaseCommand):
             self.stdout.write("STAGE_E_STREAMING_ENABLED is False - shakedown driver is a no-op.")
             return
 
-        batch_size: int = options["batch_size"] or getattr(
-            settings, "STAGE_E_MICRO_BATCH_SIZE", DEFAULT_MICRO_BATCH_SIZE
-        )
+        # MODE_INCREMENTAL, not MODE_BULK (2026-07-29 - `cardpicker.stage_e_batch_sizing`'s own
+        # "TWO MODES" section). This driver runs the Bug-A tail with `short_circuit=False`, i.e.
+        # the full extractor escalation ladder - six extra tesseract calls per card - so its
+        # per-card cost is nothing like the fetch-bound floor the bulk rule's duration term is
+        # calibrated against, and a batch sized by that rule would run far longer than the rule
+        # believes. It also drives a small, deliberately-shaped cohort where batch size is part of
+        # the observation (this command's own docstring reads batch growth as a cascade signal),
+        # not a throughput knob. `--batch-size` still overrides.
+        batch_size: int = resolve_micro_batch_size(explicit=options["batch_size"], mode=MODE_INCREMENTAL).batch_size
         limit: Optional[int] = options["limit"]
         max_batches: Optional[int] = options["max_batches"]
 
