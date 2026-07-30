@@ -2648,6 +2648,75 @@ class QuestionFeedServedLog(models.Model):
         return f"anonymous_id={self.anonymous_id} pool={self.pool} question_type={self.question_type}"
 
 
+class GlobalFetchPace(models.Model):
+    """
+    THE CROSS-PROCESS PACING STATE for one outbound fetch destination - the shared row that makes
+    `harvest_fetch_limiter`'s req/s ceiling a GLOBAL cap rather than a per-process one.
+
+    WHY THIS EXISTS (owner clarification, 2026-07-30: "the 7 fetches per second cap is a global
+    cap, it shouldn't be per process or per core"). `_DestinationLimiter` paces with a
+    `threading.Lock` and a process-local `_next_allowed`, so `rate_per_sec = 7.0` meant 7/s PER
+    PROCESS. The pooled runner (`run_image_evidence_cohort`) is single-process, so it was correct
+    by accident; the conveyor is not - django-q2 workers are separate OS PROCESSES
+    (`multiprocessing`, `Q_CLUSTER["workers"]`), each constructing its own limiter and pacing
+    independently, so N concurrent dispatches produced N x 7/s. At the production
+    `STAGE_E_MAX_CONCURRENT_DISPATCHES = 2` that is 14/s against a 7/s ruling, scaling with the
+    cap. This is the same per-process trap as `threading.Semaphore(max_concurrency)` - the one
+    `stage_e_batch_sizing` (PR #589) removed a false ceiling term over, and the one
+    `stage_e_concurrency` was built to escape for slot counts.
+
+    WHY A ROW AND NOT AN ADVISORY LOCK - the question `stage_e_concurrency`'s own docstring
+    forces, since that module rejected a DB row for slot counting and chose advisory locks
+    instead. Both halves of that reasoning INVERT for a rate:
+
+      1. An advisory lock is a BINARY held/not-held token. It can express "how many at once"
+         (concurrency); it cannot express "how many per unit time" (a rate), because a rate needs
+         a remembered TIMESTAMP and a lock stores no value. Enforcing 7/s with N binary locks
+         would mean holding each for exactly 1/7s - turning every fetching process into a sleeper
+         occupying a Postgres session, and making the rate a function of how long a lock is held
+         rather than how often it is acquired.
+      2. The crash-safety objection that made a DB row WRONG for slots does not apply here. That
+         objection was that a `kill -9`'d worker leaves a claimed slot claimed forever, since
+         nothing ties a row to a process's lifetime. This row holds no CLAIM - only a timestamp. A
+         process killed mid-reservation leaves `next_allowed_at` at most one interval in the
+         future, which self-heals in ~143ms at 7/s with zero reconciliation code. The very
+         property that made a row unsafe for a claim makes it exactly right for a pace.
+
+    ONE ROW PER DESTINATION, created on demand (`harvest_rate_budget._ensure_row`), never deleted.
+    `destination` matches `DestinationLimiterConfig.name` - the same key the in-process limiter
+    registry uses, so the two are always talking about the same destination.
+
+    `next_allowed_at` IS WRITTEN AND READ ONLY IN THE DATABASE'S OWN CLOCK (`clock_timestamp()`),
+    never a Python-side timestamp. This is load-bearing, not stylistic: the in-process limiter
+    uses `time.monotonic()`, whose epoch is PER PROCESS and meaningless to compare across
+    processes - persisting one process's monotonic reading for another to read would silently
+    reintroduce exactly the per-process defect this row exists to fix.
+
+    `backoff_multiplier`/`clean_streak` are here for the same reason, not as an extra feature: the
+    interval that advances `next_allowed_at` must be a SINGLE agreed value across every process,
+    or two processes holding different multipliers write conflicting paces into the same row and
+    the effective rate becomes whatever the least-backed-off process believes. A global rate
+    ceiling requires a global backoff term. The semantics are `harvest_fetch_limiter`'s own,
+    unchanged (doubling per 429/503, capped; halving per `_CLEAN_RESPONSES_BEFORE_DECAY`
+    consecutive clean responses; floored at 1.0) - only the storage moved.
+    """
+
+    destination = models.CharField(max_length=64, primary_key=True)
+    # The instant the NEXT request to this destination may be issued, in the DATABASE's clock. A
+    # reservation reads it, advances it by one interval, and returns the slot it claimed - all in
+    # one atomic UPDATE (see `harvest_rate_budget.reserve_slot`).
+    next_allowed_at = models.DateTimeField()
+    backoff_multiplier = models.FloatField(default=1.0)
+    clean_streak = models.IntegerField(default=0)
+
+    class Meta:
+        verbose_name = "global fetch pace"
+        verbose_name_plural = "global fetch paces"
+
+    def __str__(self) -> str:
+        return f"{self.destination} next_allowed_at={self.next_allowed_at.isoformat()} x{self.backoff_multiplier:.1f}"
+
+
 __all__ = [
     "Faces",
     "CardTypes",
@@ -2673,4 +2742,5 @@ __all__ = [
     "ImageEvidence",
     "QuestionFeedServedPool",
     "QuestionFeedServedLog",
+    "GlobalFetchPace",
 ]

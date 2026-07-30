@@ -133,6 +133,84 @@ fabricated ceiling PR #589 **removed** from `stage_e_batch_sizing`. The honest
 hardware-vs-destination signal remains #589's own
 `HostProfile.fetch_overcommitted`.
 
+#### The 7/s cap is GLOBAL, not per process and not per core
+
+Owner clarification, 2026-07-30:
+
+> "to be clear: the 7 fetches per second cap is a global cap, it shouldn't be
+> per process or per core"
+
+**This is the distinction two people have now misread, so it is stated
+explicitly.** `_DestinationLimiter` paces with a `threading.Lock` and a
+process-local `next_allowed` timestamp. Setting `rate_per_sec = 7.0` therefore
+bought **7/s per process**, which is not the same thing as 7/s:
+
+| fetcher                                     | processes                                                        | what the old per-process cap actually gave                                                                                                                                                                                     |
+| ------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pooled runner (`run_image_evidence_cohort`) | **one** — a single process with an internal fetch thread pool    | a genuine 7/s. Correct, but **by accident**: one process, one limiter.                                                                                                                                                         |
+| Conveyor (`stage_e_dispatch` via django-q2) | **many** — workers are separate OS processes (`multiprocessing`) | **N × 7/s.** Each worker builds its own limiter in its own address space and paces independently. At the production `STAGE_E_MAX_CONCURRENT_DISPATCHES = 2` that is **14/s against a 7/s ruling**, and it scales with the cap. |
+
+This is the same per-process trap as `threading.Semaphore(max_concurrency)` —
+the one PR #589 deleted a false ceiling term from `stage_e_batch_sizing` over.
+Because the rate limit (not the concurrency limit) is what actually protects
+the destination, the rate limit's **globality** is load-bearing, not a
+refinement.
+
+**The mechanism: one Postgres row per destination**
+(`cardpicker.models.GlobalFetchPace`, module `cardpicker.harvest_rate_budget`).
+Every fetching process reserves its turn with a single atomic
+`UPDATE … SET next_allowed_at = GREATEST(clock_timestamp(), next_allowed_at) + interval … RETURNING`, then sleeps until its slot **locally**, holding no lock
+and no transaction. Concurrent reservers serialise on Postgres's own row lock,
+and under READ COMMITTED the blocked statement re-evaluates against the
+committed row — so the reservations form **one** strictly-increasing sequence
+no matter how many processes compete.
+
+Three properties worth knowing on call:
+
+- **Timestamps are the database's clock** (`clock_timestamp()`), never a
+  process's `time.monotonic()`. Monotonic epochs are per-process and not
+  comparable across processes; persisting one for another to read would
+  reintroduce the exact defect while _looking_ coordinated.
+- **The backoff multiplier and clean streak live in the same row.** A global
+  rate ceiling requires a global backoff term — two processes holding different
+  multipliers would write conflicting paces into the same row, and the effective
+  rate would be whatever the least-backed-off process believed. The 429/503
+  semantics and the decay schedule from the section above are unchanged; only
+  their storage moved.
+- **`max_concurrency` remains per-process, deliberately.** It is a local
+  resource bound (how many of _this_ process's threads may be in flight), not
+  the destination-protecting ceiling.
+
+**Why a row rather than the advisory locks `stage_e_concurrency` already uses.**
+That module is this repo's established cross-process primitive, so it was the
+first candidate. It cannot carry a rate, and both halves of its own reasoning
+invert here: an advisory lock is a **binary** held/not-held token that expresses
+"how many at once", not "how many per unit time" — a rate needs a remembered
+timestamp and a lock stores no value. And the crash-safety objection that made a
+DB row _wrong_ for slot counting (a `kill -9`'d worker leaves a claimed slot
+claimed forever) does not apply: this row holds **no claim, only a timestamp**. A
+process killed mid-reservation leaves `next_allowed_at` at most one interval in
+the future, self-healing in ~143 ms at 7/s with zero reconciliation. Redis was
+not an option — `docker/docker-compose.prod.yml` runs django, worker, nginx,
+postgres and elasticsearch, and no Redis.
+
+**Cost.** A reservation is one local round trip: **1.5 ms mean, 1.3 ms p50,
+2.3 ms p95** measured over 300 calls against the containerised Postgres the test
+suite uses. Against a ~300 ms image fetch that is **0.78 % at p95**, and against
+the 143 ms pacing interval the reservation itself schedules it is ~1 %. The
+pooled runner is not measurably slowed; its fetch threads touch the row only 7
+times a second in total, so the row lock runs at roughly a 1 % duty cycle.
+
+**If the database is unreachable, pacing degrades to per-process and the run
+continues** — logged at ERROR, never fatal. That is a real loss (the aggregate
+ceiling is not enforced while it persists) but a bounded one: every process is
+still paced at 7/s by its own local limiter. This is deliberately the **opposite**
+of `stage_e_concurrency`'s fail-closed posture, because the downsides differ — an
+unavailable _concurrency_ cap lets unbounded dispatches pile onto the host, while
+an unavailable _rate_ budget still leaves every process individually paced. It
+also matches the standing rule that rate machinery degrades rather than shutting
+things down.
+
 **Backoff now decays.** It used to be sticky for the life of the process — the
 multiplier only ever grew. On a one-shot multi-hour pass that meant a single
 early 429 pinned the whole run at half speed with no way back. It is now

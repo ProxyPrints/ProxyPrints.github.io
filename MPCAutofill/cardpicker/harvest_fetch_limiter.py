@@ -43,6 +43,16 @@ instead - a materially milder, more common, recoverable signal.
 OWNER RATE RULING (2026-07-30): "the limit needs to be on the amount we are fetching from google
 api 7/s or hardware whichever comes first. and the limit needs to throttle not shut it down."
 
+  * THE CEILING IS GLOBAL, NOT PER PROCESS (owner clarification, 2026-07-30: "the 7 fetches per
+    second cap is a global cap, it shouldn't be per process or per core"). `_DestinationLimiter`
+    paces with a `threading.Lock` and a process-local `_next_allowed`, so `rate_per_sec = 7.0`
+    ORIGINALLY bought 7/s PER PROCESS - correct by accident for the single-process pooled runner,
+    and wrong for the conveyor, whose django-q2 workers are separate OS PROCESSES each holding
+    their own limiter (N concurrent dispatches = N x 7/s; 14/s at the production
+    `STAGE_E_MAX_CONCURRENT_DISPATCHES = 2`, scaling with the cap). The reservation is therefore
+    made against ONE shared Postgres row - see `cardpicker.harvest_rate_budget`, which owns the
+    mechanism and the reasoning. Note the asymmetry with `max_concurrency` below, which REMAINS
+    per-process on purpose: it is a local resource bound, not the destination-protecting ceiling.
   * THE CEILING IS 7.0/s. `GOOGLE_IMAGE.rate_per_sec` drops 8.0 -> 7.0. The probe-derived 8.0 was
     the highest measured-clean step; 7.0 is the owner's own ratified number and is strictly under
     it, so nothing the probe established is contradicted - only tightened.
@@ -85,6 +95,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+from cardpicker.harvest_rate_budget import (
+    RateBudgetUnavailable,
+    record_backoff,
+    record_clean_response,
+    reserve_slot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -260,11 +277,20 @@ class _DestinationLimiter:
         logger.error("%s destination locked out (403) - this is a hard stop, not a pacing change", self._config.name)
 
     def backoff(self) -> None:
+        """Escalate pacing after a 429/503. The multiplier is advanced in the SHARED row first, so
+        one process observing rate pressure slows EVERY process (2026-07-30: the interval that
+        advances the shared `next_allowed_at` has to be a single agreed value, or processes holding
+        different multipliers write conflicting paces into the same row - see `GlobalFetchPace`'s
+        own docstring). The local copy is kept in step so the degraded fallback path
+        (`_local_wait`) stays correct if the row later becomes unreachable."""
+        shared = record_backoff(self._config.name, 2.0, self._MAX_BACKOFF_MULTIPLIER)
         with self._lock:
             self._backoff_multiplier = min(self._backoff_multiplier * 2.0, self._MAX_BACKOFF_MULTIPLIER)
             self._clean_streak = 0
-            multiplier = self._backoff_multiplier
-        logger.warning("%s destination backing off (429) - pacing interval now x%.1f", self._config.name, multiplier)
+            multiplier = shared if shared is not None else self._backoff_multiplier
+        logger.warning(
+            "%s destination backing off (429/503) - GLOBAL pacing interval now x%.1f", self._config.name, multiplier
+        )
 
     def note_clean_response(self) -> None:
         """One response that was neither a lockout nor a backoff code - the decay half of the
@@ -275,7 +301,15 @@ class _DestinationLimiter:
         back never accumulates enough clean responses to recover.
 
         A no-op while the multiplier is already 1.0, which is the overwhelmingly common case - a
-        run that never sees a 429 never touches the streak counter at all."""
+        run that never sees a 429 never touches the streak counter at all.
+
+        BOTH the streak and the multiplier live in the SHARED row (2026-07-30), for the same reason
+        the backoff does and one more: N processes each counting their own streak would reach the
+        decay threshold N times over and recover N times faster than the single agreed schedule
+        intends - quietly accelerating recovery in exactly the situation (many workers, sustained
+        pressure) where it is supposed to be slowest. The local copies below are maintained only to
+        keep `_local_wait`'s degraded fallback honest."""
+        record_clean_response(self._config.name, self._CLEAN_RESPONSES_BEFORE_DECAY, self._MIN_BACKOFF_MULTIPLIER)
         with self._lock:
             if self._backoff_multiplier <= self._MIN_BACKOFF_MULTIPLIER:
                 self._clean_streak = 0
@@ -294,18 +328,58 @@ class _DestinationLimiter:
         )
 
     def acquire(self) -> "_LimiterSlot":
+        """Claim this caller's turn, then block until it arrives.
+
+        THE PACING RESERVATION IS GLOBAL (owner clarification, 2026-07-30: "the 7 fetches per
+        second cap is a global cap, it shouldn't be per process or per core"). The wait comes from
+        `harvest_rate_budget.reserve_slot`, a single atomic UPDATE against one shared Postgres row,
+        so every fetching process in the deployment draws from ONE request sequence. The
+        process-local `_next_allowed` arithmetic this used to do is now the FALLBACK only - see
+        `_local_wait` - because it silently meant `rate_per_sec` PER PROCESS, i.e. N x 7/s across N
+        django-q2 workers.
+
+        The sleep itself happens HERE, after the reservation returns and outside any database lock
+        or transaction: the row is advanced and released in one statement, and this thread then
+        waits on its own. A slow caller therefore delays only itself, never the shared sequence.
+
+        The concurrency semaphore is unchanged and remains deliberately per-process - it is a local
+        resource bound (how many of THIS process's threads may be in flight at once), not the
+        destination-protecting ceiling. The rate limit is that, which is exactly why it is the one
+        that had to become global."""
         if self._locked_out:
             raise GoogleFetchLockoutError(f"{self._config.name} is locked out (403) - refusing further requests")
         self._semaphore.acquire()
+        try:
+            wait_time = reserve_slot(self._config.name, self._interval)
+        except RateBudgetUnavailable as exc:
+            # DEGRADE, never fail (module docstring's own posture, and `harvest_rate_budget`'s
+            # "FAIL-OPEN TO LOCAL PACING" section): the ceiling reverts to per-process, which is
+            # where this repo already was before the shared row existed, and the run keeps going.
+            logger.error(
+                "%s: global rate budget unavailable (%s) - DEGRADED to per-process pacing at %.1f/s "
+                "for this request; the aggregate ceiling is not being enforced while this persists",
+                self._config.name,
+                exc,
+                self._config.rate_per_sec,
+            )
+            wait_time = self._local_wait()
+        with self._lock:
+            self._request_count += 1
+        if wait_time > 0:
+            time.sleep(wait_time)
+        return _LimiterSlot(self._semaphore)
+
+    def _local_wait(self) -> float:
+        """The ORIGINAL per-process pacing arithmetic, kept verbatim as the degraded fallback for
+        when the shared row is unreachable. Uses `time.monotonic()`, whose epoch is per-process -
+        which is precisely why this cannot be the primary path and why the shared row uses the
+        DATABASE's `clock_timestamp()` instead (see `harvest_rate_budget`'s own docstring)."""
         with self._lock:
             now = time.monotonic()
             interval = self._interval * self._backoff_multiplier
             wait_time = max(0.0, self._next_allowed - now)
             self._next_allowed = max(now, self._next_allowed) + interval
-            self._request_count += 1
-        if wait_time > 0:
-            time.sleep(wait_time)
-        return _LimiterSlot(self._semaphore)
+        return wait_time
 
 
 class _LimiterSlot:
