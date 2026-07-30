@@ -1058,7 +1058,7 @@ def _run_stage_c(
     return trip
 
 
-def _run_illustration_calculator(run_id: str, card_ids: list[int]) -> Any:
+def _run_illustration_calculator(run_id: str, card_ids: Optional[list[int]], dry_run: bool = False) -> Any:
     """
     Lazy-import wrapper for `cardpicker.local_illustration.run_illustration_calculator` - mirrors
     `_stage_c_manifest_extractor_keys`'s own posture of avoiding a hard import-time dependency
@@ -1069,10 +1069,12 @@ def _run_illustration_calculator(run_id: str, card_ids: list[int]) -> Any:
     """
     from cardpicker.local_illustration import run_illustration_calculator
 
-    return run_illustration_calculator(run_id=run_id, dry_run=False, card_ids=card_ids)
+    return run_illustration_calculator(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
 
 
-def _run_attribute_chip_casters(run_id: str, card_ids: list[int], outcome: DispatchOutcome) -> None:
+def _run_attribute_chip_casters(
+    run_id: str, card_ids: Optional[list[int]], outcome: DispatchOutcome, dry_run: bool = False
+) -> None:
     """
     THE ATTRIBUTE-CHIP CASTERS, wired into the conveyor (2026-07-30, closing the 2026-07-29
     composition audit's §1 Q1 items 1-3). Same lazy-import posture as
@@ -1115,10 +1117,10 @@ def _run_attribute_chip_casters(run_id: str, card_ids: list[int], outcome: Dispa
     from cardpicker.local_layout_class_cast import run_layout_class_cast
 
     try:
-        border_result = run_layout_class_cast(run_id=run_id, dry_run=False, card_ids=card_ids)
+        border_result = run_layout_class_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
         outcome.stage_d_border_chip_votes = border_result.votes_written
 
-        chip_result = run_attribute_chip_cast(run_id=run_id, dry_run=False, card_ids=card_ids)
+        chip_result = run_attribute_chip_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
         outcome.stage_d_frame_chip_votes = chip_result.frame_votes_written
         outcome.stage_d_bleed_chip_votes = chip_result.bleed_votes_written
     except RuntimeError as exc:
@@ -1132,7 +1134,7 @@ def _run_attribute_chip_casters(run_id: str, card_ids: list[int], outcome: Dispa
         )
 
 
-def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) -> None:
+def _run_stage_d(batch_ids: Optional[list[int]], run_id: str, outcome: DispatchOutcome, dry_run: bool = False) -> None:
     """
     Stage D over the SAME micro-batch, scoped via the `card_ids` parameter
     `local_calculate_verdicts.py` gained for this module (see that module's own docstring) - the
@@ -1143,6 +1145,24 @@ def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) ->
     evidence and never needed Stage C at all this dispatch) - each calculator's own eligibility
     query simply finds nothing to do for a card with no current evidence (a "no-evidence" named
     skip, not an error), so this is always safe to call.
+
+    `batch_ids=None` IS BULK MODE (2026-07-30, for `run_pipeline`, the one-command monolith).
+    Every calculator and caster below already accepts `card_ids=None` and has always treated it as
+    "the whole eligible catalogue" - that is the mode `local_calculate_verdicts`' own bulk command
+    invokes them in. Passing it through here means the monolith runs THIS sequence, in THIS order,
+    rather than keeping a second copy of it: the conveyor's per-micro-batch scoping and a
+    full-catalogue pass become the same Stage D, differing only in that one argument. A
+    full-catalogue pass must NOT instead pass its whole cohort as an explicit id list - `card_ids`
+    is pushed down into every dependency subquery (PR #579), which is a large win at batch 25 and
+    a `pk__in` list of ~230,000 ids at catalogue scale.
+
+    `dry_run` DEFAULTS TO FALSE HERE AND MUST STAY THAT WAY. Every caller of this function is an
+    ENGINE, and an engine that computes a whole pass and persists nothing fails in the worst
+    available shape: full logs, every counter reporting, zero rows. The `dry_run=True` path exists
+    for `run_pipeline --dry-run`, whose whole job is to let an operator preview a 230k-card pass
+    before committing to it - each calculator below already had the parameter and already reports
+    `would_cast` alongside `votes_written`, so a dry run is a real, fully-executed pass that
+    withholds only the write.
 
     CONCURRENT-DISPATCH VOTE COLLISION (2026-07-24, shakedown run tripping envelope trip
     envtrip-20260724T214616-be6e5db9): this is the FIRST caller ever to invoke
@@ -1170,24 +1190,24 @@ def _run_stage_d(batch_ids: list[int], run_id: str, outcome: DispatchOutcome) ->
     see `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (companion change) for the actual fix to that,
     and `docs/features/stage-e-operations.md`'s runbook for acknowledging the open trip itself.
     """
-    join_key_result = run_join_key_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
+    join_key_result = run_join_key_calculator(run_id=run_id, dry_run=dry_run, card_ids=batch_ids)
     outcome.stage_d_join_key_votes = join_key_result.votes_written + join_key_result.no_match_votes_written
     outcome.stage_d_join_key_already_voted = join_key_result.already_voted
 
-    fallback_result = run_fallback_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
+    fallback_result = run_fallback_calculator(run_id=run_id, dry_run=dry_run, card_ids=batch_ids)
     outcome.stage_d_fallback_votes = fallback_result.votes_written
     outcome.stage_d_fallback_already_voted = fallback_result.already_voted
 
-    illustration_result = _run_illustration_calculator(run_id=run_id, card_ids=batch_ids)
+    illustration_result = _run_illustration_calculator(run_id=run_id, card_ids=batch_ids, dry_run=dry_run)
     outcome.stage_d_illustration_votes = illustration_result.votes_written
     outcome.stage_d_illustration_already_voted = illustration_result.already_voted
 
-    slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=False, card_ids=batch_ids)
+    slow_path_result = run_slow_path_calculator(run_id=run_id, dry_run=dry_run, card_ids=batch_ids)
     outcome.stage_d_slow_path_routed = slow_path_result.routed_written
 
     # See `_run_attribute_chip_casters`' own docstring: three chip families that were reachable
     # from neither engine, two of them at zero rows with no substitute. Zero image fetches.
-    _run_attribute_chip_casters(run_id=run_id, card_ids=batch_ids, outcome=outcome)
+    _run_attribute_chip_casters(run_id=run_id, card_ids=batch_ids, outcome=outcome, dry_run=dry_run)
 
 
 def dispatch_micro_batch(
