@@ -154,10 +154,17 @@ resume filter up front (skip any card whose ImageEvidence row already carries ev
 extractor's version key) so a re-invocation after a kill does not re-pay the fetch+OCR cost for
 cards already done, matching task #147's resume-contract spirit without building its full
 run-ledger machinery (explicitly out of scope for this bounded run per its own directive).
-`MANIFEST_EXTRACTOR_KEYS` is kept in sync with `image_evidence.extract_card_evidence`'s own
-`extractor_versions` keys (12 as of the artbox_phash extractor, issue #480) - stale here would
-silently under-count "already done" and re-pay fetch+OCR cost this resume filter exists
-specifically to avoid.
+`MANIFEST_EXTRACTOR_KEYS` and `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` are kept in sync with
+`image_evidence.compute_card_evidence`'s own `extractor_versions` assignments (11 keys as of
+color_profile's retirement 2026-07-27) - stale here would silently under-count "already done"
+and re-pay fetch+OCR cost this resume filter exists specifically to avoid.
+
+That sync is now ENFORCED, not merely requested: `.github/scripts/check_extractor_manifest_sync.py`
+derives {key: version} from image_evidence.py by AST and fails CI if either constant below
+disagrees with it. Two things this prose itself had wrong are the argument for a tether rather
+than a sterner comment - it said "12" when the manifest carried 11 keys, and it named
+`extract_card_evidence` when the assignments actually live in `compute_card_evidence`. A
+hand-written anchor drifts exactly like a hand-written list.
 
 `artbox_phash` (issue #480, added 2026-07-25) has the same "adding a manifest key stales every
 row's `has_keys` check" consequence every prior manifest addition has had, deliberately - see
@@ -282,8 +289,10 @@ logger = logging.getLogger(__name__)
 # The full Stage C manifest as of 2026-07-27 (fetch_health + geometry-bleed + geometry-group +
 # OCR-group + artbox-phash + symbol-region + legal-line + quality-signals; color_profile retired
 # 2026-07-27, never consumed downstream) - matches
-# image_evidence.extract_card_evidence's own extractor_versions keys exactly. Keep this set in
-# sync with that function whenever a new extractor group lands (see module docstring).
+# image_evidence.compute_card_evidence's own extractor_versions keys exactly. Keep this set in
+# sync with that function whenever a new extractor group lands (see module docstring) - and note
+# that "keep in sync" is now CHECKED by .github/scripts/check_extractor_manifest_sync.py, so a
+# drift fails CI rather than waiting to be noticed.
 MANIFEST_EXTRACTOR_KEYS = frozenset(
     {
         "fetch_health",
@@ -308,7 +317,8 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
 # should be re-processed, not skipped. Imported by stage_e_dispatch._stage_c_manifest_versions()
 # for the streaming filter (same "imported, never reimplemented" posture as MANIFEST_EXTRACTOR_KEYS
 # itself). Keep this dict's values in sync with image_evidence.py's version constants whenever a
-# version bump lands.
+# version bump lands - ENFORCED by .github/scripts/check_extractor_manifest_sync.py, which
+# derives the expected map from image_evidence.py by AST and fails CI on any disagreement.
 MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "fetch_health": "fetch-health-v2",
     "geometry_bleed": "geometry-bleed-v1",
