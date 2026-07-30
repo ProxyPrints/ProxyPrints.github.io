@@ -66,6 +66,20 @@ api 7/s or hardware whichever comes first. and the limit needs to throttle not s
     envelope breach (host load, RSS, non-throttle fetch failures, a 403 lockout) still halts,
     unchanged. See `operating_envelope.py` and `docs/features/stage-e-operations.md`.
 
+THE CEILING IS GLOBAL, NOT PER PROCESS (owner clarification, 2026-07-30: "to be clear: the 7
+fetches per second cap is a global cap, it shouldn't be per process or per core"). Everything in
+`_DestinationLimiter` below - `_next_allowed`, its `threading.Lock`, its `threading.Semaphore` -
+is PER-PROCESS state, and that was the whole ceiling until now. It held for the pooled runner
+(`run_image_evidence_cohort`: one process, one thread pool) and it did NOT hold for the conveyor
+(`stage_e_dispatch` under django-q2, whose workers are separate OS PROCESSES): N concurrent
+dispatches each paced themselves to 7/s independently, for N x 7/s at the destination, scaling with
+`STAGE_E_MAX_CONCURRENT_DISPATCHES`. `acquire()` now takes its pacing decision from
+`harvest_rate_coordinator` - one atomic Postgres statement over a cursor shared by every fetching
+process - so the aggregate is the ceiling regardless of how many processes fetch. The per-process
+arithmetic survives, divided by the process count, only as the degraded fallback when the
+coordination store is unreachable. See that module's docstring for the mechanism, the rejected
+alternatives, and the fail-open/fail-closed reasoning.
+
 BACKOFF IS NO LONGER STICKY-FOREVER (same ruling). It was: "the multiplier only grows, never
 resets", on the reasoning that recovering the fast rate mid-run risks re-tripping the same
 undocumented ceiling. That reasoning holds for a SHORT run and fails for the one this project
@@ -85,6 +99,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+from cardpicker import harvest_rate_coordinator
 
 logger = logging.getLogger(__name__)
 
@@ -293,16 +309,50 @@ class _DestinationLimiter:
             multiplier,
         )
 
+    def _reserve_locally(self, interval: float) -> float:
+        """The ORIGINAL per-process minimum-interval arithmetic, now reached only when
+        cross-process coordination is unavailable (`harvest_rate_coordinator.reserve` returned
+        `None`). Kept verbatim - it is a correct pacer, it was only ever wrong about its SCOPE. The
+        caller widens `interval` by `degraded_divisor()` before calling this, so N processes each
+        running this fallback still sum to no more than the configured ceiling."""
+        with self._lock:
+            now = time.monotonic()
+            wait_time = max(0.0, self._next_allowed - now)
+            self._next_allowed = max(now, self._next_allowed) + interval
+        return wait_time
+
     def acquire(self) -> "_LimiterSlot":
+        """Blocks the calling thread until this destination's GLOBAL budget clears it to fetch, then
+        returns a context manager holding the per-process concurrency semaphore for the fetch's
+        duration.
+
+        The pacing decision is made by `harvest_rate_coordinator.reserve` - a single atomic Postgres
+        statement over a cursor every fetching PROCESS shares - not by this object's own
+        `_next_allowed`. That is the whole point: this class's state is per-process, and django-q2's
+        workers are separate OS processes, so a purely local pacer delivered N x the configured rate
+        (see `harvest_rate_coordinator`'s own module docstring for the full defect writeup). The
+        local pacer survives as the degraded fallback only.
+
+        Backoff stays local and is passed INTO the reservation as an already-widened interval, so PR
+        #644's throttle-not-halt behaviour is unchanged: a process under rate pressure contributes a
+        larger gap to the shared cursor, which can only ever slow the aggregate, never raise it."""
         if self._locked_out:
             raise GoogleFetchLockoutError(f"{self._config.name} is locked out (403) - refusing further requests")
         self._semaphore.acquire()
-        with self._lock:
-            now = time.monotonic()
-            interval = self._interval * self._backoff_multiplier
-            wait_time = max(0.0, self._next_allowed - now)
-            self._next_allowed = max(now, self._next_allowed) + interval
-            self._request_count += 1
+        try:
+            with self._lock:
+                interval = self._interval * self._backoff_multiplier
+                self._request_count += 1
+            wait_time = harvest_rate_coordinator.reserve(self._config.name, interval)
+            if wait_time is None:
+                wait_time = self._reserve_locally(interval * harvest_rate_coordinator.degraded_divisor())
+        except BaseException:
+            # Nothing between the semaphore acquire and the sleep is expected to raise - `reserve`
+            # swallows its own failures by contract. If something does anyway, the semaphore must
+            # not leak, or this destination silently loses a concurrency slot for the life of the
+            # process.
+            self._semaphore.release()
+            raise
         if wait_time > 0:
             time.sleep(wait_time)
         return _LimiterSlot(self._semaphore)
@@ -342,9 +392,13 @@ def get_limiter(config: DestinationLimiterConfig) -> _DestinationLimiter:
 
 def reset_limiters() -> None:
     """Test-only: drops every registered limiter so each test starts with fresh pacing/trip
-    state instead of leaking across tests via the module-level registry."""
+    state instead of leaking across tests via the module-level registry, and drops the rate
+    coordinator's dedicated connection with them (the cross-process cursor itself is per
+    destination NAME, so tests that want a fresh cursor must call
+    `harvest_rate_coordinator.clear_cursor` for their own destination - see that module)."""
     with _REGISTRY_LOCK:
         _LIMITERS.clear()
+    harvest_rate_coordinator.reset_connection()
 
 
 def rate_limited_get(config: DestinationLimiterConfig, url: str, **kwargs: Any) -> "requests.Response":
