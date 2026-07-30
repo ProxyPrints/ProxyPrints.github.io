@@ -116,6 +116,13 @@ class Command(BaseCommand):
         write(f"run_id: {report.run_id or '(none - no ledger rows exist)'}")
         if report.ledger is not None:
             write(f"command: {report.ledger.command}   status: {report.ledger.status}")
+            write(f"votes_written (self-reported by the run): {report.ledger.votes_written}")
+            # The run's OWN counters, printed beside the row counts this report
+            # derived independently. They are a self-report and are shown for
+            # comparison only - where the two disagree, the row counts are the
+            # fact and the counters are the claim.
+            for key, value in sorted((report.ledger.counters or {}).items()):
+                write(f"  counter {key}: {value}")
         roster = report.roster
         write(
             f"roster derived from code: {len(roster.vote)} vote / {len(roster.extractor)} extractor / "
@@ -197,6 +204,16 @@ def _as_json(report: Any, outcomes: list[Any]) -> dict[str, Any]:
     return {
         "run_id": report.run_id,
         "measurable": report.measurable,
+        "ledger": (
+            {
+                "command": report.ledger.command,
+                "status": report.ledger.status,
+                "votes_written": report.ledger.votes_written,
+                "counters": report.ledger.counters,
+            }
+            if report.ledger is not None
+            else None
+        ),
         "findings": report.findings,
         "roster_sizes": {
             "vote": len(report.roster.vote),
