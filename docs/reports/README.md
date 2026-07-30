@@ -83,6 +83,17 @@ a `detail` object read only when the summary signals it's needed.
   pilot-era value's current home, 3 confirmed MISSING items, 3 open
   items. Cited by [`../pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md),
   the gate's canonical status page.
+- `2026-07-29-border-colour-measurements.md` — what each `border_color`
+  actually measures in pixels, per colour and per band, across 120 images
+  (official Scryfall renders + a full census of the catalogue's white/
+  silver/gold images). Found that `classify_border_color`'s sample bands
+  land 79–91% inside the bleed margin on bleed-inclusive images (98.7% of
+  production), giving 0% recall on white and on silver; that
+  `_SILVER_BRIGHTNESS_RANGE` contains no measured silver border; and that
+  the top band is a zero-area crop on every trimmed image. Establishes gold
+  as `RGB(168, 138, 78)` and yellow as `RGB(246, 193, 19)`, separable by
+  saturation but not brightness. Data:
+  [`../data/2026-07-29-border-colour-measurements.csv`](../data/2026-07-29-border-colour-measurements.csv).
 
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
