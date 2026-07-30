@@ -1248,6 +1248,56 @@ class AttributeReport:
     cards_absorbed_into_clusters: int = 0
 
 
+def build_propagated_cluster_votes(
+    *,
+    representative_card_id: int,
+    printing_pk: int,
+    anonymous_id: str,
+    confidence: float,
+    run_id: Optional[str],
+    members_by_representative: dict[int, list[int]],
+    members_already_voted: set[int],
+    source: VoteSource = VoteSource.OCR,
+) -> list[CardPrintingTag]:
+    """
+    THE CLUSTER-VOTE PROPAGATION RULE (addendum item 2a), lifted out of `run_pilot`'s own
+    `propagate_cluster_vote` closure 2026-07-30 so it has exactly one implementation and two
+    callers - `run_pilot` (unchanged behaviour: the closure now calls this and does its own
+    batching) and `run_pipeline`, the one-command monolith, which had no way to reach it at all
+    while it lived inside a closure over six pieces of `run_pilot`-local state.
+
+    An accepted vote on a distance-0 cluster REPRESENTATIVE propagates as an identical vote (same
+    `anonymous_id`, `printing`, `confidence`) to every OTHER member of its cluster. Absorbed
+    members are, by construction, cards whose stored `content_phash` is bit-identical to the
+    representative's - the same image - so this is an identity property first and a throughput
+    lever second: it is what makes an identity group AGREE, and it does it without the member
+    ever being fetched or computed.
+
+    `members_already_voted` is the caller's pre-computed set of member card ids that ALREADY carry
+    a vote under this same `anonymous_id` (one query, up front, never re-queried per call - see
+    `run_pilot`'s own call site for why a member can legitimately be in that state). Propagating
+    to one anyway would violate `CardPrintingTag`'s own (card, printing, anonymous_id) uniqueness
+    constraint, and would silently double-vote or overwrite regardless.
+
+    Returns the rows to write; it never writes them itself, so the caller keeps ownership of its
+    own batching, purge-and-write discipline and gate accounting.
+    """
+    member_ids = members_by_representative.get(representative_card_id, [])
+    return [
+        CardPrintingTag(
+            card_id=member_id,
+            printing_id=printing_pk,
+            is_no_match=False,
+            anonymous_id=anonymous_id,
+            source=source,
+            confidence=confidence,
+            run_id=run_id,
+        )
+        for member_id in member_ids
+        if member_id not in members_already_voted
+    ]
+
+
 def run_pilot(
     engine: Literal["ocr", "phash", "both"] = "both",
     limit: int = 300,
@@ -1483,29 +1533,28 @@ def run_pilot(
         engine this run) - propagating anyway would violate CardPrintingTag's own
         (card, printing, anonymous_id) uniqueness constraint, and would silently double-vote or
         attempt to overwrite an existing vote regardless. Returns how many propagated votes were
-        actually queued, for the engine's votes_written tally."""
-        member_ids = cluster_result.members_by_representative.get(representative_card_id, [])
-        already_voted = members_already_voted_by_anonymous_id.get(anonymous_id, set())
-        propagated = 0
-        for member_id in member_ids:
-            if member_id in already_voted:
-                continue
-            votes_batch.append(
-                CardPrintingTag(
-                    card_id=member_id,
-                    printing_id=printing_pk,
-                    is_no_match=False,
-                    anonymous_id=anonymous_id,
-                    source=VoteSource.OCR,
-                    confidence=confidence,
-                    run_id=run_id,
-                )
-            )
-            if member_id not in written_card_ids:
-                written_card_ids.append(member_id)
-                batch_written_card_ids.append(member_id)
-            propagated += 1
-        return propagated
+        actually queued, for the engine's votes_written tally.
+
+        The row-building half was lifted verbatim into the module-level
+        `build_propagated_cluster_votes` (2026-07-30) so a second engine - `run_pipeline`, the
+        one-command monolith - can propagate cluster votes without a second copy of it. This
+        closure keeps everything that is genuinely `run_pilot`-local: which batch the rows join,
+        and the two written-id ledgers the gate check reads."""
+        rows = build_propagated_cluster_votes(
+            representative_card_id=representative_card_id,
+            printing_pk=printing_pk,
+            anonymous_id=anonymous_id,
+            confidence=confidence,
+            run_id=run_id,
+            members_by_representative=cluster_result.members_by_representative,
+            members_already_voted=members_already_voted_by_anonymous_id.get(anonymous_id, set()),
+        )
+        for row in rows:
+            votes_batch.append(row)
+            if row.card_id not in written_card_ids:
+                written_card_ids.append(row.card_id)
+                batch_written_card_ids.append(row.card_id)
+        return len(rows)
 
     # Fetch budget (pre-scale program item 3b): every image fetch is one request against the
     # image CDN Worker, which shares its daily request quota with live site traffic
