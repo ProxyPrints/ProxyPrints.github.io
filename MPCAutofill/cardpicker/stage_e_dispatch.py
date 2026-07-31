@@ -1391,6 +1391,9 @@ def dispatch_micro_batch(
     table) the instant it applies - a halted or throttled dispatch never partially starts Stage C.
     """
 
+    if not getattr(settings, "STAGE_E_STREAMING_ENABLED", False):
+        return DispatchOutcome(status="disabled", run_id=run_id)
+
     # NO SELF-RESUME (binding Phase-1 Tron-gate note, module docstring): refuse outright while a
     # trip is already open - checked BEFORE sampling/spending a fresh envelope check, per
     # operating_envelope.current_trip's own docstring ("the caller is expected to check
