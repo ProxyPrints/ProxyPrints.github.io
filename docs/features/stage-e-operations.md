@@ -1704,6 +1704,16 @@ suppresses work — Stage C's resume filter is run-scoped (PR #645) and each
 calculator's own eligibility is run-scoped (PR #604). Re-passing an earlier
 `--run-id` resumes that run instead. No flag is required for a working run.
 
+**`--force-reextract` overrides the one not-run-scoped skip.** Stage C's
+manifest check (`already_done_ids`, the extractor-manifest `ImageEvidence`
+filter) is deliberately global — its whole point is that evidence already
+extracted with the current extractor versions needs no redo, on any run.
+`--force-reextract` clears that filter for the pass, so every eligible card
+is extracted fresh and its evidence row overwritten in place
+(`ImageEvidence` is keyed on `(card_id, content_hash)`). Use it for a full
+bulk re-extraction pass when you want every card's evidence rebuilt
+unconditionally, not merely cards an earlier run has not touched.
+
 ### Stage 0 — the same stage, one implementation
 
 Stage 0 is `stream_full_catalog`'s own freshness stage, whose body was lifted
@@ -1788,6 +1798,17 @@ make impossible.
 The row's `counters` carry one key per stage — `stage_0` (including the bulk
 file vintage), `stage_c`, `stage_d`, `clustering`, `fidelity_gate`,
 `channel_report`, `elapsed_s`.
+
+**Every micro-batch's dispatch also gets its own UNIQUE ledger row.**
+`dispatch_micro_batch`'s `ledger_run_id` parameter (2026-07-31) decouples a
+micro-batch's ledger identity from the `run_id` its data is stamped with.
+The pipeline passes `ledger_run_id=<run_id>-<attempt timestamp>-b<batch num>`
+so a multi-batch pass under one `--run-id` survives: `PilotRunLedger.run_id`
+is UNIQUE, and handing every dispatch the same bare `run_id` used to raise an
+`IntegrityError` on the second micro-batch. Data rows keep the operator's
+clean `run_id` (channel_report scopes by the run_id on the rows); only each
+dispatch's own ledger row carries the suffixed id. Event-system dispatches
+pass `ledger_run_id=None` and are byte-identical to before.
 
 ### What a fresh run still inherits from an earlier one
 
