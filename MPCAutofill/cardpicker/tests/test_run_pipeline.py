@@ -358,6 +358,30 @@ class TestEndToEndPass:
         assert "channel_report exit=" in out
         assert "VOTE CHANNELS" in out
 
+    def test_a_multi_batch_run_gives_every_micro_batch_a_unique_ledger_row(self, cohort: dict[str, Any]) -> None:
+        """
+        The 2026-07-31 run_id collision: a multi-batch pass under one `--run-id` used to hand the
+        SAME id to every `dispatch_micro_batch`, and `PilotRunLedger.run_id` is UNIQUE - so batch 1
+        (and every later batch) died with an IntegrityError and the run could never finish a whole
+        catalogue. The data must stay under the operator's clean run_id (channel_report scopes by
+        the run_id on the rows) while each micro-batch's ledger row is unique (`ledger_run_id`).
+        """
+        _run("--batch-size", "1", run_id="multi-batch")
+
+        summary = PilotRunLedger.objects.get(command="run_pipeline", run_id="multi-batch-pipeline")
+        assert summary.status == PilotRunLedger.Status.COMPLETED
+
+        batches = list(
+            PilotRunLedger.objects.filter(command="stage_e_streaming_dispatch", run_id__startswith="multi-batch-")
+        )
+        assert len(batches) >= 2, "the --batch-size 1 pass must span more than one micro-batch"
+        assert all(row.status == PilotRunLedger.Status.COMPLETED for row in batches)
+        assert len({row.run_id for row in batches}) == len(batches), "every dispatch ledger row must be unique"
+        assert all("-b" in row.run_id for row in batches), "ledger rows must be suffixed per batch, not bare run_id"
+        assert not PilotRunLedger.objects.filter(command="stage_e_streaming_dispatch", run_id="multi-batch").exists()
+
+        assert ImageEvidence.objects.filter(run_id="multi-batch").count() == 2
+
     def test_cluster_propagation_gives_an_unfetched_member_its_groups_verdict(self, cohort: dict[str, Any]) -> None:
         """
         THE HIGHEST-VALUE CARRIED FEATURE. `absorbed` never fetched, never extracted and never

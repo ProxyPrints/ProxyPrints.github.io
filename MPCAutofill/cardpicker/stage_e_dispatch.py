@@ -1356,6 +1356,7 @@ def dispatch_micro_batch(
     force_stage_c_reextract: bool = False,
     short_circuit: Optional[bool] = None,
     dry_run: bool = False,
+    ledger_run_id: Optional[str] = None,
 ) -> DispatchOutcome:
     """
     The CONVEYOR itself - one micro-batch dispatch decision (docs/proposals/stage-e-streaming.md
@@ -1381,6 +1382,18 @@ def dispatch_micro_batch(
     calls, and the PilotRunLedger row is flagged `dry_run=True`. The pipeline's own
     `--dry-run` flag is the sole production caller; dispatch from the event system always passes
     `dry_run=False`.
+
+    `ledger_run_id` (2026-07-31): DECOUPLES the micro-batch's PilotRunLedger row identity from
+    the run_id its data is stamped with. By default the ledger row takes `dispatch_run_id`
+    (`run_id` or the auto-minted `stage-e-stream-*` id) - identical to every caller's data stamp,
+    which is what every drill/test below pins. `run_pipeline` is the one caller whose DATA must
+    keep the operator's clean run_id (`channel_report` scopes by the run_id ON THE ROWS, see its
+    own ledger-comment at run_pipeline.py) while each micro-batch's ledger row must be UNIQUE
+    (`PilotRunLedger.run_id` is a unique constraint) - a multi-batch pass passing the same
+    `run_id` for every dispatch would collide on the second batch. Passing `ledger_run_id`
+    (`<clean run_id>-<attempt timestamp>-b<batch num>` from the pipeline) gives that caller a
+    unique per-attempt, per-batch ledger row while `run_id` keeps stamping every data row with
+    the clean identity. When `ledger_run_id` is None this function behaves exactly as before.
 
     Ordering: no-self-resume gate -> fresh envelope sample -> batch selection ->
     concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`) -> Stage C (sequential, per-card)
@@ -1471,9 +1484,13 @@ def dispatch_micro_batch(
         # "Phase 2" section): one PilotRunLedger row per micro-batch dispatch, `command=
         # "stage_e_streaming_dispatch"`. `dry_run` is False for event-system dispatches and forwarded
         # from the CLI `--dry-run` flag for pipeline dispatches (2026-07-30, the streaming pipeline
-        # always runs all stages and reports, just without persisting when --dry-run is set).
+        # always runs all stages and reports, just without persisting when --dry-run is set). When a
+        # caller passes `ledger_run_id`, that becomes this row's identity (the pipeline needs a
+        # UNIQUE per-attempt, per-batch id here while `run_id` keeps stamping the data); otherwise the
+        # row takes `dispatch_run_id`, the same id its data is stamped with - see the param's own
+        # docstring paragraph.
         ledger = PilotRunLedger.objects.create(
-            run_id=dispatch_run_id,
+            run_id=ledger_run_id or dispatch_run_id,
             command="stage_e_streaming_dispatch",
             dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,

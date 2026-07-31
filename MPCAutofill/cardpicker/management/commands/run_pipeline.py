@@ -355,6 +355,7 @@ class Command(BaseCommand):
             default=False,
             help="Force re-extraction of Stage C evidence for every card, ignoring prior runs.",
         )
+        parser.add_argument("--skip-stage-c", dest="skip_stage_c", action="store_true", default=False)
         parser.add_argument("--skip-stage-d", dest="skip_stage_d", action="store_true", default=False)
         parser.add_argument("--skip-clustering", dest="skip_clustering", action="store_true", default=False)
         parser.add_argument(
@@ -662,6 +663,14 @@ class Command(BaseCommand):
         limit: Optional[int] = options.get("limit")
         short_circuit = False if options.get("no_shortcircuit") else None
 
+        # Each micro-batch's PilotRunLedger row needs a UNIQUE id (`PilotRunLedger.run_id` is a
+        # unique constraint), while every data row this pass writes must stay under the operator's
+        # clean `run_id` (channel_report scopes by the run_id on the rows - comment above the
+        # pipeline's own ledger create). The attempt timestamp makes the ledger id unique across
+        # resumes too: re-running `--run-id <same>` re-dispatches batch 0, and its prior-attempt
+        # ledger row must not collide (stage_e_dispatch.dispatch_micro_batch's `ledger_run_id`).
+        attempt = timezone.now().strftime("%Y%m%dT%H%M%S%f")
+
         queryset = Card.objects.filter(content_phash__isnull=False).order_by("pk")
 
         after_pk = 0
@@ -719,6 +728,7 @@ class Command(BaseCommand):
                 force_stage_c_reextract=options["force_reextract"],
                 short_circuit=short_circuit,
                 dry_run=dry_run,
+                ledger_run_id=f"{run_id}-{attempt}Z-b{batch_count}",
             )
 
             batch_count += 1
