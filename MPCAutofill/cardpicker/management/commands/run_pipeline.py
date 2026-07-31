@@ -348,7 +348,13 @@ class Command(BaseCommand):
             default=None,
             help="Stop after N micro-batches (default: process all cards).",
         )
-        parser.add_argument("--skip-stage-c", dest="skip_stage_c", action="store_true", default=False)
+        parser.add_argument(
+            "--force-reextract",
+            dest="force_reextract",
+            action="store_true",
+            default=False,
+            help="Force re-extraction of Stage C evidence for every card, ignoring prior runs.",
+        )
         parser.add_argument("--skip-stage-d", dest="skip_stage_d", action="store_true", default=False)
         parser.add_argument("--skip-clustering", dest="skip_clustering", action="store_true", default=False)
         parser.add_argument(
@@ -710,7 +716,7 @@ class Command(BaseCommand):
                 trigger_reason="pipeline",
                 run_id=run_id,
                 batch_size=len(chunk),
-                force_stage_c_reextract=False,
+                force_stage_c_reextract=options["force_reextract"],
                 short_circuit=short_circuit,
                 dry_run=dry_run,
             )
