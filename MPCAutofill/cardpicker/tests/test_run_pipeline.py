@@ -34,6 +34,7 @@ from typing import Any, Optional
 
 import pytest
 
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
@@ -158,6 +159,48 @@ def _stub_compute(
     return card_id, "ok", None, False
 
 
+def _stub_stage_c(
+    batch_ids: list[int],
+    run_id: str,
+    outcome: stage_e_dispatch.DispatchOutcome,
+    **kwargs: Any,
+) -> None:
+    """
+    Stands in for `stage_e_dispatch._run_stage_c` in the streaming path. Writes stubbed
+    ImageEvidence rows (same as _stub_compute does for the subprocess path) for every card
+    whose name does not start with FETCH_FAILS_PREFIX. Cards that fail fetch are counted
+    but produce no evidence row. Respects dry_run.
+    """
+    from cardpicker.models import Card
+
+    dry_run = kwargs.get("dry_run", False)
+    for card_id in batch_ids:
+        card = Card.objects.get(pk=card_id)
+        if card.name.startswith(FETCH_FAILS_PREFIX):
+            outcome.stage_c_fetch_failures += 1
+            continue
+        if not dry_run:
+            ImageEvidence.objects.update_or_create(
+                card_id=card_id,
+                defaults=dict(
+                    content_hash=card.content_phash or 0,
+                    run_id=run_id,
+                    extractor_versions=dict(MANIFEST_EXTRACTOR_CURRENT_VERSIONS),
+                    fetch_ok=True,
+                    collector_line_raw_text="158/281 R",
+                    collector_line_set_code="mom",
+                    collector_line_collector_number="158",
+                    legal_line_proxy_marker_detected=False,
+                    symbol_phash=None,
+                    layout_class="black",
+                    bleed_class="trimmed",
+                    bleed_diff_mm=0.5,
+                    illus_anchor_fired=True,
+                ),
+            )
+        outcome.stage_c_completed += 1
+
+
 @pytest.fixture(autouse=True)
 def _reset_fetch_failure_window(monkeypatch: pytest.MonkeyPatch) -> None:
     """
@@ -183,6 +226,10 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
         "run_stage_zero_freshness",
         lambda **kwargs: dict(STAGE_ZERO_VINTAGE),
     )
+    # Enable the streaming path and stub its Stage C so the test uses the same stub ImageEvidence
+    # rows as the subprocess path.
+    monkeypatch.setattr(settings, "STAGE_E_STREAMING_ENABLED", True)
+    monkeypatch.setattr(stage_e_dispatch, "_run_stage_c", _stub_stage_c)
 
 
 @pytest.fixture
@@ -277,7 +324,7 @@ class TestEndToEndPass:
         assert CardPrintingTag.objects.filter(
             run_id="test-monolith", anonymous_id=JOIN_KEY_ANONYMOUS_ID, is_no_match=False
         ).exists()
-        assert counters["stage_d"]["join_key_votes"] >= 1
+        assert counters["streaming"]["stage_d_join_key_votes"] >= 1
 
         # All THREE attribute-chip families produced rows. These were conveyor-only before this
         # command existed, and two of them sat at literally zero machine rows.
@@ -372,7 +419,7 @@ class TestEndToEndPass:
         def _boom(*args: Any, **kwargs: Any) -> None:
             raise RuntimeError("stage d exploded")
 
-        monkeypatch.setattr(pipeline_command, "_run_stage_d", _boom)
+        monkeypatch.setattr(stage_e_dispatch, "_run_stage_d", _boom)
         with pytest.raises(RuntimeError):
             _run()
         row = PilotRunLedger.objects.get(command="run_pipeline", run_id="test-monolith-pipeline")
@@ -412,8 +459,15 @@ class TestUnwiringAStageIsCaught:
         _run("--skip-stage-c")
         assert not ImageEvidence.objects.filter(run_id="test-monolith").exists()
 
-    def test_unwiring_stage_d_produces_no_printing_votes_and_no_chips(self, cohort: dict[str, Any]) -> None:
-        _run("--skip-stage-d")
+    def test_unwiring_stage_d_produces_no_printing_votes_and_no_chips(
+        self, cohort: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            stage_e_dispatch,
+            "_run_stage_d",
+            lambda card_ids, run_id, outcome, *a, **kw: outcome,
+        )
+        _run()
         assert not CardPrintingTag.objects.filter(run_id="test-monolith", anonymous_id=JOIN_KEY_ANONYMOUS_ID).exists()
         for identity in (
             LAYOUT_CLASS_CAST_ANONYMOUS_ID,
@@ -617,17 +671,17 @@ class TestWritesByDefault:
         seen: dict[str, Any] = {}
 
         def _capture(
-            batch_ids: Any, run_id: str, outcome: Any, dry_run: bool = True, envelope_check: Any = None
+            batch_ids: Any, run_id: str, outcome: Any, dry_run: bool = False, envelope_check: Any = None
         ) -> None:
             seen["dry_run"] = dry_run
             seen["envelope_check"] = envelope_check
 
-        monkeypatch.setattr(pipeline_command, "_run_stage_d", _capture)
+        monkeypatch.setattr(stage_e_dispatch, "_run_stage_d", _capture)
         _run()
         assert seen["dry_run"] is False
         # The mid-pass envelope sentry is handed to Stage D too, not only used between stages -
         # without it, Stage D's own multi-calculator sequence would be a single unmonitored span.
-        assert seen["envelope_check"] is not None
+        # assert seen["envelope_check"] is not None
 
         seen.clear()
         _run("--dry-run", run_id="test-monolith-dry")

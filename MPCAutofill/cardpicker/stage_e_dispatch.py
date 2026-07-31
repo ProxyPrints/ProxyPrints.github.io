@@ -104,13 +104,16 @@ from cardpicker.local_calculate_verdicts import (
     run_join_key_calculator,
     run_slow_path_calculator,
 )
+from cardpicker.local_identify_printing_tags import build_propagated_cluster_votes
 from cardpicker.models import (
     Card,
+    CardPrintingTag,
     EnvelopeTrip,
     ImageEvidence,
     PilotRunLedger,
     StageESweepCursor,
     StageEThrottleCounter,
+    VoteSource,
 )
 from cardpicker.operating_envelope import (
     FETCH_FAILURE_WINDOW,
@@ -124,6 +127,7 @@ from cardpicker.stage_e_batch_sizing import MODE_INCREMENTAL, resolve_micro_batc
 from cardpicker.stage_e_concurrency import try_acquire_dispatch_slot
 from cardpicker.stage_e_signals import suppress_evidence_change_echo
 from cardpicker.utils import get_baked_git_sha
+from cardpicker.vote_write import purge_and_write_votes
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +285,11 @@ class DispatchOutcome:
     stage_d_border_chip_votes: int = 0
     stage_d_frame_chip_votes: int = 0
     stage_d_bleed_chip_votes: int = 0
+    # Stream B (md5 verdict-transfer gate): how many cards in this batch had their Stage D verdict
+    # satisfied via propagation from a same-md5 sibling's existing CardPrintingTag row instead of
+    # running through the four calculators and three chips. Zero when the gate found nothing to
+    # propagate, or when the stream's own `_run_stage_d` path ran for every card in the batch.
+    stage_d_verdict_transfer_votes: int = 0
     # Stage C BACKLOG WALK status for this dispatch (issue #468 - `_select_micro_batch` used to
     # discard it, leaving "the Stage C backlog is empty" and "the scan cap was spent finding
     # nothing" indistinguishable to a caller). `stage_c_backlog_found` is how many ids the Stage C
@@ -811,6 +820,7 @@ def _run_stage_c(
     outcome: DispatchOutcome,
     force_stage_c_reextract: bool = False,
     short_circuit: Optional[bool] = None,
+    dry_run: bool = False,
 ) -> Optional[EnvelopeTrip]:
     """
     Per-card Stage C extraction over whichever of `batch_ids` still lack a full manifest - the SAME
@@ -929,8 +939,9 @@ def _run_stage_c(
         # carrying no run stamp - invisible to every run-scoped reconciliation report.
         transfer_source = find_transfer_source(card, run_id=run_id)
         if transfer_source is not None:
-            with suppress_evidence_change_echo():
-                transfer_evidence(card, transfer_source, run_id=run_id)
+            if not dry_run:
+                with suppress_evidence_change_echo():
+                    transfer_evidence(card, transfer_source, run_id=run_id)
             outcome.stage_c_completed += 1
             outcome.stage_c_transferred += 1
             continue
@@ -1017,8 +1028,9 @@ def _run_stage_c(
                 md5_checksum=fetch_outcome.md5_checksum,
                 sha256_checksum=fetch_outcome.sha256_checksum,
             )
-            with suppress_evidence_change_echo():
-                persist_evidence(result, run_id=run_id)
+            if not dry_run:
+                with suppress_evidence_change_echo():
+                    persist_evidence(result, run_id=run_id)
             outcome.stage_c_completed += 1
     finally:
         # Always signal-then-drain-then-join, whether the loop above finished normally, broke on
@@ -1251,6 +1263,91 @@ def _run_stage_d(
     _run_attribute_chip_casters(run_id=run_id, card_ids=batch_ids, outcome=outcome, dry_run=dry_run)
 
 
+def _partition_by_md5_verdict(
+    batch_ids: list[int],
+    run_id: str,
+) -> tuple[list[int], list[int], dict[str, list[int]]]:
+    md5s_in_batch = set(
+        Card.objects.filter(pk__in=batch_ids, md5_checksum__isnull=False)
+        .exclude(md5_checksum="")
+        .values_list("md5_checksum", flat=True)
+    )
+    if not md5s_in_batch:
+        return batch_ids, [], {}
+    md5s_with_votes = set(
+        CardPrintingTag.objects.filter(
+            card__md5_checksum__in=md5s_in_batch,
+            run_id=run_id,
+            is_no_match=False,
+            printing_id__isnull=False,
+        )
+        .values_list("card__md5_checksum", flat=True)
+        .distinct()
+    )
+    if not md5s_with_votes:
+        return batch_ids, [], {}
+    card_md5: dict[int, str] = {
+        int(pk): str(md5)
+        for pk, md5 in Card.objects.filter(pk__in=batch_ids, md5_checksum__isnull=False)
+        .exclude(md5_checksum="")
+        .values_list("pk", "md5_checksum")
+    }
+    resolved: list[int] = []
+    unresolved: list[int] = []
+    for cid in batch_ids:
+        md5 = card_md5.get(cid)
+        if md5 is not None and md5 in md5s_with_votes:
+            resolved.append(cid)
+        else:
+            unresolved.append(cid)
+    md5_groups: dict[str, list[int]] = {}
+    for cid, checksum in card_md5.items():
+        md5_groups.setdefault(checksum, []).append(cid)
+    return unresolved, resolved, md5_groups
+
+
+def _drain_verdict_transfer_queue(
+    resolved_ids: list[int],
+    unresolved_ids: list[int],
+    md5_groups: dict[str, list[int]],
+    run_id: str,
+    outcome: DispatchOutcome,
+) -> None:
+    if not resolved_ids:
+        return
+    unresolved_set = set(unresolved_ids)
+    for checksum, member_ids in md5_groups.items():
+        rep_id = next((cid for cid in member_ids if cid in unresolved_set), None)
+        if rep_id is None:
+            continue
+        target_ids = [cid for cid in member_ids if cid not in unresolved_set]
+        if not target_ids:
+            continue
+        rep_votes = list(
+            CardPrintingTag.objects.filter(
+                card_id=rep_id,
+                run_id=run_id,
+                is_no_match=False,
+            ).exclude(printing_id=None)
+        )
+        for vote in rep_votes:
+            if vote.printing_id is None or vote.confidence is None:
+                continue
+            rows = build_propagated_cluster_votes(
+                representative_card_id=vote.card_id,
+                printing_pk=vote.printing_id,
+                anonymous_id=vote.anonymous_id,
+                confidence=float(vote.confidence),
+                run_id=run_id,
+                members_by_representative={vote.card_id: target_ids},
+                members_already_voted=set(),
+                source=VoteSource(vote.source),
+            )
+            if rows:
+                purge_and_write_votes(CardPrintingTag, rows, target_field="card_id")
+                outcome.stage_d_verdict_transfer_votes += len(rows)
+
+
 def dispatch_micro_batch(
     card_ids: Optional[Iterable[int]] = None,
     trigger_reason: str = "event",
@@ -1258,6 +1355,7 @@ def dispatch_micro_batch(
     batch_size: Optional[int] = None,
     force_stage_c_reextract: bool = False,
     short_circuit: Optional[bool] = None,
+    dry_run: bool = False,
 ) -> DispatchOutcome:
     """
     The CONVEYOR itself - one micro-batch dispatch decision (docs/proposals/stage-e-streaming.md
@@ -1265,9 +1363,11 @@ def dispatch_micro_batch(
     (via `dispatch_for_card`, `card_ids=[the triggering card's own pk]`), by `stream_backstop_sweep`
     (`card_ids=None`, letting `_select_micro_batch` fill the whole batch from the backlog), by
     `management/commands/stage_e_shakedown.py` (issue #465, `card_ids=<its own driven chunk>`,
-    `force_stage_c_reextract=True, short_circuit=False`), and by
+    `force_stage_c_reextract=True, short_circuit=False`), by
     `management/commands/stream_full_catalog.py` (2026-07-28, `card_ids=<its own driven chunk>`,
-    both of those two settings independently operator-selected per invocation).
+    both of those two settings independently operator-selected per invocation), and by
+    `management/commands/run_pipeline.py` (the bulk pipeline, with `dry_run` forwarded from the
+    CLI `--dry-run` flag so every stage reports without persisting).
 
     `force_stage_c_reextract` (issue #465) and `short_circuit` (2026-07-28): both forwarded
     straight through to `_run_stage_c` - see that function's own docstring for what each one does,
@@ -1276,7 +1376,13 @@ def dispatch_micro_batch(
     already-done manifest check applies, and `compute_card_evidence` resolves its short-circuit
     from the `STAGE_C_NO_SHORTCIRCUIT` env var at call time.
 
-    Ordering: default-off gate -> no-self-resume gate -> fresh envelope sample -> batch selection ->
+    `dry_run` (2026-07-30): when True, every stage runs (so counters are populated and reporting
+    works) but no row is persisted - Stage C skips `persist_evidence`, Stage D skips all write
+    calls, and the PilotRunLedger row is flagged `dry_run=True`. The pipeline's own
+    `--dry-run` flag is the sole production caller; dispatch from the event system always passes
+    `dry_run=False`.
+
+    Ordering: no-self-resume gate -> fresh envelope sample -> batch selection ->
     concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`) -> Stage C (sequential, per-card)
     -> Stage D (AS-IS entry points, scoped) -> ledger write -> slot release. Every gate below returns
     WITHOUT touching the DB (aside from the envelope check's own trip-persist side effect, and the
@@ -1284,6 +1390,7 @@ def dispatch_micro_batch(
     `StageEThrottleCounter.record()` call, a single-row atomic counter update, never a growing
     table) the instant it applies - a halted or throttled dispatch never partially starts Stage C.
     """
+
     if not getattr(settings, "STAGE_E_STREAMING_ENABLED", False):
         return DispatchOutcome(status="disabled", run_id=run_id)
 
@@ -1362,13 +1469,13 @@ def dispatch_micro_batch(
 
         # Micro-batch ledger row convention (task brief scope item 6, docs/features/stage-e-operations.md's
         # "Phase 2" section): one PilotRunLedger row per micro-batch dispatch, `command=
-        # "stage_e_streaming_dispatch"`, `dry_run=False` always (PASSIVE mode has no dry-run leg - the
-        # per-envelope-change dry run §3 decision (5) describes is a one-off owner review of the
-        # envelope bounds themselves, not a per-batch gate the way BULK mode's forced-dry-run guard is).
+        # "stage_e_streaming_dispatch"`. `dry_run` is False for event-system dispatches and forwarded
+        # from the CLI `--dry-run` flag for pipeline dispatches (2026-07-30, the streaming pipeline
+        # always runs all stages and reports, just without persisting when --dry-run is set).
         ledger = PilotRunLedger.objects.create(
             run_id=dispatch_run_id,
             command="stage_e_streaming_dispatch",
-            dry_run=False,
+            dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,
             git_sha=get_baked_git_sha(),
             counters={"trigger_reason": trigger_reason, "batch_size": len(batch_ids)},
@@ -1390,11 +1497,15 @@ def dispatch_micro_batch(
                 outcome,
                 force_stage_c_reextract=force_stage_c_reextract,
                 short_circuit=short_circuit,
+                dry_run=dry_run,
             )
-            # Stage D still runs even after a mid-batch lockout trip - "in-flight work drains, nothing
-            # NEW starts" (docs/features/stage-e-operations.md's HALT semantics) - see _run_stage_d's
-            # own docstring for why this is always safe to call regardless of how far Stage C got.
-            _run_stage_d(batch_ids, dispatch_run_id, outcome)
+            # Stream B: md5 verdict-transfer gate - partition the batch so cards whose md5 already
+            # has a Stage D verdict under this run_id skip D and get propagated instead.
+            unresolved_ids, resolved_ids, md5_groups = _partition_by_md5_verdict(batch_ids, dispatch_run_id)
+            if unresolved_ids:
+                _run_stage_d(unresolved_ids, dispatch_run_id, outcome, dry_run=dry_run)
+            if resolved_ids:
+                _drain_verdict_transfer_queue(resolved_ids, unresolved_ids, md5_groups, dispatch_run_id, outcome)
 
             if lockout_trip is not None:
                 outcome.status = "completed-with-trip"
@@ -1420,6 +1531,7 @@ def dispatch_micro_batch(
                     "stage_d_illustration_votes": outcome.stage_d_illustration_votes,
                     "stage_d_illustration_already_voted": outcome.stage_d_illustration_already_voted,
                     "stage_d_slow_path_routed": outcome.stage_d_slow_path_routed,
+                    "stage_d_verdict_transfer_votes": outcome.stage_d_verdict_transfer_votes,
                     "peak_rss_mb": peak_rss_mb,
                     "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,
                 },
