@@ -447,3 +447,12 @@ columns with no `card` in the predicate, which the model's pre-existing
 `(card, anonymous_id)` index cannot serve (leading-column mismatch). See
 migration `0096`'s own docstring for the full reasoning, including why
 `anonymous_id` leads the composite index.
+
+## Deployment: nginx must route /1/ to django (PR #668)
+
+`docker/nginx/nginx.conf` must include a `location /1/` proxy block
+forwarding to `http://django-api`, without which every /1/ request
+returns a 404 at nginx. The stats page (`GET 1/catalogStats/`) renders
+"The stats cache hasn't been computed yet" and the homepage participation
+graph (`GET 1/funnelCounts/`) shows an error. The block was added in
+PR #668; see [[../infrastructure.md]] for the full nginx setup.
