@@ -15,7 +15,8 @@ proves ImageEvidence rows actually land, matching `_evidence()`'s own convention
 
 import io
 import threading
-from typing import Any
+from concurrent.futures import Future
+from typing import Any, Optional
 
 import psycopg2
 import pytest
@@ -81,12 +82,68 @@ def _reset_fetch_failure_window(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stage_e_dispatch, "_window", _FetchOutcomeWindow())
 
 
+class _SyncStagePoolStub:
+    """Drop-in stand-in for ``ThreadPoolExecutor``/``ProcessPoolExecutor`` that runs submitted
+    work synchronously, in this test process, and returns a real (already-resolved)
+    ``concurrent.futures.Future`` — so ``_run_stage_c``'s own coordinator loop (submission-order
+    fetch consumption, the ``_STAGE_C_POOL_QUEUE_DEPTH`` backpressure drain via ``wait(...,
+    FIRST_COMPLETED)``, the final ``as_completed`` drain, all real stdlib, untouched) runs
+    UNMODIFIED against it. Mirrors ``_SyncPoolStub`` in
+    ``test_run_image_evidence_cohort.py:76`` — this is the same substitution technique, applied
+    to the same-shaped ``ThreadPoolExecutor``/``ProcessPoolExecutor`` module-level names this
+    module imports.
+
+    ONE deliberate difference from that stub: this one DOES invoke ``initializer`` when the
+    pooled loop supplies one. ``_stage_c_compute_worker_init`` is what sets the per-batch
+    ``short_circuit`` value ``_stage_c_compute_one_card`` reads off a process global —
+    ``test_short_circuit_is_independent_of_force_stage_c_reextract`` below asserts on exactly
+    that value, so it must be set fresh on every call, never left at whatever a previous test's
+    pool last wrote. The initializer's own DB-connection-close step (correct for a freshly
+    forked worker, hostile to this single-process test session sharing one connection) is
+    neutralized only for the duration of that one call — a synchronous stub never forks, so
+    there is no inherited, stale connection to close in the first place.
+    """
+
+    def __init__(self, max_workers: Optional[int] = None, initializer: Any = None, initargs: tuple = ()) -> None:
+        if initializer is not None:
+            from django.db.backends.base.base import BaseDatabaseWrapper
+
+            original_close = BaseDatabaseWrapper.close
+            BaseDatabaseWrapper.close = lambda self: None  # type: ignore[method-assign]
+            try:
+                initializer(*initargs)
+            finally:
+                BaseDatabaseWrapper.close = original_close  # type: ignore[method-assign]
+
+    def __enter__(self) -> "_SyncStagePoolStub":
+        return self
+
+    def __exit__(self, *exc_info: Any) -> bool:
+        return False
+
+    def submit(self, fn: Any, *args: Any) -> "Future[Any]":
+        future: "Future[Any]" = Future()
+        try:
+            result = fn(*args)
+        except BaseException as exc:  # pragma: no cover - defensive, mirrors real pool behaviour
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+        return future
+
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        pass
+
+
 @pytest.fixture(autouse=True)
-def _inline_stage_c_compute(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force Stage C compute to run INLINE in the main process — avoids ProcessPoolExecutor
-    fork/spawn complexity with pytest-django's connection wrapping. The coordinator-loop
-    logic is identical; only the execution model (synchronous vs. process pool) differs."""
-    monkeypatch.setattr(stage_e_dispatch, "_INLINE_COMPUTE_FOR_TESTS", True)
+def _sync_stage_c_pools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test in this file replaces both real ``_run_stage_c`` executors with the
+    synchronous stub above — none of them need genuine threads/forking to exercise the real
+    pooled coordinator loop under test. No test-only twin implementation left to grade: this is
+    the SAME loop production runs, with a synchronous pool underneath (issue #472's Bug in PR
+    #669's own review — see the module's own module-docstring PIPELINE STAGES section)."""
+    monkeypatch.setattr(stage_e_dispatch, "ThreadPoolExecutor", _SyncStagePoolStub)
+    monkeypatch.setattr(stage_e_dispatch, "ProcessPoolExecutor", _SyncStagePoolStub)
 
 
 def _png_bytes() -> bytes:
@@ -2019,3 +2076,67 @@ class TestPooledStageC:
         assert outcome.stage_c_completed == 3
         assert outcome.stage_c_fetch_failures == 1
         assert outcome.stage_c_fetch_throttled == 1
+
+
+class TestStageCComputeWorkerInit:
+    """Direct unit coverage of ``_stage_c_compute_worker_init`` itself — the compute pool's own
+    ``initializer=`` — mirroring ``TestInitWorkerArtistContext`` in
+    ``test_run_image_evidence_cohort.py:1779``, which does the same for that command's own
+    ``_init_worker``. Every ``TestPooledStageC``/``TestDecoupledFetchAhead`` test above exercises
+    this function only indirectly, through ``_SyncStagePoolStub``'s own initializer call and a
+    ``compute_card_evidence`` stub that ignores the lookup singletons it receives; the tests here
+    are the only ones that assert on what this function itself actually builds."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_compute_pool_globals(self, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+        """``_stage_c_compute_worker_init`` writes PROCESS globals and closes the process's DB
+        connections — both correct for a freshly forked worker, both hostile to this
+        single-process test session's one shared connection. The globals are monkeypatched
+        (auto-restored at teardown) and the two DB-close entry points are replaced with a
+        recorder the tests below assert on, instead of a real close."""
+        from django.db import connections
+        from django.db.backends.base.base import BaseDatabaseWrapper
+
+        closed: list[bool] = []
+        monkeypatch.setattr(stage_e_dispatch, "_compute_pool_short_circuit", None)
+        monkeypatch.setattr(stage_e_dispatch, "_compute_pool_lexicon", None)
+        monkeypatch.setattr(stage_e_dispatch, "_compute_pool_artist_lexicon", None)
+        monkeypatch.setattr(stage_e_dispatch, "_compute_pool_printing_artist_lookup", None)
+        monkeypatch.setattr(stage_e_dispatch, "_compute_pool_name_artist_lookup", None)
+        monkeypatch.setattr(connections, "close_all", lambda: closed.append(True))
+        monkeypatch.setattr(BaseDatabaseWrapper, "close", lambda self: closed.append(True))
+        return closed
+
+    @pytest.mark.django_db
+    def test_builds_every_lookup_singleton_and_pins_omp_threads(
+        self, _isolated_compute_pool_globals: list[bool]
+    ) -> None:
+        import os
+
+        stage_e_dispatch._stage_c_compute_worker_init(short_circuit=True)
+
+        assert os.environ["OMP_THREAD_LIMIT"] == "1"
+        assert stage_e_dispatch._compute_pool_short_circuit is True
+        assert stage_e_dispatch._compute_pool_lexicon is not None
+        assert stage_e_dispatch._compute_pool_artist_lexicon is not None
+        assert stage_e_dispatch._compute_pool_printing_artist_lookup is not None
+        assert stage_e_dispatch._compute_pool_name_artist_lookup is not None
+        assert _isolated_compute_pool_globals  # the DB-close step ran (recorded, not real)
+
+    @pytest.mark.django_db
+    def test_short_circuit_defaults_to_none(self, _isolated_compute_pool_globals: list[bool]) -> None:
+        stage_e_dispatch._stage_c_compute_worker_init()
+
+        assert stage_e_dispatch._compute_pool_short_circuit is None
+
+    @pytest.mark.django_db
+    def test_short_circuit_false_is_preserved_not_coerced_to_none(
+        self, _isolated_compute_pool_globals: list[bool]
+    ) -> None:
+        """``short_circuit=False`` is a distinct value from the default ``None`` (``None`` means
+        "resolve from the env var at call time" — see ``_run_stage_c``'s own docstring on why the
+        two were decoupled from ``force_stage_c_reextract``); a falsy-coercion bug here would
+        silently turn an explicit "run the full escalation ladder" request back into the default."""
+        stage_e_dispatch._stage_c_compute_worker_init(short_circuit=False)
+
+        assert stage_e_dispatch._compute_pool_short_circuit is False

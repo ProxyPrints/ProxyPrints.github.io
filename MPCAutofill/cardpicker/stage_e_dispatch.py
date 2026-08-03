@@ -654,17 +654,6 @@ _compute_pool_lexicon: Any = None
 _compute_pool_artist_lexicon: Any = None
 _compute_pool_printing_artist_lookup: Any = None
 _compute_pool_name_artist_lookup: Any = None
-# Test-only override: forces inline compute regardless of PYTEST_CURRENT_TEST (see
-# _inline_compute_active below). Production never sets this.
-_INLINE_COMPUTE_FOR_TESTS = False
-
-
-def _inline_compute_active() -> bool:
-    # ProcessPoolExecutor forks a connection pytest-django is mid-transaction on; the parent's
-    # own later writes (e.g. mark_ledger_failed after a worker crash) then hit "connection
-    # already closed". Checked at call time, not import time, since PYTEST_CURRENT_TEST is set
-    # per-test and the module is imported once at collection.
-    return _INLINE_COMPUTE_FOR_TESTS or "PYTEST_CURRENT_TEST" in os.environ
 
 
 def _stage_c_compute_worker_init(
@@ -1036,13 +1025,6 @@ def _run_stage_c(
 
     fetch_pool = ThreadPoolExecutor(max_workers=_STAGE_C_FETCH_THREADS)
 
-    if _inline_compute_active():
-        # Test mode: run compute inline in the main process — avoids fork/spawn complexity
-        # with pytest-django's connection wrapping. Production never hits this path.
-        result = _run_stage_c_phase2_inline(fetch_pool, to_fetch, short_circuit, run_id, dry_run, outcome)
-        fetch_pool.shutdown(wait=False, cancel_futures=True)
-        return result
-
     # The parent keeps its own DB connection open across the fork (unlike a manual
     # connection.close() here, which broke this coordinator's own later writes, e.g.
     # mark_ledger_failed on a compute-side crash). Each worker closes its OWN inherited
@@ -1133,93 +1115,6 @@ def _run_stage_c(
         # for cards nothing will consume.
         fetch_pool.shutdown(wait=False, cancel_futures=True)
         compute_pool.shutdown(wait=False, cancel_futures=True)
-
-    return trip
-
-
-def _run_stage_c_phase2_inline(
-    fetch_pool: "ThreadPoolExecutor",
-    to_fetch: "list[Card]",
-    short_circuit: "Optional[bool]",
-    run_id: str,
-    dry_run: bool,
-    outcome: "DispatchOutcome",
-) -> "Optional[EnvelopeTrip]":
-    """Test-mode inline compute path. Same coordinator-loop logic as the pooled path,
-    but ``_stage_c_compute_one_card`` is called synchronously in the main process
-    instead of submitted to a ``ProcessPoolExecutor``. All invariants (lockout drain,
-    error propagation, throttle skipping, window recording) are identical to the
-    pooled path — only the execution model differs."""
-    # Build the process-global lookups that the pooled path's initializer would normally
-    # build in each worker. Called once here (in the main process) so
-    # ``_stage_c_compute_one_card`` can read them. Deliberately NOT calling
-    # ``_stage_c_compute_worker_init`` — its connection-close step would kill the
-    # main process's DB connection. The lookup singletons are self-contained and safe
-    # to build here.
-    from cardpicker.collector_line_artist import (
-        build_name_artist_lookup,
-        build_printing_artist_lookup,
-        load_artist_lexicon,
-    )
-    from cardpicker.local_calculate_verdicts import known_set_codes
-
-    global _compute_pool_short_circuit
-    global _compute_pool_lexicon, _compute_pool_artist_lexicon
-    global _compute_pool_printing_artist_lookup, _compute_pool_name_artist_lookup
-
-    _compute_pool_short_circuit = short_circuit
-    _compute_pool_lexicon = known_set_codes()
-    _compute_pool_artist_lexicon = load_artist_lexicon()
-    _compute_pool_printing_artist_lookup = build_printing_artist_lookup()
-    _compute_pool_name_artist_lookup = build_name_artist_lookup()
-
-    fetch_futures: "list[concurrent.futures.Future[_StageCFetchOutcome]]" = [
-        fetch_pool.submit(_stage_c_fetch_one, card) for card in to_fetch
-    ]
-    stop = False
-    trip: Optional[EnvelopeTrip] = None
-
-    for fetch_future in fetch_futures:
-        if stop:
-            break
-
-        fetch_outcome = fetch_future.result()
-
-        if fetch_outcome.throttled:
-            outcome.stage_c_fetch_throttled += 1
-            continue
-
-        if fetch_outcome.error is not None:
-            raise fetch_outcome.error
-
-        if fetch_outcome.lockout:
-            _window.record(success=False)
-            logger.error("Stage E dispatch: GoogleFetchLockoutError observed - halting Stage C for this batch")
-            trip = check_envelope(_sample_envelope_signals(google_lockout=True), run_id=run_id)
-            stop = True
-            continue
-
-        if fetch_outcome.image_bytes is None:
-            _window.record(success=False)
-            outcome.stage_c_fetch_failures += 1
-            continue
-
-        _window.record(success=True)
-        success, error = _stage_c_compute_one_card(
-            fetch_outcome.card_id,
-            fetch_outcome.content_hash,
-            fetch_outcome.image_bytes,
-            fetch_outcome.fetch_latency_ms,
-            fetch_outcome.md5_checksum,
-            fetch_outcome.sha256_checksum,
-            fetch_outcome.card_name,
-            run_id,
-            dry_run,
-        )
-        if not success:
-            assert error is not None  # narrow for mypy: !success → error is Some
-            raise error
-        outcome.stage_c_completed += 1
 
     return trip
 

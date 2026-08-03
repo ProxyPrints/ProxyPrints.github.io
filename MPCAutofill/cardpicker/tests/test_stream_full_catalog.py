@@ -52,8 +52,20 @@ from cardpicker.tests.factories import (
     ImageEvidenceFactory,
     SourceFactory,
 )
+from cardpicker.tests.test_stage_e_dispatch import _SyncStagePoolStub
 
 STREAMING_ON = override_settings(STAGE_E_STREAMING_ENABLED=True)
+
+
+@pytest.fixture(autouse=True)
+def _sync_stage_c_pools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This driver dispatches through the real `dispatch_micro_batch` -> `_run_stage_c` for every
+    test in this module that isn't stubbed at the `dispatch_micro_batch` boundary itself (via
+    `_install_recording_dispatch`) - see `_SyncStagePoolStub`'s own docstring in
+    `test_stage_e_dispatch.py` for why the real `ThreadPoolExecutor`/`ProcessPoolExecutor` module
+    names must be replaced rather than left real in a test process."""
+    monkeypatch.setattr(stage_e_dispatch, "ThreadPoolExecutor", _SyncStagePoolStub)
+    monkeypatch.setattr(stage_e_dispatch, "ProcessPoolExecutor", _SyncStagePoolStub)
 
 
 def _exit_code(*argv: Any, **kwargs: Any) -> int:
