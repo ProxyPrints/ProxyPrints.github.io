@@ -79,27 +79,20 @@ is imported lazily (same pattern as `_stage_c_manifest_extractor_keys`) to avoid
 import-time dependency between sibling engines.
 """
 
+import concurrent.futures
 import logging
 import os
-import queue
-import threading
 import time
 from collections import deque
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Iterable, Optional
 
 from django.conf import settings
 from django.utils import timezone
 
-from cardpicker.collector_line_artist import (
-    build_name_artist_lookup,
-    build_printing_artist_lookup,
-    load_artist_lexicon,
-)
 from cardpicker.evidence_transfer import find_transfer_source, transfer_evidence
-from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.local_calculate_verdicts import (
-    known_set_codes,
     run_fallback_calculator,
     run_join_key_calculator,
     run_slow_path_calculator,
@@ -636,27 +629,240 @@ def _select_micro_batch_with_backlog_status(
 # brief's own concrete number rather than leaving it operator-tunable; PASSIVE mode's own
 # micro-batches are small enough (§3 decision (2), a handful to a few dozen cards) that this never
 # needs retuning the way BULK mode's own `--queue-depth` does.
-_STAGE_C_FETCH_AHEAD_DEPTH = 2
+# Stage C fetch/compute pool sizing (issue #566). FETCH: three threads since I/O-bound fetches do
+# benefit from concurrency (unlike the old single-thread fetch-ahead worker, which was fine for a
+# synthetic test run but left a full-catalog production pass spending ~40% of its wall-clock
+# waiting for the fetch-ahead thread). COMPUTE: three processes, matching the worker count the
+# cohort command settled on for real throughput. HANDOFF QUEUE: bounded to 2 per compute worker so
+# RSS stays bounded regardless of batch size (the old single-thread design's own _STAGE_C_FETCH_
+# AHEAD_DEPTH=2 satisfied this incidentally; the pooled design must state it explicitly since the
+# ThreadPoolExecutor + ProcessPoolExecutor combination has no built-in handoff bound — without
+# `_STAGE_C_POOL_QUEUE_DEPTH`'s own backpressure drain below, the main loop would keep handing
+# completed fetches into the ProcessPoolExecutor's own UNBOUNDED internal queue, and RSS could
+# grow without bound over the course of a production-length pass).
+_STAGE_C_FETCH_THREADS = 3
+_STAGE_C_COMPUTE_WORKERS = 3
+_STAGE_C_POOL_QUEUE_DEPTH = 6  # 2 × _STAGE_C_COMPUTE_WORKERS
+
+
+# Process-global lookups built once per compute worker process (initializer). All four are set by
+# _stage_c_compute_worker_init and consumed by _stage_c_compute_one_card — they are module-level
+# globals BY DESIGN (must be picklable-free, since multiprocessing's fork semantics mean each
+# worker process gets its own independent module namespace).
+_compute_pool_short_circuit: Optional[bool] = None
+_compute_pool_lexicon: Any = None
+_compute_pool_artist_lexicon: Any = None
+_compute_pool_printing_artist_lookup: Any = None
+_compute_pool_name_artist_lookup: Any = None
+
+
+def _stage_c_compute_worker_init(
+    short_circuit: Optional[bool] = None,
+) -> None:
+    """Initializer for every Stage C compute pool worker process.
+
+    Three responsibilities, all required for correctness:
+
+    1. OMP_THREAD_LIMIT=1: tesseract's own OpenMP thread pool defaults to one thread per core;
+       inside a per-card worker in a multi-process pool, the product (pool workers × tesseract
+       threads) oversubscribes the machine's physical core count, producing WORSE per-card
+       throughput than a single sequential worker for a compute pool of any size >1. Setting
+       this environment variable BEFORE tesseract's first import is the same mechanism the
+       cohort command's own _init_worker uses (``run_image_evidence_cohort.py``, §init_worker),
+       deliberately reused here rather than re-implemented — one OMP-thread-pinning mechanism
+       across all callers, the cohort command's own comment is the canonical design doc.
+
+    2. Fresh DB connections: fork() carries parent-process Django connections into the child,
+       but the child's own fork of the underlying TCP socket is ALREADY the parent's socket
+       (not an independent connection) — any use will trip a "DatabaseWrapper objects created
+       in a thread can only be used in that same thread" or "connection already closed" error
+       at the first query. ``connections.close_all()`` forces fresh connection creation on the
+       child's own first ``.cursor()`` call.
+
+    3. Lookup singletons: ``known_set_codes``, ``load_artist_lexicon``,
+       ``build_printing_artist_lookup``, and ``build_name_artist_lookup`` are all built once per
+       worker process (matching the batch-scoped ``_run_stage_c`` convention exactly — the
+       call sites are identical, just hoisted from per-batch in the parent to per-worker-process
+       in the pool), and the last two return stateful resolvers with internal caches backed by
+       DB queries — they MUST be rebuilt in the child rather than passed across the fork boundary,
+       which would carry a stale cache pointing at the (now-closed) parent's own DB handles.
+    """
+    import os as _os
+
+    from django.db import connections as _connections
+
+    from cardpicker.collector_line_artist import build_name_artist_lookup as _build_name
+    from cardpicker.collector_line_artist import (
+        build_printing_artist_lookup as _build_printing,
+    )
+    from cardpicker.collector_line_artist import load_artist_lexicon as _load_artist
+    from cardpicker.local_calculate_verdicts import known_set_codes as _known_set_codes
+
+    # 1. Pin OpenMP thread count — MUST happen before any PIL/tesseract import reaches OpenMP init.
+    _os.environ["OMP_THREAD_LIMIT"] = "1"
+
+    # 2. Fresh DB connections — the parent closed its own connection before forking, so the
+    #    child inherits ``connection.connection is None``. ``close_all()`` is a no-op here
+    #    (every wrapper already has ``connection is None``), and ``ensure_connection()`` opens
+    #    a fresh socket on first use.
+    for conn in _connections.all():
+        conn.close()
+    _connections.close_all()
+
+    # 3. Lookup singletons — one per worker process, matching the batch-scoped convention.
+    global _compute_pool_short_circuit
+    global _compute_pool_lexicon, _compute_pool_artist_lexicon
+    global _compute_pool_printing_artist_lookup, _compute_pool_name_artist_lookup
+
+    _compute_pool_short_circuit = short_circuit
+    _compute_pool_lexicon = _known_set_codes()
+    _compute_pool_artist_lexicon = _load_artist()
+    _compute_pool_printing_artist_lookup = _build_printing()
+    _compute_pool_name_artist_lookup = _build_name()
+
+
+def _stage_c_compute_one_card(
+    card_id: int,
+    content_hash: Optional[int],
+    image_bytes: bytes,
+    fetch_latency_ms: float,
+    md5_checksum: Optional[str],
+    sha256_checksum: Optional[str],
+    card_name: str,
+    run_id: str,
+    dry_run: bool,
+) -> "tuple[bool, Optional[Exception]]":
+    """Picklable per-card compute function for the ProcessPoolExecutor.
+
+    Each invocation: PIL-decode the image bytes → compute_card_evidence → persist_evidence
+    (wrapped in suppress_evidence_change_echo, since ContextVars are process-local and the
+    worker gets a fresh process — the parent's own echo-suppression token does NOT transfer
+    across the fork boundary). Returns (success, error) so the main loop can distinguish a
+    completed card from a compute crash and handle each appropriately.
+
+    All lookup singletons (lexicon, artist_lexicon, printing_artist_lookup, name_artist_lookup,
+    short_circuit) are read from process-global module variables set by
+    _stage_c_compute_worker_init — no second build, no imports at call time beyond PIL and the
+    two evidence functions themselves.
+    """
+    from io import BytesIO
+
+    from PIL import Image
+
+    from cardpicker.image_evidence import compute_card_evidence, persist_evidence
+    from cardpicker.stage_e_signals import suppress_evidence_change_echo
+
+    try:
+        image = Image.open(BytesIO(image_bytes))
+        result = compute_card_evidence(
+            card_id,
+            content_hash,
+            image,
+            fetch_latency_ms=fetch_latency_ms,
+            short_circuit=_compute_pool_short_circuit,
+            known_set_codes=_compute_pool_lexicon,
+            artist_lexicon=_compute_pool_artist_lexicon,
+            printing_artist_lookup=_compute_pool_printing_artist_lookup,
+            card_artist_names=_compute_pool_name_artist_lookup(card_name),
+            md5_checksum=md5_checksum,
+            sha256_checksum=sha256_checksum,
+        )
+        if not dry_run:
+            with suppress_evidence_change_echo():
+                persist_evidence(result, run_id=run_id)
+        return (True, None)
+    except Exception as exc:  # noqa: BLE001 — deliberately broad; any compute-time fault must surface
+        return (False, exc)
+
+
+def _stage_c_fetch_one(card: "Card") -> "_StageCFetchOutcome":
+    """Single-card fetch for the ThreadPoolExecutor.
+
+    Deliberately NOT attached to a stop_event: the pool's own shutdown(wait=False,
+    cancel_futures=True) in the finally block is the sole stop mechanism — there is no
+    cross-thread stop coordination to maintain. Every fetch runs to completion (success,
+    lockout, throttle, or error), packing the result into a _StageCFetchOutcome for the
+    main loop to interpret.
+
+    Mirrors _stage_c_fetch_ahead_worker's own fetch logic byte-for-byte but for ONE card
+    — no iteration, no stop_event check, no queue.put(). The main loop is now the one that
+    decides what to do with each outcome (including whether to break on lockout/error),
+    rather than the worker thread stopping itself.
+    """
+    from cardpicker.harvest_fetch_limiter import (
+        DestinationThrottledError,
+        GoogleFetchLockoutError,
+    )
+    from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
+
+    fetch_started_at = time.monotonic()
+    try:
+        image_bytes = fetch_card_image_bytes(card, dpi=DEFAULT_FETCH_DPI)
+    except GoogleFetchLockoutError:
+        return _StageCFetchOutcome(
+            card_id=card.pk,
+            content_hash=card.content_phash,
+            md5_checksum=card.md5_checksum,
+            sha256_checksum=card.sha256_checksum,
+            image_bytes=None,
+            fetch_latency_ms=0.0,
+            card_name=card.name,
+            lockout=True,
+        )
+    except DestinationThrottledError:
+        return _StageCFetchOutcome(
+            card_id=card.pk,
+            content_hash=card.content_phash,
+            md5_checksum=card.md5_checksum,
+            sha256_checksum=card.sha256_checksum,
+            image_bytes=None,
+            fetch_latency_ms=0.0,
+            card_name=card.name,
+            throttled=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — deliberately broad, see _StageCFetchOutcome.error
+        return _StageCFetchOutcome(
+            card_id=card.pk,
+            content_hash=card.content_phash,
+            md5_checksum=card.md5_checksum,
+            sha256_checksum=card.sha256_checksum,
+            image_bytes=None,
+            fetch_latency_ms=0.0,
+            card_name=card.name,
+            error=exc,
+        )
+
+    fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
+    return _StageCFetchOutcome(
+        card_id=card.pk,
+        content_hash=card.content_phash,
+        md5_checksum=card.md5_checksum,
+        sha256_checksum=card.sha256_checksum,
+        image_bytes=image_bytes,
+        fetch_latency_ms=fetch_latency_ms,
+        card_name=card.name,
+    )
 
 
 @dataclass
 class _StageCFetchOutcome:
-    """One card's own fetch-stage result, handed from `_stage_c_fetch_ahead_worker` (the fetch-
-    ahead thread) to `_run_stage_c`'s own sequential compute loop via a bounded `queue.Queue`.
-    `card`/`content_hash`/`md5_checksum`/`sha256_checksum` are all read from the SAME `Card`
-    instance `_run_stage_c` already loaded (and used for its own transfer check) before handing
-    this card off to the fetch-ahead thread - no second `Card` query on either side of the
-    boundary. `lockout=True` iff this card's OWN fetch attempt raised `GoogleFetchLockoutError` -
-    the compute loop treats this as the signal to stop (module docstring's "halts NEW fetches
+    """One card's own fetch-stage result, returned by ``_stage_c_fetch_one`` (a single-card fetch
+    worker for the ThreadPoolExecutor) and drained by ``_run_stage_c``'s Phase 2 coordinator loop
+    via ``concurrent.futures.as_completed()``. ``card``/``content_hash``/``md5_checksum``/
+    ``sha256_checksum`` are all read from the SAME ``Card`` instance ``_run_stage_c`` already
+    loaded (and used for its own transfer check) before handing this card off to the fetch pool -
+    no second ``Card`` query on either side of the boundary. ``lockout=True`` iff this card's OWN
+    fetch attempt raised ``GoogleFetchLockoutError`` - the coordinator loop treats this as the
+    signal to stop submitting new fetches/computes (module docstring's "halts NEW fetches
     immediately" bar), never a fetch failure to retry.
 
-    `error`, if set, is a NON-`GoogleFetchLockoutError` exception the fetch attempt raised (2026-07-25,
-    kill-safety fix - see `_stage_c_fetch_ahead_worker`'s own docstring for why this exists at
-    all): re-raised by the compute loop IN THE MAIN THREAD the instant it's observed, so a crash
-    during fetch still propagates out of `_run_stage_c`/`dispatch_micro_batch` exactly as it did
-    before this module had a separate fetch thread at all - `TestKillSafetyResumeContract`'s own
-    "a mid-batch crash leaves a truthful FAILED ledger row" contract does not distinguish between
-    a crash during fetch and a crash during compute, and must not silently become a hang instead."""
+    ``error``, if set, is a NON-``GoogleFetchLockoutError`` exception the fetch attempt raised
+    (2026-07-25, kill-safety fix - see ``_stage_c_fetch_one``'s own docstring for the motivation):
+    re-raised by the coordinator loop IN THE MAIN THREAD the instant it's observed, so a crash
+    during fetch still propagates out of ``_run_stage_c``/``dispatch_micro_batch`` exactly as it
+    did before this module had a fetch pool - ``TestKillSafetyResumeContract``'s own "a mid-batch
+    crash leaves a truthful FAILED ledger row" contract does not distinguish between a crash
+    during fetch and a crash during compute, and must not silently become a hang instead."""
 
     card_id: int
     content_hash: Optional[int]
@@ -668,150 +874,23 @@ class _StageCFetchOutcome:
     error: Optional[BaseException] = None
     # 2026-07-29 (`collector_line_artist`'s CARD-NAME NARROWING): the card's own uploaded name,
     # read off the SAME already-loaded `Card` instance every other field here comes from - no
-    # second query on either side of the fetch/compute boundary. The compute loop resolves it to
-    # this card's real artists via the batch's own `NameArtistLookup`; it is deliberately NOT
-    # resolved on the fetch thread, which must stay purely I/O-bound. Defaulted (like every field
-    # after `lockout` here) so the two error/lockout constructions above stay keyword-complete.
+    # second query. The compute worker resolves it to this card's real artists via its own
+    # process-local `NameArtistLookup` (built once per worker process by
+    # `_stage_c_compute_worker_init`); it is deliberately NOT resolved on the fetch thread,
+    # which must stay purely I/O-bound. Defaulted (like every field after `lockout` here) so
+    # the two error/lockout constructions above stay keyword-complete.
     card_name: str = ""
     # `throttled=True` iff this card's own fetch raised `harvest_fetch_limiter
     # .DestinationThrottledError` (a 429/503 from the destination) - RATE PRESSURE, the third and
     # mildest of this dataclass's three failure severities, added 2026-07-30 under the owner rate
     # ruling ("the limit needs to throttle not shut it down"). The other two both STOP the fetch
-    # thread (`lockout` and `error` each set `stop_event` and return); this one does NOT - the
-    # thread proceeds to the next card, and the limiter's own already-widened pacing interval is
-    # what makes that next fetch slower. The compute loop must NOT record a throttled outcome onto
-    # the fetch-outcome window: doing so is exactly what used to let sustained rate pressure trip
-    # `EnvelopeTrip.Bar.FETCH_FAILURE_RATE` and hard-stop the whole unattended pass.
+    # pool worker (`lockout` and `error` each produce a terminal outcome); this one does NOT -
+    # the worker returns the outcome and the fetch pool's own `shutdown(wait=False,
+    # cancel_futures=True)` in the finally block handles the rest. The coordinator loop must NOT
+    # record a throttled outcome onto the fetch-outcome window: doing so is exactly what used to
+    # let sustained rate pressure trip `EnvelopeTrip.Bar.FETCH_FAILURE_RATE` and hard-stop the
+    # whole unattended pass.
     throttled: bool = False
-
-
-def _stage_c_fetch_ahead_worker(
-    cards: list[Card],
-    out_queue: "queue.Queue[_StageCFetchOutcome]",
-    stop_event: threading.Event,
-) -> None:
-    """
-    THE fetch-ahead thread (issue #472) - ONE thread, sequential fetches (never pooled: the design
-    brief's own "no compute pooling" bar applies equally to a fetch pool here, since a SECOND
-    concurrent fetch would only race further ahead of a compute loop that's already the slower
-    stage, buying nothing the bounded queue depth doesn't already buy via fetch/compute OVERLAP
-    alone). Pushes one `_StageCFetchOutcome` per entry in `cards`, in order - `queue.Queue`'s own
-    FIFO ordering means the compute loop always drains outcomes in the SAME order this thread
-    fetched them, satisfying the design brief's own "fetch-outcome window records in completion
-    order" bar for free (a single serial fetch worker's own completion order IS its submission
-    order, there is no reordering possible with only one fetch in flight at a time).
-
-    `out_queue`'s own bound (`queue.Queue(maxsize=_STAGE_C_FETCH_AHEAD_DEPTH)`, set by the caller)
-    is what keeps RSS bounded independent of batch size - `put()` BLOCKS once the queue is full,
-    so this thread can never race further than `_STAGE_C_FETCH_AHEAD_DEPTH` outcomes ahead of
-    whatever the compute loop has actually consumed so far, regardless of how many cards remain in
-    `cards` or how large a future catalog's own micro-batch could be.
-
-    LOCKOUT (design brief's own "instant halt" bar): the moment `fetch_card_image_bytes` raises
-    `GoogleFetchLockoutError` for one card, `stop_event` is set and this thread returns immediately
-    WITHOUT attempting any further card in `cards` - "halts NEW fetches immediately". The card
-    whose OWN fetch triggered the lockout is reported to the compute loop via this outcome's own
-    `lockout=True` flag (never silently dropped), so the compute loop can record the trip itself
-    and stop too. Every outcome that already made it into `out_queue` BEFORE this happened is left
-    there untouched - "in-flight work drains" - the compute loop keeps consuming those (they sort
-    earlier in FIFO order than the lockout outcome) before it ever reaches the lockout marker,
-    exactly mirroring the pre-#472 sequential design's own "an already-fetched image still gets to
-    finish its own compute+persist" property, just now genuinely overlapped rather than accidental.
-
-    ANY OTHER EXCEPTION (2026-07-25, kill-safety fix - `TestKillSafetyResumeContract`'s own
-    mid-batch-crash test caught this during review): a plain `try/except GoogleFetchLockoutError`
-    here would let a non-lockout exception (a real bug, a simulated kill-drill fault, a genuine
-    network error `fetch_card_image_bytes` doesn't itself wrap) kill this THREAD silently - Python
-    does not propagate an uncaught exception from a spawned `threading.Thread` to its caller, so
-    the compute loop's own `queue.get()` for that card would block FOREVER waiting for an outcome
-    that will never arrive, turning a crash into a silent hang instead of the loud, ledger-recorded
-    failure the resume contract requires. Caught here as a bare `Exception`, packaged onto the
-    outcome's own `error` field, and this thread stops (same "no further cards attempted" posture
-    as a lockout) - the compute loop re-raises it in the MAIN thread the instant it's seen.
-
-    A THROTTLE (2026-07-30 owner rate ruling: "the limit needs to throttle not shut it down") is
-    the one severity that does NOT stop this thread. `DestinationThrottledError` means the
-    destination answered 429/503 and `harvest_fetch_limiter` has ALREADY widened its own pacing
-    interval; the correct response is to mark this one card deferred (`throttled=True`) and CARRY
-    ON to the next card, whose fetch will now be slower because of that widening. `stop_event` is
-    deliberately NOT set, no error is packaged, and the run continues at a degraded rate. Note the
-    ordering constraint this creates: `except DestinationThrottledError` must sit ABOVE the broad
-    `except Exception`, or the throttle is swallowed into the stop-the-thread path and the whole
-    conversion is undone.
-    """
-    from cardpicker.harvest_fetch_limiter import DestinationThrottledError
-    from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
-
-    for card in cards:
-        if stop_event.is_set():
-            return
-
-        fetch_started_at = time.monotonic()
-        try:
-            image_bytes = fetch_card_image_bytes(card, dpi=DEFAULT_FETCH_DPI)
-        except GoogleFetchLockoutError:
-            stop_event.set()
-            out_queue.put(
-                _StageCFetchOutcome(
-                    card_id=card.pk,
-                    content_hash=card.content_phash,
-                    md5_checksum=card.md5_checksum,
-                    sha256_checksum=card.sha256_checksum,
-                    image_bytes=None,
-                    fetch_latency_ms=0.0,
-                    card_name=card.name,
-                    lockout=True,
-                )
-            )
-            return
-        except DestinationThrottledError:
-            # NOT a stop - see this function's own docstring. No `stop_event.set()`, no `return`:
-            # the loop proceeds to the next card at the limiter's newly-widened pace.
-            logger.warning(
-                "Stage E dispatch: throttled fetching card %s - deferring it and continuing at a slower pace",
-                card.pk,
-            )
-            out_queue.put(
-                _StageCFetchOutcome(
-                    card_id=card.pk,
-                    content_hash=card.content_phash,
-                    md5_checksum=card.md5_checksum,
-                    sha256_checksum=card.sha256_checksum,
-                    image_bytes=None,
-                    fetch_latency_ms=0.0,
-                    card_name=card.name,
-                    throttled=True,
-                )
-            )
-            continue
-        except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring above
-            stop_event.set()
-            out_queue.put(
-                _StageCFetchOutcome(
-                    card_id=card.pk,
-                    content_hash=card.content_phash,
-                    md5_checksum=card.md5_checksum,
-                    sha256_checksum=card.sha256_checksum,
-                    image_bytes=None,
-                    fetch_latency_ms=0.0,
-                    card_name=card.name,
-                    error=exc,
-                )
-            )
-            return
-        fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
-
-        out_queue.put(
-            _StageCFetchOutcome(
-                card_id=card.pk,
-                content_hash=card.content_phash,
-                md5_checksum=card.md5_checksum,
-                sha256_checksum=card.sha256_checksum,
-                image_bytes=image_bytes,
-                fetch_latency_ms=fetch_latency_ms,
-                card_name=card.name,
-            )
-        )
 
 
 def _run_stage_c(
@@ -836,14 +915,19 @@ def _run_stage_c(
        counted via `outcome.stage_c_transferred`/`stage_c_completed`. Every card that still needs a
        real extraction (no md5, no eligible sibling, or a loud pairing/content-hash anomaly - see
        that function's own docstring) is collected into `to_fetch`.
-    2. **Decoupled fetch-ahead + sequential compute** (issue #472): `to_fetch` is handed to ONE
-       fetch-ahead thread (`_stage_c_fetch_ahead_worker`) writing into a bounded
-       (`_STAGE_C_FETCH_AHEAD_DEPTH`) queue; THIS function's own loop stays the sequential OCR/
-       extraction compute stage the design brief mandates (no compute pooling), just now able to
-       decode+extract card N while the fetch-ahead thread is already fetching card N+1's bytes,
-       instead of blocking on that fetch itself. Every fetch outcome (transfer OR real fetch) is
-       recorded onto `_window` regardless of whether it ends up mattering to THIS batch's own
-       envelope decision - the window spans the whole worker process's uptime, not one batch.
+    2. **Decoupled fetch-thread-pool + compute-process-pool** (issue #566): ``to_fetch`` is
+        submitted to a ``ThreadPoolExecutor`` of three fetch threads, each calling
+        ``_stage_c_fetch_one`` (single-card, no shared stop event — the pool's own
+        ``shutdown(wait=False, cancel_futures=True)`` in the finally block is the sole stop
+        mechanism). Completed fetch results are drained via ``as_completed()``; each successful
+        fetch is handed to a ``ProcessPoolExecutor`` of three compute workers, each running
+        ``_stage_c_compute_one_card`` (the compute+persist unit, with echo suppression inside
+        the worker process since ``ContextVar`` is process-local). A bounded backpressure drain
+        keeps the handoff between pools at or below ``_STAGE_C_POOL_QUEUE_DEPTH`` (6 = 2 × 3
+        workers) — whenever ``len(pending_compute)`` reaches that bound, ONE completed compute
+        result is drained before the next fetch is handed to the compute pool. This is the sole
+        RSS-flat mechanism: ``ProcessPoolExecutor``'s own internal queue is UNBOUNDED, so
+        without this drain, RSS grows without bound over the course of a production-length pass.
     3. **Echo suppression** (issue #472's own fold, `cardpicker.stage_e_signals`'s own module
        docstring has the full mechanism writeup): both the transfer write in phase 1 and the
        `persist_evidence` write in phase 2 are wrapped in `suppress_evidence_change_echo()` - a
@@ -897,12 +981,6 @@ def _run_stage_c(
     roll back) - and records a fresh trip via `check_envelope(google_lockout=True)` so the NEXT
     dispatch call refuses until an owner acknowledges it, matching the "instant pause" bar exactly.
     """
-    from io import BytesIO
-
-    from PIL import Image
-
-    from cardpicker.image_evidence import compute_card_evidence, persist_evidence
-
     if force_stage_c_reextract:
         already_done_ids: set[int] = set()
     else:
@@ -912,14 +990,6 @@ def _run_stage_c(
                 card_id__in=batch_ids, extractor_versions__contains=manifest_versions
             ).values_list("card_id", flat=True)
         )
-    lexicon = known_set_codes()
-    # COLLECTOR-LINE ARTIST GATE (2026-07-29 - see `image_evidence.compute_card_evidence`'s own
-    # `artist_lexicon` docstring paragraph): built once per batch and threaded through, the same
-    # shape `known_set_codes()` immediately above already has, so `compute_card_evidence` keeps
-    # issuing no DB query of its own. `build_printing_artist_lookup()` returns a stateful resolver
-    # that caches one query per EXPANSION (not per card) across this whole batch.
-    artist_lexicon = load_artist_lexicon()
-    printing_artist_lookup = build_printing_artist_lookup()
 
     # PHASE 1 (module docstring): build the work list, resolving evidence transfer BEFORE
     # deciding whether a card needs a fetch at all.
@@ -951,61 +1021,50 @@ def _run_stage_c(
     if not to_fetch:
         return None
 
-    # CARD-NAME NARROWING (2026-07-29 - see `collector_line_artist`'s own docstring section): the
-    # third batch-scoped resolver on this same "build once, thread through" convention, but built
-    # HERE rather than alongside the other two - after the transfer pass has already established
-    # that this batch really does have cards to extract. It is backed by
-    # `local_calculate_verdicts._get_cached_candidate_name_index()` (the single process-cached
-    # entry point that module documents as mandatory for every batch-reachable caller, so a worker
-    # that also runs Stage D shares the one index rather than building a second), and building
-    # that index is the most expensive of the three - a batch whose cards were all satisfied by
-    # evidence transfer must not pay for it, the same laziness `run_join_key_calculator`'s own
-    # `index` already practises.
-    name_artist_lookup = build_name_artist_lookup()
+    # PHASE 2 (module docstring): decoupled fetch-thread-pool + compute-process-pool (issue #566).
 
-    # PHASE 2 (module docstring): decoupled fetch-ahead thread + this function's own sequential
-    # compute loop.
-    fetch_queue: "queue.Queue[_StageCFetchOutcome]" = queue.Queue(maxsize=_STAGE_C_FETCH_AHEAD_DEPTH)
-    stop_event = threading.Event()
-    fetch_thread = threading.Thread(
-        target=_stage_c_fetch_ahead_worker, args=(to_fetch, fetch_queue, stop_event), daemon=True
+    fetch_pool = ThreadPoolExecutor(max_workers=_STAGE_C_FETCH_THREADS)
+
+    # The parent keeps its own DB connection open across the fork (unlike a manual
+    # connection.close() here, which broke this coordinator's own later writes, e.g.
+    # mark_ledger_failed on a compute-side crash). Each worker closes its OWN inherited
+    # copy in its initializer below — that's the side that actually needs a fresh one.
+    compute_pool = ProcessPoolExecutor(
+        max_workers=_STAGE_C_COMPUTE_WORKERS,
+        initializer=_stage_c_compute_worker_init,
+        initargs=(short_circuit,),
     )
-    fetch_thread.start()
 
+    # Submission-order list, not ``as_completed`` — completion order across concurrent fetch
+    # threads is racy (an instant lockout can outrace a slower successful fetch submitted
+    # earlier); blocking on futures in submission order doesn't serialize the threads, it only
+    # fixes which result the loop consumes next.
+    fetch_futures: "list[concurrent.futures.Future[_StageCFetchOutcome]]" = [
+        fetch_pool.submit(_stage_c_fetch_one, card) for card in to_fetch
+    ]
+    pending_compute: "dict[concurrent.futures.Future[tuple[bool, Optional[Exception]]], int]" = {}
+    stop = False
     trip: Optional[EnvelopeTrip] = None
+
     try:
-        for _ in range(len(to_fetch)):
-            fetch_outcome = fetch_queue.get()
+        for fetch_future in fetch_futures:
+            if stop:
+                break
+
+            fetch_outcome = fetch_future.result()
+
+            if fetch_outcome.throttled:
+                outcome.stage_c_fetch_throttled += 1
+                continue
 
             if fetch_outcome.error is not None:
-                # Re-raise IN THE MAIN THREAD - see _StageCFetchOutcome/_stage_c_fetch_ahead_
-                # worker's own docstrings for why this exists (a spawned thread's own uncaught
-                # exception never reaches the caller on its own). Propagates out of this function,
-                # through dispatch_micro_batch's own `except Exception: mark_ledger_failed(...);
-                # raise` - identical observable behaviour to the pre-#472 sequential design's own
-                # "a fetch-time crash surfaces exactly like a compute-time one" contract.
                 raise fetch_outcome.error
 
             if fetch_outcome.lockout:
                 _window.record(success=False)
                 logger.error("Stage E dispatch: GoogleFetchLockoutError observed - halting Stage C for this batch")
                 trip = check_envelope(_sample_envelope_signals(google_lockout=True), run_id=run_id)
-                break
-
-            if fetch_outcome.throttled:
-                # THE HALT->THROTTLE CONVERSION (2026-07-30 owner rate ruling). This branch MUST
-                # sit above the `image_bytes is None` one below (a throttled outcome also carries
-                # `image_bytes=None`) and MUST NOT touch `_window`. Recording a throttle as a
-                # fetch FAILURE is what used to make sustained rate pressure indistinguishable
-                # from a broken dependency: at >1% of a rolling 500-card window it tripped
-                # `EnvelopeTrip.Bar.FETCH_FAILURE_RATE`, which is a HARD STOP requiring a human
-                # `resolve_envelope_trip` acknowledgement and exits `stream_full_catalog` with
-                # code 3 - killing a 230,753-card unattended pass over a condition whose correct
-                # answer is "go slower". The card is simply not processed this pass; the Stage C
-                # backlog walk re-selects it later, by which time the limiter's pacing has either
-                # decayed back toward the ceiling or settled at a rate the destination tolerates.
-                # The OTHER three bars are untouched: host load, RSS and a 403 lockout still halt.
-                outcome.stage_c_fetch_throttled += 1
+                stop = True
                 continue
 
             if fetch_outcome.image_bytes is None:
@@ -1014,58 +1073,48 @@ def _run_stage_c(
                 continue
 
             _window.record(success=True)
-            image = Image.open(BytesIO(fetch_outcome.image_bytes))
-            result = compute_card_evidence(
+
+            # Backpressure: drain one pending compute result before submitting the next whenever
+            # the handoff queue is at capacity — the ProcessPoolExecutor's own internal queue is
+            # UNBOUNDED, so this is the sole mechanism keeping RSS flat regardless of batch size.
+            if len(pending_compute) >= _STAGE_C_POOL_QUEUE_DEPTH:
+                done, _ = concurrent.futures.wait(pending_compute, return_when=concurrent.futures.FIRST_COMPLETED)
+                for cf in done:
+                    success, error = cf.result()
+                    if not success:
+                        assert error is not None  # narrow for mypy: !success → error is Some
+                        raise error
+                    outcome.stage_c_completed += 1
+                    del pending_compute[cf]
+
+            cf = compute_pool.submit(
+                _stage_c_compute_one_card,
                 fetch_outcome.card_id,
                 fetch_outcome.content_hash,
-                image,
-                fetch_latency_ms=fetch_outcome.fetch_latency_ms,
-                short_circuit=short_circuit,
-                known_set_codes=lexicon,
-                artist_lexicon=artist_lexicon,
-                printing_artist_lookup=printing_artist_lookup,
-                card_artist_names=name_artist_lookup(fetch_outcome.card_name),
-                md5_checksum=fetch_outcome.md5_checksum,
-                sha256_checksum=fetch_outcome.sha256_checksum,
+                fetch_outcome.image_bytes,
+                fetch_outcome.fetch_latency_ms,
+                fetch_outcome.md5_checksum,
+                fetch_outcome.sha256_checksum,
+                fetch_outcome.card_name,
+                run_id,
+                dry_run,
             )
-            if not dry_run:
-                with suppress_evidence_change_echo():
-                    persist_evidence(result, run_id=run_id)
+            pending_compute[cf] = fetch_outcome.card_id
+
+        # All fetches done — drain the remaining compute results.
+        for cf in concurrent.futures.as_completed(pending_compute):
+            success, error = cf.result()
+            if not success:
+                assert error is not None  # narrow for mypy: !success → error is Some
+                raise error
             outcome.stage_c_completed += 1
     finally:
-        # Always signal-then-drain-then-join, whether the loop above finished normally, broke on
-        # a lockout, or raised - the fetch-ahead thread is `daemon=True` (won't block process exit
-        # on its own) but this function should never RETURN while it's still mid-fetch for a card
-        # nothing will ever consume.
-        #
-        # `stop_event.set()` MUST happen BEFORE the drain+join below (Tron §8 gate condition,
-        # 2026-07-25, HIGH severity - found on review): a bare `fetch_thread.join()` here, with
-        # neither `stop_event.set()` nor a queue drain first, left the fetch-ahead thread wedged
-        # FOREVER the moment COMPUTE (not fetch) raised mid-batch - e.g. a corrupt download that
-        # decodes far enough to pass the fetch stage but raises a PIL error inside
-        # `compute_card_evidence`/`persist_evidence` above. Once this loop stops calling
-        # `fetch_queue.get()` (it exited via the exception), a fetch-ahead thread already blocked
-        # on `out_queue.put(...)` for its own next outcome (the queue is bounded at
-        # `_STAGE_C_FETCH_AHEAD_DEPTH`) never unblocks on its own - `stop_event` alone does
-        # nothing for a thread that isn't back at its own loop-top `if stop_event.is_set(): return`
-        # check yet, and nothing else will ever call `.get()` again to free room for that `put()`
-        # to complete. The observable failure mode was silent and total: `join()` blocks
-        # indefinitely, so this function (and `dispatch_micro_batch`'s own `except Exception:
-        # mark_ledger_failed(...); raise` around it) never even reaches the point of recording the
-        # crash - the `PilotRunLedger` row stays lying at `RUNNING` forever, and the concurrency-cap
-        # slot this dispatch holds (`stage_e_concurrency.try_acquire_dispatch_slot`) never gets
-        # released either, wedging the whole worker process's dispatch capacity over ONE corrupt
-        # image. Fixed by (1) `stop_event.set()` first, so the thread returns the instant it's back
-        # at its own loop-top, and (2) draining `fetch_queue` below, which is what actually
-        # unblocks a `put()` already in progress - after at most one more successful put (the one
-        # the drain makes room for), the thread reaches its own stop_event check and returns.
-        stop_event.set()
-        while True:
-            try:
-                fetch_queue.get_nowait()
-            except queue.Empty:
-                break
-        fetch_thread.join()
+        # Shutdown fetch pool — cancel any still-pending fetches (a lockout mid-batch, or an
+        # exception anywhere above). wait=False + cancel_futures=True is the pooled equivalent of
+        # the old stop_event.set() + drain queue + join() sequence — no thread left mid-fetch
+        # for cards nothing will consume.
+        fetch_pool.shutdown(wait=False, cancel_futures=True)
+        compute_pool.shutdown(wait=False, cancel_futures=True)
 
     return trip
 
