@@ -647,7 +647,7 @@ STAGE_E_SELECTION_SCAN_CAP = 1000
 # constant), same convention as STAGE_E_STREAMING_ENABLED above, so a self-hoster who doesn't run
 # sweeps at all - and therefore never wants the warm skipped over a ledger row it doesn't
 # understand - can turn the gate off with one env var and no code change or redeploy.
-WARM_CATALOG_STATS_SWEEP_GATE_ENABLED = env.bool("WARM_CATALOG_STATS_SWEEP_GATE_ENABLED", default=True)
+WARM_CATALOG_STATS_SWEEP_GATE_ENABLED = env.bool("WARM_CATALOG_STATS_SWEEP_GATE_ENABLED", default=False)
 
 # WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS - how old a RUNNING PilotRunLedger row has to be
 # before the gate stops trusting it and lets the warm run anyway (the guard against a crashed

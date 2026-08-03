@@ -725,9 +725,9 @@ class TestMigration0094:
 
 class TestWarmCatalogStatsSweepGate:
     """
-    Tests for `warm_catalog_stats`'s sweep gate (owner ruling 2026-07-29 - see that command's own
-    module docstring, and `docs/features/catalog-stats.md`'s "Sweep gate" section, for the full
-    skip/staleness mechanism and the accepted up-to-~7h staleness trade it creates).
+    Tests for `warm_catalog_stats`'s sweep gate - the 2026-07-29 skip/staleness mechanism,
+    now opt-in (default off, 2026-08-03 retirement). See that command's own module docstring
+    and `docs/features/catalog-stats.md`'s "Sweep gate" section.
 
     Every scenario here calls the real management command end-to-end (`call_command`, not the
     gate helper directly) so a regression in either the gate check itself OR its wiring into
@@ -737,7 +737,8 @@ class TestWarmCatalogStatsSweepGate:
     def test_running_sweep_within_staleness_bound_skips_and_leaves_cache_untouched(self, db, capsys):
         """The core skip guarantee: exit 0 (no exception), a clear message naming the blocking
         run, and the cache left byte-for-byte as it was - not merely "the command returned", the
-        cache must still hold exactly the PRIOR blob, proving no recompute happened at all."""
+        cache must still hold exactly the PRIOR blob, proving no recompute happened at all.
+        Requires the gate to be explicitly enabled since it is off by default (2026-08-03)."""
         call_command("warm_catalog_stats")
         good_cache = caches[SHARED_CACHE_ALIAS].get(CACHE_KEY)
         assert good_cache is not None
@@ -748,7 +749,8 @@ class TestWarmCatalogStatsSweepGate:
             status=PilotRunLedger.Status.RUNNING,
         )
 
-        call_command("warm_catalog_stats")  # must not raise - a skip is exit 0, never an error
+        with override_settings(WARM_CATALOG_STATS_SWEEP_GATE_ENABLED=True):
+            call_command("warm_catalog_stats")  # must not raise - a skip is exit 0, never an error
         output = capsys.readouterr().out
 
         assert "sweep-in-flight-abc123" in output
