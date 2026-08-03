@@ -654,13 +654,17 @@ _compute_pool_lexicon: Any = None
 _compute_pool_artist_lexicon: Any = None
 _compute_pool_printing_artist_lookup: Any = None
 _compute_pool_name_artist_lookup: Any = None
-# Test-only flag: when True, ``_run_stage_c`` runs compute INLINE in the main process
-# instead of submitting to a ``ProcessPoolExecutor``. Set by
-# ``test_stage_e_dispatch.py``'s ``__inline_stage_c_compute`` autouse fixture so tests
-# exercise the coordinator loop without the fork/spawn complexity of real process pools
-# (which require Django connection lifecycle management that conflicts with pytest-django's
-# connection-wrapping). Production code never sets this flag.
+# Test-only override: forces inline compute regardless of PYTEST_CURRENT_TEST (see
+# _inline_compute_active below). Production never sets this.
 _INLINE_COMPUTE_FOR_TESTS = False
+
+
+def _inline_compute_active() -> bool:
+    # ProcessPoolExecutor forks a connection pytest-django is mid-transaction on; the parent's
+    # own later writes (e.g. mark_ledger_failed after a worker crash) then hit "connection
+    # already closed". Checked at call time, not import time, since PYTEST_CURRENT_TEST is set
+    # per-test and the module is imported once at collection.
+    return _INLINE_COMPUTE_FOR_TESTS or "PYTEST_CURRENT_TEST" in os.environ
 
 
 def _stage_c_compute_worker_init(
@@ -1032,35 +1036,38 @@ def _run_stage_c(
 
     fetch_pool = ThreadPoolExecutor(max_workers=_STAGE_C_FETCH_THREADS)
 
-    if _INLINE_COMPUTE_FOR_TESTS:
+    if _inline_compute_active():
         # Test mode: run compute inline in the main process — avoids fork/spawn complexity
         # with pytest-django's connection wrapping. Production never hits this path.
         result = _run_stage_c_phase2_inline(fetch_pool, to_fetch, short_circuit, run_id, dry_run, outcome)
         fetch_pool.shutdown(wait=False, cancel_futures=True)
         return result
 
-    # Close parent's DB connection so forked children inherit ``connection.connection is None``.
-    from django.db import connection
-
-    connection.close()
-
+    # The parent keeps its own DB connection open across the fork (unlike a manual
+    # connection.close() here, which broke this coordinator's own later writes, e.g.
+    # mark_ledger_failed on a compute-side crash). Each worker closes its OWN inherited
+    # copy in its initializer below — that's the side that actually needs a fresh one.
     compute_pool = ProcessPoolExecutor(
         max_workers=_STAGE_C_COMPUTE_WORKERS,
         initializer=_stage_c_compute_worker_init,
         initargs=(short_circuit,),
     )
 
-    fetch_futures: "dict[concurrent.futures.Future[_StageCFetchOutcome], Card]" = {
-        fetch_pool.submit(_stage_c_fetch_one, card): card for card in to_fetch
-    }
+    # Submission-order list, not ``as_completed`` — completion order across concurrent fetch
+    # threads is racy (an instant lockout can outrace a slower successful fetch submitted
+    # earlier); blocking on futures in submission order doesn't serialize the threads, it only
+    # fixes which result the loop consumes next.
+    fetch_futures: "list[concurrent.futures.Future[_StageCFetchOutcome]]" = [
+        fetch_pool.submit(_stage_c_fetch_one, card) for card in to_fetch
+    ]
     pending_compute: "dict[concurrent.futures.Future[tuple[bool, Optional[Exception]]], int]" = {}
     stop = False
     trip: Optional[EnvelopeTrip] = None
 
     try:
-        for fetch_future in concurrent.futures.as_completed(fetch_futures):
+        for fetch_future in fetch_futures:
             if stop:
-                continue
+                break
 
             fetch_outcome = fetch_future.result()
 
@@ -1166,15 +1173,15 @@ def _run_stage_c_phase2_inline(
     _compute_pool_printing_artist_lookup = build_printing_artist_lookup()
     _compute_pool_name_artist_lookup = build_name_artist_lookup()
 
-    fetch_futures: "dict[concurrent.futures.Future[_StageCFetchOutcome], Card]" = {
-        fetch_pool.submit(_stage_c_fetch_one, card): card for card in to_fetch
-    }
+    fetch_futures: "list[concurrent.futures.Future[_StageCFetchOutcome]]" = [
+        fetch_pool.submit(_stage_c_fetch_one, card) for card in to_fetch
+    ]
     stop = False
     trip: Optional[EnvelopeTrip] = None
 
-    for fetch_future in concurrent.futures.as_completed(fetch_futures):
+    for fetch_future in fetch_futures:
         if stop:
-            continue
+            break
 
         fetch_outcome = fetch_future.result()
 
