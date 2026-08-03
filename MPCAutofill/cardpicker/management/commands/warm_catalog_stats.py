@@ -35,36 +35,29 @@ it isn't configured.** Same split as `warm_artist_external_links`: this command 
 docstring). A cron/schedule run that silently writes nowhere and reports success is exactly the
 bug issue #538 exists to prevent, and this command must not repeat it a second way.
 
-**SKIPS (exit 0, never an error) while a catalog sweep is in flight (owner ruling 2026-07-29).**
-A sweep (`PilotRunLedger` row with `status=RUNNING` - see that model's own docstring: "the
-durable, queryable record", created RUNNING at start, updated COMPLETED/FAILED at end) genuinely
-contends for the same database this command's five aggregates query, so this command checks for
-one BEFORE computing anything and, if found, skips the entire run rather than compute against a
-catalog mid-mutation. This is the exact same "not configured" vs "broken" split
-`warm_artist_external_links` already draws between an opt-in gate (quiet, exit-0 skip) and a
-genuine fetch failure (`CommandError`, non-zero) - a skip here is equally NOT an error: it is this
-command correctly declining to run, not a failure to run. The cache is left completely untouched
-on skip, same rule this command already follows on a genuine failure - never a partial or zeroed
-blob, stale-but-correct beats fresh-but-wrong here just as much as it does on the failure path.
+**Sweep gate (owner ruling 2026-07-29, RETIRED as default 2026-08-03).**
+The original ruling gated the warm run while a catalog sweep held a `PilotRunLedger` row with
+`status=RUNNING` within the staleness bound, on the premise that a heavy batch sweep contended
+for the same database. That premise no longer holds under the streaming micro-batch sweep design,
+where a `RUNNING` row is perpetually present — the gate was freezing the stats page indefinitely.
 
-Guarded against a crashed sweep that never reaches COMPLETED/FAILED and would otherwise leave a
-`RUNNING` row - and therefore this gate - stuck forever: a `RUNNING` row older than
-`settings.WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS` (default comfortably above a full sweep's
-measured ~7.0h floor - see that setting's own comment in `MPCAutofill/MPCAutofill/settings.py` for the exact
-number and reasoning) is ignored and does not block this run. Both the gate itself
-(`settings.WARM_CATALOG_STATS_SWEEP_GATE_ENABLED`) and the staleness bound are settings-driven,
-tunable without a migration or a code change - see those two settings' own comments.
+**Owner's ruling, 2026-08-03 (reverses the 2026-07-29 gate ruling): the gate is RETIRED as the
+default.** The command now computes all five panels on every hourly run, sweep or no sweep,
+because: (a) the aggregations are MVCC-safe — plain SELECTs never block on or are blocked by the
+streaming sweep's tiny micro-batch INSERTs; (b) the stats pipeline already isolates sweep
+artifacts — `runHistory` filters rows with `anonymous_id=SLOW_PATH_ANONYMOUS_ID,
+skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON` (see `catalog_stats.py` lines ~391-396), and the
+vote panels count only human sources, so mid-sweep numbers are stable and correct; (c) measured
+full compute of all five panels takes ~9s (last ungated run 2026-08-02T16:00:22Z→16:00:31Z),
+trivial load once an hour.
 
-The skip message names the specific blocking run (`run_id`, `started_at`, and how long it has
-been running) precisely so a frozen stats page is diagnosable from the command's own log output in
-one command, without a separate query against `PilotRunLedger`.
-
-**Consequence, stated plainly (owner ruling 2026-07-29): gating the WHOLE warm run this way means
-the stats page can be up to ~7h stale during a full sweep**, not the roughly-hourly cadence the
-schedule alone implies - see `docs/features/catalog-stats.md`'s "Sweep gate" section for the full
-write-up. This is an accepted trade, not an oversight: a fast/slow split (skip only the panels
-that actually read tables a sweep mutates, keep warming the rest) would avoid this staleness, and
-is a known, deliberately deferred follow-up - not designed or built here.
+**The gate is now OPT-IN**, controlled by the settings flag
+`WARM_CATALOG_STATS_SWEEP_GATE_ENABLED` (default `False`). When opted in (set to `True` via
+env var), the exact 2026-07-29 skip behaviour is preserved: a RUNNING row within the staleness
+bound skips the entire run (exit 0, cache untouched, same warning text as before), and a RUNNING
+row older than `WARM_CATALOG_STATS_SWEEP_STALE_AFTER_HOURS` (default 12h) is ignored as a
+crashed-sweep guard. Both the gate flag and the staleness bound remain settings-driven, tunable
+without a migration or a code change.
 """
 
 from datetime import timedelta
@@ -96,10 +89,11 @@ def _find_blocking_sweep() -> Optional[PilotRunLedger]:
 class Command(BaseCommand):
     help = (
         "Recomputes all five Proposal F catalog-stats panels and writes the catalog-stats cache "
-        "blob. Intended for an hourly django-q2 schedule. Skips cleanly (exit 0) while a catalog "
-        "sweep is in flight (PilotRunLedger status=RUNNING within the staleness bound), leaving "
-        "the cache untouched - see this command's own module docstring for the accepted "
-        "up-to-~7h staleness trade this creates. On any other failure, also leaves the existing "
+        "blob. Intended for an hourly django-q2 schedule. By default (sweep gate disabled) "
+        "computes all five panels on every run, sweep or no sweep - see this command's own module "
+        "docstring for the 2026-08-03 retirement rationale. When the sweep gate is opt-in enabled "
+        "(WARM_CATALOG_STATS_SWEEP_GATE_ENABLED=True), skips cleanly (exit 0) while a catalog "
+        "sweep is in flight, leaving the cache untouched. On any failure, also leaves the existing "
         "cache untouched and exits non-zero."
     )
 
@@ -121,6 +115,8 @@ class Command(BaseCommand):
                     )
                 )
                 return
+        else:
+            self.stdout.write("Sweep gate: disabled (default) — computing all five panels.")
 
         try:
             blob = warm_catalog_stats_cache()
