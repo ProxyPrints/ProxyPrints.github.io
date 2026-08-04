@@ -98,22 +98,27 @@ class _SyncStagePoolStub:
     ``short_circuit`` value ``_stage_c_compute_one_card`` reads off a process global —
     ``test_short_circuit_is_independent_of_force_stage_c_reextract`` below asserts on exactly
     that value, so it must be set fresh on every call, never left at whatever a previous test's
-    pool last wrote. The initializer's own DB-connection-close step (correct for a freshly
+    pool last wrote. The initializer's own DB-connection-discard step (correct for a freshly
     forked worker, hostile to this single-process test session sharing one connection) is
     neutralized only for the duration of that one call — a synchronous stub never forks, so
-    there is no inherited, stale connection to close in the first place.
+    there is no inherited, stale connection to discard in the first place.
     """
 
     def __init__(self, max_workers: Optional[int] = None, initializer: Any = None, initargs: tuple = ()) -> None:
         if initializer is not None:
-            from django.db.backends.base.base import BaseDatabaseWrapper
+            from django.db import connections
 
-            original_close = BaseDatabaseWrapper.close
-            BaseDatabaseWrapper.close = lambda self: None  # type: ignore[method-assign]
+            # Snapshot/restore each wrapper's WHOLE `__dict__`, not just `.connection` — the
+            # initializer's own lexicon-building queries reconnect mid-call (autocommit,
+            # `in_atomic_block`, etc. all get reset by that reconnect), and a real fork would
+            # never leak that back into the parent, but this in-process stub shares the object.
+            saved = {alias: dict(connections[alias].__dict__) for alias in connections}
             try:
                 initializer(*initargs)
             finally:
-                BaseDatabaseWrapper.close = original_close  # type: ignore[method-assign]
+                for alias, state in saved.items():
+                    connections[alias].__dict__.clear()
+                    connections[alias].__dict__.update(state)
 
     def __enter__(self) -> "_SyncStagePoolStub":
         return self
@@ -2088,30 +2093,34 @@ class TestStageCComputeWorkerInit:
     are the only ones that assert on what this function itself actually builds."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_compute_pool_globals(self, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
-        """``_stage_c_compute_worker_init`` writes PROCESS globals and closes the process's DB
-        connections — both correct for a freshly forked worker, both hostile to this
-        single-process test session's one shared connection. The globals are monkeypatched
-        (auto-restored at teardown) and the two DB-close entry points are replaced with a
-        recorder the tests below assert on, instead of a real close."""
+    def _isolated_compute_pool_globals(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``_stage_c_compute_worker_init`` writes PROCESS globals and discards the process's own
+        inherited DB connection reference — both correct for a freshly forked worker, both
+        hostile to this single-process test session's one shared connection. The globals are
+        monkeypatched (auto-restored at teardown); the connection reference is saved here and
+        restored at teardown, standing in for what a real fork's own separate process would give
+        back for free."""
         from django.db import connections
-        from django.db.backends.base.base import BaseDatabaseWrapper
 
-        closed: list[bool] = []
         monkeypatch.setattr(stage_e_dispatch, "_compute_pool_short_circuit", None)
         monkeypatch.setattr(stage_e_dispatch, "_compute_pool_lexicon", None)
         monkeypatch.setattr(stage_e_dispatch, "_compute_pool_artist_lexicon", None)
         monkeypatch.setattr(stage_e_dispatch, "_compute_pool_printing_artist_lookup", None)
         monkeypatch.setattr(stage_e_dispatch, "_compute_pool_name_artist_lookup", None)
-        monkeypatch.setattr(connections, "close_all", lambda: closed.append(True))
-        monkeypatch.setattr(BaseDatabaseWrapper, "close", lambda self: closed.append(True))
-        return closed
+        saved = {alias: dict(connections[alias].__dict__) for alias in connections}
+        yield
+        for alias, state in saved.items():
+            connections[alias].__dict__.clear()
+            connections[alias].__dict__.update(state)
 
     @pytest.mark.django_db
-    def test_builds_every_lookup_singleton_and_pins_omp_threads(
-        self, _isolated_compute_pool_globals: list[bool]
-    ) -> None:
+    def test_builds_every_lookup_singleton_and_pins_omp_threads(self, _isolated_compute_pool_globals: None) -> None:
         import os
+
+        from django.db import connection
+
+        connection.ensure_connection()
+        original_connection = connection.connection
 
         stage_e_dispatch._stage_c_compute_worker_init(short_circuit=True)
 
@@ -2121,18 +2130,19 @@ class TestStageCComputeWorkerInit:
         assert stage_e_dispatch._compute_pool_artist_lexicon is not None
         assert stage_e_dispatch._compute_pool_printing_artist_lookup is not None
         assert stage_e_dispatch._compute_pool_name_artist_lookup is not None
-        assert _isolated_compute_pool_globals  # the DB-close step ran (recorded, not real)
+        # The connection-discard step ran and a genuinely fresh connection replaced the
+        # inherited one (the lexicon builders above are themselves DB queries, so a lazy
+        # reconnect has already happened by this point).
+        assert connection.connection is not original_connection
 
     @pytest.mark.django_db
-    def test_short_circuit_defaults_to_none(self, _isolated_compute_pool_globals: list[bool]) -> None:
+    def test_short_circuit_defaults_to_none(self, _isolated_compute_pool_globals: None) -> None:
         stage_e_dispatch._stage_c_compute_worker_init()
 
         assert stage_e_dispatch._compute_pool_short_circuit is None
 
     @pytest.mark.django_db
-    def test_short_circuit_false_is_preserved_not_coerced_to_none(
-        self, _isolated_compute_pool_globals: list[bool]
-    ) -> None:
+    def test_short_circuit_false_is_preserved_not_coerced_to_none(self, _isolated_compute_pool_globals: None) -> None:
         """``short_circuit=False`` is a distinct value from the default ``None`` (``None`` means
         "resolve from the env var at call time" — see ``_run_stage_c``'s own docstring on why the
         two were decoupled from ``force_stage_c_reextract``); a falsy-coercion bug here would
@@ -2140,3 +2150,65 @@ class TestStageCComputeWorkerInit:
         stage_e_dispatch._stage_c_compute_worker_init(short_circuit=False)
 
         assert stage_e_dispatch._compute_pool_short_circuit is False
+
+
+def _noop_stage_c_compute_task() -> bool:
+    """Module-level (picklable) stand-in submitted to a REAL ``ProcessPoolExecutor`` below — a
+    lambda isn't picklable for multiprocessing, and the whole point of
+    ``TestStageCComputeWorkerInitRealFork`` is to fork a genuine worker process rather than stub
+    it out the way both ``_SyncStagePoolStub`` and ``TestStageCComputeWorkerInit`` do."""
+    return True
+
+
+class TestStageCComputeWorkerInitRealFork:
+    """Root-cause regression for the 2026-08-04 Stage C resume DB connection drop.
+
+    ``_run_stage_c`` deliberately keeps the PARENT's own Django connection OPEN across the
+    ``ProcessPoolExecutor`` fork (see that construction site's own comment — closing it there
+    broke ``mark_ledger_failed``), so every forked compute worker inherits a LIVE duplicate of
+    the parent's own TCP socket, not an unused handle. ``_stage_c_compute_worker_init``'s own
+    docstring claims the parent already closed its connection before forking and that its own
+    ``connections.close_all()`` is therefore a no-op — that assumption is false given the
+    sibling comment above, and calling the real ``BaseDatabaseWrapper.close()`` (psycopg2's own
+    ``PQfinish``) on the inherited copy sends an actual wire-level Terminate over the SHARED
+    socket, which silently ends the session for the parent too (Postgres logs nothing — a
+    Terminate is a clean disconnect, not a crash — exactly matching the reported "server closed
+    the connection unexpectedly" symptom).
+
+    Every other test in this file — ``_SyncStagePoolStub``, and
+    ``TestStageCComputeWorkerInit``'s own ``_isolated_compute_pool_globals`` fixture — explicitly
+    neutralizes this exact close call because a real one is "hostile to this single-process test
+    session's one shared connection" (that fixture's own docstring). Both are right that it's
+    dangerous, and both dodge it rather than proving it's safe. This is the one test in the
+    suite that lets a REAL ``ProcessPoolExecutor`` fork happen, which is the only way this
+    defect is observable at all."""
+
+    @pytest.mark.django_db(transaction=True)
+    def test_worker_init_does_not_kill_the_parents_own_connection_across_a_real_fork(self) -> None:
+        from concurrent.futures import ProcessPoolExecutor
+
+        from django.db import connection
+
+        # Establish a real, open connection in THIS process before forking — `_run_stage_c`'s
+        # own precondition (the parent already has a live connection from earlier queries in the
+        # same dispatch call) that makes the inherited copy dangerous to close.
+        connection.ensure_connection()
+        assert connection.connection is not None
+
+        pool = ProcessPoolExecutor(
+            max_workers=1,
+            initializer=stage_e_dispatch._stage_c_compute_worker_init,
+            initargs=(None,),
+        )
+        try:
+            future = pool.submit(_noop_stage_c_compute_task)
+            assert future.result(timeout=30) is True
+        finally:
+            pool.shutdown(wait=True)
+
+        # The parent's OWN connection, opened before the fork, must still be usable — this is
+        # the exact next-query shape `_partition_by_md5_verdict` hits immediately after
+        # `_run_stage_c` returns in production.
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone() == (1,)
