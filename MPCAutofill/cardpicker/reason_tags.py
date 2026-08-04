@@ -98,6 +98,19 @@ NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
     ),
 ]
 
+# The WTC phase B partition (see the module docstring above) as real, checked constants rather
+# than prose a backend consumer would have to re-derive by hand from the "axis" comments inline
+# above. Mirrors `NoMatchReasonStrip.tsx`'s `NO_MATCH_REASON_TAG_GROUPS` tagNames exactly - kept
+# as two flat frozensets rather than one grouped structure since, unlike the frontend, nothing
+# backend-side needs the group's label/hint copy, only "which side is this tag on" as a routing
+# predicate. `test_reason_tags.py` asserts these are exhaustive and disjoint over
+# `NO_MATCH_REASON_TAGS`, the same invariant `NoMatchReasonStrip.spec.ts` asserts on the frontend
+# side of this same split.
+NOT_OFFICIAL_PRINTING_REASON_TAGS: frozenset[str] = frozenset(
+    {"altered-frame", "upscaled", "no-collector-line", "non-english"}
+)
+NOT_OFFICIAL_ART_REASON_TAGS: frozenset[str] = frozenset({"custom-art", "ai-art", EXTERNAL_IP_TAG_NAME})
+
 
 def seed_no_match_reason_tags() -> dict[str, int]:
     """
@@ -121,4 +134,9 @@ def seed_no_match_reason_tags() -> dict[str, int]:
     return {"created": created, "updated": updated}
 
 
-__all__ = ["seed_no_match_reason_tags", "NO_MATCH_REASON_TAGS"]
+__all__ = [
+    "seed_no_match_reason_tags",
+    "NO_MATCH_REASON_TAGS",
+    "NOT_OFFICIAL_PRINTING_REASON_TAGS",
+    "NOT_OFFICIAL_ART_REASON_TAGS",
+]

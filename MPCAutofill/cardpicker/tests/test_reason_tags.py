@@ -3,6 +3,8 @@ from cardpicker.models import Tag
 from cardpicker.reason_tags import (
     EXTERNAL_IP_TAG_NAME,
     NO_MATCH_REASON_TAGS,
+    NOT_OFFICIAL_ART_REASON_TAGS,
+    NOT_OFFICIAL_PRINTING_REASON_TAGS,
     seed_no_match_reason_tags,
 )
 
@@ -82,3 +84,17 @@ class TestSeedNoMatchReasonTags:
         default_tag_names = {name for name, _aliases, _display_name in DEFAULT_TAGS}
         reason_tag_names = {name for name, _description, _display_name in NO_MATCH_REASON_TAGS}
         assert default_tag_names.isdisjoint(reason_tag_names)
+
+
+class TestNoMatchReasonTagGroups:
+    # Mirrors NoMatchReasonStrip.spec.ts's exhaustiveness/disjointness assertion on the frontend
+    # side of this same WTC phase B split (reason_tags.py's module docstring).
+    def test_groups_are_disjoint(self):
+        assert NOT_OFFICIAL_PRINTING_REASON_TAGS.isdisjoint(NOT_OFFICIAL_ART_REASON_TAGS)
+
+    def test_groups_are_exhaustive_over_the_full_taxonomy(self):
+        reason_tag_names = {name for name, _description, _display_name in NO_MATCH_REASON_TAGS}
+        assert NOT_OFFICIAL_PRINTING_REASON_TAGS | NOT_OFFICIAL_ART_REASON_TAGS == reason_tag_names
+
+    def test_external_ip_is_in_the_not_official_art_group(self):
+        assert EXTERNAL_IP_TAG_NAME in NOT_OFFICIAL_ART_REASON_TAGS
