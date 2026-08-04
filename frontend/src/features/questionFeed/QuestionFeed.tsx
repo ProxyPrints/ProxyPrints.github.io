@@ -339,6 +339,14 @@ const IllustrationGroupLabel = styled.p`
   margin: 0 0 4px;
 `;
 
+// Caps the width of the reused ArtistSupportLink applet so a full-bleed button (its own
+// "stretch to fill" rule - see the component's docstring, not overridden here) reads as a
+// compact cluster credit rather than a page-width CTA repeated once per cluster.
+const IllustrationCredit = styled.div`
+  max-width: 220px;
+  margin-bottom: 8px;
+`;
+
 // The spec's `.btn` base + variants (section 1c) - min 44px thumb targets (mobile funnel
 // pass, WCAG 2.5.5/Apple HIG), replacing the old `ThumbButton`/`FilterToggleButton` gold
 // overrides with plain token-derived variants. A native <button>, not a react-bootstrap
@@ -1442,7 +1450,13 @@ export function QuestionFeed() {
       // endpoints despite sharing this exact markup.
       const renderCandidateTile = (
         candidate: PrintingCandidate,
-        onSelect: () => void = () => selectCandidate(candidate, false)
+        onSelect: () => void = () => selectCandidate(candidate, false),
+        // Illustration clusters (below) pass false: the cluster now carries its own
+        // ArtistSupportLink credit above the grid, so repeating the same name on every tile
+        // inside it is redundant. Ungrouped tiles have no cluster-level credit, so they keep
+        // this caption at its default (true) - the only place a candidate's artist is still
+        // shown at all for that grid.
+        showArtistCaption: boolean = true
       ) => (
         <CandidateButton
           key={candidate.identifier}
@@ -1478,7 +1492,7 @@ export function QuestionFeed() {
               {candidate.expansionCode.toUpperCase()}{" "}
               {candidate.collectorNumber}
             </div>
-            <div className="cs">{candidate.artist}</div>
+            {showArtistCaption && <div className="cs">{candidate.artist}</div>}
           </CandidateCaption>
         </CandidateButton>
       );
@@ -1594,29 +1608,48 @@ export function QuestionFeed() {
               </Btn>
             </div>
           )}
-          {illustrationGroups.map((group) => (
-            <IllustrationGroup
-              key={group[0].illustrationId}
-              data-testid="question-feed-illustration-group"
-              data-illustration-id={group[0].illustrationId}
-            >
-              <IllustrationGroupLabel>
-                Same illustration - {group.length} printings
-              </IllustrationGroupLabel>
-              <CandidateGrid>
-                {group.map((candidate) =>
-                  renderCandidateTile(candidate, () =>
-                    // every member of `group` shares this non-null illustrationId - see the
-                    // grouping logic above, which only clusters candidates that have one.
-                    selectIllustrationGroup(
-                      candidate.illustrationId as string,
-                      candidate
-                    )
-                  )
+          {illustrationGroups.map((group) => {
+            // Every member of `group` shares one illustrationId, i.e. one artwork - artist
+            // should be identical across them too, but source data can disagree, so take the
+            // first non-blank rather than assuming group[0] is always populated.
+            const illustrationArtist = group
+              .map((candidate) => candidate.artist)
+              .find((artist) => artist.trim() !== "");
+            return (
+              <IllustrationGroup
+                key={group[0].illustrationId}
+                data-testid="question-feed-illustration-group"
+                data-illustration-id={group[0].illustrationId}
+              >
+                <IllustrationGroupLabel>
+                  Same illustration - {group.length} printings
+                </IllustrationGroupLabel>
+                {illustrationArtist != null && (
+                  <IllustrationCredit data-testid="question-feed-illustration-credit">
+                    <div className="text-muted small mb-1">
+                      Illustration by {illustrationArtist}
+                    </div>
+                    <ArtistSupportLink artistName={illustrationArtist} />
+                  </IllustrationCredit>
                 )}
-              </CandidateGrid>
-            </IllustrationGroup>
-          ))}
+                <CandidateGrid>
+                  {group.map((candidate) =>
+                    renderCandidateTile(
+                      candidate,
+                      () =>
+                        // every member of `group` shares this non-null illustrationId - see the
+                        // grouping logic above, which only clusters candidates that have one.
+                        selectIllustrationGroup(
+                          candidate.illustrationId as string,
+                          candidate
+                        ),
+                      false
+                    )
+                  )}
+                </CandidateGrid>
+              </IllustrationGroup>
+            );
+          })}
           {ungroupedCandidates.length > 0 && (
             <CandidateGrid data-testid="question-feed-candidate-grid-ungrouped">
               {ungroupedCandidates.map((candidate) =>
