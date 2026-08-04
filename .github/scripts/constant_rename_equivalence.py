@@ -793,10 +793,19 @@ def scope_modules(base: RevisionIndex, head: RevisionIndex, everything: bool) ->
     """Modules to compare, plus the renamed/removed constants that put them
     there. Scope is deliberately narrow: the modules that touch a constant
     whose DECLARED NAME changed between the two revisions. `--all` widens it
-    to every module mentioning the pattern."""
+    to every module mentioning the pattern.
+
+    A pure addition (a name present only at head) is NOT in scope: the
+    module declaring a brand-new constant necessarily differs from base,
+    so whole-module AST equality could never hold for it, and additions
+    were never what this gate proves. A removal or a rename both still
+    land here, because the old name is base-only either way — for a
+    rename, pulling the old name into scope compares the SAME module
+    that now declares the new name, so the equivalence proof still
+    covers it."""
     base_names = base.declared_matching()
     head_names = head.declared_matching()
-    moved = {n: base_names.get(n) or head_names.get(n) or "?" for n in set(base_names) ^ set(head_names)}
+    moved = {n: base_names[n] for n in set(base_names) - set(head_names)}
 
     shared = sorted(set(base.sources) & set(head.sources))
     if everything:
@@ -988,10 +997,18 @@ def main(argv: list[str] | None = None) -> int:
         return len(findings)
 
     if moved:
-        print(f"Constants whose declared name changed between {base_rev} and {head_rev}:")
+        print(f"Constants removed or renamed away between {base_rev} and {head_rev}:")
         for name in sorted(moved):
-            side = "base only" if name in base.declared_matching() else "head only"
-            print(f"  - {name}  ({side}, {moved[name]})")
+            print(f"  - {name}  (was declared in {moved[name]})")
+        # Informational only — NOT part of scope. A rename's new name lands
+        # here too (it is head-only), so an operator reading a scope failure
+        # can see both halves; a pure addition unrelated to any removal above
+        # also lands here and is indistinguishable from one by name alone.
+        added = sorted(set(head.declared_matching()) - set(base.declared_matching()))
+        if added:
+            print(f"\nConstants declared only at {head_rev} (informational, not compared):")
+            for name in added:
+                print(f"  - {name}  ({head.declared_matching()[name]})")
         print()
 
     findings += check_equivalence(base, head, targets)

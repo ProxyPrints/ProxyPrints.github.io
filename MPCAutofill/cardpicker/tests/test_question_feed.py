@@ -213,6 +213,64 @@ class TestGetNextQuestionFeedItem:
         assert item.tagName == tag_b.name
 
 
+class TestPhaseCNotOfficialArtRouting:
+    """
+    2026-08-04 gate on the phase-C/md5 routing brief (item 2): a card carrying a positive,
+    human-backed no-match-reason vote for one of `reason_tags.NOT_OFFICIAL_ART_REASON_TAGS` has
+    had its artwork question declared unanswerable by a human, so the feed must stop serving
+    artist-shaped questions for it - the printing question is a different matter and stays
+    unaffected. `NOT_OFFICIAL_PRINTING_REASON_TAGS` tags carry no such implication.
+    """
+
+    @staticmethod
+    def _artist_candidate():
+        # RESOLVED printing + UNRESOLVED artist isolates this card to tier 4's artist half,
+        # mirroring test_tier_4_artist_when_no_printing_candidates_remain above.
+        return CardFactory(
+            printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.UNRESOLVED
+        )
+
+    def test_a_not_official_art_vote_excludes_the_card_from_artist_questions(self, db):
+        card = self._artist_candidate()
+        tag = TagFactory(name="custom-art")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="crowd-1")
+
+        assert get_next_question_feed_item("anon-1") is None
+
+    def test_a_not_official_printing_vote_does_not_exclude_the_card(self, db):
+        card = self._artist_candidate()
+        tag = TagFactory(name="upscaled")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="crowd-1")
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "artist"
+        assert item.card.identifier == card.identifier
+
+    def test_a_negative_not_official_art_vote_does_not_exclude_the_card(self, db):
+        card = self._artist_candidate()
+        tag = TagFactory(name="external-ip")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, anonymous_id="crowd-1")
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == card.identifier
+
+    def test_a_machine_cast_not_official_art_vote_does_not_exclude_the_card(self, db):
+        card = self._artist_candidate()
+        tag = TagFactory(name="ai-art")
+        CardTagVoteFactory(
+            card=card, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="ai-bot", source=VoteSource.DEDUCTION
+        )
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == card.identifier
+
+
 class TestScryfallIllustrationUrl:
     """`_scryfall_illustration_url` (WTC artist question re-frame) surfaces the canonical
     printing's harvested Scryfall art-crop URL on artist-type feed items - see that function's

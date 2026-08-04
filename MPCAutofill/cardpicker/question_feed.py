@@ -83,6 +83,7 @@ from cardpicker.local_calculate_verdicts import (
 from cardpicker.models import (
     ArtistVoteStatus,
     Card,
+    CardArtistVote,
     CardPrintingTag,
     CardScanLog,
     CardTagVote,
@@ -91,6 +92,7 @@ from cardpicker.models import (
     QuestionFeedServedPool,
     Tag,
     TagVoteStatus,
+    VotePolarity,
     VoteSource,
 )
 from cardpicker.printing_candidates import get_ranked_printing_candidates
@@ -100,10 +102,12 @@ from cardpicker.printing_consensus import (
     group_printing_votes,
     md5_group_expanded_card_ids,
 )
+from cardpicker.reason_tags import NOT_OFFICIAL_ART_REASON_TAGS
 from cardpicker.schema_types import QuestionFeedCounts, QuestionFeedItem, TypeEnum
 from cardpicker.tag_consensus import get_tag_net_polarity, get_tag_review_queue_pairs
 from cardpicker.vote_consensus import (
     VoteTuple,
+    is_human_backed_source,
     resolve_vote_weight,
     resolve_weighted_consensus,
 )
@@ -263,6 +267,74 @@ def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
     return md5_group_expanded_card_ids(voted_card_ids)
 
 
+def _voter_answered_artist_card_ids(anonymous_id: str) -> set[int]:
+    """
+    The artist-tier analogue of `_voter_answered_printing_card_ids` above: every card this voter
+    has already cast a `CardArtistVote` on, widened to those cards' full md5 identity groups, so
+    a voter who answered one member of a byte-identical group is not re-asked the same artist
+    question under a sibling's identifier (issue #473). Scoped to `_tier_2_contested` only
+    (2026-08-04 gate on the phase-C/md5 routing brief) - `_tier_4_fresh`'s own artist exclusion
+    keeps its pre-existing, unwidened `.exclude(artist_votes__anonymous_id=...)` form.
+
+    COMPUTED ONCE PER FEED REQUEST, mirroring `_voter_answered_printing_card_ids`'s own
+    convention exactly.
+    """
+    voted_card_ids = CardArtistVote.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
+    return md5_group_expanded_card_ids(voted_card_ids)
+
+
+def _voter_answered_tag_card_ids_by_tag(anonymous_id: str) -> dict[str, set[int]]:
+    """
+    For every tag name this voter has cast a `CardTagVote` on, the set of card ids - each widened
+    to its full md5 identity group - that count as "already answered" for THAT tag. Widening is
+    on the CARD axis only, never the tag axis: `_tier_2_contested`'s own-vote exclusion is
+    deliberately scoped to (card, tag, anonymous_id), not (card, anonymous_id) - a card carries
+    ~11 independent attribute-chip tags, and a card-level exclude would silently hide every other
+    still-open tag the moment a voter touches any one of them (see that function's own comment).
+    This applies the identical scoping onto md5 siblings: "has this voter answered THIS tag on
+    ANY member of this card's md5 group", never "has this voter answered ANY tag on this card's
+    md5 group".
+
+    ONE query fetches every (tag_name, card_id) pair this voter has ever voted on - cost scales
+    with this voter's own vote count, not with `get_tag_review_queue_pairs()`'s output, so it
+    does not multiply per review pair. The md5 expansion then runs once per distinct tag name
+    this voter has touched (bounded by the fixed attribute-chip taxonomy), never once per pair.
+    """
+    rows = CardTagVote.objects.filter(anonymous_id=anonymous_id).values_list("tag__name", "card_id")
+    card_ids_by_tag: dict[str, set[int]] = defaultdict(set)
+    for tag_name, card_id in rows:
+        card_ids_by_tag[tag_name].add(card_id)
+    return {tag_name: md5_group_expanded_card_ids(card_ids) for tag_name, card_ids in card_ids_by_tag.items()}
+
+
+def _not_official_art_card_ids() -> set[int]:
+    """
+    Cards a human has declared NOT official art via a positive (`VotePolarity.APPLY`)
+    `CardTagVote` for one of `reason_tags.NOT_OFFICIAL_ART_REASON_TAGS` - the phase-C routing
+    signal the WTC phase B partition (`reason_tags.py`'s module docstring) was always meant to
+    feed. For such a card the artwork question is UNANSWERABLE, so the feed must stop serving
+    artist-shaped questions for it; the printing question is unaffected (see this function's
+    call sites, both in the artist half only). Widened to each card's full md5 identity group,
+    since byte-identical files share the same artwork.
+
+    Human-backed only (`is_human_backed_source`), not "any positive vote": these reason tags are
+    cast by a human through `NoMatchReasonStrip`, but nothing in the schema stops a machine
+    caster from writing one in principle, and this routing signal is meant to represent an
+    actual human declaration that the artwork question is meaningless for this card - a future
+    machine-cast source earning the same trust would need its own explicit decision, not a
+    silent inclusion here.
+
+    Unlike `_voter_answered_printing_card_ids`/`_voter_answered_artist_card_ids` above, this is
+    NOT per-voter: it is a fact about the CARD, so it applies identically to every voter's feed.
+    Still COMPUTED ONCE PER FEED REQUEST, same convention as the per-voter exclusions.
+    """
+    rows = CardTagVote.objects.filter(
+        tag__name__in=NOT_OFFICIAL_ART_REASON_TAGS, polarity=VotePolarity.APPLY
+    ).values_list("card_id", "source")
+    human_backed_card_ids = {card_id for card_id, source in rows if is_human_backed_source(source)}
+    return md5_group_expanded_card_ids(human_backed_card_ids)
+
+
 def is_likely_resolve_printing(card: Card) -> bool:
     """
     True when ONE hypothetical additional agreeing human vote (`VoteSource.USER` weight) added
@@ -394,10 +466,21 @@ def _tier_1_confirm_suggestion(
 
 
 def _tier_2_contested(
-    anonymous_id: str, answered_card_ids: Optional[set[int]] = None
+    anonymous_id: str,
+    answered_card_ids: Optional[set[int]] = None,
+    answered_artist_card_ids: Optional[set[int]] = None,
+    answered_tag_card_ids_by_tag: Optional[dict[str, set[int]]] = None,
+    not_official_art_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[QuestionFeedItem, str]]:
     if answered_card_ids is None:
         answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
+    if answered_artist_card_ids is None:
+        answered_artist_card_ids = _voter_answered_artist_card_ids(anonymous_id)
+    if answered_tag_card_ids_by_tag is None:
+        answered_tag_card_ids_by_tag = _voter_answered_tag_card_ids_by_tag(anonymous_id)
+    if not_official_art_card_ids is None:
+        not_official_art_card_ids = _not_official_art_card_ids()
+
     printing_card = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=get_contested_card_ids())
         .exclude(pk__in=answered_card_ids)
@@ -409,7 +492,8 @@ def _tier_2_contested(
 
     artist_card = (
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=get_contested_artist_card_ids())
-        .exclude(artist_votes__anonymous_id=anonymous_id)
+        .exclude(pk__in=answered_artist_card_ids)
+        .exclude(pk__in=not_official_art_card_ids)
         .order_by("-date_created")
         .first()
     )
@@ -417,12 +501,14 @@ def _tier_2_contested(
         return _artist_item(artist_card), "tier_2_contested_artist"
 
     for card_id, tag_name in get_tag_review_queue_pairs():
-        # scoped to (card, tag, anonymous_id), not just (card, anonymous_id) - a voter who
-        # already answered a *different* tag on this card (there are ~11 attribute-chip tags
-        # per card) must still see this tag if they haven't answered it yet. A card-level
-        # exclude here would silently hide every other still-open tag on a card the moment
-        # this voter touches any one tag on it.
-        if CardTagVote.objects.filter(card_id=card_id, tag__name=tag_name, anonymous_id=anonymous_id).exists():
+        # scoped to (card, tag, anonymous_id) widened to the card's md5 group, not just (card,
+        # anonymous_id) - a voter who already answered a *different* tag on this card (there
+        # are ~11 attribute-chip tags per card) must still see this tag if they haven't
+        # answered it yet, and a voter who answered THIS tag on a byte-identical sibling of
+        # this card must not be re-asked it here either (issue #473). A card-level exclude here
+        # (dropping the tag axis) would silently hide every other still-open tag on a card the
+        # moment this voter touches any one tag on it.
+        if card_id in answered_tag_card_ids_by_tag.get(tag_name, set()):
             continue
         card = Card.objects.get(pk=card_id)
         status = card.tag_vote_statuses.get(tag_name)
@@ -446,7 +532,9 @@ def _latest_stage_d_origin_reason_subquery() -> Subquery:
 
 
 def _tier_4_fresh(
-    anonymous_id: str, answered_card_ids: Optional[set[int]] = None
+    anonymous_id: str,
+    answered_card_ids: Optional[set[int]] = None,
+    not_official_art_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[QuestionFeedItem, str]]:
     # named "tier 4" (not renumbered to 3) even though moderation's former tier 3 was removed
     # (see module docstring) - keeps this name stable against every docstring/test/comment
@@ -471,6 +559,8 @@ def _tier_4_fresh(
     # what actually decides ordering among them, not a rarely-reached fallback.
     if answered_card_ids is None:
         answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
+    if not_official_art_card_ids is None:
+        not_official_art_card_ids = _not_official_art_card_ids()
     printing_card = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=get_contested_card_ids())
@@ -498,6 +588,7 @@ def _tier_4_fresh(
     artist_card = (
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
         .exclude(artist_votes__anonymous_id=anonymous_id)
+        .exclude(pk__in=not_official_art_card_ids)
         .order_by("-date_created")
         .first()
     )
@@ -560,9 +651,19 @@ def get_next_question_feed_item(anonymous_id: str) -> Optional[QuestionFeedItem]
     The voter's answered-card exclusion set (`_voter_answered_printing_card_ids`, md5-group-
     expanded per issue #473) is resolved ONCE here and passed to every printing tier below - it
     cannot change mid-request, and recomputing it per tier was a real per-request regression the
-    2026-07-25 PR #482 gate (condition f1) called out.
+    2026-07-25 PR #482 gate (condition f1) called out. The same convention now covers two more
+    request-scoped exclusions (2026-08-04 gate on the phase-C/md5 routing brief):
+    `_voter_answered_artist_card_ids`/`_voter_answered_tag_card_ids_by_tag` (md5-widened, own-
+    vote exclusions for `_tier_2_contested`'s artist/tag halves - see those functions' own
+    docstrings for why this is scoped to that tier only), and `_not_official_art_card_ids` (the
+    phase-C routing signal: a card a human has declared not-official-art via `reason_tags.
+    NOT_OFFICIAL_ART_REASON_TAGS` stops being served as an artist-shaped question, in both
+    `_tier_2_contested` and `_tier_4_fresh` - printing questions are unaffected).
     """
     answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
+    answered_artist_card_ids = _voter_answered_artist_card_ids(anonymous_id)
+    answered_tag_card_ids_by_tag = _voter_answered_tag_card_ids_by_tag(anonymous_id)
+    not_official_art_card_ids = _not_official_art_card_ids()
 
     if _served_mix_ratio(anonymous_id) < settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO:
         likely_resolve_card = _likely_resolve_printing_card(anonymous_id, answered_card_ids)
@@ -576,12 +677,18 @@ def get_next_question_feed_item(anonymous_id: str) -> Optional[QuestionFeedItem]
     if tier_1_item is not None:
         return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
 
-    tier_2_result = _tier_2_contested(anonymous_id, answered_card_ids)
+    tier_2_result = _tier_2_contested(
+        anonymous_id,
+        answered_card_ids,
+        answered_artist_card_ids=answered_artist_card_ids,
+        answered_tag_card_ids_by_tag=answered_tag_card_ids_by_tag,
+        not_official_art_card_ids=not_official_art_card_ids,
+    )
     if tier_2_result is not None:
         tier_2_item, tier_2_reason = tier_2_result
         return _log_served(anonymous_id, tier_2_item, QuestionFeedServedPool.REMAINDER, tier_2_reason)
 
-    tier_4_result = _tier_4_fresh(anonymous_id, answered_card_ids)
+    tier_4_result = _tier_4_fresh(anonymous_id, answered_card_ids, not_official_art_card_ids=not_official_art_card_ids)
     if tier_4_result is not None:
         tier_4_item, tier_4_reason = tier_4_result
         return _log_served(anonymous_id, tier_4_item, QuestionFeedServedPool.REMAINDER, tier_4_reason)
