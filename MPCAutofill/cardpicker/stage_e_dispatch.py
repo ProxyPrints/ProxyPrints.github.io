@@ -672,12 +672,17 @@ def _stage_c_compute_worker_init(
        deliberately reused here rather than re-implemented — one OMP-thread-pinning mechanism
        across all callers, the cohort command's own comment is the canonical design doc.
 
-    2. Fresh DB connections: fork() carries parent-process Django connections into the child,
-       but the child's own fork of the underlying TCP socket is ALREADY the parent's socket
-       (not an independent connection) — any use will trip a "DatabaseWrapper objects created
-       in a thread can only be used in that same thread" or "connection already closed" error
-       at the first query. ``connections.close_all()`` forces fresh connection creation on the
-       child's own first ``.cursor()`` call.
+    2. Fresh DB connections: fork() carries parent-process Django connections into the child as
+       a LIVE DUPLICATE of the parent's own TCP socket, not an independent connection — the
+       parent deliberately stays connected across this fork (see the `ProcessPoolExecutor`
+       construction site's own comment), so calling the real `BaseDatabaseWrapper.close()`
+       here would send psycopg2's wire-level Terminate over that SHARED socket and kill the
+       parent's connection too, not just this child's copy of it (2026-08-04 incident: this is
+       exactly what "server closed the connection unexpectedly" on the parent's very next query
+       traced back to). This discards each wrapper's inherited reference directly instead,
+       without ever touching the wire — Django's own `connect()` resets every other piece of
+       per-connection state unconditionally on next use, so nulling `.connection` alone is
+       sufficient for a fresh, independent socket on this worker's own first query.
 
     3. Lookup singletons: ``known_set_codes``, ``load_artist_lexicon``,
        ``build_printing_artist_lookup``, and ``build_name_artist_lookup`` are all built once per
@@ -701,13 +706,13 @@ def _stage_c_compute_worker_init(
     # 1. Pin OpenMP thread count — MUST happen before any PIL/tesseract import reaches OpenMP init.
     _os.environ["OMP_THREAD_LIMIT"] = "1"
 
-    # 2. Fresh DB connections — the parent closed its own connection before forking, so the
-    #    child inherits ``connection.connection is None``. ``close_all()`` is a no-op here
-    #    (every wrapper already has ``connection is None``), and ``ensure_connection()`` opens
-    #    a fresh socket on first use.
+    # 2. Fresh DB connections — discard the inherited reference directly, without calling
+    #    `.close()`: the parent's own connection stays open and in use across this fork, so a
+    #    real close() would send a wire-level Terminate over the shared socket and kill the
+    #    parent's connection too. `ensure_connection()` opens a genuinely fresh socket on this
+    #    worker's own first query.
     for conn in _connections.all():
-        conn.close()
-    _connections.close_all()
+        conn.connection = None
 
     # 3. Lookup singletons — one per worker process, matching the batch-scoped convention.
     global _compute_pool_short_circuit
