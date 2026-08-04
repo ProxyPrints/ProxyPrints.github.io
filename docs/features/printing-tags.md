@@ -1944,6 +1944,22 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
 
 ## Known gaps
 
+- **Illustration-grouped tiles still show printing scans, not an art crop**
+  (owner report, 2026-08-04): `selectIllustrationGroup` casts an
+  illustration-level vote, but `IllustrationGroup`'s tiles in
+  `QuestionFeed.tsx` still render each candidate's own
+  `mediumThumbnailUrl` (a per-printing scan) via the same
+  `renderCandidateTile` markup the ungrouped grid uses — asking the voter
+  to discriminate on border/frame/language differences the vote itself
+  doesn't record. A shared art crop isn't available to plumb in instead:
+  `QuestionFeedItem.scryfallIllustrationUrl` (`schema_types.ts`) is a
+  single, item-level field consumed only by the unrelated `artist`
+  question type's subject-card re-frame, and `PrintingCandidate` carries
+  no art-crop field of its own — only `mediumThumbnailUrl`/
+  `smallThumbnailUrl`. Making this fix possible needs a backend change
+  (a per-candidate or, more efficiently, a per-`illustrationId` art-crop
+  URL on the questionFeed payload) that is out of scope for a
+  frontend-only change and was not attempted here.
 - Client-side (local-folder/Google Drive) search gets no re-rank/filter/
   match-indicator parity — no ES/DB access on that path.
 - The starburst/card/chip-ring layout was hand-tuned via iterative
