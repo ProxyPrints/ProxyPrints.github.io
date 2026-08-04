@@ -629,18 +629,29 @@ def _select_micro_batch_with_backlog_status(
 # brief's own concrete number rather than leaving it operator-tunable; PASSIVE mode's own
 # micro-batches are small enough (§3 decision (2), a handful to a few dozen cards) that this never
 # needs retuning the way BULK mode's own `--queue-depth` does.
-# Stage C fetch/compute pool sizing (issue #566). FETCH: three threads since I/O-bound fetches do
-# benefit from concurrency (unlike the old single-thread fetch-ahead worker, which was fine for a
-# synthetic test run but left a full-catalog production pass spending ~40% of its wall-clock
-# waiting for the fetch-ahead thread). COMPUTE: three processes, matching the worker count the
-# cohort command settled on for real throughput. HANDOFF QUEUE: bounded to 2 per compute worker so
-# RSS stays bounded regardless of batch size (the old single-thread design's own _STAGE_C_FETCH_
+# Stage C fetch/compute pool sizing (issue #566). FETCH: six threads, matching
+# harvest_fetch_limiter.GOOGLE_IMAGE's own max_concurrency=6 (rate_per_sec=7.0) - the limiter was
+# already sized for six concurrent fetches, so three threads used less than half the capacity we'd
+# already granted ourselves, and fetch threads are I/O-blocked on a socket so this costs
+# approximately no CPU. The rate ceiling stays global regardless of thread count:
+# harvest_rate_coordinator.reserve() paces every fetch through a single cursor row in Postgres
+# (INSERT ... ON CONFLICT DO UPDATE + clock_timestamp()), so six threads in one process still
+# cannot exceed 7/s - they queue on the cursor, not the socket; the only route past the ceiling is
+# two processes fetching at once, which is a sequencing question, not a thread-count one. At the
+# prior 3 fetch / 3 compute split, fetch was the bottleneck (~3.3/s vs compute's ~4.6/s) and
+# compute idled waiting for images; six fetch threads takes fetch off the critical path and leaves
+# compute as the sole constraint. COMPUTE: three processes - do not raise this.
+# docs/reports/2026-07-20-pipeline-compute-profile.md measured 6-way concurrency on this CPU-bound
+# OCR stage running 3.25x SLOWER per card while burning 27.7x more CPU-seconds (cores thrash rather
+# than parallelise), which is why fetch and compute get different numbers and why compute stays
+# capped at the cohort command's own worker count. HANDOFF QUEUE: bounded to 2 per compute worker
+# so RSS stays bounded regardless of batch size (the old single-thread design's own _STAGE_C_FETCH_
 # AHEAD_DEPTH=2 satisfied this incidentally; the pooled design must state it explicitly since the
-# ThreadPoolExecutor + ProcessPoolExecutor combination has no built-in handoff bound — without
+# ThreadPoolExecutor + ProcessPoolExecutor combination has no built-in handoff bound - without
 # `_STAGE_C_POOL_QUEUE_DEPTH`'s own backpressure drain below, the main loop would keep handing
 # completed fetches into the ProcessPoolExecutor's own UNBOUNDED internal queue, and RSS could
 # grow without bound over the course of a production-length pass).
-_STAGE_C_FETCH_THREADS = 3
+_STAGE_C_FETCH_THREADS = 6
 _STAGE_C_COMPUTE_WORKERS = 3
 _STAGE_C_POOL_QUEUE_DEPTH = 6  # 2 × _STAGE_C_COMPUTE_WORKERS
 
