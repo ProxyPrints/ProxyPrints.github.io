@@ -621,7 +621,7 @@ class Command(BaseCommand):
             if unresolved_ids:
                 _run_stage_d(unresolved_ids, run_id, outcome, dry_run=dry_run, envelope_check=envelope_check)
             if resolved_ids:
-                _drain_verdict_transfer_queue(resolved_ids, unresolved_ids, md5_groups, run_id, outcome)
+                _drain_verdict_transfer_queue(resolved_ids, md5_groups, run_id, outcome)
         else:
             _run_stage_d(None, run_id, outcome, dry_run=dry_run, envelope_check=envelope_check)
 

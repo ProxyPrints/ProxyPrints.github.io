@@ -1354,47 +1354,70 @@ def _partition_by_md5_verdict(
             resolved.append(cid)
         else:
             unresolved.append(cid)
+    # DEFECT 2 FIX: DB-WIDE groups for the checksums that already have a vote this pass, not
+    # batch-only. Byte-identical twins sit at arbitrary pk distances (keyset-paginated batches), so
+    # a group built only from this batch's own members essentially never contains both the voted
+    # twin and its unvoted sibling - _drain_verdict_transfer_queue's representative lookup would
+    # then always bail out. Not `printing_consensus.md5_group_expanded_card_ids`: this module's own
+    # docstring states it "never imports printing_consensus/vote_consensus/tag_consensus/
+    # artist_consensus (PROTECTED CORE) directly at all" (the dispatch loop is deliberately
+    # decoupled from the consensus layer), so the equivalent query is inlined here instead.
     md5_groups: dict[str, list[int]] = {}
-    for cid, checksum in card_md5.items():
-        md5_groups.setdefault(checksum, []).append(cid)
+    for pk, checksum in (
+        Card.objects.filter(md5_checksum__in=md5s_with_votes).exclude(md5_checksum="").values_list("pk", "md5_checksum")
+    ):
+        md5_groups.setdefault(str(checksum), []).append(int(pk))
     return unresolved, resolved, md5_groups
 
 
 def _drain_verdict_transfer_queue(
     resolved_ids: list[int],
-    unresolved_ids: list[int],
     md5_groups: dict[str, list[int]],
     run_id: str,
     outcome: DispatchOutcome,
 ) -> None:
     if not resolved_ids:
         return
-    unresolved_set = set(unresolved_ids)
-    for checksum, member_ids in md5_groups.items():
-        rep_id = next((cid for cid in member_ids if cid in unresolved_set), None)
-        if rep_id is None:
-            continue
-        target_ids = [cid for cid in member_ids if cid not in unresolved_set]
-        if not target_ids:
+    resolved_set = set(resolved_ids)
+    for member_ids in md5_groups.values():
+        # A DB-wide group with no member in THIS batch's resolved_ids has nothing waiting on this
+        # dispatch - its own batch, whenever it runs, finds itself resolved and drains the queue
+        # then. member_ids now spans the whole catalogue (DEFECT 2 fix), not just this batch.
+        if not (resolved_set & set(member_ids)):
             continue
         rep_votes = list(
-            CardPrintingTag.objects.filter(
-                card_id=rep_id,
-                run_id=run_id,
-                is_no_match=False,
-            ).exclude(printing_id=None)
+            CardPrintingTag.objects.filter(card_id__in=member_ids, run_id=run_id, is_no_match=False)
+            .exclude(printing_id=None)
+            .order_by("card_id")
         )
+        if not rep_votes:
+            continue
+        # One representative vote per agent (anonymous_id), deterministically the lowest card id -
+        # the representative may be ANY group member, in this batch or not (DEFECT 2), not only a
+        # member this batch itself just ran Stage D on.
+        chosen_by_agent: dict[str, CardPrintingTag] = {}
         for vote in rep_votes:
+            chosen_by_agent.setdefault(vote.anonymous_id, vote)
+
+        for anonymous_id, vote in chosen_by_agent.items():
             if vote.printing_id is None or vote.confidence is None:
                 continue
+            # DEFECT 3 FIX: a card that already holds its OWN vote for this agent must never be
+            # purged and overwritten by the propagated copy - this truthful set replaces the
+            # unconditional set() the bug passed.
+            already_voted = set(
+                CardPrintingTag.objects.filter(card_id__in=member_ids, anonymous_id=anonymous_id).values_list(
+                    "card_id", flat=True
+                )
+            )
             rows = build_propagated_cluster_votes(
                 representative_card_id=vote.card_id,
                 printing_pk=vote.printing_id,
-                anonymous_id=vote.anonymous_id,
+                anonymous_id=anonymous_id,
                 confidence=float(vote.confidence),
                 run_id=run_id,
-                members_by_representative={vote.card_id: target_ids},
-                members_already_voted=set(),
+                members_by_representative={vote.card_id: member_ids},
+                members_already_voted=already_voted,
                 source=VoteSource(vote.source),
             )
             if rows:
@@ -1576,7 +1599,7 @@ def dispatch_micro_batch(
             if unresolved_ids:
                 _run_stage_d(unresolved_ids, dispatch_run_id, outcome, dry_run=dry_run)
             if resolved_ids:
-                _drain_verdict_transfer_queue(resolved_ids, unresolved_ids, md5_groups, dispatch_run_id, outcome)
+                _drain_verdict_transfer_queue(resolved_ids, md5_groups, dispatch_run_id, outcome)
 
             if lockout_trip is not None:
                 outcome.status = "completed-with-trip"

@@ -68,6 +68,7 @@ from cardpicker.stage_e_dispatch import (
 from cardpicker.tests.factories import (
     CanonicalCardFactory,
     CardFactory,
+    CardPrintingTagFactory,
     ImageEvidenceFactory,
 )
 
@@ -1685,6 +1686,161 @@ class TestEvidenceTransferInDispatch:
         assert outcome.stage_c_transferred == 0
         log = CardScanLog.objects.get(card=target, anonymous_id="evidence-transfer-v1")
         assert log.run_id == "a-dispatch-run"
+
+
+class TestMd5VerdictTransferPool:
+    """The Stream B md5 verdict-transfer pool (GitHub issue #666's own follow-up): two defects,
+    both fixed together since neither is independently observable end-to-end. Defect 1 -
+    `_partition_by_md5_verdict`'s already-voted read was scoped to a run_id that was unique PER
+    BATCH (`stream_full_catalog`'s own per-batch suffix), so it could never see a vote cast by an
+    earlier batch of the same pass; fixed by making the pass's run_id stable
+    (`stream_full_catalog.py`) while `ledger_run_id` keeps the PilotRunLedger row unique. Defect 2 -
+    `md5_groups` was built from batch members only, so a twin outside the batch could never be
+    reached even with defect 1 fixed; fixed by building DB-wide groups here. Defect 3 -
+    `members_already_voted` was passed as an unconditional empty set, so propagation could purge
+    and overwrite a target's own already-cast vote; fixed by a truthful per-agent lookup.
+
+    Every test below dispatches two or more SEPARATE `dispatch_micro_batch` calls under the SAME
+    `run_id` - the exact shape a multi-batch `stream_full_catalog` pass produces once its own
+    run_id is stable across batches."""
+
+    @STREAMING_ON
+    def test_a_twin_voted_in_an_earlier_batch_of_the_same_pass_is_transferred_not_recomputed(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        card_a = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        card_b = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        _full_evidence(card_a, collector_line_set_code="mom", collector_line_collector_number="158")
+        _full_evidence(card_b, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        pass_run_id = "stage-e-fullcat-b25-test-pass-1"
+        # ledger_run_id decouples each batch's PilotRunLedger row identity (unique constraint)
+        # from the pass's stable data run_id - exactly stream_full_catalog.py's own fix.
+        outcome_1 = dispatch_micro_batch(card_ids=[card_a.pk], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b0")
+        assert outcome_1.stage_d_join_key_votes == 1
+        vote_a = CardPrintingTag.objects.get(card=card_a, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote_a.printing_id == printing.pk
+
+        # Same run_id, a LATER batch - this is only reachable at all once the run_id is stable
+        # across batches (defect 1's fix); before it, card_b's own batch could never see card_a's
+        # vote and would always recompute redundantly.
+        outcome_2 = dispatch_micro_batch(card_ids=[card_b.pk], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b1")
+
+        assert outcome_2.stage_d_join_key_votes == 0
+        assert outcome_2.stage_d_verdict_transfer_votes == 1
+        vote_b = CardPrintingTag.objects.get(card=card_b, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote_b.printing_id == printing.pk
+        assert vote_b.confidence == vote_a.confidence
+        assert vote_b.run_id == pass_run_id
+
+    @STREAMING_ON
+    def test_a_twin_that_never_shares_a_batch_with_the_representative_still_transfers(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defect 2: `md5_groups` must be DB-WIDE, not batch-only - card_c below is dispatched in
+        its own single-card batch and never once shares a `batch_ids` list with card_a (the vote
+        holder) or card_b, which is the ordinary case (keyset-paginated batches put byte-identical
+        twins at arbitrary pk distances)."""
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        card_a = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        card_b = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        card_c = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        for card in (card_a, card_b, card_c):
+            _full_evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        pass_run_id = "stage-e-fullcat-b25-test-pass-2"
+        dispatch_micro_batch(card_ids=[card_a.pk], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b0")
+        # The target scope is EVERY DB-wide group member lacking its own vote, not only this
+        # batch's own members - so card_c (never in this or any other batch_ids list yet) already
+        # gets its vote written here, as a side effect of card_b's own dispatch.
+        outcome_2 = dispatch_micro_batch(card_ids=[card_b.pk], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b1")
+        assert outcome_2.stage_d_verdict_transfer_votes == 2
+
+        outcome_3 = dispatch_micro_batch(card_ids=[card_c.pk], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b2")
+        assert outcome_3.stage_d_join_key_votes == 0
+        assert outcome_3.stage_d_verdict_transfer_votes == 0  # already resolved by outcome_2
+        vote_c = CardPrintingTag.objects.get(card=card_c, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote_c.printing_id == printing.pk
+
+    @STREAMING_ON
+    def test_a_card_already_holding_its_own_vote_is_not_purged_by_propagation(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Defect 3: `members_already_voted` must be the TRUTHFUL per-agent set, not an
+        unconditional `set()` - a card that already holds its own vote for this agent (here, a
+        real human USER vote) must survive the transfer completely untouched, never purged and
+        overwritten by the propagated copy."""
+        CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        printing_b = CanonicalCardFactory(name="A Different Printing")
+        card_a = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        card_b = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        _full_evidence(card_a, collector_line_set_code="mom", collector_line_collector_number="158")
+        _full_evidence(card_b, collector_line_set_code="mom", collector_line_collector_number="158")
+        own_vote = CardPrintingTagFactory(
+            card=card_b,
+            printing=printing_b,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+        )
+
+        pass_run_id = "stage-e-fullcat-b25-test-pass-3"
+        dispatch_micro_batch(card_ids=[card_a.pk], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b0")
+        outcome_2 = dispatch_micro_batch(card_ids=[card_b.pk], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b1")
+
+        assert outcome_2.stage_d_verdict_transfer_votes == 0
+        own_vote.refresh_from_db()
+        assert own_vote.printing_id == printing_b.pk
+
+    @STREAMING_ON
+    def test_a_vote_from_a_different_earlier_run_does_not_suppress_stage_d_this_pass(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Scope guard for the defect-1 fix: `_partition_by_md5_verdict` stays PASS-SCOPED
+        (filtered by `run_id`), never run-agnostic - a stale vote from an earlier, unrelated pass
+        must never suppress Stage D for a fresh pass, which is what lets `--reextract` genuinely
+        overwrite stale data instead of being silently skipped by its own predecessor's votes."""
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        card_a = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        card_b = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        _full_evidence(card_a, collector_line_set_code="mom", collector_line_collector_number="158")
+        _full_evidence(card_b, collector_line_set_code="mom", collector_line_collector_number="158")
+        CardPrintingTagFactory(
+            card=card_a,
+            printing=printing,
+            anonymous_id=JOIN_KEY_ANONYMOUS_ID,
+            source=VoteSource.OCR,
+            confidence=0.5,
+            run_id="a-stale-earlier-pass",
+        )
+
+        outcome = dispatch_micro_batch(card_ids=[card_b.pk], run_id="a-fresh-new-pass")
+
+        assert outcome.stage_d_join_key_votes == 1
+        assert outcome.stage_d_verdict_transfer_votes == 0
+        vote_b = CardPrintingTag.objects.get(card=card_b, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote_b.run_id == "a-fresh-new-pass"
+
+    @STREAMING_ON
+    def test_stage_d_verdict_transfer_votes_counts_exactly_what_was_written(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        card_a = CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123")
+        members = [CardFactory(name="Some Card", content_phash=42, md5_checksum="abc123") for _ in range(3)]
+        for card in (card_a, *members):
+            _full_evidence(card, collector_line_set_code="mom", collector_line_collector_number="158")
+
+        pass_run_id = "stage-e-fullcat-b25-test-pass-5"
+        dispatch_micro_batch(card_ids=[card_a.pk], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b0")
+
+        outcome = dispatch_micro_batch(
+            card_ids=[c.pk for c in members], run_id=pass_run_id, ledger_run_id=f"{pass_run_id}-b1"
+        )
+
+        assert outcome.stage_d_verdict_transfer_votes == 3
+        for card in members:
+            vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+            assert vote.printing_id == printing.pk
 
 
 class TestDecoupledFetchAhead:
