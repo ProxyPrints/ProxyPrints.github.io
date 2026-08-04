@@ -1034,21 +1034,35 @@ class Command(BaseCommand):
                 self.stdout.write("Cohort exhausted - every card in this pass has been dispatched.")
                 break
 
+            # STREAM B FIX (md5 verdict-transfer pool, GitHub issue #666 follow-up): `run_id` MUST
+            # be STABLE across the whole pass, not per-batch. `_partition_by_md5_verdict`'s
+            # already-voted read is scoped to `run_id`, and a per-batch run_id made that read
+            # structurally always-empty - Stage D for a batch runs AFTER its own partition read,
+            # so no batch could ever see a sibling's vote cast by an earlier batch of the same
+            # pass (see that function's own docstring). The PilotRunLedger row identity still needs
+            # to be UNIQUE per batch (that model's own `run_id` unique constraint) - `ledger_run_id`
+            # decouples exactly this, mirroring `run_pipeline.py`'s own `_run_streaming_stages`
+            # (its `ledger_run_id=f"{run_id}-{attempt}Z-b{batch_count}"` is the model). No separate
+            # attempt component is needed on top of `run_id_prefix` the way `run_pipeline` needs one
+            # on top of its operator-chosen `--run-id`: `run_id_prefix` already carries a
+            # microsecond-precision invocation timestamp (RUN_ID_TIMESTAMP_FORMAT above), so it is
+            # already unique per invocation/attempt on its own.
+            #
             # Reused verbatim across a throttle retry of the same chunk: a throttled dispatch
-            # writes NO PilotRunLedger row, so re-using its run_id cannot collide with the UNIQUE
-            # constraint, and the eventually-successful attempt lands under the run_id its batch
-            # index says it should.
-            run_id = f"{run_id_prefix}-{batch_num}"
+            # writes NO PilotRunLedger row, so re-using its ledger_run_id cannot collide with the
+            # UNIQUE constraint, and the eventually-successful attempt lands under the ledger id
+            # its batch index says it should.
             outcome = dispatch_micro_batch(
                 card_ids=chunk,
                 trigger_reason=TRIGGER_REASON,
-                run_id=run_id,
+                run_id=run_id_prefix,
                 # batch_size == len(chunk) is LOAD-BEARING, not incidental: together with an
                 # explicit card_ids it makes _select_micro_batch return at its first branch, so no
                 # StageESweepCursor is ever read or advanced (module docstring).
                 batch_size=len(chunk),
                 force_stage_c_reextract=reextract,
                 short_circuit=short_circuit,
+                ledger_run_id=f"{run_id_prefix}-{batch_num}",
             )
 
             if outcome.status in _HALT_STATUSES:

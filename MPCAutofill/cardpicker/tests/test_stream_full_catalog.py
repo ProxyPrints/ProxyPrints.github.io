@@ -609,6 +609,47 @@ class TestReextractAndShortCircuitAreIndependent:
         assert ledger.counters["batch_size"] == 1  # dispatched all the same
 
 
+class TestRunIdIsStableAcrossBatchesLedgerIdIsNot:
+    """GitHub issue #666 follow-up: `run_id` used to carry a `-{batch_num}` suffix, making
+    `_partition_by_md5_verdict`'s already-voted read (scoped to `run_id`) structurally always-empty
+    across batches - no batch could ever see an md5 sibling's vote cast by an earlier batch of the
+    same pass. `run_id` must now be the pass's stable prefix on every batch, while `ledger_run_id`
+    (not `PilotRunLedger.run_id` directly) is what stays unique per batch."""
+
+    @STREAMING_ON
+    def test_run_id_is_identical_across_batches_while_ledger_run_id_is_unique(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _cards(3)
+        recorder = _install_recording_dispatch(monkeypatch)
+
+        call_command("stream_full_catalog", "--batch-size", "1")
+
+        assert len(recorder.calls) == 3
+        run_ids = [call["run_id"] for call in recorder.calls]
+        assert len(set(run_ids)) == 1  # stable across every batch of the pass
+
+        ledger_run_ids = [call["ledger_run_id"] for call in recorder.calls]
+        assert len(set(ledger_run_ids)) == 3  # unique per batch
+        assert all(ledger_run_id != run_ids[0] for ledger_run_id in ledger_run_ids)
+
+    @STREAMING_ON
+    def test_real_dispatch_writes_one_ledger_row_per_batch_with_no_unique_constraint_collision(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same shape, through the REAL `dispatch_micro_batch` (no recorder stub) - proves
+        `ledger_run_id` actually avoids the `PilotRunLedger.run_id` unique-constraint collision a
+        stable, unsuffixed `run_id` would otherwise hit on the second batch."""
+        cards = _cards(3)
+        _install_ok_stage_c_stub(monkeypatch)
+
+        call_command("stream_full_catalog", "--batch-size", "1")
+
+        assert PilotRunLedger.objects.count() == 3
+        assert PilotRunLedger.objects.values_list("run_id", flat=True).distinct().count() == 3
+        assert StageEFullCatalogCursor.get_position(FULL_CATALOG_SCOPE) == cards[-1].pk
+
+
 class TestStopConditions:
     """The two conditions are DELIBERATELY ASYMMETRIC: an envelope trip hard-stops with no retry
     ever (NO SELF-RESUME is a binding design gate), while a concurrency-cap throttle is transient
