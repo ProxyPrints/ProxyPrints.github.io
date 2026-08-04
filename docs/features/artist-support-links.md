@@ -83,7 +83,7 @@ non-null) or a vote the user just cast themselves - never for a vote-
 pending or unknown artist, since there'd be no name to build a URL from.
 M2 didn't widen this gate at all, only what gets rendered once it's open.
 
-## Surfaces (three, as of the Proposal H pane migration)
+## Surfaces (four, as of the question-feed illustration-cluster credit)
 
 1. **Card Detail Modal** (`CardDetailedViewModal.tsx`'s attribute table,
    the `"Canonical Aritst"` row - yes, that's a pre-existing typo in the
@@ -114,6 +114,22 @@ M2 didn't widen this gate at all, only what gets rendered once it's open.
    rail's currently-selected slot's own `CardDocument` (already resident in
    `cardDocumentsByIdentifier`) for the artist name - the applet's own data
    fetch is separate (keyed by that name), not piggybacked on this read.
+4. **`/whatsthat`'s Level 2 illustration clusters** (`QuestionFeed.tsx`,
+   the `IllustrationGroup` wrapper `illustrationGroups` renders around
+   candidates sharing a Scryfall `illustrationId`). Gating here differs
+   from surfaces 1-3: those gate on a _confirmed_ artist (a cast vote, or
+   `CardDocument.canonicalArtist` consensus); this one gates on the first
+   non-blank `candidate.artist` across the cluster's members - the artist
+   of a _candidate printing_, sourced from canonical Scryfall reference
+   data, before the voter has picked anything. Worded `"Illustration by <Name>"` rather than the `"Art by <Name>"` phrasing surfaces 2-3 use, so
+   it doesn't read as an assertion about the voter's own scanned card. The
+   applet itself renders unmodified; a `max-width` wrapper
+   (`IllustrationCredit`, caller-side only, not a `className` override of
+   the applet's own "stretch to fill" rule) keeps one full-bleed CTA per
+   cluster from reading as page-width inside a multi-cluster grid. The
+   per-tile artist caption is dropped inside grouped clusters (redundant
+   with the new cluster-level credit) but kept on ungrouped tiles, which
+   have no cluster credit of their own.
 
 **Not built** (explicitly out of scope, noted so a future session doesn't
 have to re-derive why): the confidently-known-artist collapsed display

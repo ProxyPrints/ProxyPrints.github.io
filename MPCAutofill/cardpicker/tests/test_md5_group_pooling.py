@@ -42,9 +42,12 @@ from cardpicker.local_calculate_verdicts import (
 )
 from cardpicker.management.commands.consensus_recompute import run_consensus_recompute
 from cardpicker.models import (
+    ArtistVoteStatus,
     Card,
     CardPrintingTag,
     PrintingTagStatus,
+    TagVoteStatus,
+    VotePolarity,
     VoteSource,
     calculator_family,
 )
@@ -60,16 +63,25 @@ from cardpicker.printing_consensus import (
     resolve_printing,
 )
 from cardpicker.question_feed import (
+    _not_official_art_card_ids,
     _tier_1_confirm_suggestion,
+    _tier_2_contested,
+    _voter_answered_artist_card_ids,
     _voter_answered_printing_card_ids,
+    _voter_answered_tag_card_ids_by_tag,
     get_next_question_feed_item,
     is_likely_resolve_printing,
 )
+from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
+    CanonicalArtistFactory,
     CanonicalCardFactory,
+    CardArtistVoteFactory,
     CardFactory,
     CardPrintingTagFactory,
+    CardTagVoteFactory,
     ImageEvidenceFactory,
+    TagFactory,
 )
 from cardpicker.vote_consensus import (
     VoteTuple,
@@ -691,6 +703,146 @@ class TestAnsweredSetComputedOncePerFeedRequest:
             get_next_question_feed_item("voter-1")
 
         assert spy.call_count == 1
+
+    def test_the_three_new_exclusions_are_each_computed_exactly_once(self, db):
+        # 2026-08-04 gate on the phase-C/md5 routing brief: the same f1 condition above now also
+        # covers _voter_answered_artist_card_ids/_voter_answered_tag_card_ids_by_tag/
+        # _not_official_art_card_ids - each resolved once in get_next_question_feed_item, not
+        # once per tier that consults it.
+        with (
+            patch(
+                "cardpicker.question_feed._voter_answered_artist_card_ids",
+                side_effect=_voter_answered_artist_card_ids,
+            ) as artist_spy,
+            patch(
+                "cardpicker.question_feed._voter_answered_tag_card_ids_by_tag",
+                side_effect=_voter_answered_tag_card_ids_by_tag,
+            ) as tag_spy,
+            patch(
+                "cardpicker.question_feed._not_official_art_card_ids",
+                side_effect=_not_official_art_card_ids,
+            ) as art_spy,
+        ):
+            get_next_question_feed_item("voter-1")
+
+        assert artist_spy.call_count == 1
+        assert tag_spy.call_count == 1
+        assert art_spy.call_count == 1
+
+
+class TestPhaseCAndTierTwoMd5Expansion:
+    """
+    2026-08-04 gate on the phase-C/md5 routing brief. Two independent things, both pinned here:
+
+    - `_not_official_art_card_ids` (phase C): a positive, human-backed no-match-reason vote for
+      one of `reason_tags.NOT_OFFICIAL_ART_REASON_TAGS` stops the artist question from being
+      served for that card's whole md5 group.
+    - `_tier_2_contested`'s artist/tag own-vote exclusions, md5-expanded (issue #473's existing
+      convention, extended to these two halves - see `_voter_answered_artist_card_ids`/
+      `_voter_answered_tag_card_ids_by_tag`'s own docstrings).
+    """
+
+    def test_answered_artist_card_ids_expand_to_the_whole_group(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        CardArtistVoteFactory(card=card_a, anonymous_id="voter-1")
+
+        assert _voter_answered_artist_card_ids("voter-1") == {card_a.pk, card_b.pk}
+        assert _voter_answered_artist_card_ids("voter-2") == set()
+
+    def test_tier_2_does_not_re_serve_an_artist_question_answered_on_a_sibling(self, db, md5_groups):
+        card_a = CardFactory(artist_vote_status=ArtistVoteStatus.CONTESTED)
+        card_b = CardFactory(artist_vote_status=ArtistVoteStatus.CONTESTED)
+        md5_groups("same-bytes", card_a, card_b)
+        artist_x, artist_y = CanonicalArtistFactory(), CanonicalArtistFactory()
+        for card in (card_a, card_b):
+            CardArtistVoteFactory(card=card, artist=artist_x, anonymous_id="crowd-1")
+            CardArtistVoteFactory(card=card, artist=artist_y, anonymous_id="crowd-2")
+
+        # voter-1 answers card_a's artist question...
+        CardArtistVoteFactory(card=card_a, artist=artist_x, anonymous_id="voter-1")
+
+        # ...and must not be re-served the identical question via card_b, its byte-identical
+        # sibling, even though voter-1 never cast a vote on card_b directly.
+        assert _tier_2_contested("voter-1") is None
+
+    def test_answered_tag_card_ids_by_tag_expand_to_the_whole_group(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        tag = TagFactory(name="Full Art")
+        CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="voter-1")
+
+        by_tag = _voter_answered_tag_card_ids_by_tag("voter-1")
+
+        assert by_tag[tag.name] == {card_a.pk, card_b.pk}
+        assert _voter_answered_tag_card_ids_by_tag("voter-2") == {}
+
+    def test_tier_2_does_not_re_serve_a_tag_question_answered_on_a_sibling(self, db, md5_groups):
+        card_a = CardFactory(
+            printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
+        )
+        card_b = CardFactory(
+            printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
+        )
+        md5_groups("same-bytes", card_a, card_b)
+        tag = TagFactory(name="Full Art")
+        for card in (card_a, card_b):
+            CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="crowd-1")
+            CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, anonymous_id="crowd-2")
+            resolve_and_persist_tag_votes(card)
+            card.refresh_from_db()
+        assert card_a.tag_vote_statuses[tag.name] == TagVoteStatus.CONTESTED
+        assert card_b.tag_vote_statuses[tag.name] == TagVoteStatus.CONTESTED
+
+        # voter-1 answers tag on card_a...
+        CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="voter-1")
+
+        # ...and must not be re-served the identical (card, tag) question via card_b's own
+        # otherwise-still-contested pair.
+        assert _tier_2_contested("voter-1") is None
+
+    def test_a_different_tag_on_the_group_is_still_served_despite_the_widened_exclusion(self, db, md5_groups):
+        card_a = CardFactory(
+            printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
+        )
+        card_b = CardFactory(
+            printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
+        )
+        md5_groups("same-bytes", card_a, card_b)
+        tag_a = TagFactory(name="Full Art")
+        tag_b = TagFactory(name="Etched")
+        for tag in (tag_a, tag_b):
+            CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="crowd-1")
+            CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, anonymous_id="crowd-2")
+        resolve_and_persist_tag_votes(card_a)
+        card_a.refresh_from_db()
+
+        # voter-1 answers tag_a on card_a - widened to the whole md5 group for tag_a specifically...
+        CardTagVoteFactory(card=card_a, tag=tag_a, polarity=VotePolarity.APPLY, anonymous_id="voter-1")
+
+        # ...but tag_b, untouched, must still be served - the exclusion is per-tag, not
+        # per-card, even once widened onto md5 siblings (the regression the identical comment
+        # in _tier_2_contested itself warns against).
+        result = _tier_2_contested("voter-1")
+        assert result is not None
+        item, reason = result
+        assert reason == "tier_2_contested_tag"
+        assert item.tagName == tag_b.name
+        assert item.card.identifier == card_a.identifier
+
+    def test_not_official_art_vote_excludes_the_whole_group_from_artist_questions(self, db, md5_groups):
+        card_a = CardFactory(artist_vote_status=ArtistVoteStatus.CONTESTED)
+        card_b = CardFactory(artist_vote_status=ArtistVoteStatus.CONTESTED)
+        md5_groups("same-bytes", card_a, card_b)
+        artist_x, artist_y = CanonicalArtistFactory(), CanonicalArtistFactory()
+        for card in (card_a, card_b):
+            CardArtistVoteFactory(card=card, artist=artist_x, anonymous_id="crowd-1")
+            CardArtistVoteFactory(card=card, artist=artist_y, anonymous_id="crowd-2")
+        tag = TagFactory(name="custom-art")
+        CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="reporter-1")
+
+        assert _not_official_art_card_ids() == {card_a.pk, card_b.pk}
+        assert _tier_2_contested("voter-1") is None
 
 
 def _join_key_evidence(card, **overrides):

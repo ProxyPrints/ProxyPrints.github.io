@@ -153,15 +153,47 @@ class TestFolding(unittest.TestCase):
             code, out = compare(root)
             self.assertEqual(code, 0, out)
 
-    def test_fstring_prefix_change_is_caught(self):
+    def test_fstring_prefix_change_is_caught_when_bundled_with_a_rename(self):
+        # An isolated extraction — nothing else matching the pattern renamed
+        # or removed anywhere in the module — cannot be told apart, by
+        # declared-name diffing alone, from a harmless brand-new constant for
+        # brand-new logic (see test_an_isolated_extraction_with_a_wrong_value_
+        # is_a_known_scope_blind_spot below), so it needs a companion rename
+        # in the SAME module to land in scope — exactly how it happens in
+        # practice: PR #567 introduced LANDS_PHASH_SKIP_REASON_PREFIX in the
+        # same file as dozens of other real renames.
+        base = {
+            "m.py": 'A_SKIP_REASON = "a"\n\n\ndef f(x, reason):\n    return A_SKIP_REASON if x else f"phash-{reason}"\n'
+        }
+        head = {
+            "m.py": 'B_SKIP_REASON = "a"\nPHASH_SKIP_REASON_PREFIX = "phash2-"\n\n\n'
+            'def f(x, reason):\n    return B_SKIP_REASON if x else f"{PHASH_SKIP_REASON_PREFIX}{reason}"\n'
+        }
+        with _repo(base, head) as root:
+            code, out = compare(root)
+            self.assertEqual(code, 1, out)
+            self.assertIn("m.py", out)
+
+    def test_an_isolated_extraction_with_a_wrong_value_is_a_known_scope_blind_spot(self):
+        # KNOWN LIMITATION, pinned deliberately, not a bug: base declares no
+        # matching constant at all in this module, so nothing "disappeared"
+        # from base and scope_modules correctly treats this exactly like a
+        # harmless brand-new constant for brand-new logic (see
+        # test_pure_addition_of_a_new_matching_constant_is_out_of_scope in
+        # TestScopeAndNotes) — the two shapes are provably identical under
+        # name-diffing; there is no way to tell them apart without also
+        # accepting whole-module comparisons for every unrelated new-feature
+        # PR that happens to add a matching-pattern constant, which is the
+        # false-positive class this gate exists to avoid. Pinned so a future
+        # scope_modules change doesn't silently start "catching" this again
+        # without someone noticing the tradeoff moved back the other way.
         base = {"m.py": 'def f(reason):\n    return f"phash-{reason}"\n'}
         head = {
             "m.py": 'PHASH_SKIP_REASON_PREFIX = "phash2-"\n\n\ndef f(reason):\n    return f"{PHASH_SKIP_REASON_PREFIX}{reason}"\n'
         }
         with _repo(base, head) as root:
             code, out = compare(root)
-            self.assertEqual(code, 1, out)
-            self.assertIn("m.py", out)
+            self.assertEqual(code, 0, out)
 
     def test_string_concatenation_is_folded(self):
         base = {"m.py": 'def f():\n    return "phash-" + "miss"\n'}
@@ -520,6 +552,37 @@ class TestScopeAndNotes(unittest.TestCase):
             # other than HEAD~1, default_base() must still find something.
             code, out = run_tool(root, "--head", "HEAD")
             self.assertEqual(code, 0, out)
+
+    def test_pure_addition_of_a_new_matching_constant_is_out_of_scope(self):
+        # scope_modules used to take a SYMMETRIC difference of declared
+        # names, so a constant added at head with nothing removed anywhere
+        # put its own module in scope — and that module's AST can never
+        # equal base's, since base never declared the new name. Any PR
+        # merely adding a matching constant would fail this gate permanently.
+        base = {"m.py": "def f():\n    return 1\n"}
+        head = {"m.py": 'NEW_SKIP_REASON = "x"\n\n\ndef f():\n    return NEW_SKIP_REASON\n'}
+        with _repo(base, head) as root:
+            code, out = compare(root)
+            self.assertEqual(code, 0, out)
+            self.assertIn("nothing to prove", out)
+
+    def test_rename_still_puts_the_module_in_scope_and_catches_a_real_diff(self):
+        base = {"m.py": 'A_SKIP_REASON = "x"\n\n\ndef f(v):\n    return A_SKIP_REASON if v else ""\n'}
+        head = {"m.py": 'B_SKIP_REASON = "x"\n\n\ndef f(v):\n    return B_SKIP_REASON if not v else ""\n'}
+        with _repo(base, head) as root:
+            code, out = compare(root)
+            self.assertEqual(code, 1, out)
+            self.assertIn("A_SKIP_REASON", out)
+            self.assertIn("m.py", out)
+
+    def test_pure_removal_still_puts_the_module_in_scope(self):
+        base = {"m.py": 'A_SKIP_REASON = "x"\n\n\ndef f():\n    return A_SKIP_REASON\n'}
+        head = {"m.py": 'def f():\n    return "x"\n'}
+        with _repo(base, head) as root:
+            code, out = compare(root)
+            self.assertEqual(code, 0, out)
+            self.assertIn("A_SKIP_REASON", out)
+            self.assertNotIn("nothing to prove", out)
 
 
 class TestNormaliserUnits(unittest.TestCase):

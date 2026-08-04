@@ -728,7 +728,7 @@ describe("QuestionFeed", () => {
 
     // expand the filter and set "Full Art" positive - narrows item 1's grid to printing-2 only
     fireEvent.click(screen.getByTestId("question-feed-filter-toggle"));
-    fireEvent.click(await screen.findByTestId("attribute-chip-Full Art"));
+    fireEvent.click(await screen.findByTestId("attribute-chip-Full Art-yes"));
     await waitFor(() =>
       expect(screen.queryByTestId("attribute-chip-Full Art")).toHaveAttribute(
         "data-chip-state",

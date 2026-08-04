@@ -1,9 +1,9 @@
 /**
  * Tri-state attribute chips surrounding the subject card in the unified question feed (see
- * QuestionFeed.tsx and docs/features/printing-tags.md's questionFeed section). Each chip
- * cycles untouched -> positive -> negative -> untouched on tap, casting a real CardTagVote
- * each time (including the retraction on cycling back to untouched - see
- * cardpicker.views.RETRACT_POLARITY). Fill color/intensity renders the tag's current
+ * QuestionFeed.tsx and docs/features/printing-tags.md's questionFeed section). Each chip is a
+ * Yes/No button pair, either directly reachable in one tap, casting a real CardTagVote each
+ * time (including the retraction when tapping the already-active button back to untouched -
+ * see cardpicker.views.RETRACT_POLARITY). Fill color/intensity renders the tag's current
  * weighted net polarity (confidence), independent of - though usually correlated with - this
  * voter's own explicit state; exclusion-group siblings of an explicitly-positive chip render
  * a separate "implied-negative" dimmed style without casting a vote of their own.

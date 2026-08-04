@@ -83,7 +83,7 @@ test.describe("question feed - Level 2 (candidate grid)", () => {
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     await page.getByTestId("question-feed-filter-toggle").click();
-    await page.getByTestId("attribute-chip-Full Art").click(); // candidate1 is fullArt=false
+    await page.getByTestId("attribute-chip-Full Art-yes").click(); // candidate1 is fullArt=false
 
     await expect(page.getByTestId("question-feed-hidden-count")).toContainText(
       "1 hidden"
