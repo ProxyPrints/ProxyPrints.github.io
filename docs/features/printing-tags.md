@@ -1944,6 +1944,13 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
 
 ## Known gaps
 
+- **Illustration-grouped tiles still show printing scans, not an art crop**:
+  `PrintingCandidate.artCropUrl` (`schema_types.py`/`schema_types.ts`,
+  sourced from the existing `CanonicalPrintingMetadata.art_crop_url`
+  sidecar field, same provenance as `illustrationId`) now exists on the
+  questionFeed payload for exactly this purpose — but nothing consumes it
+  yet. Rendering it in place of `mediumThumbnailUrl` for illustration-
+  clustered candidate tiles is frontend work, not yet done.
 - Client-side (local-folder/Google Drive) search gets no re-rank/filter/
   match-indicator parity — no ES/DB access on that path.
 - The starburst/card/chip-ring layout was hand-tuned via iterative
