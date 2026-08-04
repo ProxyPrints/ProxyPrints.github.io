@@ -113,6 +113,7 @@ from cardpicker.local_fallback import (
 from cardpicker.local_ocr import DEFAULT_CROP_BOX, LEGAL_LINE_CROP_BOX
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import CardScanLog, CardTagVote, ImageEvidence
+from cardpicker.modern_artist_credit import build_lexicon_index
 from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory, TagFactory
 
 
@@ -1787,6 +1788,115 @@ class TestExtractCardEvidenceWidenedArtistRead:
 
         assert result.skip_reasons["legal_line"] == "fetch_failed"
         assert "legal_line_raw_text" not in result.fields
+
+
+class TestExtractCardEvidenceArtistCropFallback:
+    """2026-08-04, the ARTIST-CROP FALLBACK (see `compute_card_evidence`'s own
+    `modern_artist_lexicon` docstring paragraph). Real production rows (evidence ids 221241,
+    221268, 221274) carry NO collector line and NO legal line at all - an old-border proxy's only
+    on-card credit is a centred "Illus. <name>" line, OCR'd into `artist_ocr_raw_text` but missed
+    by the anchor regex to ordinary noise (`Soot Itus.` never matches `_ILLUS_RE`). Neither the
+    anchor nor `recover_artist_from_card_text` (which reads only the two bottom-print-row fields)
+    can ever reach that population; `modern_artist_credit.recognize_artist_credit`, re-reading
+    `artist_ocr_raw_text` itself, can.
+
+    `run_tesseract` backs both the legal-line crop and the artist-crop fallback pass; the two
+    crops have very different pixel heights (`LEGAL_LINE_CROP_BOX` is a thin strip,
+    `ARTIST_CROP_BOX` a much taller band), so the stub below distinguishes them by `variant.size`
+    rather than by call order.
+    """
+
+    LEXICON = build_artist_lexicon(["Aaron Miller"])
+    MODERN_LEXICON = build_lexicon_index(["Aaron Miller"])
+
+    @staticmethod
+    def _lookup(set_code, collector_number):
+        return None  # no printing resolution - these tests are about the READING, not the gate
+
+    @staticmethod
+    def _run_tesseract_by_crop_height(variant, **kwargs):
+        if variant.size[1] < 400:
+            return ""  # the legal-line crop: blank, matching "no bottom print row at all"
+        return "Soot Itus. Aaron Miller ~ *"  # the artist crop: the real card-30-shaped OCR text
+
+    def test_recovers_a_name_the_anchor_and_print_row_recovery_both_missed(self, db, monkeypatch):
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda image_arg, config: ("", []))
+        monkeypatch.setattr(module, "run_tesseract", self._run_tesseract_by_crop_height)
+
+        result = fetch_and_compute_card_evidence_for_tests(
+            card,
+            artist_lexicon=self.LEXICON,
+            printing_artist_lookup=self._lookup,
+            modern_artist_lexicon=self.MODERN_LEXICON,
+        )
+
+        assert result.fields["artist_ocr_name"] == "Aaron Miller"
+        assert result.fields["illus_anchor_fired"] is False  # the anchor genuinely never fired
+        assert result.fields["collector_line_raw_text"] == ""
+        assert result.fields["legal_line_raw_text"] == ""
+
+    def test_without_the_lexicon_the_gap_stays_open(self, db, monkeypatch):
+        """Control: byte-identical inputs with `modern_artist_lexicon` left at its `None` default
+        - every pre-2026-08-04 caller's behaviour, unchanged."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda image_arg, config: ("", []))
+        monkeypatch.setattr(module, "run_tesseract", self._run_tesseract_by_crop_height)
+
+        result = fetch_and_compute_card_evidence_for_tests(
+            card, artist_lexicon=self.LEXICON, printing_artist_lookup=self._lookup
+        )
+
+        assert result.fields["artist_ocr_name"] == ""
+
+    def test_the_illus_anchor_still_wins_when_it_fires(self, db, monkeypatch):
+        """The anchor's own reading always wins - this fallback only ever fills a BLANK value,
+        same invariant `TestExtractCardEvidenceCollectorLineArtistGate` already pins for the
+        print-row recovery."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(module, "run_tesseract_text_and_words", lambda image_arg, config: ("", []))
+        monkeypatch.setattr(module, "run_tesseract", lambda variant, **kwargs: "Illus. Ron Spears")
+
+        lexicon = build_artist_lexicon(["Ron Spears", "Aaron Miller"])
+        modern_lexicon = build_lexicon_index(["Ron Spears", "Aaron Miller"])
+        result = fetch_and_compute_card_evidence_for_tests(
+            card, artist_lexicon=lexicon, printing_artist_lookup=self._lookup, modern_artist_lexicon=modern_lexicon
+        )
+
+        assert result.fields["artist_ocr_name"] == "Ron Spears"
+        assert result.fields["illus_anchor_fired"] is True
+
+    def test_print_row_recovery_still_wins_over_the_artist_crop_fallback(self, db, monkeypatch):
+        """Precedence: when the collector/legal-line recovery finds something storable, it is
+        never second-guessed by the artist-crop fallback, even though the artist crop's own OCR
+        text names a DIFFERENT, equally real, lexicon artist. The legal-line crop is left BLANK
+        here (unlike `test_recovers_a_name_...` above) so the print-row recovery's own answer
+        comes from the collector line alone, not the wider legal-line read winning on a tie-break."""
+        card = CardFactory(content_phash=1)
+        image = _build_card_image([(DEFAULT_CROP_BOX, "")])
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
+        monkeypatch.setattr(
+            module, "run_tesseract_text_and_words", lambda image_arg, config: ("059/274R\nDMR ¢ EN RON SPEARS", [])
+        )
+
+        def _run_tesseract(variant, **kwargs):
+            return "" if variant.size[1] < 400 else "Aaron Miller"
+
+        monkeypatch.setattr(module, "run_tesseract", _run_tesseract)
+
+        lexicon = build_artist_lexicon(["Ron Spears", "Aaron Miller"])
+        modern_lexicon = build_lexicon_index(["Ron Spears", "Aaron Miller"])
+        result = fetch_and_compute_card_evidence_for_tests(
+            card, artist_lexicon=lexicon, printing_artist_lookup=self._lookup, modern_artist_lexicon=modern_lexicon
+        )
+
+        assert result.fields["artist_ocr_name"] == "Ron Spears"  # the print row, not the art crop
 
 
 class TestCollectorLineOcrAttempts:

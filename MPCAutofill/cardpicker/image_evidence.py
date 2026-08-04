@@ -278,6 +278,7 @@ from cardpicker.local_ocr import (
 )
 from cardpicker.local_phash import ART_CROP_BOX
 from cardpicker.models import Card, CardScanLog, ImageEvidence
+from cardpicker.modern_artist_credit import LexiconIndex, recognize_artist_credit
 from cardpicker.utils import twos_complement
 
 logger = logging.getLogger(__name__)
@@ -651,6 +652,7 @@ def fetch_and_compute_card_evidence_for_tests(
     artist_lexicon: Optional[ArtistLexicon] = None,
     printing_artist_lookup: Optional[Callable[[Optional[str], Optional[str]], Optional[str]]] = None,
     name_artist_lookup: Optional[Callable[[str], tuple[str, ...]]] = None,
+    modern_artist_lexicon: Optional[LexiconIndex] = None,
 ) -> ExtractionResult:
     """
     A TEST-ONLY CONVENIENCE WRAPPER. It has no production caller and has not had one since the
@@ -720,6 +722,10 @@ def fetch_and_compute_card_evidence_for_tests(
     picklable `ProcessPoolExecutor` entrypoint, and a resolver holding a 113k-row index is not
     something to send across that boundary. `None` (the default) means no narrowing - every
     pre-2026-07-29 caller's behaviour, unchanged.
+
+    `modern_artist_lexicon`, if given, is forwarded straight through to `compute_card_evidence`
+    below - see that function's own docstring for the ARTIST-CROP FALLBACK it controls. `None`
+    (the default) leaves it off, behavior identical to every caller that predates it.
     """
 
     fetch_started_at = time.monotonic()
@@ -743,6 +749,7 @@ def fetch_and_compute_card_evidence_for_tests(
         artist_lexicon=artist_lexicon,
         printing_artist_lookup=printing_artist_lookup,
         card_artist_names=() if name_artist_lookup is None else name_artist_lookup(card.name),
+        modern_artist_lexicon=modern_artist_lexicon,
         md5_checksum=card.md5_checksum,
         sha256_checksum=card.sha256_checksum,
     )
@@ -763,6 +770,7 @@ def compute_card_evidence(
     artist_lexicon: Optional[ArtistLexicon] = None,
     printing_artist_lookup: Optional[Callable[[Optional[str], Optional[str]], Optional[str]]] = None,
     card_artist_names: tuple[str, ...] = (),
+    modern_artist_lexicon: Optional[LexiconIndex] = None,
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
 ) -> ExtractionResult:
@@ -920,6 +928,39 @@ def compute_card_evidence(
          from `collector_line_artist.build_name_artist_lookup()`, whose name resolution is
          `local_identify_printing_tags.CandidateNameIndex.candidates_for` - the codebase's existing
          normaliser, not a new one. Empty (the default) means no narrowing.
+
+    `modern_artist_lexicon` (2026-08-04): the ARTIST-CROP FALLBACK - a third, independent source
+    for the `artist_ocr_name` storage fallback above, tried only after BOTH the "Illus." anchor
+    AND the collector/legal-line recovery have found nothing storable.
+
+    THE GAP THIS CLOSES. `recover_artist_from_card_text` reads only `collector_line_raw_text` and
+    `legal_line_raw_text` - the bottom PRINT ROW. A real, measured population of cards (old-border
+    proxies with a centred "Illus. <name>" credit and no collector line/set code/copyright row
+    printed at all) has NO text in either of those two fields, so that recovery is structurally
+    blind to them even when the anchor regex itself missed the credit to ordinary OCR noise
+    (`_ILLUS_RE` requires literal "llus", and a misread like "Soot Itus." - real production text,
+    card evidence id 221268 - never matches it). The ONE stored string that DOES carry the credit
+    on these cards is `artist_ocr_raw_text` - the artist-crop OCR text this same extractor already
+    computed a few lines above - and until now nothing in the live extraction path ever re-read it.
+
+    `cardpicker.modern_artist_credit.recognize_artist_credit` already exists for exactly this
+    shape of input (its own module docstring: "a wholly independent, parse-only re-reader of the
+    SAME already-stored `artist_ocr_raw_text` strings") and was previously reachable only through
+    its own standalone `backfill_modern_artist_names` command, never during real extraction - so a
+    freshly-extracted or re-extracted row could go on carrying the same gap forever. Verified
+    against three real evidence rows this way blank in production (ids 221241, 221268, 221274):
+    `recognize_artist_credit` recovers "Sebastian Giacobino"/"Aaron Miller"/"Andrey Kuzinskiy" from
+    their stored `artist_ocr_raw_text` at ratio 1.0 with a comfortable margin over the runner-up,
+    using the real ~2.5k-name production lexicon - not a toy fixture.
+
+    ORDER: tried strictly AFTER `recover_artist_from_card_text` returns nothing storable, never
+    instead of it or in competition with it - the print-row read is format-anchored (a fixed
+    layout, narrowed by `card_artist_names`) and stays authoritative when it succeeds; this is
+    purely an ADDITIONAL fallback for the population it can never reach. `None` (the default, and
+    every pre-2026-08-04 caller) leaves this off entirely - byte-identical to before. No
+    extractor_versions key is added and no version bumped, deliberately, for the same reason
+    `artist_lexicon` above isn't: either would invalidate every existing row and force a full
+    catalog re-extraction to recover text this repository already has.
 
     `md5_checksum`/`sha256_checksum` (2026-07-25, issue #473 PR-2, folded with issue #472): the
     calling card's own live `Card.md5_checksum`/`Card.sha256_checksum` at the moment of THIS real
@@ -1251,18 +1292,28 @@ def compute_card_evidence(
         # key is added and no version bumped, deliberately - either would invalidate every
         # existing row against `run_image_evidence_cohort.MANIFEST_EXTRACTOR_CURRENT_VERSIONS` and
         # force a full 220k-card Stage C re-extraction.
-        if artist_name is None and artist_lexicon is not None:
-            recovered_artist = recover_artist_from_card_text(
-                fields["collector_line_raw_text"],
-                legal_line_raw_text,
-                artist_lexicon,
-                allowed_artist_names=card_artist_names,
-            )
+        if artist_name is None:
+            recovered_artist = None
+            if artist_lexicon is not None:
+                recovered_artist = recover_artist_from_card_text(
+                    fields["collector_line_raw_text"],
+                    legal_line_raw_text,
+                    artist_lexicon,
+                    allowed_artist_names=card_artist_names,
+                )
             if recovered_artist is not None and recovered_artist.canonical_name is not None:
                 # `canonical_name` is a verbatim `CanonicalArtist.name` and is `None` unless the
                 # reading is compatible with exactly one of them - fuzzy MATCHING is permitted,
                 # fuzzy STORAGE is not (owner ruling, 2026-07-29).
                 fields["artist_ocr_name"] = recovered_artist.canonical_name
+            elif modern_artist_lexicon is not None:
+                # ARTIST-CROP FALLBACK (2026-08-04) - see this function's own `modern_artist_
+                # lexicon` docstring paragraph. Re-reads `artist_raw_text` (the artist-crop OCR
+                # text this extractor already computed above), the one stored string the
+                # collector/legal-line recovery above structurally cannot reach.
+                recognized_artist = recognize_artist_credit(artist_raw_text, modern_artist_lexicon)
+                if recognized_artist is not None:
+                    fields["artist_ocr_name"] = recognized_artist.matched_name
 
     extractor_versions["collector_line_ocr"] = COLLECTOR_LINE_OCR_EXTRACTOR_VERSION
     extractor_versions["artist_ocr"] = ARTIST_OCR_EXTRACTOR_VERSION
