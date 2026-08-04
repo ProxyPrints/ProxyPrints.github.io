@@ -285,15 +285,63 @@ test.describe("NoMatchReasonStrip tests", () => {
     await page.getByTestId("question-feed-no-match").click();
     await page.getByTestId("no-match-reason-altered-frame").click();
 
+    // Same tagName/polarity shape as the not-official-art chip in the previous test - the
+    // split is presentational, not a new vote payload.
+    await expect(async () => {
+      expect(submittedBody.tagName).toBe("altered-frame");
+    }).toPass();
+    expect(submittedBody.polarity).toBe(1);
+  });
+
+  test("a not-official-printing reason returns to this item's candidate grid with the filter panel open, instead of advancing", async ({
+    page,
+    network,
+  }) => {
+    // Owner report, 2026-08-04: the artwork is genuine on this axis, so the remaining
+    // question (which printing) is still answerable from this same item's own candidate
+    // list - this exercises that Level 2 stays put rather than skipping to the next item.
+    network.use(
+      questionFeedIdentifyPrinting,
+      submitPrintingTagNoMatch,
+      submitTagVoteResolvesToApply,
+      tagsAllNoMatchReasonTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await page.getByTestId("question-feed-no-match").click();
+    await page.getByTestId("no-match-reason-altered-frame").click();
+
+    await expect(page.getByTestId("attribute-chip-panel")).toBeVisible();
+    await expect(
+      page.getByText(
+        "You're all caught up - no cards left to work on right now!"
+      )
+    ).not.toBeVisible();
+  });
+
+  test("a not-official-art reason still advances straight through - nothing to narrow towards", async ({
+    page,
+    network,
+  }) => {
+    const mocks = questionFeedUntilNoMatchVoted();
+    network.use(
+      mocks.questionFeed,
+      mocks.submitPrintingTagNoMatch,
+      submitTagVoteResolvesToApply,
+      tagsAllNoMatchReasonTags,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await page.getByTestId("question-feed-no-match").click();
+    await page.getByTestId("no-match-reason-ai-art").click();
+
     await expect(
       page.getByText(
         "You're all caught up - no cards left to work on right now!"
       )
     ).toBeVisible();
-    // Same tagName/polarity shape as the not-official-art chip in the previous test - the
-    // split is presentational, not a new vote payload.
-    expect(submittedBody.tagName).toBe("altered-frame");
-    expect(submittedBody.polarity).toBe(1);
   });
 
   test("skip in the reason strip advances without submitting a no-match-reason vote", async ({

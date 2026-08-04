@@ -19,7 +19,6 @@ import { useAppDispatch } from "@/common/types";
 import {
   CHIP_POLARITY,
   ChipVoteState,
-  nextChipState,
 } from "@/features/attributeChips/attributeChips";
 import { APISubmitTagVote } from "@/store/api";
 import { setNotification } from "@/store/slices/toastsSlice";
@@ -44,9 +43,10 @@ export interface UseTagVotingResult {
   confidence: Record<string, number>;
   /** The tagName currently mid-submission (disables every chip until it settles), or null. */
   submittingTagName: string | null;
-  /** Cycles the given tag's state (untouched -> positive -> negative -> untouched) and casts
-   * exactly one real vote for that tap. */
-  tap: (tagName: string) => void;
+  /** Sets the given tag's explicit state directly to `desired` and casts exactly one real
+   * vote for that tap - direct-access Yes/No, not a cycle (see attributeChipRender.tsx's
+   * header comment for why this stopped being a cycle). */
+  tap: (tagName: string, desired: ChipVoteState) => void;
 }
 
 export function useTagVoting({
@@ -68,15 +68,14 @@ export function useTagVoting({
     setConfidence(tagConfidence);
   }, [tagConfidence]);
 
-  const tap = (tagName: string) => {
+  const tap = (tagName: string, desired: ChipVoteState) => {
     const previousState = chipStates[tagName] ?? "untouched";
     const previousConfidence = confidence[tagName] ?? 0;
-    const nextState = nextChipState(previousState);
-    const polarity = CHIP_POLARITY[nextState];
+    const polarity = CHIP_POLARITY[desired];
 
     // optimistic: nudge the fill toward the tapped direction immediately, and update the
     // explicit state right away - both get reconciled with the server response below
-    onChipStatesChange({ ...chipStates, [tagName]: nextState });
+    onChipStatesChange({ ...chipStates, [tagName]: desired });
     setConfidence((previous) => ({
       ...previous,
       [tagName]: polarity === 0 ? 0 : polarity,

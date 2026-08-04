@@ -66,7 +66,10 @@ import {
   getOpenExclusionGroups,
 } from "@/features/attributeChips/attributeChips";
 import { ArtistVotePicker } from "@/features/attributeVoting/ArtistVotePicker";
-import { NoMatchReasonStrip } from "@/features/attributeVoting/NoMatchReasonStrip";
+import {
+  NO_MATCH_REASON_TAG_GROUPS,
+  NoMatchReasonStrip,
+} from "@/features/attributeVoting/NoMatchReasonStrip";
 import { QueueTagQuestion } from "@/features/attributeVoting/QueueTagQuestion";
 import {
   ArtPlaceholder,
@@ -1479,6 +1482,28 @@ export function QuestionFeed() {
           </CandidateCaption>
         </CandidateButton>
       );
+      // Problem 2 (owner report, 2026-08-04): a not-official-printing reason (the artwork is
+      // genuine, this scan just isn't one of the listed printings) means the remaining
+      // question - which printing - is still answerable from this same item's own candidate
+      // list, so this returns to the existing Level 2 grid with its filter panel already
+      // expanded instead of skipping to the next item, reusing the funnel's existing chip
+      // narrowing (filterCandidatesByChipStates) rather than any new selector or vote shape.
+      // A not-official-art reason (custom-art/ai-art/external-ip) has nothing left to narrow
+      // towards - that axis keeps advancing straight through, unchanged.
+      const onNoMatchReasonDone = (chosenTagName?: string) => {
+        const isNotOfficialPrinting =
+          chosenTagName != null &&
+          (
+            NO_MATCH_REASON_TAG_GROUPS["not-official-printing"]
+              .tagNames as readonly string[]
+          ).includes(chosenTagName);
+        if (isNotOfficialPrinting && nonRejectedCandidates.length > 0) {
+          setFollowUp("none");
+          setFilterExpanded(true);
+          return;
+        }
+        advance();
+      };
       const level2Body = (
         <>
           <QHead>
@@ -1614,7 +1639,7 @@ export function QuestionFeed() {
               <NoMatchReasonStrip
                 backendURL={backendURL}
                 cardIdentifier={item.card.identifier}
-                onDone={advance}
+                onDone={onNoMatchReasonDone}
                 onRateLimited={() => setRateLimited(true)}
               />
             </NegWrap>

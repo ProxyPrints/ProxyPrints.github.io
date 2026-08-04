@@ -41,7 +41,7 @@ function Wrapper({
 }
 
 describe("AttributeChipPanel", () => {
-  it("cycles a chip untouched -> positive -> negative -> untouched, casting one vote per tap", async () => {
+  it("reaches positive, negative, and back to untouched in exactly one tap each - no cycle", async () => {
     server.use(
       http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
         const body = (await request.json()) as {
@@ -61,8 +61,8 @@ describe("AttributeChipPanel", () => {
     );
     render(<Wrapper store={setupStore()} />);
 
-    const chip = screen.getByTestId("attribute-chip-Full Art");
-    expect(chip.getAttribute("data-chip-state")).toBe("untouched");
+    const group = screen.getByTestId("attribute-chip-Full Art");
+    expect(group.getAttribute("data-chip-state")).toBe("untouched");
 
     // each click's optimistic state update lands synchronously, but the button stays
     // `disabled` (submitting) until the mocked request's promise resolves - wait for it to
@@ -72,17 +72,23 @@ describe("AttributeChipPanel", () => {
       await waitFor(() => {
         const el = screen.getByTestId("attribute-chip-Full Art");
         expect(el.getAttribute("data-chip-state")).toBe(expectedState);
-        expect(el).not.toBeDisabled();
+        expect(
+          screen.getByTestId("attribute-chip-Full Art-yes")
+        ).not.toBeDisabled();
       });
     };
 
-    fireEvent.click(chip);
-    await waitForSettled("positive");
-
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    // one tap on "no" reaches negative directly from untouched - no need to pass through
+    // positive first.
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art-no"));
     await waitForSettled("negative");
 
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    // one tap on "yes" switches straight to positive from negative - still one tap, no cycle.
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art-yes"));
+    await waitForSettled("positive");
+
+    // tapping the already-active button retracts to untouched.
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art-yes"));
     await waitForSettled("untouched");
   });
 
@@ -108,7 +114,7 @@ describe("AttributeChipPanel", () => {
     );
     render(<Wrapper store={setupStore()} />);
 
-    fireEvent.click(screen.getByTestId("attribute-chip-Black Border"));
+    fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
     await waitFor(() => expect(submittedTagNames).toEqual(["Black Border"]));
 
     // sibling should render implied-negative (dimmed) without ever being submitted
@@ -126,7 +132,7 @@ describe("AttributeChipPanel", () => {
     );
     render(<Wrapper store={setupStore()} />);
 
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art-yes"));
     await waitFor(() =>
       expect(
         screen
@@ -159,7 +165,7 @@ describe("AttributeChipPanel", () => {
       />
     );
 
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art-yes"));
     await waitFor(() => expect(rateLimitedCallCount).toBe(1));
 
     expect(
@@ -192,7 +198,7 @@ describe("AttributeChipPanel", () => {
       />
     );
 
-    fireEvent.click(screen.getByTestId("attribute-chip-Full Art"));
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art-yes"));
     await waitFor(() => {
       const notifications = Object.values(
         store.getState().toasts.notifications

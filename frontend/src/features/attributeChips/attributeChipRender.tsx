@@ -1,13 +1,24 @@
 /**
- * The chip button styling + single chip-button render (fill color, implied-negative dimming,
+ * The chip group styling + single chip-group render (fill color, implied-negative dimming,
  * lean tooltip, data-chip-state) shared by every attribute-chip layout. Extracted out of
  * AttributeChipPanel.tsx (Proposal H pane migration, left-panel unification) so the display
  * page's rail Attributes section (features/display/AttributesSection.tsx) renders byte-for-byte
  * the same chip a caller sees in the question feed's ring - only the surrounding arrangement
  * (ring around a card vs. a plain vertical stack) differs between the two, per the design doc's
- * §5 component-mapping table. AttributeChipPanel.tsx imports Chip/ChipRow/renderAttributeChip
- * from here (one-directional) rather than the other way around, so there's no import cycle
- * between this file and its own ring-layout caller.
+ * §5 component-mapping table. AttributeChipPanel.tsx imports ChipRow/renderAttributeChip from
+ * here (one-directional) rather than the other way around, so there's no import cycle between
+ * this file and its own ring-layout caller.
+ *
+ * Direct-access Yes/No (owner-reported defect, 2026-08-04): a single cycling button
+ * (untouched -> positive -> negative -> untouched) made a "No" answer cost two taps, and an
+ * untouched chip whose exclusion-group sibling was explicitly positive rendered dimmed
+ * ("implied negative") while having cast no vote of its own - a voter reading that dimming as
+ * "I already said no" was looking at a UI that disagreed with the data. Each chip is now a
+ * labelled group of two always-visible buttons (Yes / No), either one reachable in exactly one
+ * tap from any prior state - tapping the button matching the chip's current explicit state
+ * retracts it back to untouched (the vote-level RETRACT_POLARITY behavior is unchanged, only how
+ * many taps it takes to reach any of the three states changed). This still can't be forked per
+ * surface: the rail and the question feed's ring render the exact same group.
  */
 import styled from "@emotion/styled";
 import React from "react";
@@ -19,20 +30,51 @@ import {
 
 // Mobile funnel pass (thumb-native tap targets): measured at ~30px tall against the previous
 // 0.35rem/0.6rem padding - short of the 44px minimum both Apple's HIG and WCAG 2.5.5 (Target
-// Size, AA) call for, on the ring's own answer controls. min-height/min-width guarantee the real
-// hit area regardless of label length; flex centering keeps the (unchanged, still compact) text
-// centered in the now-taller box rather than pinned to its old top-padding baseline.
-export const Chip = styled.button<{ fill: string; impliedNegative: boolean }>`
+// Size, AA) call for, on the ring's own answer controls. min-height guarantees the real hit
+// area of the group as a whole regardless of label length; flex centering keeps the label
+// vertically centered against the taller Yes/No buttons beside it.
+export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
   border: 2px solid rgba(0, 0, 0, 0.25);
   border-radius: 0.5rem;
-  background-color: ${(props) => props.fill};
   opacity: ${(props) => (props.impliedNegative ? 0.45 : 1)};
   color: inherit;
-  padding: 0.35rem 0.6rem;
   font-size: 0.85rem;
   white-space: nowrap;
   min-height: 44px;
-  min-width: 44px;
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+`;
+
+export const ChipLabel = styled.span<{ fill: string }>`
+  background-color: ${(props) => props.fill};
+  padding: 0.35rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+`;
+
+// Yes/No are separate, always-visible buttons rather than a single cycling one so each of the
+// chip's three meaningful answers (yes / no / no opinion) is reachable in exactly one tap - see
+// this file's header comment. `$active` reflects this voter's own explicit tap (independent of
+// `fill`'s fluctuating community-plus-machine lean, which is what let a just-cast vote appear to
+// "not have registered" once the server's real weighted polarity replaced the optimistic one).
+export const ChipStateButton = styled.button<{
+  $active: boolean;
+  $polarity: "positive" | "negative";
+}>`
+  border: none;
+  border-left: 1px solid rgba(0, 0, 0, 0.25);
+  background-color: ${(props) =>
+    props.$active
+      ? props.$polarity === "positive"
+        ? "rgba(40, 167, 69, 0.85)"
+        : "rgba(220, 53, 69, 0.85)"
+      : "transparent"};
+  color: ${(props) => (props.$active ? "#fff" : "inherit")};
+  font-weight: ${(props) => (props.$active ? 700 : 400)};
+  min-height: 44px;
+  min-width: 32px;
+  padding: 0.35rem 0.4rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -78,7 +120,10 @@ export interface RenderAttributeChipArgs {
   confidence: Record<string, number>;
   chipStates: Record<string, ChipVoteState>;
   submittingTagName: string | null;
-  tap: (tagName: string) => void;
+  /** Sets tagName's explicit state directly to `desired` ("positive" or "negative") in one
+   * call - tapping the button that's already active is what retracts to "untouched", handled
+   * by the caller before invoking this (see the two `onClick`s below). */
+  tap: (tagName: string, desired: ChipVoteState) => void;
   getTagDisplayName: (label: string) => string;
 }
 
@@ -94,6 +139,8 @@ export function renderAttributeChip(
   label: string
 ): React.ReactElement {
   const explicitState = chipStates[tagName] ?? "untouched";
+  const isPositive = explicitState === "positive";
+  const isNegative = explicitState === "negative";
   const group = findExclusionGroup(tagName);
   const impliedNegative =
     explicitState === "untouched" &&
@@ -104,26 +151,53 @@ export function renderAttributeChip(
         (chipStates[sibling.tagName] ?? "untouched") === "positive"
     );
   const lean = leanTooltip(confidence[tagName] ?? 0);
-  const title =
-    explicitState === "positive"
-      ? "Yes"
-      : explicitState === "negative"
-      ? "No"
-      : lean ?? "Tap to describe what you see";
+  const disabled = submittingTagName != null;
+  const setState = (desired: "positive" | "negative") =>
+    tap(tagName, explicitState === desired ? "untouched" : desired);
+  const noTitle = impliedNegative
+    ? "Implied by another answer above - no vote cast yet. Tap to answer this directly."
+    : isNegative
+    ? "Tap to clear your No"
+    : "No";
+
   return (
-    <Chip
+    <ChipGroup
       key={tagName}
-      type="button"
-      fill={confidenceFill(confidence[tagName] ?? 0)}
       impliedNegative={impliedNegative}
-      disabled={submittingTagName != null}
-      onClick={() => tap(tagName)}
       data-testid={`attribute-chip-${tagName}`}
       data-chip-state={explicitState}
-      title={title}
+      title={lean ?? undefined}
     >
-      {getTagDisplayName(label)}
-    </Chip>
+      <ChipLabel fill={confidenceFill(confidence[tagName] ?? 0)}>
+        {getTagDisplayName(label)}
+      </ChipLabel>
+      <ChipStateButton
+        type="button"
+        $active={isPositive}
+        $polarity="positive"
+        disabled={disabled}
+        onClick={() => setState("positive")}
+        data-testid={`attribute-chip-${tagName}-yes`}
+        aria-pressed={isPositive}
+        aria-label={`${getTagDisplayName(label)}: Yes`}
+        title={isPositive ? "Tap to clear your Yes" : "Yes"}
+      >
+        &#10003;
+      </ChipStateButton>
+      <ChipStateButton
+        type="button"
+        $active={isNegative}
+        $polarity="negative"
+        disabled={disabled}
+        onClick={() => setState("negative")}
+        data-testid={`attribute-chip-${tagName}-no`}
+        aria-pressed={isNegative}
+        aria-label={`${getTagDisplayName(label)}: No`}
+        title={noTitle}
+      >
+        &#10005;
+      </ChipStateButton>
+    </ChipGroup>
   );
 }
 

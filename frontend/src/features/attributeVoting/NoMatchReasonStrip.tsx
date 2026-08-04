@@ -96,8 +96,11 @@ export const NO_MATCH_REASON_TAG_NAMES: Array<string> = (
 interface NoMatchReasonStripProps {
   backendURL: string;
   cardIdentifier: string;
-  /** Called once a reason has been submitted, or the user skips. */
-  onDone: () => void;
+  /** Called once a reason has been submitted (with the chosen tagName), or the user skips
+   * (with no argument) - the caller uses the tagName to route not-official-printing answers
+   * back to the candidate grid instead of straight to the next item, see QuestionFeed.tsx's
+   * own onNoMatchReasonDone. */
+  onDone: (chosenTagName?: string) => void;
   /** Called instead of the usual error toast when a submission is rejected with 429 - see
    * ArtistVotePicker.tsx's identical prop for the full rationale. This component has only one
    * caller today (QuestionFeed.tsx), so this is effectively always provided, but stays optional
@@ -133,7 +136,7 @@ export function NoMatchReasonStrip({
       "same-origin",
       "question-feed"
     )
-      .then(() => onDone())
+      .then(() => onDone(tagName))
       .catch((error) => {
         if (isRateLimited(error) && onRateLimited) {
           onRateLimited();
@@ -196,7 +199,7 @@ export function NoMatchReasonStrip({
         <Button
           variant="outline-secondary"
           disabled={submittingTagName != null}
-          onClick={onDone}
+          onClick={() => onDone()}
           data-testid="no-match-reason-skip"
         >
           Skip
