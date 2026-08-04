@@ -290,16 +290,22 @@ GEOMETRY_BLEED_EXTRACTOR_VERSION = "geometry-bleed-v1"
 LAYOUT_CLASS_EXTRACTOR_VERSION = "layout-class-v1"
 CROP_COORDINATES_EXTRACTOR_VERSION = "crop-coordinates-v1"
 # v1 -> v2 (issue #480's combined pass, THE FLIP: settings.OCR_ENGINE default -> "tesserocr" -
-# see settings.py's own comment). These three extractors are the ones whose STORED VALUE actually
-# depends on which OCR engine produced it (they all read through `local_ocr.
-# run_tesseract_text_and_words`, which now runs on tesserocr's differently-compiled tesseract/
-# leptonica build by default - issue #423's spike already found byte-identical output is
-# structurally unreachable given that vendored-build mismatch). Bumping the version is what makes
-# every existing row under the OLD tag stale, so the next pass re-extracts it under the new
-# engine rather than silently mixing two engines' output under one provenance label (issue #480's
-# correction comment: "Engine swap WITHOUT a version bump is forbidden").
+# see settings.py's own comment). These extractors' STORED VALUE actually depends on which OCR
+# engine produced it (they read through `local_ocr.run_tesseract_text_and_words`, which now runs
+# on tesserocr's differently-compiled tesseract/leptonica build by default - issue #423's spike
+# already found byte-identical output is structurally unreachable given that vendored-build
+# mismatch). Bumping the version is what makes every existing row under the OLD tag stale, so the
+# next pass re-extracts it under the new engine rather than silently mixing two engines' output
+# under one provenance label (issue #480's correction comment: "Engine swap WITHOUT a version
+# bump is forbidden").
 COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v2"
-ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v2"
+# v2 -> v3 (PR #685): wires modern_artist_credit.recognize_artist_credit in as a third artist
+# fallback inside compute_card_evidence, recovering a name for ~19,478 cards that previously
+# stored none. The extractor's own OCR pass is unchanged from v2 (still issue #480's tesserocr
+# engine) - this bump exists solely so Stage C's version-aware resume filter
+# (MANIFEST_EXTRACTOR_CURRENT_VERSIONS) selects the whole catalogue for one re-extraction pass
+# under the new fallback, per issue #509's stale-value comparison.
+ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v3"
 COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v2"
 # NOT bumped: symbol_region is a raw phash of a crop region (imagehash, no tesseract call at all)
 # - engine-independent by construction.

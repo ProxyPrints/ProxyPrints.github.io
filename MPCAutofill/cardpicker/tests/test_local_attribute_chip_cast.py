@@ -42,7 +42,7 @@ from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory
 
 _COMPLETE_EXTRACTOR_VERSIONS = {
     "collector_line_ocr": "collector-line-ocr-v2",
-    "artist_ocr": "artist-ocr-v2",
+    "artist_ocr": "artist-ocr-v3",
     "geometry_bleed": "geometry-bleed-v1",
 }
 
