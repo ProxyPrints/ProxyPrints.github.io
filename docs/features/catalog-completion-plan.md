@@ -1841,6 +1841,74 @@ as `ARTBOX_OLD_CROP_BOX`'s own crop-fraction confidence.
 
 **Border-color `CardTagVote` cast inline during Stage C — `extraction-soundness-batch` (2026-07-27)**: `extract_card_evidence` in `image_evidence.py` now casts a `CardTagVote` for border color immediately after `compute_card_evidence` returns, using the `layout_class` field already extracted by the `layout_class` extractor block. `cast_border_attribute_vote(card, layout_class, confidence=0.5)` (existing function in `local_fallback.py`) is called with machine weight 0.5 (vs the 0.75 default used in the write loop's own post-import re-vote path). The empty-string ambiguous sentinel (`layout_class == ""`) is coerced to `None` before the call so no vote fires for ambiguous classifications. `compute_card_evidence` itself is unchanged and remains DB-free (required for `ProcessPoolExecutor` workers); the vote cast is the only DB write in `extract_card_evidence`. Test: `TestExtractCardEvidenceBorderColorVote` in `test_image_evidence.py` asserts that the extraction count equals the vote count for a non-ambiguous border color, that no vote is cast for an ambiguous classification, and that no vote is cast when `layout_class` is absent from the result.
 
+**Stage C extractor ownership — visibility + CI totality (issue #509's own follow-up, 2026-08-04)**:
+the eleven `*_EXTRACTOR_VERSION` constants only cover code that changed a KEY's version when it
+changed the KEY's own logic. A meaningful amount of what `compute_card_evidence` actually stores
+lives in module-private helpers (`_extract_legal_line`, `_parse_artist_is_contradicted`,
+`_parse_is_lexicon_valid`, `_crop_box_to_pixels`, ...) and in callables imported from
+`collector_line_artist.py`/`local_ocr.py`/`local_image_quality.py`
+(`recover_artist_from_card_text`, `preprocess_variants`, `run_tesseract_text_and_words`, ...) —
+none of which carry a version of their own. The collector-line artist gate
+(`_parse_artist_is_contradicted`/`recover_artist_from_card_text`, 2026-07-29) is the sharpest
+example already on record: its own docstring states plainly that landing it bumped no version,
+"deliberately," because a bump there would have forced a ~220k-card re-extraction that wasn't
+being scheduled at the time. That is a reasoned decision about WHEN to re-extract, not a decision
+that the code path is invisible — but nothing before this entry made the two distinguishable to a
+future reader.
+
+THE RULE: every code path that helps determine a stored `ImageEvidence` field takes one of two
+shapes, and the choice is a per-entry judgement call made explicitly, never left implicit.
+
+1. It is genuinely its own extractor — a new `*_EXTRACTOR_VERSION` constant, a new
+   `MANIFEST_EXTRACTOR_KEYS` member, `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` entry, and (per
+   `golden_set.py`'s own task #145 gate) `GOLDEN_EXPECTATIONS` coverage for the value it produces.
+2. It is a component of an existing extractor — declared in
+   `EXTRACTOR_OWNERSHIP` in `.github/scripts/check_extractor_ownership_totality.py`, naming every
+   `MANIFEST_EXTRACTOR_KEYS` member whose stored field it actually helps determine (more than one,
+   when it does — the artist gate above governs `collector_line_ocr`'s own escalation loop, which
+   is also what `collector_line_tsv`'s word boxes are selected against and what `artist_ocr`'s
+   raw-text reuse pass sees, so it is declared under all three). Declaring a component here does
+   NOT bump any version by itself; it is a visibility act. Whether/when to actually bump the
+   version(s) it names, once its own behaviour changes, is still the separate per-extractor
+   decision task #145's "one PR per extractor, golden-set-tested before merge" gate has always
+   required — this just makes the decision impossible to skip past unnoticed.
+
+WHAT KEEPS THE TWO ROSTERS IN SYNC: both are CI-enforced by AST derivation, never by a hand-list
+trusted to stay current, matching this file's own repeated "the pipeline's own existing strings
+verbatim, not a separately-invented vocabulary" discipline applied one level up, to CODE rather
+than STRINGS. `.github/scripts/check_extractor_manifest_sync.py` (pre-existing, issue #509) ties
+the eleven version constants to the cohort driver's resume-filter map. Its new sibling,
+`.github/scripts/check_extractor_ownership_totality.py`, derives the set of module-private helpers
+`image_evidence.py` defines plus every externally-imported callable it actually calls, and fails CI
+if that derived set and `EXTRACTOR_OWNERSHIP`'s declared keys disagree in either direction — an
+undeclared new contributor, or a stale entry for one that was renamed/removed. It also cross-checks
+that every key an ownership entry names is a real, live `MANIFEST_EXTRACTOR_KEYS` member (imported
+from `check_extractor_manifest_sync.py` directly, so the two scripts can never independently
+disagree about what counts as "real").
+
+TWO EXPLICIT EXCLUSIONS from this sweep, both stated in the totality script's own module docstring
+rather than left to be discovered by a confused future reader: `local_fallback.py`'s own exported
+helpers (`classify_bleed_edge`, `classify_border_color`, `classify_frame_style`,
+`compute_bleed_diff_mm`, `normalize_crop_box`, `extract_artist_name`) and the OCR attempt-tier
+ladder (`_collector_line_ocr_attempts`, issue #259) — both being worked on in parallel by other
+branches at the time this sweep landed. Each is already the direct, named mechanism of an existing
+versioned extractor (`geometry_bleed`/`layout_class`/`artbox_phash`/`collector_line_ocr`), so their
+omission is a sequencing decision, not a coverage gap this sweep itself leaves open — lifting each
+exclusion is one entry once its own parallel branch lands.
+
+CORRECTION TO THE ORIGINATING BRIEF: `local_art_edge.classify_art_edge_continuity` (issue #617's
+own "Extended" art-edge continuity classifier) was named as a candidate for this sweep but is NOT
+actually reachable from `compute_card_evidence` today — `local_art_edge.py` is a declared-but-
+not-yet-live Stage D CALCULATOR (it reads `ImageEvidence.art_crop_px`, already-persisted, rather
+than being called from within Stage C's own extraction pass), confirmed by grep against the whole
+`cardpicker` package finding zero call sites outside its own tests. It is out of this sweep's scope
+for the same reason `local_fallback.py`/the OCR ladder are — nothing currently calls it from
+`compute_card_evidence` for the ownership map to declare.
+
+No stored `ImageEvidence` value changes as a result of this entry: all seventeen sweep-covered
+contributors were already feeding their currently-versioned extractor(s) before this landed; the
+work is declaration and CI enforcement only, not a version bump or a re-extraction trigger.
+
 **Stage C bulk driver: compute profile + concurrency/OCR-cost fix (2026-07-20)** —
 `docs/reports/2026-07-20-pipeline-compute-profile.md` measured the bulk cohort driver
 (`run_image_evidence_cohort.py`, previously landed on an unmerged worktree branch only, ported to
