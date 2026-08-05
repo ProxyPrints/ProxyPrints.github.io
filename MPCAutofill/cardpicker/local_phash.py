@@ -383,6 +383,161 @@ def run_content_phash_backfill(
     return BackfillResult(dry_run=dry_run, total_candidates=total, hashed=hashed, failed=failed)
 
 
+DEFAULT_CANONICAL_HASH_BACKFILL_BATCH_SIZE = 500
+# Matches SCRYFALL_CDN.max_concurrency (harvest_fetch_limiter.py) - a wider pool just queues
+# threads behind that destination's own concurrency semaphore, never raises real throughput.
+DEFAULT_CANONICAL_HASH_BACKFILL_WORKERS = 5
+
+
+@dataclass(frozen=True)
+class CanonicalHashBackfillResult:
+    dry_run: bool = False
+    allow_remote: bool = False
+    total_backlog: int = 0
+    total_candidates: int = 0
+    hashed: int = 0
+    failed: int = 0
+    skipped_no_local_url: int = 0
+    elapsed_seconds: float = 0.0
+
+
+def run_canonical_hash_backfill(
+    dry_run: bool = False,
+    batch_size: int = DEFAULT_CANONICAL_HASH_BACKFILL_BATCH_SIZE,
+    workers: int = DEFAULT_CANONICAL_HASH_BACKFILL_WORKERS,
+    limit: Optional[int] = None,
+    nice: bool = True,
+    progress_every: int = 1000,
+    queue_depth_batches: int = DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES,
+    allow_remote: bool = False,
+) -> CanonicalHashBackfillResult:
+    """
+    Completes the local phash reference corpus (docs/features/catalog-completion-plan.md):
+    hashes every `CanonicalCard` row still at the unset sentinel (`image_hash == 0` - see
+    `get_or_compute_canonical_hash`'s own docstring on why 0 always means "never computed", not
+    "computed as zero"). Idempotent and resumable by construction, same NULL/sentinel-filter-as-
+    checkpoint discipline as `run_content_phash_backfill` above: a plain re-invocation after a
+    kill just filters out everything already hashed and picks up where it left off.
+
+    LOCAL-ONLY BY DEFAULT. `CanonicalPrintingMetadata.art_crop_url` is local-first (Stage B,
+    2026-07-19) and, as of issue #339's closure, populated on 113,224/113,224 printings - so the
+    entire corpus is computable with zero network calls to Scryfall's REST API, only its image
+    CDN (for the hash fetch itself, which cannot be avoided - the point is skipping the REST
+    round-trip that measured as 93.6% of a Stage B wall-clock probe, not skipping the fetch that
+    actually produces the hash). A candidate whose local URL is genuinely missing is counted in
+    `skipped_no_local_url` and left alone - NOT silently routed to the live Scryfall REST API -
+    unless the caller explicitly opts in via `allow_remote` (off by default; the escape hatch
+    exists for closing a residual gap deliberately, not as an implicit fallback).
+
+    Same pipelined shape as `run_content_phash_backfill`: one long-lived `workers`-thread pool
+    for the whole run, a sliding submission window of `batch_size * queue_depth_batches` futures
+    kept full via `concurrent.futures.wait(..., return_when=FIRST_COMPLETED)`, checkpoint-flush
+    per batch as fetches complete. See that function's own docstring for the out-of-order-
+    completion safety argument (identical here: each row's persist is independent).
+
+    No separate rate-limit parameter here (unlike `run_content_phash_backfill`'s
+    `rate_limit_per_sec`): `_fetch_and_hash` already goes through
+    `harvest_fetch_limiter.rate_limited_get(SCRYFALL_CDN, ...)`, which paces and bounds
+    concurrency at the destination-limiter layer - a second, uncoordinated pacer on top of that
+    would just add a redundant ceiling, not a better one.
+
+    `elapsed_seconds` covers only THIS invocation's own selection (respecting `limit`) - the
+    caller (the management command) is responsible for extrapolating a full-backlog wall-clock
+    estimate from `total_backlog`/`total_candidates`/`elapsed_seconds` when `limit` narrows the
+    run to a sample.
+    """
+    if nice:
+        try:
+            os.nice(15)
+        except (AttributeError, PermissionError, OSError):
+            logger.warning("os.nice unavailable in this environment - --nice throttling is CPU-yield-only")
+
+    base_queryset = CanonicalCard.objects.filter(image_hash=0).select_related("printing_metadata")
+    total_backlog = base_queryset.count()
+    queryset = base_queryset.order_by("pk")
+    if limit is not None:
+        queryset = queryset[:limit]
+    all_canonicals = list(queryset)
+    total = len(all_canonicals)
+    print(f"{total_backlog} canonical printing/s with no image_hash yet ({total} selected this run).")
+
+    hashed = 0
+    failed = 0
+    skipped_no_local_url = 0
+    processed = 0
+    to_persist: list[CanonicalCard] = []
+    window_size = max(batch_size * queue_depth_batches, workers)
+    start_time = time.monotonic()
+
+    def _resolve_url(canonical: CanonicalCard) -> Optional[str]:
+        local_url = _local_art_crop_url(canonical)
+        if local_url is not None:
+            return local_url
+        if allow_remote:
+            return _fetch_scryfall_art_crop_url(str(canonical.identifier))
+        return None
+
+    def _fetch_one(canonical: CanonicalCard) -> tuple[Optional[int], bool]:
+        """Returns (hash_or_None, had_url) - had_url False means no art-crop URL was available
+        (locally, or via the live REST fallback if allow_remote), distinct from a fetch/hash
+        failure on a URL that did resolve."""
+        url = _resolve_url(canonical)
+        if url is None:
+            return None, False
+        return _fetch_and_hash(url), True
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending: dict["Future[tuple[Optional[int], bool]]", CanonicalCard] = {}
+        canonical_iter = iter(all_canonicals)
+
+        def submit_next() -> None:
+            canonical = next(canonical_iter, None)
+            if canonical is not None:
+                pending[executor.submit(_fetch_one, canonical)] = canonical
+
+        for _ in range(window_size):
+            submit_next()
+
+        while pending:
+            done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
+            for done_future in done:
+                canonical = pending.pop(done_future)
+                image_hash, had_url = done_future.result()
+                processed += 1
+                submit_next()  # keep the window full - fetch stays ahead of persist
+
+                if not had_url:
+                    skipped_no_local_url += 1
+                elif image_hash is not None:
+                    canonical.image_hash = image_hash
+                    to_persist.append(canonical)
+                    hashed += 1
+                else:
+                    failed += 1
+
+                if len(to_persist) >= batch_size:
+                    if not dry_run:
+                        CanonicalCard.objects.bulk_update(to_persist, ["image_hash"], batch_size=batch_size)
+                    to_persist = []
+
+                if progress_every and processed % progress_every < len(done):
+                    print(f"  ... {processed}/{total} canonical printings processed")
+
+        if to_persist and not dry_run:
+            CanonicalCard.objects.bulk_update(to_persist, ["image_hash"], batch_size=batch_size)
+
+    return CanonicalHashBackfillResult(
+        dry_run=dry_run,
+        allow_remote=allow_remote,
+        total_backlog=total_backlog,
+        total_candidates=total,
+        hashed=hashed,
+        failed=failed,
+        skipped_no_local_url=skipped_no_local_url,
+        elapsed_seconds=time.monotonic() - start_time,
+    )
+
+
 @dataclass(frozen=True)
 class PhashMatch:
     candidate: "CandidatePrinting"
@@ -444,11 +599,15 @@ __all__ = [
     "DEFAULT_BACKFILL_WORKERS",
     "DEFAULT_PIPELINE_QUEUE_DEPTH_BATCHES",
     "DEFAULT_BACKFILL_RATE_LIMIT_PER_SEC",
+    "DEFAULT_CANONICAL_HASH_BACKFILL_BATCH_SIZE",
+    "DEFAULT_CANONICAL_HASH_BACKFILL_WORKERS",
     "PhashMatch",
     "BackfillResult",
+    "CanonicalHashBackfillResult",
     "get_or_compute_canonical_hash",
     "compute_card_art_hash",
     "compute_content_phash_for_card",
     "run_content_phash_backfill",
+    "run_canonical_hash_backfill",
     "find_best_match",
 ]
