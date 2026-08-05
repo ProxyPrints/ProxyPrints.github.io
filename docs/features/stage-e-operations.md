@@ -446,19 +446,30 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    Phase 1's own review: no code path in `stage_e_dispatch.py` ever calls
    `acknowledge_trip` — resume is always `resolve_envelope_trip`'s own
    command, a fresh, explicit owner action (see the runbook above).
-3. **Fresh envelope sample** — live host load (`os.getloadavg()`), this
+3. **Load brake** (`cardpicker.stage_e_load_brake`, added 2026-08-05) —
+   before the fresh envelope sample below, re-samples `os.getloadavg()` on
+   its own account and, while the reading sits between
+   `settings.STAGE_E_HOST_LOAD_SOFT_CEILING` (default 6.0) and the hard
+   `operating_envelope.HOST_LOAD_CEILING` (7.0), sleeps and re-samples
+   rather than proceeding straight to the trip check. See "The host-load
+   soft brake" below for the full mechanism; the ordering guarantee that
+   matters here is that it runs after the no-self-resume gate (so it never
+   blocks a check of an already-open trip) and before both the fresh
+   envelope sample and the concurrency-cap slot acquire (so a braking
+   process holds no slot while it waits).
+4. **Fresh envelope sample** — live host load (`os.getloadavg()`), this
    worker process's own RSS (`cardpicker.process_metrics.get_process_rss_mb`),
    and a rolling fetch-outcome window feed `check_envelope`. If THIS sample
    breaches a bar, a new trip is recorded and the call halts
    (`status="halted-new-trip"`) before touching Stage C/D at all.
-4. **Micro-batch selection** — `_select_micro_batch` builds the card-id list:
+5. **Micro-batch selection** — `_select_micro_batch` builds the card-id list:
    the triggering event's own card first (if any), filled up to
    `settings.STAGE_E_MICRO_BATCH_SIZE` from the Stage C backlog (cards
    lacking a full-manifest `ImageEvidence` row — the same shape
    `run_image_evidence_cohort.py`'s own resume filter uses, imported, not
    reimplemented) via the persistent sweep cursor described below (issue
    [#458](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/458)).
-5. **Concurrency-cap slot acquire** (companion change, 2026-07-24 —
+6. **Concurrency-cap slot acquire** (companion change, 2026-07-24 —
    `cardpicker.stage_e_concurrency`) — refuses PROACTIVELY
    (`status="throttled-concurrency-cap"`, zero DB writes beyond the
    advisory-lock check itself) once `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`
@@ -466,7 +477,7 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    this box's django-q2 worker processes. See "Concurrency cap" below for
    the full mechanism and the incident that motivated it — distinct from,
    and a proactive complement to, the envelope's own reactive host-load bar.
-6. **Stage C** (COMPUTE sequential, per-card, not pooled — a micro-batch is
+7. **Stage C** (COMPUTE sequential, per-card, not pooled — a micro-batch is
    far too small for BULK mode's process-pool concurrency to help; FETCH
    overlapped with compute since 2026-07-25, issue #472 — see "Evidence
    transfer and decoupled fetch-ahead" below) — the same
@@ -477,19 +488,19 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    immediately and records a fresh trip (instant-pause bar) — in-flight,
    already-committed work stays committed; Stage D below still runs against
    whatever was reached ("in-flight work drains, nothing NEW starts").
-7. **Stage D** — `run_join_key_calculator`/`run_fallback_calculator`/
+8. **Stage D** — `run_join_key_calculator`/`run_fallback_calculator`/
    `run_slow_path_calculator`, called AS-IS with the new `card_ids` scope, in
    the same escalation order every BULK-mode invocation already uses. Each of
    these already calls `resolve_and_persist_printing` internally for every
    card it touches — this is what satisfies §3 decision (4)'s "scoped
    incremental per-touch consensus recompute" with no separate consensus step
    in the dispatcher at all.
-8. **Ledger write, then concurrency-cap slot release** — one `PilotRunLedger`
+9. **Ledger write, then concurrency-cap slot release** — one `PilotRunLedger`
    row per micro-batch (see "Observability" below), then the slot acquired in
-   step 5 is released (always, including on an exception - see "Concurrency
+   step 6 is released (always, including on an exception - see "Concurrency
    cap" below).
 
-Before adding a calculator to step 7, check which class its inference falls
+Before adding a calculator to step 8, check which class its inference falls
 into — [`docs/theory.md`](../theory.md) §10a. Two of the three are safe to
 dispatch per batch and one is not, and the split is not about cost: a
 calculator whose conclusion is a **count over the population** (e.g.
@@ -500,6 +511,69 @@ the scoping narrows the batch's **join-key values**, not its card ids —
 otherwise a card whose only sibling sits outside the batch silently loses it
 and nothing errors. PR #541's `run_d0_sibling_artist_propagation` scoping is
 the worked example of the second.
+
+### The host-load soft brake (2026-08-05)
+
+`operating_envelope.HOST_LOAD_CEILING` (7.0) is a binary cliff: the instant
+a fresh sample reads above it, the dispatch halts and demands a fresh owner
+action to resume (no self-resume, above). Two real passes tripped on narrow
+overshoots of that cliff a day apart (7.0796, then 7.17236328125 — 1.1% and
+2.5% over) despite the box otherwise running comfortably under load, each
+costing a stopped pipeline and a human interaction.
+`cardpicker.stage_e_load_brake` adds a throttle on approach, upstream of
+that cliff — it does not move the cliff itself, and every genuine breach
+still halts exactly as before.
+
+**Mechanism.** Step 3 of the ordering above re-samples `os.getloadavg()`
+independently of the envelope's own sample a moment later, and classifies
+the reading into a band:
+
+- `load < STAGE_E_HOST_LOAD_SOFT_CEILING` (default 6.0) — proceed
+  immediately. The common case; zero added cost.
+- `soft <= load <= HOST_LOAD_CEILING` — sleep, re-sample, repeat.
+- `load > HOST_LOAD_CEILING` — stop braking at once; the envelope's own
+  fresh sample, checked a moment later, trips honestly. The brake never
+  itself decides "trip" and never suppresses a genuine breach.
+- cumulative wait exceeds `STAGE_E_LOAD_BRAKE_MAX_WAIT_S` (default 240s) —
+  proceed anyway. Best-effort, and must never deadlock an unattended
+  multi-hour run.
+
+**Why it reduces load rather than just delaying it.** The load a pass
+generates is mostly its own concurrency
+(`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`). When every resident
+dispatcher enters the band, each one pauses independently at its own next
+batch boundary — the resident process count falls, load decays, and they
+resume. The pass self-throttles down to whatever concurrency fits under the
+ceiling, continuously, instead of running at full concurrency until it hits
+the wall and halts.
+
+**Jitter is load-bearing.** Every dispatcher reads the same global
+`os.getloadavg()`; without randomizing each sleep
+(`interval * uniform(0.75, 1.5)`), every braking process would back off and
+resume in lockstep — a sawtooth, and a thundering herd on every resume.
+
+**Settings** (all default to values that make the brake active out of the
+box — no opt-in required):
+
+- `STAGE_E_HOST_LOAD_SOFT_CEILING` (default `6.0`) — the top of the band.
+- `STAGE_E_LOAD_BRAKE_INTERVAL_S` (default `15`) — base sleep per
+  iteration, before jitter.
+- `STAGE_E_LOAD_BRAKE_MAX_WAIT_S` (default `240`) — the absolute bound on
+  one dispatch call's cumulative brake time.
+
+**Seeing whether it engaged.** `DispatchOutcome.load_brake_waits`/
+`load_brake_seconds`, merged into `PilotRunLedger.counters` on every
+completed micro-batch (see "Observability" below) — both `0`/`0.0` when the
+brake never engaged, which is expected on a quiet box. A run showing
+non-zero values under contention and zero when the box is quiet is the
+brake behaving as designed, not a bug.
+
+**Failure posture.** Wrapped in a bare `try`/`except` that proceeds as if
+unbraked on any error (a malformed setting, a transient `os.getloadavg`
+failure) — matching `stage_e_batch_sizing.resolve_micro_batch_size`'s own
+stated posture that a typo'd env var must not be able to take the run down.
+The brake is a convenience; the envelope's own hard ceiling does not depend
+on it.
 
 ### Evidence transfer and decoupled fetch-ahead (issues #473 PR-2 and #472, 2026-07-25)
 
@@ -959,8 +1033,11 @@ streamed micro-batch" below; non-zero occasionally is healthy, not a bug),
 `stage_d_illustration_votes`/`stage_d_illustration_already_voted`
 (2026-07-28, issue #507 — illustration deduction calculator wired into the
 streaming conveyor), `stage_d_slow_path_routed`, `elapsed_s`, `peak_rss_mb` (via the same
-`process_metrics.get_process_rss_mb` Phase 1 wired in), and `lockout_trip_id`
-(non-null only when a Google lockout tripped mid-batch). A halted call
+`process_metrics.get_process_rss_mb` Phase 1 wired in), `lockout_trip_id`
+(non-null only when a Google lockout tripped mid-batch), and
+`load_brake_waits`/`load_brake_seconds` (2026-08-05 — see "The host-load
+soft brake" below; both `0`/`0.0` whenever the brake never engaged for this
+batch, which is the common case). A halted call
 (`disabled`/`halted-open-trip`/`halted-new-trip`)
 writes NO ledger row at all — a halted dispatch never partially starts, so
 there's nothing to record beyond the `EnvelopeTrip` row `check_envelope`

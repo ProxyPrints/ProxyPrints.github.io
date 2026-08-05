@@ -618,6 +618,34 @@ STAGE_E_MICRO_BATCH_SIZE = env.int("STAGE_E_MICRO_BATCH_SIZE", default=None)
 # own "placeholder, not invented precision" convention immediately above.
 STAGE_E_MAX_CONCURRENT_DISPATCHES = env.int("STAGE_E_MAX_CONCURRENT_DISPATCHES", default=2)
 
+# Host-load soft brake (2026-08-05 - cardpicker/stage_e_load_brake.py's own module docstring
+# carries the full mechanism). Delays a dispatch,
+# never bypasses the hard ceiling: `STAGE_E_HOST_LOAD_SOFT_CEILING` opens the band below
+# `operating_envelope.HOST_LOAD_CEILING` (7.0) in which a dispatch sleeps and re-samples instead
+# of proceeding straight to the envelope check that would otherwise trip it. All three default to
+# values that make the brake active out of the box - matching STAGE_E_MAX_CONCURRENT_DISPATCHES's
+# own "safe by default, no opt-in required" convention above, since an instance maintainer running
+# their own catalogue for the first time cannot know to enable a knob they don't know exists.
+#
+# STAGE_E_HOST_LOAD_SOFT_CEILING - ~85% of the hard 7.0 ceiling, read off the two load-average
+# trips this brake exists to prevent (7.0796 and 7.17236328125 - both trips were already inside
+# 15% of the bar when the pass that produced them was launched, well above this 6.0 line).
+STAGE_E_HOST_LOAD_SOFT_CEILING = env.float("STAGE_E_HOST_LOAD_SOFT_CEILING", default=6.0)
+
+# STAGE_E_LOAD_BRAKE_INTERVAL_S - base sleep per brake iteration, before jitter
+# (`stage_e_load_brake.run_load_brake`'s own `uniform(0.75, 1.5)` multiplier). 15s is short
+# relative to the 1-minute load average it re-samples on each wake so the loop still notices a
+# quick recovery, without being so short that a sustained band spends most of its time waking up
+# rather than waiting.
+STAGE_E_LOAD_BRAKE_INTERVAL_S = env.float("STAGE_E_LOAD_BRAKE_INTERVAL_S", default=15.0)
+
+# STAGE_E_LOAD_BRAKE_MAX_WAIT_S - the absolute bound on how long one dispatch call may spend
+# braking before proceeding anyway. `os.getloadavg()`'s one-minute figure is an EWMA with a ~60s
+# time constant, so 240s is ~4 time constants (~98% decay of a step change) - long enough for the
+# brake to be more than a token gesture, short enough that a sustained real breach still reaches
+# the envelope's own hard trip within one dispatch call rather than stalling indefinitely.
+STAGE_E_LOAD_BRAKE_MAX_WAIT_S = env.float("STAGE_E_LOAD_BRAKE_MAX_WAIT_S", default=240.0)
+
 # Persistent sweep cursor sizing (issue #458 - see cardpicker/stage_e_dispatch.py's
 # `_select_micro_batch` and docs/features/stage-e-operations.md's Phase 2 section for the full
 # design). Plain constants, not env-tunable (unlike STAGE_E_MICRO_BATCH_SIZE/
