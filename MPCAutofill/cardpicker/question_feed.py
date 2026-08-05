@@ -100,7 +100,7 @@ from cardpicker.printing_consensus import (
     build_group_printing_vote_tuples,
     get_contested_card_ids,
     group_printing_votes,
-    md5_group_expanded_card_ids,
+    identity_group_expanded_card_ids,
 )
 from cardpicker.reason_tags import NOT_OFFICIAL_ART_REASON_TAGS
 from cardpicker.schema_types import QuestionFeedCounts, QuestionFeedItem, TypeEnum
@@ -245,11 +245,12 @@ def _printing_vote_tuples(card: Card) -> list[VoteTuple]:
 
 def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
     """
-    Every card this voter has already cast a printing vote on, WIDENED to those cards' full md5
-    identity groups (`printing_consensus.md5_group_expanded_card_ids`) - the exclusion set the
-    printing tiers below filter against, so a voter who answered one member of a group is never
-    asked the same byte-identical image again under a sibling's identifier (issue #473: the feed
-    serves one member per group, not N).
+    Every card this voter has already cast a printing vote on, WIDENED to those cards' full
+    combined identity groups (`printing_consensus.identity_group_expanded_card_ids` - md5 union
+    artbox-phash-d0, issue #661) - the exclusion set the printing tiers below filter against, so
+    a voter who answered one member of a group is never asked the same byte-identical or
+    phash-d0-identical image again under a sibling's identifier (issue #473: the feed serves one
+    member per group, not N).
 
     This replaces the `.exclude(printing_tags__anonymous_id=anonymous_id)` clause those tiers
     used before, and is exactly equivalent to it for a card whose group is itself alone (the
@@ -264,15 +265,16 @@ def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
     direct caller - a test, a shell - can still ask for one tier by `anonymous_id` alone.
     """
     voted_card_ids = CardPrintingTag.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
-    return md5_group_expanded_card_ids(voted_card_ids)
+    return identity_group_expanded_card_ids(voted_card_ids)
 
 
 def _voter_answered_artist_card_ids(anonymous_id: str) -> set[int]:
     """
     The artist-tier analogue of `_voter_answered_printing_card_ids` above: every card this voter
-    has already cast a `CardArtistVote` on, widened to those cards' full md5 identity groups, so
-    a voter who answered one member of a byte-identical group is not re-asked the same artist
-    question under a sibling's identifier (issue #473). Scoped to `_tier_2_contested` only
+    has already cast a `CardArtistVote` on, widened to those cards' full combined identity
+    groups, so a voter who answered one member of a byte-identical or phash-d0-identical group is
+    not re-asked the same artist question under a sibling's identifier (issue #473, widened by
+    #661). Scoped to `_tier_2_contested` only
     (2026-08-04 gate on the phase-C/md5 routing brief) - `_tier_4_fresh`'s own artist exclusion
     keeps its pre-existing, unwidened `.exclude(artist_votes__anonymous_id=...)` form.
 
@@ -280,13 +282,13 @@ def _voter_answered_artist_card_ids(anonymous_id: str) -> set[int]:
     convention exactly.
     """
     voted_card_ids = CardArtistVote.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
-    return md5_group_expanded_card_ids(voted_card_ids)
+    return identity_group_expanded_card_ids(voted_card_ids)
 
 
 def _voter_answered_tag_card_ids_by_tag(anonymous_id: str) -> dict[str, set[int]]:
     """
     For every tag name this voter has cast a `CardTagVote` on, the set of card ids - each widened
-    to its full md5 identity group - that count as "already answered" for THAT tag. Widening is
+    to its full combined identity group - that count as "already answered" for THAT tag. Widening is
     on the CARD axis only, never the tag axis: `_tier_2_contested`'s own-vote exclusion is
     deliberately scoped to (card, tag, anonymous_id), not (card, anonymous_id) - a card carries
     ~11 independent attribute-chip tags, and a card-level exclude would silently hide every other
@@ -304,7 +306,7 @@ def _voter_answered_tag_card_ids_by_tag(anonymous_id: str) -> dict[str, set[int]
     card_ids_by_tag: dict[str, set[int]] = defaultdict(set)
     for tag_name, card_id in rows:
         card_ids_by_tag[tag_name].add(card_id)
-    return {tag_name: md5_group_expanded_card_ids(card_ids) for tag_name, card_ids in card_ids_by_tag.items()}
+    return {tag_name: identity_group_expanded_card_ids(card_ids) for tag_name, card_ids in card_ids_by_tag.items()}
 
 
 def _not_official_art_card_ids() -> set[int]:
@@ -322,7 +324,7 @@ def _not_official_art_card_ids() -> set[int]:
     caster from writing one in principle, and this routing signal is meant to represent an
     actual human declaration that the artwork question is meaningless for this card - a future
     machine-cast source earning the same trust would need its own explicit decision, not a
-    silent inclusion here.
+    silent inclusion here. Widened via the combined identity group, not md5 alone (issue #661).
 
     Unlike `_voter_answered_printing_card_ids`/`_voter_answered_artist_card_ids` above, this is
     NOT per-voter: it is a fact about the CARD, so it applies identically to every voter's feed.
@@ -332,7 +334,7 @@ def _not_official_art_card_ids() -> set[int]:
         tag__name__in=NOT_OFFICIAL_ART_REASON_TAGS, polarity=VotePolarity.APPLY
     ).values_list("card_id", "source")
     human_backed_card_ids = {card_id for card_id, source in rows if is_human_backed_source(source)}
-    return md5_group_expanded_card_ids(human_backed_card_ids)
+    return identity_group_expanded_card_ids(human_backed_card_ids)
 
 
 def is_likely_resolve_printing(card: Card) -> bool:

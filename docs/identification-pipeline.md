@@ -143,14 +143,27 @@ carrying a resolved `custom-art` / `non-english` tag is skipped. `custom-art` is
 the catalogue declaring the image is _not_ a faithful depiction of a printing,
 and a checksum must not overturn that.
 
-**The phash distance-0 tier still runs, second, unchanged.** Its future is
-issue #661: the intended direction is that phash shares an _illustration_ (same
-artwork, possibly a different printing — a near-identity claim at a grain where
-a weaker claim is appropriate), not a printing verdict. Until that is built it
-stays, because it is the only propagation reaching cards with no md5 at all —
-md5 is NULL for every `LOCAL_FILE` source by design and is never invented. Both
-tiers call one propagation engine that takes the grouping as a parameter, so
-adding the illustration-grain tier later is a new grouping, not a restructure.
+**The phash distance-0 tier still runs, second, unchanged.** Issue #661 has
+since landed, as PR #695 (2026-08-05) — but as a change to a **different**
+mechanism than the one this paragraph originally anticipated. What shipped is
+a widening of `printing_consensus.py`'s own identity group (the one
+`group_printing_votes`/`resolve_printing` pool votes across at resolution
+time — see [`theory.md`§4 item
+3](theory.md#4-soundness-mechanisms)) to union in phash-d0 alongside md5. The
+propagation tier described in **this** section is untouched by that change
+and still does exactly what it always did: it propagates a _printing verdict_
+under the casting calculator's own identity, not an illustration identity,
+and it is still the only propagation reaching cards with no md5 at all — md5
+is NULL for every `LOCAL_FILE` source by design and is never invented. The
+"intended direction... phash shares an illustration" framing this paragraph
+used to describe as issue #661's own future is **not** what #661 shipped as;
+an illustration-grain propagation tier for Stage C+, if built, remains future
+work, not something PR #695 delivered (the code's own comment in
+`run_pipeline.py::_propagate_cluster_votes`, "Issue #661 holds the question
+of what phash grouping is FOR," is equally stale as of PR #695 and not yet
+corrected). Both tiers here still call one propagation engine that takes the
+grouping as a parameter, so adding that illustration-grain tier later is
+still a new grouping, not a restructure.
 
 It contains **no pipeline logic of its own**. Each stage below is reached by
 importing and calling the thing that already owned it; the command is

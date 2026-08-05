@@ -268,13 +268,20 @@ printings, artists, tags, and moderation from one screen.
     unchanged here (no persisted `CONTESTED` status exists for printing;
     artist's own CONTESTED-vs-UNRESOLVED split is a separate, untouched
     raw-outcome-count heuristic).
-- <a id="md5-identity-group-pooling"></a>**md5 identity-group pooling**
-  (issue #473 PR-3, owner-ratified 2026-07-25; soundness statement in
+- <a id="md5-identity-group-pooling"></a>**identity-group pooling (md5 ∪
+  phash-d0)** (issue #473 PR-3, owner-ratified 2026-07-25, md5-only;
+  widened to union in artbox-phash distance-0 by issue #661/PR #695,
+  2026-08-05; soundness statement in
   [`theory.md`](../theory.md)'s §4 item 3): cards sharing a non-null
   `Card.md5_checksum` index the **same image file** and are ONE
-  identification target, so printing consensus tallies them together.
-  `printing_consensus.md5_group_card_ids()` expands a card to its group;
-  `build_group_printing_vote_tuples()` builds the group's tally and
+  identification target, so printing consensus tallies them together — and,
+  since PR #695, so do cards sharing a CURRENT `ImageEvidence.artbox_phash`
+  at exact (distance-0) equality, the same sound-entailment tier
+  `docs/theory.md`'s two-threshold split already reserves for phash; a card
+  with neither is a group of one. `printing_consensus.identity_group_card_ids()`
+  expands a card to its combined group (`md5_group_card_ids()` /
+  `phash_group_card_ids()` are its two direct components, still separately
+  named); `build_group_printing_vote_tuples()` builds the group's tally and
   `vote_consensus.pool_group_votes()` collapses it by **casting
   `anonymous_id`, for every vote — human-backed included**: one agent's
   agreeing votes across members become ONE vote (a person answering the
@@ -303,11 +310,35 @@ printings, artists, tags, and moderation from one screen.
   affected group; `consensus_recompute` walks each group once;
   `question_feed` classifies likely-resolve on the group tally and never
   serves a second member of a group a voter has already answered. A card
-  with a null or unique checksum is a **group of one**, for which all of
+  with neither a checksum nor a current phash is a **group of one**, for
+  which all of
   the above is provably the pre-#473 behavior — which is also every
   card until #473's PR-1
   populates the column (`LOCAL_FILE` and other checksum-less sources stay
   null permanently).
+
+  **The phash-d0 union is narrower in scope than it looks.** It replaces
+  md5-alone in exactly the callers named above (`group_printing_votes`/
+  `resolve_printing`/`resolve_and_persist_printing`,
+  `question_feed.py`'s four answered-set widening helpers,
+  `consensus_recompute.py`'s printing loop) and nowhere else. It does not
+  touch the human-backed gate itself, and it does not extend to
+  illustration or artist consensus — `illustration_consensus.py` and
+  `stage_e_dispatch.py`'s own separately-inlined md5 grouping, and Stage
+  C+'s own phash-d0 vote-propagation tier
+  ([`identification-pipeline.md`'s "Stage C+"
+  section](../identification-pipeline.md#stage-c--the-md5-group-behaves-as-one-unit)),
+  are deliberately untouched — different consumers, different mechanisms.
+  A single union of a card's md5 group and its own phash-d0 group, not an
+  iterative transitive closure, is already the full connected component,
+  because `artbox_phash` is a deterministic function of the image bytes
+  (see `identity_group_card_ids`'s own docstring for the argument).
+  Measured against production 2026-08-05: **19,065** phash-d0 groups of
+  size >1 covering **40,493** cards; **22,454** cards reachable by a
+  phash-d0 sibling their md5 group alone would not reach; **1,492** cards
+  with no printing vote of their own that gain access to one through the
+  union.
+
 - **Frontend consumer (funnel round, docs/features/grid-selector.md's
   "art-picker FUNNEL" section)**: the two endpoints below are called
   from the `/display` rail's Select Version FUNNEL

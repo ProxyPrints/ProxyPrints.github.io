@@ -3,11 +3,14 @@ from typing import Hashable, Iterable, Literal, Sequence, TypedDict
 
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist
+from django.db.models import F, QuerySet
 
+from cardpicker.evidence_transfer import md5_currency_q
 from cardpicker.models import (
     CanonicalCard,
     Card,
     CardPrintingTag,
+    ImageEvidence,
     PrintingTagStatus,
     calculator_family,
 )
@@ -245,6 +248,221 @@ def md5_group_expanded_card_ids(card_ids: Iterable[int]) -> set[int]:
     return ids | set(_card_ids_with_md5_checksums(checksums))
 
 
+# `ImageEvidence.artbox_phash` (issue #480) is a 64-bit perceptual hash of the card's own art-box
+# region, populated by a whole-catalogue Stage C pass rather than being upload-time metadata like
+# `Card.md5_checksum`. Distance-0 (exact) equality on it is a WIDER identity relation than md5:
+# two files that are NOT byte-identical (a re-encode, a fresh re-upload, a genuine reprint using
+# the same digital art asset) can still hash identically here. Issue #661 is what authorizes
+# treating that as sound entailment rather than mere narrowing: `image_evidence.py`'s own
+# "SOUNDNESS NOTE FOR ANY FUTURE CONSUMER" and `docs/theory.md` §4's two-threshold split both
+# reserve d=0, and ONLY d=0, as "the same uploaded image, transitively true" - a Hamming-distance
+# threshold match (`find_best_match`'s 20/5 cutoffs) stays narrowing-only, untouched by this
+# module. The functions below mirror the md5 helpers above in shape (see each one's own
+# docstring for the one place it must differ - `artbox_phash` lives on `ImageEvidence`, not on
+# `Card`, so a per-card read costs a query current-checksum reads do not) and are never consulted
+# on their own: `identity_group_card_ids` below is the sole entry point every caller outside this
+# module (and `group_printing_votes`/`resolve_and_persist_printing` inside it) is meant to use -
+# a phash-only grouping mechanism living BESIDE the md5 one is the outcome this module's own
+# docstring framing exists to avoid.
+
+
+def _current_artbox_phash_queryset() -> "QuerySet[ImageEvidence]":
+    """
+    Every `ImageEvidence` row that is (a) CURRENT for its card - `content_hash` agrees with the
+    card's own live `content_phash`, and the row's own stamped `md5_checksum` doesn't actively
+    disagree with the card's (the same bulk currency rule `modern_artist_credit.
+    eligible_evidence_queryset` applies, via the shared, null-tolerant `evidence_transfer.
+    md5_currency_q` - never reinvented here) - and (b) carries a computed `artbox_phash`. A STALE
+    row (the card's image has changed since this row was written) is exactly as untrustworthy for
+    grouping as it is for any other Stage C/D read in this codebase: it may describe art that no
+    longer exists at this card, so it must never seed a vote-pooling group.
+    """
+    return ImageEvidence.objects.filter(content_hash=F("card__content_phash"), artbox_phash__isnull=False).filter(
+        md5_currency_q()
+    )
+
+
+def _card_artbox_phash(card: Card) -> int | None:
+    """
+    `card`'s own CURRENT `artbox_phash`, or `None` if it has none - no evidence yet, a stale row,
+    or a card whose art-box was never classifiable (`image_evidence.py`'s own docstring: an
+    unclassifiable frame or a degenerate crop box). Unlike `_card_md5_checksum` (a plain
+    `getattr`, zero queries - `md5_checksum` lives directly on `Card`), this costs one query:
+    `artbox_phash` lives on the related `ImageEvidence` row, not on `Card` itself.
+    """
+    return _current_artbox_phash_queryset().filter(card_id=card.pk).values_list("artbox_phash", flat=True).first()
+
+
+def _artbox_phashes_for_card_ids(card_ids: Iterable[int]) -> set[int]:
+    """
+    The phash analogue of `_md5_checksums_for_card_ids`: the distinct CURRENT, non-null
+    `artbox_phash` values held by `card_ids` - one query, no `ImageEvidence` instances
+    materialized. `phash is not None`, not a truthy check: unlike a checksum, `0` is a real,
+    reachable hash value here, not an empty-string-style sentinel.
+    """
+    return {
+        phash
+        for phash in _current_artbox_phash_queryset()
+        .filter(card_id__in=card_ids)
+        .values_list("artbox_phash", flat=True)
+        if phash is not None
+    }
+
+
+def _card_ids_with_artbox_phashes(phashes: set[int]) -> list[int]:
+    """
+    The phash analogue of `_card_ids_with_md5_checksums`: every `Card.pk` whose CURRENT
+    `artbox_phash` is in `phashes`.
+    """
+    return list(_current_artbox_phash_queryset().filter(artbox_phash__in=phashes).values_list("card_id", flat=True))
+
+
+def phash_group_card_ids(card: Card) -> list[int]:
+    """
+    The pks of `card`'s artbox-phash-d0 group - every card whose CURRENT `artbox_phash` exactly
+    equals `card`'s own, `card` included - sorted, mirroring `md5_group_card_ids`. `[card.pk]`
+    for a card with no current phash: absence of `artbox_phash` is a group of ONE, never a shared
+    group with every other phash-less card - the same catastrophic-misread risk `_card_md5_
+    checksum`'s own docstring already warns about for a checksum-less card, and exactly the
+    failure mode issue #661's brief calls out by name ("cards with no artbox_phash are not a
+    group of NULLs").
+    """
+    phash = _card_artbox_phash(card)
+    if phash is None:
+        return [card.pk]
+    return sorted(set(_card_ids_with_artbox_phashes({phash})) | {card.pk})
+
+
+def identity_group_key(card: Card) -> Hashable:
+    """
+    Stable identity of `card`'s COMBINED (md5 union phash-d0) group, for callers that visit each
+    group once across a large iteration (`consensus_recompute`), mirroring `md5_group_key`'s own
+    contract. Checksum is checked FIRST and, when present, used ALONE (never combined with phash
+    in the key itself): every member of an md5 clique that also carries a current phash
+    necessarily shares that SAME phash value too (`artbox_phash` is a deterministic function of
+    the image bytes), so keying on checksum already reaches every such member - see
+    `identity_group_card_ids`'s docstring for the full argument this relies on.
+
+    This key can UNDER-collapse relative to the true combined group in one specific, harmless
+    way: two true members of one group reached by DIFFERENT keys (one via `("md5", X)` because it
+    has no phash, another via `("phash", Y)` because it has no checksum) both still return the
+    same group from `identity_group_card_ids` when actually resolved - membership is never
+    decided by this key, only VISIT-ONCE is. At worst this costs a redundant re-resolution of the
+    same group from a second visited member (an extra query and an idempotent rewrite), never a
+    wrong one.
+    """
+    checksum = _card_md5_checksum(card)
+    if checksum is not None:
+        return ("md5", checksum)
+    phash = _card_artbox_phash(card)
+    if phash is not None:
+        return ("phash", phash)
+    return ("card", card.pk)
+
+
+def identity_group_card_ids(card: Card) -> list[int]:
+    """
+    `card`'s full pooling identity group (issue #661): the UNION of its md5 group (byte-identical
+    files) and its artbox-phash-d0 group (perceptually-identical art-box crop), `card` included,
+    sorted and deduplicated. This is THE group `group_printing_votes`/`resolve_printing`/
+    `resolve_and_persist_printing` pool votes across - md5 alone was #473's definition of "one
+    identification target"; issue #661 WIDENS that definition, it does not add a second one
+    beside it.
+
+    WHY A SINGLE UNION - NOT AN ITERATIVE TRANSITIVE CLOSURE - IS ALREADY THE FULL COMPONENT
+    ------------------------------------------------------------------------------------------
+    Two cards could in principle be linked only through a CHAIN - A shares a checksum with B, B
+    (not A) shares a phash with C - in which case unioning A's own two DIRECT groups could look
+    like it risks missing C. It never actually does, because `artbox_phash` is a deterministic
+    function of the image bytes: if A and B are byte-identical (an md5 edge) and BOTH carry a
+    current phash, that phash is necessarily the SAME value on both rows - so B's phash edge to C
+    is already, independently, an edge from A to C directly (A and C share that same phash
+    value), reachable by A's own phash-group lookup without visiting B first. The same argument
+    runs symmetrically for two cards linked only by a shared phash whose md5-sibling reaches a
+    third. One md5 lookup plus one phash lookup, both rooted at `card` itself, therefore already
+    return the full connected component - no BFS/union-find needed.
+
+    (This relies on `artbox_phash` having been computed consistently for both byte-identical
+    rows, under the same extractor version. A version bump straddling two siblings' extraction
+    times could, in the worst case, UNDER-group them - the safe direction, the same tolerance
+    `agent_dedupe_key`'s own version-bump handling elsewhere in this module accepts - never
+    falsely merge two genuinely different targets.)
+
+    A card with neither a checksum nor a current phash is a group of one, same as ruling 3 always
+    was for md5 alone.
+    """
+    return sorted(set(md5_group_card_ids(card)) | set(phash_group_card_ids(card)))
+
+
+def _require_full_identity_group(card: Card, group_card_ids: Sequence[int], parameter: str) -> None:
+    """
+    Raises unless `group_card_ids` is EXACTLY `card`'s full combined identity group - the
+    combined-group analogue of `_require_full_md5_group`; read THAT function's docstring for the
+    complete argument (the silent-different-winner failure mode a partial group causes, why plain
+    set equality is insufficient, the `ValueError`-not-`assert` choice). Everything there applies
+    unchanged here, checked against `identity_group_card_ids(card)` in place of
+    `md5_group_card_ids(card)`.
+    """
+    authoritative = identity_group_card_ids(card)
+    supplied = list(group_card_ids)
+    if sorted(supplied) == authoritative:
+        return
+
+    supplied_set = set(supplied)
+    missing = sorted(set(authoritative) - supplied_set)
+    foreign = sorted(supplied_set - set(authoritative))
+    duplicated = sorted({card_id for card_id in supplied_set if supplied.count(card_id) > 1})
+    raise ValueError(
+        f"`{parameter}` is not card {card.pk}'s full identity group "
+        f"(missing {missing}, not in the group {foreign}, duplicated {duplicated}). "
+        "This parameter is an OPTIMISATION ONLY and MUST be exactly `identity_group_card_ids(card)`. "
+        "A partial group does not produce a weaker tally, it produces a DIFFERENT one: consensus "
+        "pools votes across the whole group and deduplicates per agent, so dropping members "
+        "changes which agents are counted and which are withheld for self-contradiction, and can "
+        "therefore select a DIFFERENT WINNING PRINTING - silently, with a plausible-looking "
+        "result written to every member. If you arrived here from a batch-scoping pass (#533/"
+        "#541): scope the batch's TARGETS by its card_ids, never a target's identity neighbourhood "
+        f"lookup. The fix is to pass `{parameter}=None` and let this module derive the group "
+        "itself, which costs a few indexed queries - never to widen or delete this check."
+    )
+
+
+def identity_group_cards(card: Card) -> list[Card]:
+    """
+    `card`'s combined identity group as `Card` INSTANCES, `card` itself first and unreplaced -
+    mirrors `md5_group_cards` exactly (see its docstring for why identity, not just pk, must be
+    preserved: callers write through and later read off their own `card` object).
+    """
+    group_card_ids = identity_group_card_ids(card)
+    other_ids = [card_id for card_id in group_card_ids if card_id != card.pk]
+    if not other_ids:
+        return [card]
+    return [card, *Card.objects.filter(pk__in=other_ids)]
+
+
+def identity_group_expanded_card_ids(card_ids: Iterable[int]) -> set[int]:
+    """
+    `card_ids` widened to every member of each card's combined identity group - the phash-aware
+    analogue of `md5_group_expanded_card_ids`, used the same way by `question_feed.py`: "cards
+    this voter has answered" widened to "identity groups this voter has answered", so a voter who
+    answered one member of a phash-d0 group is not re-asked the same art under a sibling's
+    identifier either. At most four queries (the existing checksum pair, plus the phash pair) -
+    see `identity_group_card_ids`'s docstring for why widening through each channel once, rooted
+    in the ORIGINAL `card_ids`, already reaches the full component with no further iteration.
+    """
+    ids = set(card_ids)
+    if not ids:
+        return ids
+    expanded = set(ids)
+    checksums = _md5_checksums_for_card_ids(ids)
+    if checksums:
+        expanded |= set(_card_ids_with_md5_checksums(checksums))
+    phashes = _artbox_phashes_for_card_ids(ids)
+    if phashes:
+        expanded |= set(_card_ids_with_artbox_phashes(phashes))
+    return expanded
+
+
 @dataclass(frozen=True)
 class ResolvedPrinting:
     expansion_code: str
@@ -288,14 +506,15 @@ def get_resolved_printings(identifiers: Iterable[str]) -> dict[str, ResolvedPrin
 
 def group_printing_votes(card: Card, group_card_ids: Sequence[int] | None = None) -> tuple[list[CardPrintingTag], bool]:
     """
-    Every `CardPrintingTag` row cast against any member of `card`'s md5 identity group, plus
-    whether that group actually has more than one member.
+    Every `CardPrintingTag` row cast against any member of `card`'s combined identity group (md5
+    union artbox-phash-d0, issue #661 - see `identity_group_card_ids`'s own docstring for the
+    union-not-closure argument), plus whether that group actually has more than one member.
 
-    `group_card_ids`, when given, MUST be `card`'s COMPLETE md5 identity group - it is a
-    convenience for a caller that already derived the group (e.g. it is about to persist to those
-    same members), NOT a way to ask this function about part of one. That is CHECKED, not merely
+    `group_card_ids`, when given, MUST be `card`'s COMPLETE identity group - it is a convenience
+    for a caller that already derived the group (e.g. it is about to persist to those same
+    members), NOT a way to ask this function about part of one. That is CHECKED, not merely
     documented: this is the one place in this module where a caller-supplied group is consumed,
-    so `_require_full_md5_group` is called here, before either use of the value below, and a
+    so `_require_full_identity_group` is called here, before either use of the value below, and a
     narrowed group (the shape a batch-scoping pass would naturally produce - see #533/#541)
     raises instead of quietly returning a different tally's worth of rows. Read that function's
     docstring before changing this line, and note that the check must MOVE WITH THE CONSUMPTION:
@@ -311,9 +530,9 @@ def group_printing_votes(card: Card, group_card_ids: Sequence[int] | None = None
     `(card_id, pk)` so the pooled tally `pool_group_votes` builds is deterministic across runs.
     """
     if group_card_ids is None:
-        group_card_ids = md5_group_card_ids(card)
+        group_card_ids = identity_group_card_ids(card)
     else:
-        _require_full_md5_group(card, group_card_ids, "group_card_ids")
+        _require_full_identity_group(card, group_card_ids, "group_card_ids")
     if len(group_card_ids) <= 1:
         return list(card.printing_tags.all()), False
     votes = list(
@@ -474,7 +693,7 @@ def resolve_printing(
     card: Card, group_card_ids: Sequence[int] | None = None
 ) -> CanonicalCard | Literal["NO_MATCH"] | None:
     """
-    Reconciles all `CardPrintingTag` votes cast against `card`'s md5 identity group into a
+    Reconciles all `CardPrintingTag` votes cast against `card`'s combined identity group into a
     single resolved outcome: a specific `CanonicalCard` printing, the `NO_MATCH` sentinel
     (consensus is that no printing matches), or `None` if there isn't yet enough signal to
     conclude anything. See `cardpicker.vote_consensus.resolve_weighted_consensus` for the shared
@@ -482,31 +701,34 @@ def resolve_printing(
     `MIN_SHARE` gates, non-machine gate) - this is a thin wrapper translating `CardPrintingTag`
     rows into `VoteTuple`s and the winning outcome key back into a `CanonicalCard`.
 
-    The identity group (issue #473) is every card indexing a byte-identical image file: ONE
-    identification target, so its votes are tallied once, together, and the outcome applies to
-    all of it. A card with no checksum, or the only card with its checksum, is a group of one
-    (ruling 3) and takes the pre-#473 path unchanged - same rows, same query, same tuples, same
-    result.
+    The identity group is the UNION (issue #661) of every card indexing a byte-identical image
+    file (issue #473) and every card sharing `card`'s own artbox-phash at distance 0 - see
+    `identity_group_card_ids`'s own docstring for why a single union already reaches the full
+    connected component. Byte-identical files and phash-d0-identical art-box crops are both, by
+    this module's own ruling, ONE identification target, so their votes are tallied once,
+    together, and the outcome applies to all of it. A card with neither a checksum nor a current
+    phash is a group of one (ruling 3) and takes the pre-#473 path unchanged - same rows, same
+    query, same tuples, same result.
 
     `group_card_ids` - THE CONTRACT, in full
     ----------------------------------------
-    Optional. When given it MUST be `card`'s COMPLETE md5 identity group, i.e. exactly
-    `md5_group_card_ids(card)` (ordering is normalised and irrelevant; duplicates are not
+    Optional. When given it MUST be `card`'s COMPLETE identity group, i.e. exactly
+    `identity_group_card_ids(card)` (ordering is normalised and irrelevant; duplicates are not
     permitted). It is a convenience for a caller that has already derived the group, never a way
     to scope this call to part of one.
 
     A BATCH-NARROWED GROUP IS THE SPECIFIC MISUSE THIS GUARDS. If you are threading a batch's
     `card_ids` through the pipeline (#533/#541), do not thread it into here: a batch's `card_ids`
-    scopes which TARGETS get resolved, and this argument is a target's md5 NEIGHBOURHOOD, whose
-    members may lie outside the batch entirely. Scoping it by the batch is the natural-looking
-    move and it is wrong.
+    scopes which TARGETS get resolved, and this argument is a target's identity NEIGHBOURHOOD,
+    whose members may lie outside the batch entirely. Scoping it by the batch is the
+    natural-looking move and it is wrong.
 
     Passing anything else raises `ValueError`, because the failure it would otherwise cause is
     silent and is not a mere loss of signal: a subset yields a DIFFERENT tally, not a weaker one,
-    and can select a different winning printing. See `_require_full_md5_group` for the full
-    argument, what exactly is compared, and what the check costs; the check itself runs inside
-    `group_printing_votes` below, where the value is actually consumed. Omitting the argument is
-    always correct and costs one indexed query.
+    and can select a different winning printing. See `_require_full_identity_group`/
+    `_require_full_md5_group` for the full argument, what exactly is compared, and what the check
+    costs; the check itself runs inside `group_printing_votes` below, where the value is actually
+    consumed. Omitting the argument is always correct.
     """
     votes, is_group = group_printing_votes(card, group_card_ids)
     if not votes:
@@ -544,37 +766,38 @@ def resolve_and_persist_printing(
 ) -> CanonicalCard | Literal["NO_MATCH"] | None:
     """
     Runs `resolve_printing(card)` and writes the outcome onto `inferred_canonical_card` and
-    `printing_tag_status` together - for EVERY member of `card`'s md5 identity group, not just
-    `card` (issue #473 ruling 1: byte-identical images are one identification target, so a
-    resolution reached on one of them is a resolution for all of them, and cannot be allowed to
-    disagree with itself across the group by construction). `Card.serialise()` (which already
-    reads `inferred_canonical_card`) and the printing-tag review queue (which filters on the
-    indexed `printing_tag_status`, rather than recomputing consensus for every card) therefore
-    stay in sync with the latest votes for every member at once. Intended to be called
-    synchronously right after a vote is submitted for `card` - cheap, since it only touches this
-    one group's own votes. Returns the same outcome `resolve_printing` returned, so callers
-    don't need to recompute it again immediately afterwards.
+    `printing_tag_status` together - for EVERY member of `card`'s combined identity group, not
+    just `card` (issue #473 ruling 1, widened by issue #661: byte-identical images and
+    phash-d0-identical art-box crops are each one identification target, so a resolution reached
+    on one member is a resolution for all of them, and cannot be allowed to disagree with itself
+    across the group by construction). `Card.serialise()` (which already reads
+    `inferred_canonical_card`) and the printing-tag review queue (which filters on the indexed
+    `printing_tag_status`, rather than recomputing consensus for every card) therefore stay in
+    sync with the latest votes for every member at once. Intended to be called synchronously
+    right after a vote is submitted for `card` - cheap, since it only touches this one group's
+    own votes. Returns the same outcome `resolve_printing` returned, so callers don't need to
+    recompute it again immediately afterwards.
 
-    A group of one (a checksum-less or unique-checksum card - ruling 3) writes exactly the one
+    A group of one (neither a checksum nor a current phash - ruling 3) writes exactly the one
     row it always did, through the caller's own `card` instance, with no additional query.
 
     `members` may be passed by a caller that already materialized the group (see
-    `md5_group_cards`, whose contract this expects: `card` itself, first, unreplaced). Both
+    `identity_group_cards`, whose contract this expects: `card` itself, first, unreplaced). Both
     halves of that contract are now CHECKED rather than assumed, because both fail silently:
 
       - COMPLETENESS is enforced transitively and for free - the pks of `members` become
         `resolve_printing`'s `group_card_ids`, so a partial `members` is rejected by
-        `_require_full_md5_group` on the line below, BEFORE anything is written. That matters
-        twice over here: a narrowed `members` would not only compute a different tally, it would
-        also persist the result to only part of the group, leaving siblings on a stale
+        `_require_full_identity_group` on the line below, BEFORE anything is written. That
+        matters twice over here: a narrowed `members` would not only compute a different tally,
+        it would also persist the result to only part of the group, leaving siblings on a stale
         `printing_tag_status` and putting the group into exactly the self-disagreeing state
         ruling 1 says must be impossible by construction.
       - IDENTITY (`card` itself present, not a freshly-fetched equal-pk copy) is checked here,
         at no query cost, since the pk-level check above cannot see it. Substituting a copy
         leaves this function writing through a different instance from the one the caller holds
         and will read `printing_tag_status` off afterwards - the caller silently strands on a
-        stale status, which is the failure the `md5_group_cards` docstring already warns about
-        and which nothing verified until now.
+        stale status, which is the failure the `identity_group_cards` docstring already warns
+        about and which nothing verified until now.
 
     Also pushes each written card into Elasticsearch, but only when the outcome actually changes
     what's indexed for THAT card (see `_effective_indexed_printing_id`) - entering RESOLVED,
@@ -591,14 +814,14 @@ def resolve_and_persist_printing(
     locks in the same order and queue behind each other instead of deadlocking. For a group of
     one this is the same single write, in the same place, it always was.
     """
-    group_cards = list(members) if members is not None else md5_group_cards(card)
+    group_cards = list(members) if members is not None else identity_group_cards(card)
     if members is not None and not any(member is card for member in group_cards):
         # identity, not `card.pk in {m.pk for m in group_cards}`: an equal-pk COPY is precisely
         # the case this rejects (see the `members` paragraph above). Completeness is left to
         # `resolve_printing`'s own guard on the next line rather than re-derived here.
         raise ValueError(
             f"`members` must contain the caller's own `card` instance (pk {card.pk}) itself, "
-            "unreplaced - see `md5_group_cards`, whose output this expects. A freshly-fetched "
+            "unreplaced - see `identity_group_cards`, whose output this expects. A freshly-fetched "
             "copy of the same row has the same pk but is a different object: this function would "
             "write the resolution through the copy, leaving the caller's `card` on a stale "
             "`printing_tag_status`/`inferred_canonical_card` with nothing to indicate it."
