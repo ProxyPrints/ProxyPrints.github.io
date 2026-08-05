@@ -1917,9 +1917,10 @@ work is declaration and CI enforcement only, not a version bump or a re-extracti
 failed to parse a collector number: tier 2 (4 heavier-preprocessed variants, PSM 6) then tier 3 (a
 re-try of tier 1's own variants under PSM 11). Verified against real production images before
 touching the code, not from the 2026-07-23 probes alone (those tested ADDING new preprocessing
-methods, never removing an existing tier): two fresh probes
-(`MPCAutofill/scripts/experiments/ocr_ladder_tier_attribution.py`, 450 forced-escalation cards —
-300 currently-blank + 150 currently-resolved, both freshly re-derived live 2026-08-05) walked the
+methods, never removing an existing tier): two fresh probes (worktree-only analysis scripts, NOT
+committed to master/any branch — MPCAutofill/scripts/experiments/ocr_ladder_tier_attribution.py,
+450 forced-escalation cards — 300 currently-blank + 150 currently-resolved, both freshly
+re-derived live 2026-08-05) walked the
 old 3-tier ladder to full completion and recorded, per card, the first tier at which a
 CANDIDATE-VALIDATED genuine match appeared. Tier 2 produced 2 genuine matches across the 450-card
 sample; tier 3 produced ZERO — only more lexicon-valid-but-uncorroborated noise (6/300 in the
@@ -1942,8 +1943,9 @@ and `preprocess_fallback_variants` now carry real ownership entries.
 A second restructuring named in this issue's own brief - unifying `collector_line_ocr`'s narrow
 crop and `legal_line`'s full-width crop (same y-band, `local_ocr.DEFAULT_CROP_BOX` vs
 `LEGAL_LINE_CROP_BOX`) into ONE OCR pass - was investigated and NOT shipped: a real-image accuracy
-probe (`MPCAutofill/scripts/experiments/ocr_crop_widen_accuracy.py`, 150 currently-successful
-production cards) found that re-reading tier 1 from the wider crop with the SAME preprocessing
+probe (worktree-only analysis script, NOT committed to master/any branch —
+MPCAutofill/scripts/experiments/ocr_crop_widen_accuracy.py, 150 currently-successful production
+cards) found that re-reading tier 1 from the wider crop with the SAME preprocessing
 regressed 46/150 (30.7%) of currently-correct `collector_line_set_code`/`collector_line_collector_number`
 reads - mostly proxy/watermark text (`"PsilosX Proxy"`, `"Playtest Card"`, `"NOT FOR SALE"`,
 artist full names) getting picked up by `_SET_CODE_RE`'s "search after the number" fallback in
