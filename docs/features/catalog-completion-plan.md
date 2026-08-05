@@ -1705,6 +1705,80 @@ fit" conditional wording; full suite 1099 passed / 4 skipped (the same
 CI-documented named skips — nothing newly broken); `makemigrations --check`
 clean (no model change).
 
+**`layout` persisted, sideways-cohort measured (issue #693, 2026-08-05)**:
+`CanonicalPrintingMetadata.layout` (migration
+`0102_canonicalprintingmetadata_layout`, single-leaf on `0101`) persists
+Scryfall's own `layout` tag verbatim from
+`printing_metadata_import.PrintingMetadataRow.layout` — the same value the
+back-face lookup above already reads to test membership in
+`DOUBLE_FACED_LAYOUTS`, but which was discarded once that check ran rather
+than kept. `layout` now survives past that check as a plain
+`CharField(blank=True)`, following `border_color`/`frame`'s own field
+convention exactly: added to `_METADATA_SYNC_FIELDS` and wired into the
+`CanonicalPrintingMetadata(...)` constructor call; `DOUBLE_FACED_LAYOUTS`'s
+existing use of `row.layout` is unchanged.
+
+Persisting it was motivated by a live measurement, not spec-first — but
+the first pass at that measurement (41 of 230,488 cards, 0.018%,
+2.4% parse failure) was **retracted and redone** (2026-08-05, same day):
+it counted only cards that already carry a `canonical_card` link, and
+that link is acquired _by having been successfully identified_ — a
+sideways card whose crop lands on rotated content and therefore fails
+identification can never appear in a cohort defined by identification
+success. That cohort was drawn from a population selected for not having
+failed, so its low failure rate proved nothing about sideways cards
+generally, and the 91.5% of the catalogue with no canonical linkage
+(layout unknown, not normal) was invisible to it entirely.
+
+The redo defines the cohort by **expected** layout instead: every
+`Card.name` (source metadata, independent of identification) that
+name-matches a `CanonicalCard` whose Scryfall `layout` is `planar`/
+`scheme`, via the same `to_searchable` join
+`deductive_backfill.CanonicalNameIndex` already uses for this exact
+Card-to-CanonicalCard join. That cohort is **1,093 cards (0.474% of the
+catalogue)** — 305 canonical printing names map unambiguously to
+planar/scheme, plus 4 names that are ambiguous (also match a
+non-sideways printing); the old 41-card cohort is fully contained inside
+it. Only 43 of the 1,093 (3.9%) carry a `canonical_card` link, confirming
+the bias directly. Its collector-line parse failure rate is **53.3%
+(583/1,093)**, compared against the correct baseline — the _unlinked_
+population generally (40.4%, 85,217/210,832) — not the whole-catalogue
+figure (38.4%), which mixes the unlinked population with the
+already-successfully-identified linked population (17.1%) and so
+understates how bad the unlinked baseline really is. The sideways cohort
+fails **13 points above** its correct comparison group, a real elevated
+signal the old measurement's biased denominator hid entirely.
+
+That elevated failure rate is what a `local_fallback.normalize_crop_box`
+rotation path was built to test — and the rotation trial's result is
+negative. A 30-card real-image sample (fetched live via
+`image_cdn_fetch.fetch_card_image`, drawn from the 1,046-card pool of
+this cohort that has never carried a `canonical_card` link) was run
+through the existing collector-line and Illus.-anchor crops unmodified,
+then again with the whole image rotated 90° clockwise and 90°
+counter-clockwise (both directions, since no stored signal indicates
+which way a given render is oriented). Collector-line OCR produced a
+_plausible_-looking parse on 17/30 baseline images, 9/30 rotated
+clockwise, 7/30 rotated counter-clockwise — but validated against the
+card's own real candidates (`local_ocr.validate_against_candidates`,
+the same check Stage D's calculator applies), **zero of those parses
+were genuine matches, in any of the three orientations**. The
+Illus.-anchor artist-line crop found zero matches in all three
+orientations too. Rotation neither recovers a match baseline missed nor
+loses one baseline found (the one case where a rotation "recovered" a
+plausible parse baseline missed was itself non-genuine noise). The
+failure is not a crop-box placement problem rotation can fix; it matches
+issue #683's own finding for the (heavily overlapping — 24/30 of this
+sample's `bleed_class` is `trimmed`) trimmed-cohort investigation: these
+are disproportionately fan-made custom renders that plausibly never had
+a machine-readable collector line to begin with, a content problem no
+crop geometry recovers. Crop-box rotation was evaluated and deliberately
+**not built** — not because the cohort is negligible (it isn't) or the
+failure rate is unremarkable (it isn't), but because the rotation trial
+itself found nothing to recover. `golden_set.py`'s 30 pinned cards
+contain zero sideways-layout cards, so the golden set cannot catch a
+regression in this path specifically.
+
 **color_profile / quality_signals / fetch-health completion — Stage C manifest
 extractor group, built** (public issue #150's re-spec, 2026-07-20 — the phash half of the
 original issue is DROPPED per the owner's same-day re-spec comment on #150, superseded by

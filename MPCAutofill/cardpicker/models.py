@@ -202,6 +202,16 @@ class CanonicalPrintingMetadata(models.Model):
     border_color = models.CharField(max_length=20, blank=True)
     frame = models.CharField(max_length=10, blank=True)
     frame_effects = models.JSONField(default=list, blank=True)
+    # Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme") -
+    # the same value `printing_metadata_import.PrintingMetadataRow.layout` already parses and
+    # was, until issue #693, discarded after being checked against `DOUBLE_FACED_LAYOUTS`.
+    # Persisted so downstream consumers can ask "is this printing physically sideways"
+    # (`planar`/`scheme`, plus some `split`/`battle` cards) without re-deriving it from image
+    # geometry - measured 2026-08-05: only 46 of 230,378 evidence rows are landscape
+    # (width > height), because sideways cards are overwhelmingly rendered into a portrait
+    # frame with rotated content, so aspect ratio cannot find them. Canonical metadata is the
+    # only reliable source.
+    layout = models.CharField(max_length=30, blank=True)
     promo_types = models.JSONField(default=list, blank=True)
     edhrec_rank = models.IntegerField(null=True, blank=True)
     # HOW MANY PRINTINGS OF THIS ORACLE CARD *WE* HAVE CATALOGUED - a COUNT over our own
