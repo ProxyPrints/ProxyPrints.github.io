@@ -1705,6 +1705,32 @@ fit" conditional wording; full suite 1099 passed / 4 skipped (the same
 CI-documented named skips — nothing newly broken); `makemigrations --check`
 clean (no model change).
 
+**`layout` persisted, sideways-cohort measured (issue #693, 2026-08-05)**:
+`CanonicalPrintingMetadata.layout` (migration
+`0102_canonicalprintingmetadata_layout`, single-leaf on `0101`) persists
+Scryfall's own `layout` tag verbatim from
+`printing_metadata_import.PrintingMetadataRow.layout` — the same value the
+back-face lookup above already reads to test membership in
+`DOUBLE_FACED_LAYOUTS`, but which was discarded once that check ran rather
+than kept. `layout` now survives past that check as a plain
+`CharField(blank=True)`, following `border_color`/`frame`'s own field
+convention exactly: added to `_METADATA_SYNC_FIELDS` and wired into the
+`CanonicalPrintingMetadata(...)` constructor call; `DOUBLE_FACED_LAYOUTS`'s
+existing use of `row.layout` is unchanged.
+
+Persisting it was motivated by a live measurement, not spec-first: the
+"sideways" cohort (Scryfall `layout` `planar`/`scheme` — cards printed in
+landscape, collector line and all other text rotated 90° from the
+portrait orientation every other extractor assumes) is **41 of 230,488
+catalogued cards (0.018%)**, and that cohort's own collector-line parse
+failure rate is **2.4% (1/41)** — not elevated against any whole-catalogue
+baseline measured. On that result, crop-box rotation for sideways cards
+(a `local_fallback.normalize_crop_box` extension) was evaluated and
+deliberately **not built**: the cohort is too small and the failure rate
+too unremarkable to justify it. `golden_set.py`'s 30 pinned cards contain
+zero sideways-layout cards, so the golden set cannot catch a regression in
+this path specifically.
+
 **color_profile / quality_signals / fetch-health completion — Stage C manifest
 extractor group, built** (public issue #150's re-spec, 2026-07-20 — the phash half of the
 original issue is DROPPED per the owner's same-day re-spec comment on #150, superseded by
