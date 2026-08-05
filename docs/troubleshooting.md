@@ -1997,3 +1997,28 @@ query once it notices its client is gone, deliberately not
 `statement_timeout` (BULK-mode eligibility scans legitimately run for
 minutes-hours with a live client and must not be killed on a timer).
 Parked on the board, not yet shipped.
+
+## `manage.py makemigrations` fails with `ValueError: Missing staticfiles manifest entry for 'cardpicker/favicon.ico'` in a fresh worktree
+
+**Symptom**: `python manage.py makemigrations cardpicker` (or any other
+management command that touches `MPCAutofill.urls`, which resolves a
+static URL at import time) crashes before it gets anywhere near
+migrations, with a `ValueError` from
+`django.contrib.staticfiles.storage.ManifestStaticFilesStorage` about a
+missing manifest entry for `cardpicker/favicon.ico`. Seen 2026-08-05 in
+a brand-new `git worktree` checkout that had never had `collectstatic`
+run against it.
+
+**Cause**: `STATICFILES_STORAGE` is `ManifestStaticFilesStorage`
+(settings.py), which requires `staticfiles.json` — built by
+`collectstatic` — to resolve any `{% static %}`/`static()` reference.
+`MPCAutofill/urls.py` calls `static("cardpicker/favicon.ico")` at
+import time for the favicon redirect, so importing the URLconf at all
+(which `makemigrations`' system checks do) fails in any checkout that
+hasn't run `collectstatic` yet — this has nothing to do with
+migrations themselves.
+
+**Fix**: run `python manage.py collectstatic --noinput` once per
+worktree before the first `makemigrations`/`migrate`/any other
+management command in it. Output lands in the gitignored `/static/`
+directory at the repo root, harmless to leave in place.
