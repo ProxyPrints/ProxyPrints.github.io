@@ -394,6 +394,33 @@ printing votes, so it would have fired on the first `-v2` run.
   votes (ordinary consensus since #292). Detect-and-tag only.
 - **"Marked as proxy"** (#291, planned): marker presence → tag; **absence** →
   moderation flag, batched by source (the counterfeit-risk framing).
+- **Artbox-phash exemplar index** (#508 phase 1, `artbox_exemplar_backfill.py`,
+  `ArtboxPhashExemplar`): a second, OCR-free illustration-deduction path,
+  built but not yet wired to anything. A card's own `artbox_phash` (the
+  evidence-only extractor from #480) is labelled with the `illustration_id`
+  of the printing that scan was identified as, sourced two ways — a
+  human-backed printing resolution (`printing_tag_status == RESOLVED`,
+  always human-backed by the g5 gate above), or an unopposed join-key
+  machine vote at 0.75/0.85 confidence (the artist-disagreement tier, 0.65,
+  and the no-match tier, 0.6, are both excluded — a wrong exemplar
+  propagates to every card it later matches). Every row records its own
+  seed kind and confidence, human and machine seeds stay permanently
+  distinguishable, and a bad seed retracts together with everything it
+  seeded via a shared `seed_group_key` (one md5-identity-group resolution,
+  or one source vote). **Never sourced from Scryfall images** — phash
+  comparability needs the same crop geometry our own extractor guarantees
+  and Scryfall's `art_crop` framing does not.
+
+  **What this deliberately does NOT do, in phase 1**: it does not compare
+  any unresolved card against the index, does not resolve anything, does
+  not cast an illustration or printing vote, and does not touch
+  `resolve_weighted_consensus` or the human-backed gate. The index exists
+  and is measured; nothing reads it yet. A phase 2 matching calculator
+  (comparing unresolved scans against this index at d=0/d≤2 and reusing the
+  illustration→printings vote logic the design docstring in
+  `ArtboxPhashExemplar` describes) is gated on the coverage this index
+  actually measures once seeded, the same measurement-gate discipline
+  #693 established.
 
 ## Why a bad identification is hard
 
