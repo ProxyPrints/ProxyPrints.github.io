@@ -494,24 +494,26 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # evidence the extractor does not simply abstain on sideways layouts; it can silently return
     # a plausible-looking wrong answer.
     #
-    # 35449/130028 against the #677 ladder collapse (2026-08-05, this reconcile): both cards'
-    # values above were recorded BEFORE #677 landed, against the old 3-tier/8-attempt ladder, and
-    # - unlike the 30 above - never had an equivalent post-#677 re-run, since they were not in
-    # GOLDEN_CARD_IDS when that cross-check ran. Analytically: `_collector_line_ocr_attempts`
-    # tries tier 1 then tier 2 before the now-removed tier 3 ever runs (see that generator's own
-    # docstring) - a lazy, stop-on-first-success escalation. An outcome that was ALREADY an
-    # abstention under the full old ladder (35449's collector_line_ocr blank, both cards'
-    # artist_ocr blank below) cannot un-abstain when an attempt tier is removed: dropping an
-    # attempt only removes an opportunity to succeed, never adds one, so those values are provably
-    # unaffected without a live run. 130028's collector_line_ocr match and both cards'
-    # collector_line_tsv=True (below) are NOT covered by that argument - if either had resolved
-    # uniquely at the removed tier 3, they would read differently under current code. This
-    # reconcile could not reach production data to run the real check: `MPCAutofill/.env` is
-    # absent from this worktree (not recreated - reading or copying a secrets file from elsewhere
-    # on this box was out of scope for this task), no `DATABASE_HOST`-default Postgres port was
-    # listening on this host, and `mpcautofill_django` (which does have access) was off limits to
-    # `exec`/`cp` under an open ruling for the duration of this task. Left as-is rather than
-    # guessed at - see this reconcile's own report for the open item.
+    # 35449/130028 against the #677 ladder collapse (2026-08-05, re-verified by a real run this
+    # same day): both cards' values above were recorded BEFORE #677 landed, against the old
+    # 3-tier/8-attempt ladder. This reconcile fetched both images directly from the CDN
+    # (image_cdn_fetch.py's own URL shape, at DEFAULT_FETCH_DPI=250 - confirmed as the pins' own
+    # fetch resolution by matching the recorded crop-coordinate pixel boxes exactly at that size)
+    # and called `compute_card_evidence` directly against current code - no persistence, no DB
+    # access, since that function takes only primitives and a PIL image (see its own docstring).
+    # Every value pinned for both cards above, including 130028's collector_line_ocr match
+    # ({"set_code": "not", "collector_number": "2024"}) and both cards' collector_line_tsv=True,
+    # came back identical under the current 2-tier ladder - not merely unfalsified, positively
+    # reproduced. `known_set_codes`/`artist_lexicon` were left at their DB-backed defaults (None -
+    # this reconcile touched no database), which disables the set-code lexicon-validity gate at
+    # image_evidence.py:1185; that doesn't undermine this specific result, because 130028's own
+    # accepted parse is already known to be lexicon-INVALID ("not" is not a real Scryfall set
+    # code, see GOLDEN_CARD_IDS's own comment) - so no attempt across the ladder, gate on or off,
+    # was ever accepted as genuinely valid, meaning the gate-disabled "first collector-number-
+    # bearing attempt wins immediately" outcome and the gate-enabled "first collector-number-
+    # bearing attempt becomes the eventual best-invalid fallback" outcome are the same attempt
+    # either way. Reproducing it unchanged under the now-shorter 2-tier ladder confirms that
+    # attempt was always at tier 1 or 2, never the removed tier 3.
     "collector_line_ocr": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
