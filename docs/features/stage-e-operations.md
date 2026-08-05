@@ -1635,7 +1635,7 @@ Nothing new — every batch gets its own `PilotRunLedger` row via
 is `stage-e-fullcat-b<batch-size>-<microsecond-precision invocation timestamp>`,
 the same collision-safe shape the shakedown driver adopted.
 
-## The monolith — `run_pipeline` (2026-07-30)
+## The monolith — `run_pipeline` (2026-07-30, architecture replaced 2026-07-31)
 
 `manage.py run_pipeline` — **one command that runs the whole identification
 pipeline end to end.** Owner brief: "1 click". Every stage it runs already
@@ -1643,19 +1643,68 @@ existed and every stage was already run separately; what did not exist was
 anything that ran them together, in order, under one `run_id`.
 
 ```
-Stage 0   Scryfall reference refresh, once, at the front
-Stage E   operating-envelope preflight
-Stage C   evidence extraction (the pooled engine)
-Stage D   join-key → fallback → illustration → slow-path, then the three chips
-Stage C+  distance-0 cluster vote propagation
-Stage E   fidelity gate — machine-only resolutions must be zero
-end       channel_report
+Stage 0    Scryfall reference refresh, once, at the front
+Stage E    operating-envelope preflight
+Stage C→D  per-chunk streaming loop over the whole cohort — each chunk goes
+           through dispatch_micro_batch, which runs evidence extraction and
+           join-key → fallback → illustration → slow-path (+ the three
+           chips) for that chunk before the next chunk starts
+Stage C+   distance-0 cluster vote propagation (phash tier; the md5 tier is
+           now redundant — see "Stage C+" below)
+Stage E    fidelity gate — machine-only resolutions must be zero
+end        channel_report
 ```
 
 **It contains no pipeline logic.** Every stage is reached by importing and
 calling the module that already owned it. If a future change adds an
 inference, a threshold or a calculator to `run_pipeline.py`, that logic is in
 the wrong file.
+
+**Corrected 2026-08-05 — this section described the 2026-07-30 shape; PR
+#666 (2026-07-31) replaced it and this page was not updated at the time.**
+Two things changed load-bearingly enough that the rest of this section
+(written for the original shape) needs reading with this correction in
+hand, and one thing did not change but was never documented here:
+
+1. **Stage C and Stage D are no longer separate bulk passes.** The original
+   shape ran Stage C to completion over the whole cohort (delegated to
+   `run_image_evidence_cohort` via `call_command`) and only then ran Stage D
+   in bulk (`stage_e_dispatch._run_stage_d(batch_ids=None)`) — see
+   `docs/proposals/pipeline-batching-and-verdict-transfer.md`'s "Work stream
+   A" for why (D could not start until all ~230k cards had cleared C, ~36h
+   fetch-bound). PR #666 replaced this with the keyset-paginated per-chunk
+   loop shown in the diagram above: `run_pipeline.py`'s `_run_streaming_stages`
+   calls the SAME `dispatch_micro_batch` the event-driven conveyor and
+   `stream_full_catalog` already call, once per chunk. The `_run_stage_c` /
+   `_run_stage_d_bulk` methods and the `run_image_evidence_cohort` delegation
+   described below still exist as methods on the command class, but as of
+   this reading `handle()` no longer calls either of them — they are dead
+   code, not a fallback path selectable by any flag. Treat every mention
+   below of "Stage C, pooled" / "Stage D, explicit, batch_ids=None" as
+   describing the removed shape, not the current one.
+2. **The per-chunk loop is still gated by `settings.STAGE_E_STREAMING_ENABLED`,
+   and that setting still defaults to `False`** (`settings.py`, and
+   `docker-compose.prod.yml`'s `${STAGE_E_STREAMING_ENABLED:-False}`) —
+   unchanged from the "Phase 2 — the streaming dispatch loop" section above.
+   `dispatch_micro_batch` checks the flag first, unconditionally, for every
+   caller, `run_pipeline` included: there is no bypass for the monolith's own
+   invocation. **With the flag at its default, every chunk `run_pipeline`
+   dispatches reports `status="disabled"` and Stage C/D perform no work at
+   all** — Stage 0 and the Stage E preflight still run, `channel_report`
+   still runs at the end, and the command exits 0. This directly contradicts
+   this module's own docstring and this doc's earlier framing ("`--dry-run`
+   is the only thing that prevents a write"; "no flag is required for a
+   working run") — running the monolith for real currently requires setting
+   `STAGE_E_STREAMING_ENABLED=True` in the environment, a precondition
+   neither the command's `--help` output nor its docstring mentions. This
+   reads as an unintended interaction (the flag was built to gate the
+   PASSIVE-mode continuous daemon in "Phase 2" above, not the BULK-mode
+   monolith `run_pipeline` added five days later), not a documented design
+   decision — flagged here as a defect to file, not fixed on this page.
+3. What did **not** change: the ledger convention below (one `PilotRunLedger`
+   row per command invocation, plus one per micro-batch dispatch via
+   `ledger_run_id`), the exit codes, and Stage C+'s cluster propagation
+   remain accurate as described.
 
 ### Two defaults, both load-bearing
 
