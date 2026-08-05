@@ -2055,6 +2055,24 @@ general crop-box rework).
 the full sourced investigation (per-source failure-rate breakdown,
 image samples). `cardpicker/golden_set.py`'s `GOLDEN_CARD_IDS` DOES cover
 `trimmed` cards (145532, 150472, 189166) but all three are the same
-black-border proxy template above, so the golden set has zero coverage
-of a genuine bleed-trimmed real-scan case and cannot catch a regression
-in that path specifically.
+black-border proxy template above.
+
+**2026-08-05 follow-up (golden-set coverage close)**: the above sample
+covered the 8 highest-volume trimmed sources (88.4% of the 2,786-card
+population) plus "several" long-tail ones. A follow-up sampled 7 cards
+from 6 previously-unchecked long-tail sources and found the population
+is NOT entirely custom renders: 3 of the 7 carried real, Scryfall-
+verifiable collector-line data (one, a "MH3-AI" credit line, looked
+equally plausible but was confirmed FABRICATED against the live
+Scryfall API — see `golden_set.py`'s own `GOLDEN_CARD_IDS` comment for
+that check). The genuine one, card 35449 ("Fierce Guardianship", C20
+#35, artist Randy Vargas — verified against Scryfall's own record,
+flavor text included), is now pinned in the golden set. It is still
+NOT a photographic scan — its dimensions match Scryfall's own
+`border_crop` image asset, not a camera/scanner capture of a physical
+card, so "no genuine PHOTOGRAPHIC bleed-trimmed scan exists in this
+catalogue" remains the accurate claim. The golden set also gained a
+second 2026-08-05 pin for the separate sideways-layout gap (130028,
+"Bowie Base One", a real `layout:planar` card) — see that comment for
+what its own real run produced, which is messier than a clean
+across-the-board abstention.
