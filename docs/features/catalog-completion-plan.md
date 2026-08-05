@@ -1927,9 +1927,14 @@ blank pool), consistent with the 2026-07-23 probes' own ~99% hopeless-art-noise 
 of this population. **Tier 3 removed.** Cross-checked against all 30 `golden_set.GOLDEN_CARD_IDS`
 cards the same way: none of the 30 ever resolved uniquely at tier 3, so this collapse changes zero
 golden-set expectations (see that file's own `collector_line_ocr` comment for the re-verification
-note). `COLLECTOR_LINE_OCR_EXTRACTOR_VERSION`/`COLLECTOR_LINE_TSV_EXTRACTOR_VERSION`/
-`ARTIST_OCR_EXTRACTOR_VERSION` bumped v2->v3 (all three read through the same escalation loop, per
-`EXTRACTOR_OWNERSHIP`'s own "bump every listed key together" convention); `LEGAL_LINE_EXTRACTOR_VERSION`
+note). `COLLECTOR_LINE_OCR_EXTRACTOR_VERSION`/`COLLECTOR_LINE_TSV_EXTRACTOR_VERSION` bumped v2->v3
+(both read through the same escalation loop, per `EXTRACTOR_OWNERSHIP`'s own "bump every listed
+key together" convention). `ARTIST_OCR_EXTRACTOR_VERSION` belongs in that same bump for the
+identical reason (its raw-text reuse pass scans `collector_raw_texts`, now up to 2 entries
+shorter per card) but jumps straight to v4 instead of v3: PR #685 (merged to master separately,
+unrelated modern_artist_credit fallback wiring) already claimed "v3" for that extractor before
+this issue's bump landed, and stamping two different behaviours under one version string would
+defeat the whole point of `MANIFEST_EXTRACTOR_CURRENT_VERSIONS`'s staleness filter. `LEGAL_LINE_EXTRACTOR_VERSION`
 unchanged. `EXTRACTOR_OWNERSHIP`'s `EXCLUDED_HELPERS` entry for the ladder (added by the extractor-
 ownership-visibility entry just above) is LIFTED as part of this same change — `_collector_line_ocr_attempts`
 and `preprocess_fallback_variants` now carry real ownership entries.

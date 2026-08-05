@@ -311,11 +311,17 @@ CROP_COORDINATES_EXTRACTOR_VERSION = "crop-coordinates-v1"
 # docstring for the measured evidence. A row whose winning attempt, best-invalid fallback, or
 # no-text outcome was previously determined by a tier-3 attempt is stale under the new 2-tier
 # ladder; collector_line_tsv's word boxes come from the exact same escalation loop and are
-# therefore just as stale, and artist_ocr's raw-text reuse pass scans `collector_raw_texts`,
-# which now has up to 2 fewer entries for any card that used to reach tier 3 - all three bump
-# together, matching EXTRACTOR_OWNERSHIP's own "bump every listed key together" convention.
+# therefore just as stale - both bump together, matching EXTRACTOR_OWNERSHIP's own "bump every
+# listed key together" convention. artist_ocr's raw-text reuse pass scans `collector_raw_texts`,
+# which now has up to 2 fewer entries for any card that used to reach tier 3, and would belong in
+# this same bump - but "v3" for artist_ocr was already claimed by PR #685 (merged to master,
+# unrelated: wires modern_artist_credit.recognize_artist_credit in as a third artist fallback, no
+# ladder involvement) before this issue's own bump landed. Stamping this branch's ladder-collapse
+# change as "v3" too would put two different behaviours under one version string, defeating
+# MANIFEST_EXTRACTOR_CURRENT_VERSIONS's own staleness filter - so artist_ocr alone jumps straight
+# to v4 (v3 stays #685's).
 COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v3"
-ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v3"
+ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v4"
 COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v3"
 # NOT bumped: symbol_region is a raw phash of a crop region (imagehash, no tesseract call at all)
 # - engine-independent by construction.

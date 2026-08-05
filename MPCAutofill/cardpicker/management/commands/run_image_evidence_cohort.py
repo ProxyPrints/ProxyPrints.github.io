@@ -329,7 +329,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "layout_class": "layout-class-v1",
     "crop_coordinates": "crop-coordinates-v1",
     "collector_line_ocr": "collector-line-ocr-v3",
-    "artist_ocr": "artist-ocr-v3",
+    "artist_ocr": "artist-ocr-v4",
     "collector_line_tsv": "collector-line-tsv-v3",
     "artbox_phash": "artbox-phash-v1",
     "symbol_region": "symbol-region-v1",
