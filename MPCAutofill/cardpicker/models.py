@@ -1390,6 +1390,115 @@ class CardIllustrationVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> illustration {outcome}"
 
 
+class ArtboxPhashExemplarSeedKind(models.TextChoices):
+    """
+    How an `ArtboxPhashExemplar` row was seeded (issue #508 phase 1) - the provenance distinction
+    the owner made mandatory at seeding time (2026-08-05): a machine-derived seed and a
+    human-backed one must stay distinguishable forever, so a later decision to trust only the
+    latter is a query over this field, not a migration.
+    """
+
+    HUMAN_RESOLUTION = "human_resolution", gettext_lazy("Human-backed printing resolution")
+    JOIN_KEY_MACHINE = "join_key_machine", gettext_lazy("High-confidence join-key vote")
+
+
+class ArtboxPhashExemplar(models.Model):
+    """
+    Second illustration-deduction path's reference index (issue #508 phase 1, "self-referential
+    exemplar index" - owner-shaped 2026-07-28, seeding extended by the owner 2026-08-05 to include
+    machine seeds). An exemplar is a labelled association: a card's own CURRENT `artbox_phash`
+    (`ImageEvidence.artbox_phash` - see that field's own docstring, issue #480) -> the
+    `illustration_id` of the printing that scan was identified as (via
+    `CanonicalPrintingMetadata.illustration_id`, reached through the resolved/matched
+    `CanonicalCard`).
+
+    NEVER SOURCED FROM SCRYFALL IMAGES (binding, #508's design section). phash comparability
+    requires identical crop geometry/preprocessing - our own `artbox_phash` extractor is
+    self-consistent; Scryfall's `art_crop` framing differs and would make cross-source Hamming
+    distances unreliable (this is also why PR #694 was closed and deferred to #697 - do not
+    reintroduce a Scryfall fetch anywhere a seed for this table is computed).
+
+    SEED SOURCES (owner decision 2026-08-05, extending #508's original human-only spec, which
+    would have left this index dormant - only 12 human-backed resolutions exist catalogue-wide
+    at seeding time):
+
+    - `HUMAN_RESOLUTION`: `card.printing_tag_status == RESOLVED`. Resolution ALWAYS requires a
+      human-backed vote (`vote_consensus.resolve_weighted_consensus`'s non-machine-alone gate,
+      untouched by this work) - so every RESOLVED card is human-backed by construction, and no
+      per-vote inspection is needed to classify one as such.
+    - `JOIN_KEY_MACHINE`: an individual `CardPrintingTag` vote cast by the join-key calculator
+      (`local_calculate_verdicts.JOIN_KEY_ANONYMOUS_ID`) at or above
+      `artbox_exemplar_backfill.JOIN_KEY_SEED_CONFIDENCE_FLOOR` - see that constant's own comment
+      for why the floor excludes the artist-disagreement confidence tier (0.65) along with the
+      no-match tier (0.6, which is not an identification at all and can never seed regardless of
+      any floor).
+
+    `is_human_backed` is a plain denormalised copy of `seed_kind`'s own implication (never
+    `HUMAN_RESOLUTION` with `is_human_backed=False` or vice versa - enforced by the CheckConstraint
+    below), kept as its own column so a reader who only needs the human/machine split never has to
+    know the seed-kind vocabulary.
+
+    RETRACTION (owner directive 2026-08-05: "a bad seed must be retractable together with
+    everything it seeded"). `seed_group_key` is the stable identity of the SOURCE EVENT that
+    produced this row, not of the row itself: every exemplar traceable to the same md5-identity-
+    group resolution, or to the same source `CardPrintingTag` vote, shares one key, so retracting
+    a bad seed is `ArtboxPhashExemplar.objects.filter(seed_group_key=...).delete()` - one query, no
+    per-row reasoning about what else that source touched. See `artbox_exemplar_backfill.
+    human_resolution_seed_group_key`/`join_key_seed_group_key` for the exact format (the human-
+    resolution case mirrors `printing_consensus.md5_group_key`'s own group identity, so retracting
+    "this resolved identity group" here means the same set of cards `printing_consensus` itself
+    would call one group). `source_vote` is `SET_NULL` on the vote's own deletion (a purge doesn't
+    orphan this row's retractability - `seed_group_key` carries it independently of the FK's
+    referential integrity).
+
+    INDEX-NOT-STORE (CLAUDE.md's governing premise): this table holds a hash and a UUID, nothing
+    fetched or decodable back into pixels - `content_hash` records the source card's own
+    `content_phash` AT SEED TIME purely as a staleness audit trail (so a later reader can tell
+    whether the source card's image has since changed), never a second copy of anything
+    image-shaped.
+
+    PHASE 1 SCOPE: this table is read by nothing yet. No matching calculator, no vote, no
+    consensus, no change to `resolve_weighted_consensus`/the human-backed gate - see
+    `docs/identification-pipeline.md`'s "Parallel detectors" section for what this deliberately
+    does NOT do.
+    """
+
+    illustration_id = models.UUIDField(db_index=True)
+    artbox_phash = models.BigIntegerField(db_index=True)
+    card = models.OneToOneField(to=Card, on_delete=models.CASCADE, related_name="artbox_phash_exemplar")
+    printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, related_name="artbox_phash_exemplars")
+    seed_kind = models.CharField(max_length=32, choices=ArtboxPhashExemplarSeedKind.choices)
+    is_human_backed = models.BooleanField()
+    # SET_NULL, not CASCADE - see class docstring's RETRACTION section for why losing this FK
+    # on the source vote's own deletion is fine (seed_group_key carries retractability instead).
+    source_vote = models.ForeignKey(
+        to=CardPrintingTag, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    # Purely informational, mirroring `CardPrintingTag.confidence`'s own "not read by any
+    # resolution math" convention (`JOIN_KEY_CONFIDENCE_BOTH`'s comment in
+    # local_calculate_verdicts.py makes the identical point for that field). Null for
+    # HUMAN_RESOLUTION seeds - a resolution is a consensus outcome, not a single confidence value.
+    confidence = models.FloatField(null=True, blank=True)
+    seed_group_key = models.CharField(max_length=128, db_index=True)
+    content_hash = models.BigIntegerField()
+    run_id = models.CharField(max_length=64, null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(seed_kind=ArtboxPhashExemplarSeedKind.HUMAN_RESOLUTION, is_human_backed=True)
+                    | models.Q(seed_kind=ArtboxPhashExemplarSeedKind.JOIN_KEY_MACHINE, is_human_backed=False)
+                ),
+                name="artboxphashexemplar_seed_kind_matches_human_backed",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"[{self.seed_kind}] card={self.card_id} -> illustration {self.illustration_id}"
+
+
 class TagModerationClass(models.TextChoices):
     """
     Whether consensus on this tag resolves like any other (STANDARD) or requires a privileged
