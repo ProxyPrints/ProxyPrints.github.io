@@ -1310,7 +1310,13 @@ executable until this exists):
   comment for the full verification (including a near-miss: a
   convincingly-formatted but fabricated "MH3-AI" credit line on
   another sampled card that was checked against the live Scryfall API
-  and rejected rather than pinned).
+  and rejected rather than pinned). These two cards' values were
+  recorded before the #677 ladder collapse below landed; unlike the
+  original 30, they were not part of #677's own re-verification pass
+  and a live re-check was not reachable during the branch/master
+  reconcile that landed alongside #677 — see `golden_set.py`'s
+  `collector_line_ocr` comment for exactly which values are provably
+  unaffected and which remain an open item.
 - 21 new tests (`test_image_evidence.py`, `test_golden_set.py`), all
   passing; full suite 979 passed / 4 failed (the known pre-existing
   baseline: moxfield x2, sources OpenSSL x2 — nothing new broke);
@@ -1715,6 +1721,80 @@ fit" conditional wording; full suite 1099 passed / 4 skipped (the same
 CI-documented named skips — nothing newly broken); `makemigrations --check`
 clean (no model change).
 
+**`layout` persisted, sideways-cohort measured (issue #693, 2026-08-05)**:
+`CanonicalPrintingMetadata.layout` (migration
+`0102_canonicalprintingmetadata_layout`, single-leaf on `0101`) persists
+Scryfall's own `layout` tag verbatim from
+`printing_metadata_import.PrintingMetadataRow.layout` — the same value the
+back-face lookup above already reads to test membership in
+`DOUBLE_FACED_LAYOUTS`, but which was discarded once that check ran rather
+than kept. `layout` now survives past that check as a plain
+`CharField(blank=True)`, following `border_color`/`frame`'s own field
+convention exactly: added to `_METADATA_SYNC_FIELDS` and wired into the
+`CanonicalPrintingMetadata(...)` constructor call; `DOUBLE_FACED_LAYOUTS`'s
+existing use of `row.layout` is unchanged.
+
+Persisting it was motivated by a live measurement, not spec-first — but
+the first pass at that measurement (41 of 230,488 cards, 0.018%,
+2.4% parse failure) was **retracted and redone** (2026-08-05, same day):
+it counted only cards that already carry a `canonical_card` link, and
+that link is acquired _by having been successfully identified_ — a
+sideways card whose crop lands on rotated content and therefore fails
+identification can never appear in a cohort defined by identification
+success. That cohort was drawn from a population selected for not having
+failed, so its low failure rate proved nothing about sideways cards
+generally, and the 91.5% of the catalogue with no canonical linkage
+(layout unknown, not normal) was invisible to it entirely.
+
+The redo defines the cohort by **expected** layout instead: every
+`Card.name` (source metadata, independent of identification) that
+name-matches a `CanonicalCard` whose Scryfall `layout` is `planar`/
+`scheme`, via the same `to_searchable` join
+`deductive_backfill.CanonicalNameIndex` already uses for this exact
+Card-to-CanonicalCard join. That cohort is **1,093 cards (0.474% of the
+catalogue)** — 305 canonical printing names map unambiguously to
+planar/scheme, plus 4 names that are ambiguous (also match a
+non-sideways printing); the old 41-card cohort is fully contained inside
+it. Only 43 of the 1,093 (3.9%) carry a `canonical_card` link, confirming
+the bias directly. Its collector-line parse failure rate is **53.3%
+(583/1,093)**, compared against the correct baseline — the _unlinked_
+population generally (40.4%, 85,217/210,832) — not the whole-catalogue
+figure (38.4%), which mixes the unlinked population with the
+already-successfully-identified linked population (17.1%) and so
+understates how bad the unlinked baseline really is. The sideways cohort
+fails **13 points above** its correct comparison group, a real elevated
+signal the old measurement's biased denominator hid entirely.
+
+That elevated failure rate is what a `local_fallback.normalize_crop_box`
+rotation path was built to test — and the rotation trial's result is
+negative. A 30-card real-image sample (fetched live via
+`image_cdn_fetch.fetch_card_image`, drawn from the 1,046-card pool of
+this cohort that has never carried a `canonical_card` link) was run
+through the existing collector-line and Illus.-anchor crops unmodified,
+then again with the whole image rotated 90° clockwise and 90°
+counter-clockwise (both directions, since no stored signal indicates
+which way a given render is oriented). Collector-line OCR produced a
+_plausible_-looking parse on 17/30 baseline images, 9/30 rotated
+clockwise, 7/30 rotated counter-clockwise — but validated against the
+card's own real candidates (`local_ocr.validate_against_candidates`,
+the same check Stage D's calculator applies), **zero of those parses
+were genuine matches, in any of the three orientations**. The
+Illus.-anchor artist-line crop found zero matches in all three
+orientations too. Rotation neither recovers a match baseline missed nor
+loses one baseline found (the one case where a rotation "recovered" a
+plausible parse baseline missed was itself non-genuine noise). The
+failure is not a crop-box placement problem rotation can fix; it matches
+issue #683's own finding for the (heavily overlapping — 24/30 of this
+sample's `bleed_class` is `trimmed`) trimmed-cohort investigation: these
+are disproportionately fan-made custom renders that plausibly never had
+a machine-readable collector line to begin with, a content problem no
+crop geometry recovers. Crop-box rotation was evaluated and deliberately
+**not built** — not because the cohort is negligible (it isn't) or the
+failure rate is unremarkable (it isn't), but because the rotation trial
+itself found nothing to recover. `golden_set.py`'s 30 pinned cards
+contain zero sideways-layout cards, so the golden set cannot catch a
+regression in this path specifically.
+
 **color_profile / quality_signals / fetch-health completion — Stage C manifest
 extractor group, built** (public issue #150's re-spec, 2026-07-20 — the phash half of the
 original issue is DROPPED per the owner's same-day re-spec comment on #150, superseded by
@@ -1904,7 +1984,10 @@ ladder (`_collector_line_ocr_attempts`, issue #259) — both being worked on in 
 branches at the time this sweep landed. Each is already the direct, named mechanism of an existing
 versioned extractor (`geometry_bleed`/`layout_class`/`artbox_phash`/`collector_line_ocr`), so their
 omission is a sequencing decision, not a coverage gap this sweep itself leaves open — lifting each
-exclusion is one entry once its own parallel branch lands.
+exclusion is one entry once its own parallel branch lands. **The OCR-ladder half of this exclusion
+was lifted by issue #677** (see this file's own "#677" section below) — `_collector_line_ocr_attempts`
+and `preprocess_fallback_variants` now carry real `EXTRACTOR_OWNERSHIP` entries; the
+`local_fallback.py` half remains excluded, unrelated to that branch.
 
 CORRECTION TO THE ORIGINATING BRIEF: `local_art_edge.classify_art_edge_continuity` (issue #617's
 own "Extended" art-edge continuity classifier) was named as a candidate for this sweep but is NOT
@@ -1918,6 +2001,48 @@ for the same reason `local_fallback.py`/the OCR ladder are — nothing currently
 No stored `ImageEvidence` value changes as a result of this entry: all seventeen sweep-covered
 contributors were already feeding their currently-versioned extractor(s) before this landed; the
 work is declaration and CI enforcement only, not a version bump or a re-extraction trigger.
+
+**Collapse the Stage C OCR attempt ladder (issue #677, 2026-08-05)** — `_collector_line_ocr_attempts`
+(issue #259) escalated through 3 tiers/8 tesseract calls for any card whose tier 1 (2 attempts)
+failed to parse a collector number: tier 2 (4 heavier-preprocessed variants, PSM 6) then tier 3 (a
+re-try of tier 1's own variants under PSM 11). Verified against real production images before
+touching the code, not from the 2026-07-23 probes alone (those tested ADDING new preprocessing
+methods, never removing an existing tier): two fresh probes (worktree-only analysis scripts, NOT
+committed to master/any branch — MPCAutofill/scripts/experiments/ocr_ladder_tier_attribution.py,
+450 forced-escalation cards — 300 currently-blank + 150 currently-resolved, both freshly
+re-derived live 2026-08-05) walked the
+old 3-tier ladder to full completion and recorded, per card, the first tier at which a
+CANDIDATE-VALIDATED genuine match appeared. Tier 2 produced 2 genuine matches across the 450-card
+sample; tier 3 produced ZERO — only more lexicon-valid-but-uncorroborated noise (6/300 in the
+blank pool), consistent with the 2026-07-23 probes' own ~99% hopeless-art-noise characterization
+of this population. **Tier 3 removed.** Cross-checked against all 30 `golden_set.GOLDEN_CARD_IDS`
+cards the same way: none of the 30 ever resolved uniquely at tier 3, so this collapse changes zero
+golden-set expectations (see that file's own `collector_line_ocr` comment for the re-verification
+note). `COLLECTOR_LINE_OCR_EXTRACTOR_VERSION`/`COLLECTOR_LINE_TSV_EXTRACTOR_VERSION` bumped v2->v3
+(both read through the same escalation loop, per `EXTRACTOR_OWNERSHIP`'s own "bump every listed
+key together" convention). `ARTIST_OCR_EXTRACTOR_VERSION` belongs in that same bump for the
+identical reason (its raw-text reuse pass scans `collector_raw_texts`, now up to 2 entries
+shorter per card) but jumps straight to v4 instead of v3: PR #685 (merged to master separately,
+unrelated modern_artist_credit fallback wiring) already claimed "v3" for that extractor before
+this issue's bump landed, and stamping two different behaviours under one version string would
+defeat the whole point of `MANIFEST_EXTRACTOR_CURRENT_VERSIONS`'s staleness filter. `LEGAL_LINE_EXTRACTOR_VERSION`
+unchanged. `EXTRACTOR_OWNERSHIP`'s `EXCLUDED_HELPERS` entry for the ladder (added by the extractor-
+ownership-visibility entry just above) is LIFTED as part of this same change — `_collector_line_ocr_attempts`
+and `preprocess_fallback_variants` now carry real ownership entries.
+
+A second restructuring named in this issue's own brief - unifying `collector_line_ocr`'s narrow
+crop and `legal_line`'s full-width crop (same y-band, `local_ocr.DEFAULT_CROP_BOX` vs
+`LEGAL_LINE_CROP_BOX`) into ONE OCR pass - was investigated and NOT shipped: a real-image accuracy
+probe (worktree-only analysis script, NOT committed to master/any branch —
+MPCAutofill/scripts/experiments/ocr_crop_widen_accuracy.py, 150 currently-successful production
+cards) found that re-reading tier 1 from the wider crop with the SAME preprocessing
+regressed 46/150 (30.7%) of currently-correct `collector_line_set_code`/`collector_line_collector_number`
+reads - mostly proxy/watermark text (`"PsilosX Proxy"`, `"Playtest Card"`, `"NOT FOR SALE"`,
+artist full names) getting picked up by `_SET_CODE_RE`'s "search after the number" fallback in
+place of the real set code, and in some cases the wider image causing tesseract to drop the
+collector-number line entirely. Zero improvements found (0/150). This is exactly the "collapse
+costs measurable accuracy, report it rather than shipping" outcome the issue's own brief
+anticipated - the duplicated bottom-band read stays duplicated; only the ladder collapsed.
 
 **Stage C bulk driver: compute profile + concurrency/OCR-cost fix (2026-07-20)** —
 `docs/reports/2026-07-20-pipeline-compute-profile.md` measured the bulk cohort driver

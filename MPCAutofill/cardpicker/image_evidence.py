@@ -275,7 +275,6 @@ from cardpicker.local_image_quality import (
     is_image_truncated,
 )
 from cardpicker.local_ocr import (
-    ALTERNATE_TESSERACT_CONFIG,
     DEFAULT_CROP_BOX,
     LEGAL_LINE_CROP_BOX,
     TESSERACT_CONFIG,
@@ -300,23 +299,31 @@ GEOMETRY_BLEED_EXTRACTOR_VERSION = "geometry-bleed-v1"
 LAYOUT_CLASS_EXTRACTOR_VERSION = "layout-class-v1"
 CROP_COORDINATES_EXTRACTOR_VERSION = "crop-coordinates-v1"
 # v1 -> v2 (issue #480's combined pass, THE FLIP: settings.OCR_ENGINE default -> "tesserocr" -
-# see settings.py's own comment). These extractors' STORED VALUE actually depends on which OCR
-# engine produced it (they read through `local_ocr.run_tesseract_text_and_words`, which now runs
-# on tesserocr's differently-compiled tesseract/leptonica build by default - issue #423's spike
-# already found byte-identical output is structurally unreachable given that vendored-build
-# mismatch). Bumping the version is what makes every existing row under the OLD tag stale, so the
-# next pass re-extracts it under the new engine rather than silently mixing two engines' output
-# under one provenance label (issue #480's correction comment: "Engine swap WITHOUT a version
-# bump is forbidden").
-COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v2"
-# v2 -> v3 (PR #685): wires modern_artist_credit.recognize_artist_credit in as a third artist
-# fallback inside compute_card_evidence, recovering a name for ~19,478 cards that previously
-# stored none. The extractor's own OCR pass is unchanged from v2 (still issue #480's tesserocr
-# engine) - this bump exists solely so Stage C's version-aware resume filter
-# (MANIFEST_EXTRACTOR_CURRENT_VERSIONS) selects the whole catalogue for one re-extraction pass
-# under the new fallback, per issue #509's stale-value comparison.
-ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v3"
-COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v2"
+# see settings.py's own comment). These three extractors are the ones whose STORED VALUE actually
+# depends on which OCR engine produced it (they all read through `local_ocr.
+# run_tesseract_text_and_words`, which now runs on tesserocr's differently-compiled tesseract/
+# leptonica build by default - issue #423's spike already found byte-identical output is
+# structurally unreachable given that vendored-build mismatch). Bumping the version is what makes
+# every existing row under the OLD tag stale, so the next pass re-extracts it under the new
+# engine rather than silently mixing two engines' output under one provenance label (issue #480's
+# correction comment: "Engine swap WITHOUT a version bump is forbidden").
+# v2 -> v3 (issue #677, "collapse the Stage C OCR attempt ladder"): `_collector_line_ocr_attempts`
+# drops its own tier 3 (the PSM-11 re-try of tier 1's variants) - see that generator's own
+# docstring for the measured evidence. A row whose winning attempt, best-invalid fallback, or
+# no-text outcome was previously determined by a tier-3 attempt is stale under the new 2-tier
+# ladder; collector_line_tsv's word boxes come from the exact same escalation loop and are
+# therefore just as stale - both bump together, matching EXTRACTOR_OWNERSHIP's own "bump every
+# listed key together" convention. artist_ocr's raw-text reuse pass scans `collector_raw_texts`,
+# which now has up to 2 fewer entries for any card that used to reach tier 3, and would belong in
+# this same bump - but "v3" for artist_ocr was already claimed by PR #685 (merged to master,
+# unrelated: wires modern_artist_credit.recognize_artist_credit in as a third artist fallback, no
+# ladder involvement) before this issue's own bump landed. Stamping this branch's ladder-collapse
+# change as "v3" too would put two different behaviours under one version string, defeating
+# MANIFEST_EXTRACTOR_CURRENT_VERSIONS's own staleness filter - so artist_ocr alone jumps straight
+# to v4 (v3 stays #685's).
+COLLECTOR_LINE_OCR_EXTRACTOR_VERSION = "collector-line-ocr-v3"
+ARTIST_OCR_EXTRACTOR_VERSION = "artist-ocr-v4"
+COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v3"
 # NOT bumped: symbol_region is a raw phash of a crop region (imagehash, no tesseract call at all)
 # - engine-independent by construction.
 SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
@@ -396,7 +403,7 @@ class ExtractionResult:
 
     `short_circuited` (2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc
     lessons" item 1): True iff this card's `collector_line_ocr` pass hit the pre-classification
-    short-circuit (tier-1 digit-free, tiers 2-3 skipped). Diagnostic-only, same "never persisted
+    short-circuit (tier-1 digit-free, tier 2 skipped). Diagnostic-only, same "never persisted
     onto ImageEvidence" convention as `compute_card_evidence`'s own `profile` parameter - the
     plan's own "open verification gap" note calls for counting this population during the real
     197k-card run, not storing a fact per card; `persist_evidence` never reads this attribute.
@@ -433,53 +440,66 @@ def _collector_line_ocr_attempts(cropped: Any) -> Iterator[tuple[Any, str, int]]
     """
     Ordered, LAZY (image, tesseract_config, tier) attempts for the `collector_line_ocr` extractor
     (issue #259, "Stage D no-text bucket: OCR preprocessing/crop recovery") - cheapest/fastest
-    first, each later tier strictly more expensive than the one before it. A generator (not a
-    plain list) specifically so the caller's own "stop at the first attempt that parses a
-    collector number" loop never actually pays for a later tier's preprocessing/OCR cost unless
-    every earlier tier has already failed - `preprocess_fallback_variants(cropped)` below is not
-    even CALLED, let alone OCR'd, for the common case where an early attempt already succeeds.
-    The `tier` element (added for the "Recovery-arc lessons" item 1 pre-classification
-    short-circuit, docs/features/catalog-completion-plan.md, 2026-07-21) lets the caller detect
-    "both tier-1 attempts are now exhausted" without hardcoding or re-deriving tier boundaries
-    from attempt position/count.
+    first, tier 2 strictly more expensive than tier 1. A generator (not a plain list)
+    specifically so the caller's own "stop at the first attempt that parses a collector number"
+    loop never actually pays for tier 2's preprocessing/OCR cost unless tier 1 has already
+    failed - `preprocess_fallback_variants(cropped)` below is not even CALLED, let alone OCR'd,
+    for the common case where an early attempt already succeeds. The `tier` element (added for
+    the "Recovery-arc lessons" item 1 pre-classification short-circuit,
+    docs/features/catalog-completion-plan.md, 2026-07-21) lets the caller detect "both tier-1
+    attempts are now exhausted" without hardcoding or re-deriving tier boundaries from attempt
+    position/count.
 
     - Tier 1 (attempts 1-2, PSM 6): `preprocess_variants`' original two polarity variants -
-      UNCHANGED from before this issue, still the fast/happy path for the large majority of
+      UNCHANGED since before issue #259, still the fast/happy path for the large majority of
       cards that already parse cleanly.
     - Tier 2 (attempts 3-6, PSM 6): `preprocess_fallback_variants`' four heavier-preprocessed
       variants (sharpen+heavier-upscale, percentile threshold) - targets the #259 diagnostic's
       two concrete B-bucket failure modes (blurry uploads, uneven-brightness "garbled but
       present" text) with better PIXELS, same page-segmentation assumption.
-    - Tier 3 (attempts 7-8, PSM 11): tier 1's original variants again, but under
-      `ALTERNATE_TESSERACT_CONFIG` - targets a genuinely different failure mode (tesseract's own
-      block/line SEGMENTATION going wrong on a noisy crop), not a pixel-quality problem tier 2's
-      preprocessing can fix. Retried against the original (not fallback-preprocessed) variants
-      since PSM 11 already drops the block-structure assumption tier 2's heavier processing was
-      never targeting in the first place.
 
-    Worst case (a card that never parses anything, e.g. a genuine coverage-ceiling case) pays for
-    all 8 attempts - up to 4x the pre-#259 cost (2 attempts), UNLESS the pre-classification
-    short-circuit below fires first for a card whose tier-1 attempts are both confidently
-    digit-free (2026-07-22: non-blank AND digit-free, see `_confidently_digit_free`'s own
-    docstring - a blank/failed tier-1 read no longer short-circuits). This only hits cards whose
-    collector line genuinely never resolves to a collector number under ANY of these attempts and
-    whose tier-1 text is either blank or digit-bearing-but-unparseable; the happy path (an early
-    tier-1 parse) is unaffected in cost or behavior either way.
+    ISSUE #677 REMOVED A THIRD TIER that lived here from issue #259 through #677: a re-try of
+    tier 1's own variants under `ALTERNATE_TESSERACT_CONFIG` (`--psm 11`, targeting tesseract's
+    own block/line segmentation rather than a pixel-quality problem). Measured, not guessed: two
+    independently-sampled real-production probes (450 forced-escalation cards combined -
+    `MPCAutofill/scripts/experiments/ocr_ladder_tier_attribution.py`'s own 300-card
+    "currently-blank" pool + 150-card "currently-resolved" pool, 2026-08-05) walked the old
+    3-tier ladder to full completion (never stopping early) and recorded, per card, the first
+    tier at which a CANDIDATE-VALIDATED genuine match appeared
+    (`local_ocr.validate_against_candidates` against that card's own real name-scoped
+    candidates - the actual ground-truth check, not merely a lexicon-shaped parse). Result: tier
+    2 produced 2 genuine matches across the combined 450-card sample (1 blank-pool rescue, 1
+    at-risk success-pool card); the removed tier 3 produced ZERO genuine matches in either
+    sample - only more lexicon-valid-but-uncorroborated parses (6/300 in the blank pool), the
+    same "structurally plausible but not this card's own printing" noise both 2026-07-23
+    preprocessing probes (`docs/reports/2026-07-23-ocr-preprocessing-probe*.md`) already
+    characterized as ~99% hopeless art-noise for this population. Cross-checked against all 30
+    `golden_set.GOLDEN_CARD_IDS` cards the same way: none of the 30 ever resolved (genuine,
+    lexicon-valid, or "best invalid" fallback) uniquely at the removed tier, so this collapse
+    changed zero golden-set expectations.
+
+    Worst case (a card that never parses anything, e.g. a genuine coverage-ceiling case) now pays
+    for all 6 attempts - up to 3x the pre-#259 cost (2 attempts), down from #259-#677's own 4x
+    (8 attempts) - UNLESS the pre-classification short-circuit below fires first for a card whose
+    tier-1 attempts are both confidently digit-free (2026-07-22: non-blank AND digit-free, see
+    `_confidently_digit_free`'s own docstring - a blank/failed tier-1 read no longer
+    short-circuits). This only hits cards whose collector line genuinely never resolves to a
+    collector number under ANY of these attempts and whose tier-1 text is either blank or
+    digit-bearing-but-unparseable; the happy path (an early tier-1 parse) is unaffected in cost or
+    behavior either way.
     """
     variants = preprocess_variants(cropped)
     for variant in variants:
         yield variant, TESSERACT_CONFIG, 1
     for variant in preprocess_fallback_variants(cropped):
         yield variant, TESSERACT_CONFIG, 2
-    for variant in variants:
-        yield variant, ALTERNATE_TESSERACT_CONFIG, 3
 
 
 # Tier 1 is exactly `preprocess_variants`' own two polarity variants (see that function's own
 # docstring - "both polarities of an adaptive-ish threshold") - hardcoded here rather than
 # re-derived via a redundant extra preprocessing call just to learn the count. If that function's
 # own variant count ever changes, this constant and `_collector_line_ocr_attempts`' own tier=1
-# yield count must be updated together (already an implicit coupling the "8 attempts total"
+# yield count must be updated together (already an implicit coupling the "6 attempts total"
 # bookkeeping in that function's own docstring already assumes).
 _COLLECTOR_LINE_TIER1_ATTEMPT_COUNT = 2
 
@@ -648,8 +668,8 @@ def _confidently_digit_free(tier1_raw_texts: list[str]) -> bool:
     (`not any(_contains_digit(text) for text in tier1_raw_texts)`) fired identically whether
     tier-1 read real, digit-free TEXT or read literally NOTHING - an empty/whitespace-only
     tesseract result is not evidence there's no collector number, it's evidence tier-1 failed to
-    read anything at all, which is exactly the case a heavier-preprocessed tier 2/an alternate-PSM
-    tier 3 exists to recover from. A CONFIDENT digit-free read (tier-1 produced real, non-blank
+    read anything at all, which is exactly the case the heavier-preprocessed tier 2
+    exists to recover from. A CONFIDENT digit-free read (tier-1 produced real, non-blank
     text - a genuine word, watermark, or garbled-but-present line - that simply has no digit
     character in it) is a much stronger "there's nothing here to find" signal than silence is, and
     is the only case this now allows to short-circuit. Requires BOTH tier-1 texts to be non-blank
@@ -817,8 +837,8 @@ def compute_card_evidence(
     `short_circuit` (2026-07-21, docs/features/catalog-completion-plan.md's "Recovery-arc lessons"
     item 1): controls the `collector_line_ocr` pre-classification short-circuit - once BOTH tier-1
     attempts fail to parse a collector number, if BOTH attempts' raw text is non-blank and neither
-    contains a single digit character (`_confidently_digit_free`), tiers 2-3 (6 more tesseract
-    calls) are skipped and the extractor goes straight to its existing "no-text" outcome, matching
+    contains a single digit character (`_confidently_digit_free`), tier 2 (4 more tesseract
+    calls) is skipped and the extractor goes straight to its existing "no-text" outcome, matching
     the measured finding that a large majority of a real no-text cohort's tier-1 reads were
     already digit-free and never gained a collector number from the heavier tiers either. `None`
     (the default) resolves to `_short_circuit_enabled_by_env` (the `STAGE_C_NO_SHORTCIRCUIT` env
@@ -835,7 +855,7 @@ def compute_card_evidence(
     empty (a tesseract read FAILURE, not a confident "no collector number here" finding) yet were
     short-circuited anyway, silently skipping the deeper tiers that would have recovered the real
     collector line. `_confidently_digit_free` now additionally requires both tier-1 texts to be
-    non-blank - an empty/failed tier-1 read always escalates to tiers 2-3, exactly like a
+    non-blank - an empty/failed tier-1 read always escalates to tier 2, exactly like a
     digit-bearing unparseable read already did. This is strictly a NARROWING of the short-circuit
     (a strict subset of what used to qualify still does), so its own worst-case-cost bound above
     is unaffected; the perf win is simply now scoped to genuinely-content-bearing, genuinely
@@ -853,13 +873,13 @@ def compute_card_evidence(
     `set_code` was real - a live structural finding (docs/reports/2026-07-23-ocr-preprocessing-
     probe-2.md) traced 94% of a lexicon-invalid-no-match sample to exactly this, tier 1's very
     first attempt accepting OCR noise that happened to regex-parse into a collector-number-shaped
-    token, before tiers 2-3 (built for exactly this recovery) ever got a chance to run. Now: a
+    token, before tier 2 (built for exactly this recovery) ever got a chance to run. Now: a
     parse only terminates escalation when its `set_code` is `None` (the pre-M15 collector-number-
     only case, unaffected by this gate - same "only applies when a set-code-shaped token was
     actually found" carve-out `calculate_join_key_verdict`'s own gate uses) OR is a real
     `known_set_codes` member; a `collector_number`-bearing parse whose `set_code` is lexicon-
     invalid no longer stops the loop - it's remembered as the running "best invalid candidate"
-    (the first such parse, by tier order) and escalation continues. If no attempt across all 8
+    (the first such parse, by tier order) and escalation continues. If no attempt across all 6
     ever yields a lexicon-valid parse, the best invalid candidate (if any) becomes the stored
     outcome - IDENTICAL to what today's pre-gate code already stored for that card (the first
     `collector_number`-bearing parse it found, since old code never distinguished valid from
@@ -895,7 +915,7 @@ def compute_card_evidence(
     distinction is the whole design: suppressing only the downstream vote would leave the pipeline
     having flagged a read as suspect with nothing better to offer. Here a contradicted parse does
     NOT terminate the loop - later tiers get their chance to produce a read that is internally
-    consistent, and frequently do. Cost is bounded by the existing 8-attempt ceiling (no new tiers,
+    consistent, and frequently do. Cost is bounded by the existing 6-attempt ceiling (no new tiers,
     no unbounded work) and lands inside Stage C's measured ~22.6% idle compute (~170 ms/card idle
     against a 688 ms/card extraction, fetch-rate-limiter-bound) - the artist recovery itself
     measures at ~4.6 ms per evaluated attempt.
@@ -1111,7 +1131,7 @@ def compute_card_evidence(
         # "Recovery-arc lessons" item 1; tightened 2026-07-22, parity replay #154 - see
         # `_confidently_digit_free`'s own docstring for the full autopsy): once both tier-1
         # attempts are exhausted with no parse, a card whose tier-1 texts are BOTH non-blank and
-        # digit-free skips tiers 2-3 entirely rather than paying for 6 more tesseract calls to
+        # digit-free skips tier 2 entirely rather than paying for 4 more tesseract calls to
         # re-read the same non-collector-number text more clearly. A digit-bearing tier-1 read
         # that still fails to parse always escalates exactly as before - `_contains_digit` is a
         # coarser, cheaper check than `_COLLECTOR_NUMBER_RE` itself (see that helper's own
@@ -1119,7 +1139,7 @@ def compute_card_evidence(
         # confident "nothing here" signal, so it no longer qualifies either). This can only ever
         # short-circuit a STRICT SUBSET of cards that would have ended in "no-text" anyway, never
         # a card that could have parsed at tier 1. This gate governs whether escalation STARTS
-        # (i.e. whether tiers 2-3 run at all) - entirely independent of the lexicon-validity
+        # (i.e. whether tier 2 runs at all) - entirely independent of the lexicon-validity
         # acceptance criterion immediately below, which governs whether a tier's parse is allowed
         # to STOP escalation once it's already running.
         #

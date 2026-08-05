@@ -2076,3 +2076,28 @@ second 2026-08-05 pin for the separate sideways-layout gap (130028,
 "Bowie Base One", a real `layout:planar` card) — see that comment for
 what its own real run produced, which is messier than a clean
 across-the-board abstention.
+
+## `manage.py makemigrations` fails with `ValueError: Missing staticfiles manifest entry for 'cardpicker/favicon.ico'` in a fresh worktree
+
+**Symptom**: `python manage.py makemigrations cardpicker` (or any other
+management command that touches `MPCAutofill.urls`, which resolves a
+static URL at import time) crashes before it gets anywhere near
+migrations, with a `ValueError` from
+`django.contrib.staticfiles.storage.ManifestStaticFilesStorage` about a
+missing manifest entry for `cardpicker/favicon.ico`. Seen 2026-08-05 in
+a brand-new `git worktree` checkout that had never had `collectstatic`
+run against it.
+
+**Cause**: `STATICFILES_STORAGE` is `ManifestStaticFilesStorage`
+(settings.py), which requires `staticfiles.json` — built by
+`collectstatic` — to resolve any `{% static %}`/`static()` reference.
+`MPCAutofill/MPCAutofill/urls.py` calls `static("cardpicker/favicon.ico")` at
+import time for the favicon redirect, so importing the URLconf at all
+(which `makemigrations`' system checks do) fails in any checkout that
+hasn't run `collectstatic` yet — this has nothing to do with
+migrations themselves.
+
+**Fix**: run `python manage.py collectstatic --noinput` once per
+worktree before the first `makemigrations`/`migrate`/any other
+management command in it. Output lands in the gitignored `/static/`
+directory at the repo root, harmless to leave in place.

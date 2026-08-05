@@ -468,6 +468,17 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # placeholder: only 10/30 produced a parseable collector number on this real run, several of
     # those a 4-digit "year" collector number (mtg/proxy sets) rather than a classic 3-digit one.
     #
+    # Re-verified 2026-08-05 (issue #677, "collapse the Stage C OCR attempt ladder" - dropped the
+    # ladder's tier 3): none of these 30 values changed. All 30 golden cards were walked through
+    # the FULL pre-#677 8-attempt ladder with per-tier attribution - same method and the same live
+    # 450-card (300 blank + 150 success) probe documented in docs/features/catalog-completion-plan.md's
+    # own "#677" section (the probe script itself is a worktree-only analysis tool, not committed
+    # here, matching this repo's established convention for one-off probes - see e.g.
+    # docs/reports/2026-07-23-ocr-preprocessing-probe.md's own LIVE STATE) - not one ever resolved
+    # (genuine match, lexicon-valid parse, or "best invalid" fallback) uniquely at the removed
+    # tier, so `COLLECTOR_LINE_OCR_EXTRACTOR_VERSION`'s v2->v3 bump changes zero values here even
+    # though it changes some values outside this set (see that version constant's own comment).
+    #
     # 35449 ("Fierce Guardianship", 2026-08-05): blank, despite this being a genuine real
     # printing with a real, legible "035 R / C20 * EN RANDY VARGAS" line - real evidence that
     # normalize_crop_box's remapped `collector_line_crop_px` for THIS trimmed image lands short
@@ -482,6 +493,25 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # "not" is not a real Scryfall set code, this is a false positive, not a correct read. Real
     # evidence the extractor does not simply abstain on sideways layouts; it can silently return
     # a plausible-looking wrong answer.
+    #
+    # 35449/130028 against the #677 ladder collapse (2026-08-05, this reconcile): both cards'
+    # values above were recorded BEFORE #677 landed, against the old 3-tier/8-attempt ladder, and
+    # - unlike the 30 above - never had an equivalent post-#677 re-run, since they were not in
+    # GOLDEN_CARD_IDS when that cross-check ran. Analytically: `_collector_line_ocr_attempts`
+    # tries tier 1 then tier 2 before the now-removed tier 3 ever runs (see that generator's own
+    # docstring) - a lazy, stop-on-first-success escalation. An outcome that was ALREADY an
+    # abstention under the full old ladder (35449's collector_line_ocr blank, both cards'
+    # artist_ocr blank below) cannot un-abstain when an attempt tier is removed: dropping an
+    # attempt only removes an opportunity to succeed, never adds one, so those values are provably
+    # unaffected without a live run. 130028's collector_line_ocr match and both cards'
+    # collector_line_tsv=True (below) are NOT covered by that argument - if either had resolved
+    # uniquely at the removed tier 3, they would read differently under current code. This
+    # reconcile could not reach production data to run the real check: `MPCAutofill/.env` is
+    # absent from this worktree (not recreated - reading or copying a secrets file from elsewhere
+    # on this box was out of scope for this task), no `DATABASE_HOST`-default Postgres port was
+    # listening on this host, and `mpcautofill_django` (which does have access) was off limits to
+    # `exec`/`cp` under an open ruling for the duration of this task. Left as-is rather than
+    # guessed at - see this reconcile's own report for the open item.
     "collector_line_ocr": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
