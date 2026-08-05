@@ -40,6 +40,82 @@ section (bottom of this file) raised; nothing in this spec is still pending an
 owner call as of this amendment. See PR #446's own body for the
 section-by-section implementation mapping.
 
+---
+
+**AMENDMENTS — owner decisions closing live-state issues on 2026-08-05 (three days after
+PR #446 shipped):**
+
+1. **A1: Container-first policy reaffirmed (WD1).** The policy stated at §3 lines
+   185–190 — components style against their CONTAINER (`@container`), layout folds
+   continuously, no viewport sizing — remains binding and is WTC's first consumer.
+   No amendment to the policy itself; this reaffirmation documents the owner's
+   explicit confirmation that this is not a proposal but the governing standard for
+   this surface and its successors.
+
+2. **A2: WD4 amended — reference image pinned within container, not viewport
+   (§3 "Page scroll model").** WD4 currently retires sticky/bounded-height positioning
+   in favour of "an ordinary scrolling document," relying on WD3's subject-compaction
+   to keep the confirm hero reachable (lines 213–219). The owner requires the
+   reference image VISIBLE AT ALL TIMES, at every viewport. The reconciliation:
+   the reference image is PINNED WITHIN ITS CONTAINER, not viewport-sticky. The
+   page remains an ordinary scrolling document (WD4's rejection of viewport-coupled
+   positioning stands), but the image is held fixed within its own `@container hero`
+   ancestor by `position: sticky` applied to SubjectCardBox or Subject, scoped to
+   that container only — not the page viewport. This satisfies persistent visibility
+   while keeping the container-first policy (A1) intact. Future readers: viewport-sticky
+   was and remains rejected because it couples component layout to page-level scroll state,
+   violating the container-first principle; container-pinning achieves the same UX goal
+   without that coupling.
+
+3. **A3: §1c binding table confirmed — no amendment needed.** Issue #708 reported the
+   reference image's title overlay (SubjectArtTitle, gradient + text) as blocking the
+   bottom corner, which appeared to conflict with the binding table. Owner re-examination:
+   the gradient itself is not the defect. The actual symptom is #705's hover-grow clipping
+   (cards render in boxes with `overflow: hidden`, and the image scales up 1.6× on hover,
+   so the clipping crops the edges). The binding table stands. A future note on the
+   interaction between hover-scale transforms and container overflow may be useful; the
+   table itself needs no amendment.
+
+4. **A4: WD6 amended — AttributeChipPanel shown automatically by question type (§6
+   "Features-accounted checklist").** WD6 currently carries AttributeChipPanel as
+   Level-2 disclosure, opt-in behind a toggle (line 281, checkbox item). Owner decision
+   supersedes: the chip panel is SHOWN AUTOMATICALLY based on the TYPE OF QUESTION being
+   asked, not behind a manual toggle. Hard constraint couples to A2: the chip panel must
+   NEVER occlude or hide the reference image — the pinning mechanism (A2) and the panel's
+   visibility/placement must be co-designed to respect this.
+
+5. **A5: Annex A amended — served-mix logging seam retired (§7).** Annex A (lines 315–334)
+   calls for logging served-mix composition per session so a future audit could correlate
+   click-latency / agreement-rate against easy-question exposure. Owner decision: no
+   build item for user-action telemetry beyond what a feature strictly requires. The
+   logging seam is RETIRED. Why: the difficulty-lane model (A6) was chosen partly BECAUSE
+   it requires no telemetry — it reads entirely off existing vote state. Reason recorded
+   with the retirement so a future reader understands the decision, not a gap.
+
+6. **A6: Difficulty-lane model recorded (new § before Annex A).** Question difficulty
+   is derived from DATA STATE, never from user profiling or behavioural tracking:
+
+   - **easy**: an uncontested machine vote exists; the user confirms it.
+   - **medium**: competing votes exist; the user breaks the tie.
+   - **hard**: no data exists; the user answers cold.
+     Lanes ramp per session by default, with user override available. Note explicitly:
+     this model was chosen partly BECAUSE it requires no telemetry (A5) — it reads entirely
+     off existing vote state. Supporting fact: machine votes structurally CANNOT resolve a
+     field alone (`vote_consensus.py`'s gate requires `has_human_backed`, and DEDUCTION/OCR/
+     FEDERATED/IMPLICIT are all machine-derived), so every derived machine vote MANUFACTURES
+     a confirmable question rather than removing the need to ask one. That is the premise
+     the easy lane runs on. NOTE on consensus thresholds: the gate is 60% share
+     (`PRINTING_TAG_MIN_SHARE = 0.6`) plus a 2-vote minimum — NOT 51%. The "51%" figure
+     belongs to `question_feed.py`'s separate "≥51%-likely-resolve" SERVING policy. These
+     are separate mechanisms with different thresholds.
+
+7. **A7: Implementation state recorded (new note at end of §6).** This spec shipped
+   via PR #446 (2026-07-24). PR #687 subsequently shipped direct-access Yes/No chips on
+   the question feed. Epic #704 with children #705–#716 now tracks the open work against
+   this surface (spacing, hover-zoom clipping, title overlay, MTGAC applet size, confirm
+   button size, and reference-card visibility). Refer to the epic for current status
+   rather than duplicating its contents here.
+
 D-number scope note: D-numbers are per-proposal in this repo (proposal-h owns
 its own D1–D19; the old WTC round used W4–W7). The decisions below are the
 **WTC-rebuild round's** ledger, numbered WD1.. to avoid collision with either.
@@ -278,7 +354,7 @@ Additive props needed (all optional, behavior-preserving):
 - [x] "None of these" → `NoMatchReasonStrip` (6 reason tags) → shape **c**
 - [x] "Art matches, not official" one-tap (isNoMatch + custom-art) → shape **c** / **a**
 - [x] Level 3 open-exclusion-group chips (tri-state) + independent toggles → shape **L3**
-- [x] `AttributeChipPanel` "Filter by attribute" (opt-in) → carried as a Level-2 disclosure (tokenized; not re-drawn in mockup — behavior-preserved)
+- [x] `AttributeChipPanel` shown automatically by question type (A4 amendment) → never occludes the reference image (couples to A2 pinning mechanism)
 - [x] `artist_vote` → `ArtistVotePicker` → shape **e1**
 - [x] `tag_vote` → `QueueTagQuestion` → shape **e2**
 - [x] Moderation tab (gated) → `Nav`/`Tab`, unchanged
@@ -294,6 +370,15 @@ Additive props needed (all optional, behavior-preserving):
 
 Nothing from the component map is dropped. The three horizontal-scroll wrappers
 are the only DELETIONS, and they are replaced (not removed) by intrinsic grids.
+
+**Implementation state (A7 amendment).** This spec shipped via PR #446 (2026-07-24),
+one day after it was written; its container-first structure and token layer remain live
+in QuestionFeed.tsx. PR #687 subsequently shipped direct-access Yes/No chips on the
+question feed (2026-07-29). Epic #704 with children #705–#716 now tracks the open work
+against this surface: spacing/size tuning, hover-zoom clipping (#705), reference-card
+visibility (#710, amended 2026-08-05), title-overlay interaction (#708, amended 2026-08-05),
+MTGAC applet sizing, and confirm-button size. Refer to the epic for current status rather
+than duplicating its contents here.
 
 ---
 
@@ -312,7 +397,31 @@ are the only DELETIONS, and they are replaced (not removed) by intrinsic grids.
 
 ---
 
-## ANNEX A — served-mix logging seam (backend)
+## DIFFICULTY-LANE MODEL (derived from data state, requires no telemetry)
+
+Question difficulty is derived from DATA STATE, never from user profiling or
+behavioural tracking:
+
+- **easy**: an uncontested machine vote exists; the user confirms it.
+- **medium**: competing votes exist; the user breaks the tie.
+- **hard**: no data exists; the user answers cold.
+
+Lanes ramp per session by default, with user override available. This model was
+chosen partly BECAUSE it requires no telemetry — it reads entirely off existing
+vote state (and does so without any need for the retired served-mix logging seam
+of Annex A). Machine votes structurally CANNOT resolve a field alone (vote_consensus.py's
+gate requires `has_human_backed`, and DEDUCTION/OCR/FEDERATED/IMPLICIT are all
+machine-derived), so every derived machine vote MANUFACTURES a confirmable question
+rather than removing the need to ask one. That is the premise the easy lane runs on.
+
+**Consensus thresholds — clarity.** The gate is 60% share (`PRINTING_TAG_MIN_SHARE = 0.6`)
+plus a 2-vote minimum — NOT 51%. The "51%" figure belongs to `question_feed.py`'s
+separate "≥51%-likely-resolve" SERVING policy. These are separate mechanisms with
+different thresholds; do not confuse them.
+
+---
+
+## ANNEX A — served-mix logging seam (RETIRED 2026-08-05)
 
 The ≥51% likely-resolve mix (46,310-card 1-click supply) is a **question_feed.py
 selection-layer** concern only: it changes WHICH questions are served in what
@@ -326,12 +435,17 @@ UI implications actually built here:
 - Hard/open shapes (c/d) are visually distinct (WD7) so a run of easy confirms
   does not condition reflexive tapping into the harder shapes.
 
-Backend seam to note (not built by this design): log served-mix composition
-(ratio + family/reason per served question) per session in `question_feed.py`,
-so a future audit can correlate click latency / agreement-rate against a
-session's easy-question exposure (data brief, owner ask). The ONLY channel this
-policy can touch soundness through is degraded human-vote signal quality from
-habituation — never any weight/threshold/gate code path.
+**Backend seam (RETIRED — see A5 amendment above).** The original spec called for
+logging served-mix composition (ratio + family/reason per served question) per
+session in `question_feed.py`, so a future audit could correlate click latency /
+agreement-rate against a session's easy-question exposure (data brief, owner ask).
+This logging seam is NOT BUILT. Reason: the difficulty-lane model (see new section
+above) was chosen partly BECAUSE it requires no telemetry — it reads entirely off
+existing vote state, making this audit seam unnecessary for the feature's soundness.
+The ONLY channel the serving policy can touch soundness through is degraded human-vote
+signal quality from habituation — never any weight/threshold/gate code path. Without
+the habituation risk this seam was designed to monitor, the build item is retired.
+This record stands so a future reader understands the decision.
 
 ## ANNEX B — survivor_pks / issue #433 dependency (shape b)
 
