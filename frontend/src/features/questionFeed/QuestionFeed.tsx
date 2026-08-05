@@ -1456,7 +1456,11 @@ export function QuestionFeed() {
         // inside it is redundant. Ungrouped tiles have no cluster-level credit, so they keep
         // this caption at its default (true) - the only place a candidate's artist is still
         // shown at all for that grid.
-        showArtistCaption: boolean = true
+        showArtistCaption: boolean = true,
+        // Illustration clusters (below) pass candidate.artCropUrl, falling back to the full
+        // scan when a candidate's metadata sidecar has none - see this function's own comment
+        // on showArtistCaption for why grouped tiles diverge from the ungrouped default here.
+        imageUrl: string = candidate.mediumThumbnailUrl
       ) => (
         <CandidateButton
           key={candidate.identifier}
@@ -1474,7 +1478,7 @@ export function QuestionFeed() {
             <MysteryCard />
             <ZoomableThumbnail>
               <img
-                src={candidate.mediumThumbnailUrl}
+                src={imageUrl}
                 alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
               />
             </ZoomableThumbnail>
@@ -1643,7 +1647,8 @@ export function QuestionFeed() {
                           candidate.illustrationId as string,
                           candidate
                         ),
-                      false
+                      false,
+                      candidate.artCropUrl || candidate.mediumThumbnailUrl
                     )
                   )}
                 </CandidateGrid>

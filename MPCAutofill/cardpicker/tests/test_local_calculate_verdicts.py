@@ -132,7 +132,7 @@ def _evidence(card, **overrides):
         # (`FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS`), and a default that silently omitted it would
         # turn every frame-veto test into a no-op. `TestFrameVetoRequiresArtistOcr` overrides this
         # to exercise the absent case deliberately.
-        extractor_versions={"collector_line_ocr": "collector-line-ocr-v1", "artist_ocr": "artist-ocr-v2"},
+        extractor_versions={"collector_line_ocr": "collector-line-ocr-v1", "artist_ocr": "artist-ocr-v3"},
         collector_line_raw_text="",
         collector_line_set_code="",
         collector_line_collector_number="",
@@ -3500,7 +3500,7 @@ class TestFrameVetoRequiresArtistOcr:
         anchor - a real negative - so "modern" is a genuine reading and the veto fires exactly as
         it always did. Same card, same evidence, one extra manifest key."""
         printing, card, candidates, evidence = self._old_frame_setup(
-            {"collector_line_ocr": "collector-line-ocr-v2", "artist_ocr": "artist-ocr-v2"}
+            {"collector_line_ocr": "collector-line-ocr-v2", "artist_ocr": "artist-ocr-v3"}
         )
 
         verdict = calculate_join_key_verdict(card.pk, evidence, candidates)

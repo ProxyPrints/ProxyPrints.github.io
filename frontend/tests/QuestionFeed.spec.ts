@@ -298,6 +298,38 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     ).toHaveCount(0);
   });
 
+  test("clustered tiles render each candidate's art crop, falling back to the printing scan when absent; ungrouped tiles keep the printing scan regardless", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrintingGroupedByIllustration,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const group = page.getByTestId("question-feed-illustration-group");
+    await expect(
+      group.locator(
+        `[data-card-identifier="${illustrationGroupCandidateA.identifier}"] img`
+      )
+    ).toHaveAttribute("src", illustrationGroupCandidateA.artCropUrl as string);
+    await expect(
+      group.locator(
+        `[data-card-identifier="${illustrationGroupCandidateB.identifier}"] img`
+      )
+    ).toHaveAttribute("src", illustrationGroupCandidateB.mediumThumbnailUrl);
+
+    const ungroupedGrid = page.getByTestId(
+      "question-feed-candidate-grid-ungrouped"
+    );
+    await expect(
+      ungroupedGrid.locator(
+        `[data-card-identifier="${illustrationGroupCandidateC.identifier}"] img`
+      )
+    ).toHaveAttribute("src", illustrationGroupCandidateC.mediumThumbnailUrl);
+  });
+
   // Issue #503 (WTC phase C2) / #524 - supersedes this describe block's former "selecting a
   // grouped candidate submits the identical payload to the identical endpoint as an ungrouped
   // one" test (see .github/coverage-acks.txt for the rename ack). That title asserted phase

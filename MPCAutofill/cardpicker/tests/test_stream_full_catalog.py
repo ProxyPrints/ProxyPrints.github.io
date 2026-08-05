@@ -177,6 +177,7 @@ def _install_ok_stage_c_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         artist_lexicon: Any = None,
         printing_artist_lookup: Any = None,
         card_artist_names: Any = (),
+        modern_artist_lexicon: Any = None,
         md5_checksum: Any = None,
         sha256_checksum: Any = None,
     ) -> Any:

@@ -39,3 +39,35 @@ class TestSerialiseAsPrintingCandidateIllustrationId:
         candidate = card.serialise_as_printing_candidate()
 
         assert candidate.illustrationId is None
+
+
+class TestSerialiseAsPrintingCandidateArtCropUrl:
+    def test_emits_art_crop_url_when_metadata_has_one(self, db):
+        card = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(
+            canonical_card=card, art_crop_url="https://cards.scryfall.io/art_crop/example.jpg"
+        )
+
+        candidate = card.serialise_as_printing_candidate()
+
+        assert candidate.artCropUrl == "https://cards.scryfall.io/art_crop/example.jpg"
+
+    def test_emits_none_when_metadata_sidecar_is_missing_entirely(self, db):
+        # deliberately no `CanonicalPrintingMetadataFactory` row for this card at all - same
+        # no-sidecar shape `illustrationId` covers above.
+        card = CanonicalCardFactory()
+
+        candidate = card.serialise_as_printing_candidate()
+
+        assert candidate.artCropUrl is None
+
+    def test_emits_none_when_metadata_exists_but_art_crop_url_is_empty(self, db):
+        # `art_crop_url` is `blank=True, default=""`, not nullable - an empty string is the
+        # legitimate "no crop on file" value, and must collapse to the same optional-absent
+        # shape as the no-sidecar case above rather than serialising as an empty-string URL.
+        card = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=card, art_crop_url="")
+
+        candidate = card.serialise_as_printing_candidate()
+
+        assert candidate.artCropUrl is None

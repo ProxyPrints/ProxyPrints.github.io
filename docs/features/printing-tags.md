@@ -894,7 +894,16 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     `CandidateGrid` below the clusters, visually identical to Level 2's
     pre-grouping grid. Ungrouped candidates still call `selectCandidate`
     with that exact `PrintingCandidate` through the unchanged
-    `/2/submitPrintingTag/` path.
+    `/2/submitPrintingTag/` path. Clustered tiles render the candidate's
+    `artCropUrl` (`PrintingCandidate.artCropUrl`, added for this purpose —
+    `schema_types.py`/`schema_types.ts`, sourced from
+    `CanonicalPrintingMetadata.art_crop_url`) in place of
+    `mediumThumbnailUrl`, falling back to the printing scan when a
+    candidate's metadata sidecar has no crop — since the vote this cluster
+    casts is illustration-level, the border/frame/language a full scan
+    shows is information the vote itself doesn't record. Ungrouped tiles
+    keep the full scan unconditionally: identifying one specific printing
+    (the vote `selectCandidate` casts) does need that detail.
   - **Illustration voting** (issue #503, WTC phase C2; `CardIllustrationVote`
     itself is #524/#531): tapping a tile inside an illustration cluster now
     calls `selectIllustrationGroup` instead of `selectCandidate` — it sends
@@ -1944,22 +1953,6 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
 
 ## Known gaps
 
-- **Illustration-grouped tiles still show printing scans, not an art crop**
-  (owner report, 2026-08-04): `selectIllustrationGroup` casts an
-  illustration-level vote, but `IllustrationGroup`'s tiles in
-  `QuestionFeed.tsx` still render each candidate's own
-  `mediumThumbnailUrl` (a per-printing scan) via the same
-  `renderCandidateTile` markup the ungrouped grid uses — asking the voter
-  to discriminate on border/frame/language differences the vote itself
-  doesn't record. A shared art crop isn't available to plumb in instead:
-  `QuestionFeedItem.scryfallIllustrationUrl` (`schema_types.ts`) is a
-  single, item-level field consumed only by the unrelated `artist`
-  question type's subject-card re-frame, and `PrintingCandidate` carries
-  no art-crop field of its own — only `mediumThumbnailUrl`/
-  `smallThumbnailUrl`. Making this fix possible needs a backend change
-  (a per-candidate or, more efficiently, a per-`illustrationId` art-crop
-  URL on the questionFeed payload) that is out of scope for a
-  frontend-only change and was not attempted here.
 - Client-side (local-folder/Google Drive) search gets no re-rank/filter/
   match-indicator parity — no ES/DB access on that path.
 - The starburst/card/chip-ring layout was hand-tuned via iterative

@@ -665,6 +665,7 @@ _compute_pool_lexicon: Any = None
 _compute_pool_artist_lexicon: Any = None
 _compute_pool_printing_artist_lookup: Any = None
 _compute_pool_name_artist_lookup: Any = None
+_compute_pool_modern_artist_lexicon: Any = None
 
 
 def _stage_c_compute_worker_init(
@@ -696,12 +697,14 @@ def _stage_c_compute_worker_init(
        sufficient for a fresh, independent socket on this worker's own first query.
 
     3. Lookup singletons: ``known_set_codes``, ``load_artist_lexicon``,
-       ``build_printing_artist_lookup``, and ``build_name_artist_lookup`` are all built once per
-       worker process (matching the batch-scoped ``_run_stage_c`` convention exactly — the
-       call sites are identical, just hoisted from per-batch in the parent to per-worker-process
-       in the pool), and the last two return stateful resolvers with internal caches backed by
-       DB queries — they MUST be rebuilt in the child rather than passed across the fork boundary,
-       which would carry a stale cache pointing at the (now-closed) parent's own DB handles.
+       ``build_printing_artist_lookup``, ``build_name_artist_lookup``, and (2026-08-04)
+       ``modern_artist_credit.load_lexicon_index`` — the ARTIST-CROP FALLBACK's own lexicon, see
+       ``compute_card_evidence``'s ``modern_artist_lexicon`` docstring paragraph — are all built
+       once per worker process (matching the batch-scoped ``_run_stage_c`` convention exactly —
+       the call sites are identical, just hoisted from per-batch in the parent to per-worker-process
+       in the pool), and the stateful resolvers among them return caches backed by DB queries —
+       they MUST be rebuilt in the child rather than passed across the fork boundary, which would
+       carry a stale cache pointing at the (now-closed) parent's own DB handles.
     """
     import os as _os
 
@@ -713,6 +716,9 @@ def _stage_c_compute_worker_init(
     )
     from cardpicker.collector_line_artist import load_artist_lexicon as _load_artist
     from cardpicker.local_calculate_verdicts import known_set_codes as _known_set_codes
+    from cardpicker.modern_artist_credit import (
+        load_lexicon_index as _load_modern_artist,
+    )
 
     # 1. Pin OpenMP thread count — MUST happen before any PIL/tesseract import reaches OpenMP init.
     _os.environ["OMP_THREAD_LIMIT"] = "1"
@@ -729,12 +735,14 @@ def _stage_c_compute_worker_init(
     global _compute_pool_short_circuit
     global _compute_pool_lexicon, _compute_pool_artist_lexicon
     global _compute_pool_printing_artist_lookup, _compute_pool_name_artist_lookup
+    global _compute_pool_modern_artist_lexicon
 
     _compute_pool_short_circuit = short_circuit
     _compute_pool_lexicon = _known_set_codes()
     _compute_pool_artist_lexicon = _load_artist()
     _compute_pool_printing_artist_lookup = _build_printing()
     _compute_pool_name_artist_lookup = _build_name()
+    _compute_pool_modern_artist_lexicon = _load_modern_artist()
 
 
 def _stage_c_compute_one_card(
@@ -757,7 +765,7 @@ def _stage_c_compute_one_card(
     completed card from a compute crash and handle each appropriately.
 
     All lookup singletons (lexicon, artist_lexicon, printing_artist_lookup, name_artist_lookup,
-    short_circuit) are read from process-global module variables set by
+    modern_artist_lexicon, short_circuit) are read from process-global module variables set by
     _stage_c_compute_worker_init — no second build, no imports at call time beyond PIL and the
     two evidence functions themselves.
     """
@@ -780,6 +788,7 @@ def _stage_c_compute_one_card(
             artist_lexicon=_compute_pool_artist_lexicon,
             printing_artist_lookup=_compute_pool_printing_artist_lookup,
             card_artist_names=_compute_pool_name_artist_lookup(card_name),
+            modern_artist_lexicon=_compute_pool_modern_artist_lexicon,
             md5_checksum=md5_checksum,
             sha256_checksum=sha256_checksum,
         )
