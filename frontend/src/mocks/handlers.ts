@@ -1617,17 +1617,21 @@ export const questionFeedIdentifyPrinting = http.get(
 // (CanonicalPrintingMetadata.illustration_id is nullable and frequently absent - see
 // local_illustration.py:137). Built by spreading the existing printingCandidate1/2 fixtures
 // rather than editing test-constants.ts, which is out of this change's scope.
+// candidateA carries an art crop (the common case); candidateB shares its illustration but
+// has none (a metadata sidecar gap) - together they cover both the swap and its fallback.
 export const illustrationGroupCandidateA: PrintingCandidate = {
   ...printingCandidate1,
   identifier: "illustration-group-candidate-a",
   collectorNumber: "101",
   illustrationId: "illustration-shared",
+  artCropUrl: "https://example.com/art-crop-a.png",
 };
 export const illustrationGroupCandidateB: PrintingCandidate = {
   ...printingCandidate2,
   identifier: "illustration-group-candidate-b",
   collectorNumber: "102",
   illustrationId: "illustration-shared",
+  artCropUrl: null,
 };
 export const illustrationGroupCandidateC: PrintingCandidate = {
   ...printingCandidate1,

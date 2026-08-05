@@ -6,6 +6,7 @@ from cardpicker.printing_candidates import (
     rank_candidates_by_confidence,
 )
 from cardpicker.tests.factories import (
+    CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CanonicalPrintingMetadataFactory,
@@ -108,3 +109,22 @@ class TestGetRankedPrintingCandidates:
         results = get_ranked_printing_candidates(card, "Something Else Entirely")
 
         assert results == [other]
+
+    def test_serialising_the_candidate_grid_issues_no_extra_queries_per_candidate(self, db, django_assert_num_queries):
+        # `PrintingCandidate.artCropUrl`/`illustrationId` both read `CanonicalPrintingMetadata`
+        # off each candidate - the sidecar must already be `select_related`, or this scales with
+        # grid size instead of staying flat. `CANDIDATE_RESULT_LIMIT` bounds real grid size at
+        # 50; this uses 10 to keep the test fast while still exercising more than one row.
+        card = CardFactory(name="Mountain", searchq="mountain")
+        artist = CanonicalArtistFactory()
+        for i in range(10):
+            printing = CanonicalCardFactory(name="Mountain", artist=artist, collector_number=f"{i:03}")
+            CanonicalPrintingMetadataFactory(canonical_card=printing, art_crop_url=f"https://example.com/{i}.jpg")
+
+        candidates = get_ranked_printing_candidates(card, None)
+        assert len(candidates) == 10
+
+        with django_assert_num_queries(0):
+            serialised = [candidate.serialise_as_printing_candidate() for candidate in candidates]
+
+        assert all(candidate.artCropUrl is not None for candidate in serialised)

@@ -1998,6 +1998,67 @@ query once it notices its client is gone, deliberately not
 minutes-hours with a live client and must not be killed on a timer).
 Parked on the board, not yet shipped.
 
+## Trimmed-classified cards (`bleed_class="trimmed"`) fail collector-line OCR at ~12x the bleed-cohort rate
+
+**Symptom**: `ImageEvidence.collector_line_raw_text` is empty for a large
+majority of `bleed_class="trimmed"` rows (measured 2026-08-04: 68.8%,
+1916/2786) versus a small minority of `bleed_class="bleed"` rows (5.6%,
+12851/227539) — a ~12x differential concentrated entirely on the one
+classifier value `local_fallback.normalize_crop_box` remaps crop boxes
+for. The obvious hypothesis is that the remap arithmetic in
+`normalize_crop_box` (`cardpicker/local_fallback.py`, issue #683) is
+wrong.
+
+**It isn't.** `normalize_crop_box`'s rescale is algebraically exact:
+given a fraction `f` tuned against a bleed-inclusive image, the trimmed
+image's own fraction of the same physical position is `(f * bleed_total_mm - margin_mm) / trim_mm`, which is exactly what
+`(f - margin_fraction) / (1 - 2*margin_fraction)` reduces to. Confirmed
+empirically too: fetching real `bleed_class="bleed"` production images
+from the SAME source (e.g. WarpDandy) that DO carry a genuine collector
+line reads correctly (`"359/361 C\nCLB • EN • Kamila Szutenberg"`) with
+the un-remapped box, exactly as designed.
+
+**Cause**: the aspect-ratio classifier (`classify_bleed_edge`) measures
+raw pixel aspect ratio against two reference ratios (real MTG trim vs.
+bleed-inclusive), which is a sound, resolution-independent signal _for
+real MTG scans_. But the `trimmed` bucket in production is dominated
+(confirmed by hand across 25+ real fetched images spanning 10+ sources —
+WarpDandy, Rickman, Gikkman, RustyShackleford, Berndt_Toast83,
+Polymancer, Clutchnorris, Chili Axe, and several long-tail sources,
+including all 3 of the golden set's own `trimmed` cards, 145532/150472/ 189166) by fan-made custom card renders whose own export dimensions
+happen to land near the trim aspect ratio by coincidence, not because
+they're real bleed-trimmed scans:
+
+- A recurring black-bordered "classic" proxy template printing "PROXY:
+  Not for sale or use in organized play" where the real collector line
+  would be (several distinct uploader sources all use this same
+  template) — tesseract has nothing real to read there, so it returns
+  either nothing or noise-garbage from the textured border (`"NR TE"`,
+  `"OES"`, etc.) that occasionally false-matches a real (set, number)
+  pair by coincidence.
+- Landscape/rotated Planechase-style oversized cards (rounded corners,
+  sideways type line) — the entire card is oriented 90° from what
+  `DEFAULT_CROP_BOX`/the collector-line position assumes; there is no
+  bottom-left collector line in that orientation at all.
+- Original custom/crossover/meme cards (never a real MTG printing) with
+  their own placeholder credit line (e.g. `"2026 P Proxy, Not for Sale\nMTG • EN • <uploader>"`).
+
+None of these are fixable by adjusting the remap fractions or the
+classifier's tolerance — a perfectly-placed crop box still finds no real
+collector line on content that never had one, or is finding it 90° from
+where a portrait card would place it. This is a content/source
+classification problem, not a crop-box or classifier bug, and is out of
+scope for a bounded fix (see issue #683's own scope boundary against a
+general crop-box rework).
+
+**Refs**: no code change shipped for this — see the issue #683 PR for
+the full sourced investigation (per-source failure-rate breakdown,
+image samples). `cardpicker/golden_set.py`'s `GOLDEN_CARD_IDS` DOES cover
+`trimmed` cards (145532, 150472, 189166) but all three are the same
+black-border proxy template above, so the golden set has zero coverage
+of a genuine bleed-trimmed real-scan case and cannot catch a regression
+in that path specifically.
+
 ## `manage.py makemigrations` fails with `ValueError: Missing staticfiles manifest entry for 'cardpicker/favicon.ico'` in a fresh worktree
 
 **Symptom**: `python manage.py makemigrations cardpicker` (or any other

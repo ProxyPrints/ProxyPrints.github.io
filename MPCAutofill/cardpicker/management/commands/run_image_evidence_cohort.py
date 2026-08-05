@@ -277,6 +277,7 @@ from cardpicker.collector_line_artist import (
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.local_calculate_verdicts import known_set_codes
 from cardpicker.models import CanonicalCard, Card, ImageEvidence, PilotRunLedger
+from cardpicker.modern_artist_credit import LexiconIndex, load_lexicon_index
 from cardpicker.pilot_run_lifecycle import (
     add_dry_run_guard_arguments,
     enforce_dry_run_precondition,
@@ -329,7 +330,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "layout_class": "layout-class-v1",
     "crop_coordinates": "crop-coordinates-v1",
     "collector_line_ocr": "collector-line-ocr-v2",
-    "artist_ocr": "artist-ocr-v2",
+    "artist_ocr": "artist-ocr-v3",
     "collector_line_tsv": "collector-line-tsv-v2",
     "artbox_phash": "artbox-phash-v1",
     "symbol_region": "symbol-region-v1",
@@ -410,9 +411,13 @@ PROGRESS_EVERY = 25
 # only production constructor) always passes it.
 _WORKER_ARTIST_LEXICON: Optional[ArtistLexicon] = None
 _WORKER_PRINTING_ARTIST_LOOKUP: Optional[PrintingArtistLookup] = None
+_WORKER_MODERN_ARTIST_LEXICON: Optional[LexiconIndex] = None
 
 
-def _init_worker(artist_lexicon: Optional[ArtistLexicon] = None) -> None:
+def _init_worker(
+    artist_lexicon: Optional[ArtistLexicon] = None,
+    modern_artist_lexicon: Optional[LexiconIndex] = None,
+) -> None:
     """Compute pool `initializer=` - runs once per worker PROCESS, immediately after it starts
     (fork on Linux), before that worker executes its first task. Three jobs (the rate-limiter
     descaling job is gone entirely under the decoupled design - see module docstring):
@@ -423,6 +428,10 @@ def _init_worker(artist_lexicon: Optional[ArtistLexicon] = None) -> None:
     ARTIST WIRING section for why this one travels by initializer while `known_set_codes` travels
     per submit, and why `printing_artist_lookup` is built here rather than shipped from the
     parent.
+
+    `modern_artist_lexicon` (2026-08-04) is `handle()`'s own `load_lexicon_index()` result,
+    delivered the same way for the same reason - see `compute_card_evidence`'s own
+    `modern_artist_lexicon` docstring paragraph for what it feeds, the ARTIST-CROP FALLBACK.
     """
     # 1. tesseract's LSTM engine can multi-thread itself internally via OpenMP - without this, N
     # worker PROCESSES (not just N threads within one process) would each ALSO spread across
@@ -442,9 +451,10 @@ def _init_worker(artist_lexicon: Optional[ArtistLexicon] = None) -> None:
     # can only ever open a connection this worker owns. Skipped entirely when no lexicon was
     # supplied - a `PrintingArtistLookup` with no lexicon alongside it can never be consulted
     # (`_parse_artist_is_contradicted` requires both), so building one would be pure waste.
-    global _WORKER_ARTIST_LEXICON, _WORKER_PRINTING_ARTIST_LOOKUP
+    global _WORKER_ARTIST_LEXICON, _WORKER_PRINTING_ARTIST_LOOKUP, _WORKER_MODERN_ARTIST_LEXICON
     _WORKER_ARTIST_LEXICON = artist_lexicon
     _WORKER_PRINTING_ARTIST_LOOKUP = None if artist_lexicon is None else build_printing_artist_lookup()
+    _WORKER_MODERN_ARTIST_LEXICON = modern_artist_lexicon
 
 
 def _get_rss_mb() -> Optional[float]:
@@ -645,13 +655,14 @@ def _compute_one_card(
     list stays picklable exactly as `compute_card_evidence`'s own docstring requires. `()` (the
     default) means "don't narrow", byte-identical to the pre-2026-07-29 behaviour.
 
-    THE OTHER TWO ARTIST INPUTS ARE PROCESS STATE, NOT ARGUMENTS. `artist_lexicon` and
-    `printing_artist_lookup` are read off `_WORKER_ARTIST_LEXICON`/`_WORKER_PRINTING_ARTIST_LOOKUP`,
+    THE OTHER ARTIST INPUTS ARE PROCESS STATE, NOT ARGUMENTS. `artist_lexicon`,
+    `printing_artist_lookup`, and (2026-08-04) `modern_artist_lexicon` are read off
+    `_WORKER_ARTIST_LEXICON`/`_WORKER_PRINTING_ARTIST_LOOKUP`/`_WORKER_MODERN_ARTIST_LEXICON`,
     which `_init_worker` set once when this worker process started - see the module docstring for
-    why each travels the way it does. Both being `None` (an un-initialised process: a direct unit
-    call, a pool built without the initializer) disables the escalation gate and the
-    `artist_ocr_name` storage fallback entirely, which is exactly what this command did before
-    2026-07-29 - never an error, and never a partially-wired read."""
+    why each travels the way it does. All being `None` (an un-initialised process: a direct unit
+    call, a pool built without the initializer) disables the escalation gate and both
+    `artist_ocr_name` storage fallbacks entirely, which is exactly what this command did before
+    2026-07-29/2026-08-04 - never an error, and never a partially-wired read."""
     from cardpicker.image_evidence import compute_card_evidence, persist_evidence
 
     wall_started_at = time.monotonic() if profile else None
@@ -676,6 +687,7 @@ def _compute_one_card(
         artist_lexicon=_WORKER_ARTIST_LEXICON,
         printing_artist_lookup=_WORKER_PRINTING_ARTIST_LOOKUP,
         card_artist_names=card_artist_names,
+        modern_artist_lexicon=_WORKER_MODERN_ARTIST_LEXICON,
         md5_checksum=md5_checksum,
         sha256_checksum=sha256_checksum,
     )
@@ -801,6 +813,7 @@ def _run_cohort(
     known_set_codes: Optional[frozenset[str]] = None,
     artist_lexicon: Optional[ArtistLexicon] = None,
     name_artist_lookup: Optional[NameArtistLookup] = None,
+    modern_artist_lexicon: Optional[LexiconIndex] = None,
 ) -> tuple[int, int, bool, int, bool, Optional[float]]:
     """
     The decoupled fetch/compute driver itself. Two concurrent executors:
@@ -854,6 +867,10 @@ def _run_cohort(
     `None` (the default, and every test that doesn't thread them) leaves the artist gate and the
     `artist_ocr_name` storage fallback off, exactly as before 2026-07-29.
 
+    `modern_artist_lexicon` (2026-08-04): built ONCE by `handle()` below and handed to the compute
+    pool's `initializer=` alongside `artist_lexicon` - same lifetime, same route. `None` (the
+    default) leaves the ARTIST-CROP FALLBACK off - see `compute_card_evidence`'s own docstring.
+
     Returns `(completed, fetch_failures, lockout_hit, short_circuited, rss_limit_hit, peak_rss_mb)`
     - the same three figures the old single-loop design printed in its final summary line, plus the
     short-circuit counter (item 1's own "count it during the real run" ask), the RSS-limit flag, and
@@ -865,7 +882,7 @@ def _run_cohort(
     stats = _CohortStats(total=len(cohort_ids), stdout_write=stdout_write, stop_event=stop_event, max_rss_mb=max_rss_mb)
 
     with ThreadPoolExecutor(max_workers=fetch_threads) as fetch_pool, ProcessPoolExecutor(
-        max_workers=workers, initializer=_init_worker, initargs=(artist_lexicon,)
+        max_workers=workers, initializer=_init_worker, initargs=(artist_lexicon, modern_artist_lexicon)
     ) as compute_pool:
         cohort_iter = iter(cohort_ids)
         outstanding_fetch: "set[Future[Any]]" = set()
@@ -1280,6 +1297,10 @@ class Command(BaseCommand):
             # `run_join_key_calculator` already practise.
             artist_lexicon = load_artist_lexicon()
             name_artist_lookup = build_name_artist_lookup()
+            # ARTIST-CROP FALLBACK (2026-08-04): same "query once, pass through explicitly"
+            # convention as the two lookups immediately above - see `compute_card_evidence`'s own
+            # `modern_artist_lexicon` docstring paragraph.
+            modern_artist_lexicon = load_lexicon_index()
 
             # Close the parent's own DB connection(s) before forking the compute pool - belt-and-
             # braces alongside each compute worker's own _init_worker close_all() call, so the
@@ -1307,6 +1328,7 @@ class Command(BaseCommand):
                     known_set_codes=lexicon,
                     artist_lexicon=artist_lexicon,
                     name_artist_lookup=name_artist_lookup,
+                    modern_artist_lexicon=modern_artist_lexicon,
                 )
             finally:
                 if profile_file is not None:

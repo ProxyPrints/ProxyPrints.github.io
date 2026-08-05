@@ -173,6 +173,13 @@ class CanonicalCard(models.Model):
             illustrationId=(
                 str(metadata.illustration_id) if metadata is not None and metadata.illustration_id else None
             ),
+            # Scryfall's art-crop image URL for this printing - see
+            # CanonicalPrintingMetadata.art_crop_url's own docstring for provenance. Null-tolerant
+            # for the same two reasons illustrationId is above: metadata can be absent entirely,
+            # and art_crop_url is `blank=True` so a printing can legitimately carry an empty
+            # value - both collapse to None here so the frontend can fall back to
+            # mediumThumbnailUrl rather than render a broken image.
+            artCropUrl=metadata.art_crop_url if metadata is not None and metadata.art_crop_url else None,
         )
 
 

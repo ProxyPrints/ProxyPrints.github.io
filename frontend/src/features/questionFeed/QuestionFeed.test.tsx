@@ -891,5 +891,57 @@ describe("QuestionFeed", () => {
       });
       expect(illustrationVoteCalled).toBe(false);
     });
+
+    it("clustered tiles render the candidate's art crop, falling back to the printing scan when absent; ungrouped tiles are unaffected", async () => {
+      const withArtCrop = {
+        ...groupedItem,
+        candidates: [
+          {
+            ...groupedItem.candidates[0],
+            artCropUrl: "https://example.com/art-crop-1.png",
+          },
+          { ...groupedItem.candidates[1], artCropUrl: null },
+          groupedItem.candidates[2],
+        ],
+      };
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: withArtCrop,
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      renderFeed();
+      await revealCard();
+
+      const group = await screen.findByTestId(
+        "question-feed-illustration-group"
+      );
+      expect(within(group).getByAltText("abc 1")).toHaveAttribute(
+        "src",
+        "https://example.com/art-crop-1.png"
+      );
+      expect(within(group).getByAltText("xyz 42")).toHaveAttribute(
+        "src",
+        groupedItem.candidates[1].mediumThumbnailUrl
+      );
+
+      const ungroupedGrid = await screen.findByTestId(
+        "question-feed-candidate-grid-ungrouped"
+      );
+      expect(within(ungroupedGrid).getByAltText("def 3")).toHaveAttribute(
+        "src",
+        groupedItem.candidates[2].mediumThumbnailUrl
+      );
+    });
   });
 });

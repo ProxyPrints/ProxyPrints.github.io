@@ -154,6 +154,7 @@ export interface QuestionFeedItem {
 }
 
 export interface PrintingCandidate {
+  artCropUrl?: null | string;
   artist: string;
   borderColor: string;
   canonicalId: string;
@@ -2894,6 +2895,11 @@ const typeMap: any = {
   ),
   PrintingCandidate: o(
     [
+      {
+        json: "artCropUrl",
+        js: "artCropUrl",
+        typ: u(undefined, u(null, "")),
+      },
       { json: "artist", js: "artist", typ: "" },
       { json: "borderColor", js: "borderColor", typ: "" },
       { json: "canonicalId", js: "canonicalId", typ: "" },

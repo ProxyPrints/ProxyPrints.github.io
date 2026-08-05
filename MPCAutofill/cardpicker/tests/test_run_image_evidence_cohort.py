@@ -840,6 +840,7 @@ class TestComputeOneCard:
             artist_lexicon: Any = None,
             printing_artist_lookup: Any = None,
             card_artist_names: tuple[str, ...] = (),
+            modern_artist_lexicon: Any = None,
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
         ) -> Any:
@@ -887,6 +888,7 @@ class TestComputeOneCard:
             artist_lexicon: Any = None,
             printing_artist_lookup: Any = None,
             card_artist_names: tuple[str, ...] = (),
+            modern_artist_lexicon: Any = None,
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
         ) -> Any:
@@ -954,6 +956,7 @@ class TestComputeOneCard:
             artist_lexicon: Any = None,
             printing_artist_lookup: Any = None,
             card_artist_names: tuple[str, ...] = (),
+            modern_artist_lexicon: Any = None,
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
         ) -> Any:
@@ -2073,10 +2076,12 @@ class TestRunCohortArtistWiring:
             name_artist_lookup=lambda card_name: (f"artist-for-{card_name}",),
         )
 
-        # The compute pool - and ONLY the compute pool - is initialised with the lexicon.
+        # The compute pool - and ONLY the compute pool - is initialised with the lexicon. The
+        # second initargs slot is `modern_artist_lexicon` (2026-08-04) - `None` here since this
+        # test doesn't thread one through, matching `_run_cohort`'s own default.
         compute_pools = [pool for pool in constructed if pool["initializer"] is cohort_command._init_worker]
         assert len(compute_pools) == 1
-        assert compute_pools[0]["initargs"] == (lexicon,)
+        assert compute_pools[0]["initargs"] == (lexicon, None)
 
         # `card_artist_names` is the last positional argument of every submission, resolved from
         # that card's own name in the parent process.

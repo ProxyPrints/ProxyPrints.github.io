@@ -94,6 +94,7 @@ class PrintingCandidate(BaseModel):
     smallThumbnailUrl: str
     releasedAt: Optional[str] = None
     illustrationId: Optional[str] = None
+    artCropUrl: Optional[str] = None
 
     @staticmethod
     def from_dict(obj: Any) -> "PrintingCandidate":
@@ -115,6 +116,7 @@ class PrintingCandidate(BaseModel):
         smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
         releasedAt = from_union([from_none, from_str], obj.get("releasedAt"))
         illustrationId = from_union([from_none, from_str], obj.get("illustrationId"))
+        artCropUrl = from_union([from_none, from_str], obj.get("artCropUrl"))
         return PrintingCandidate(
             artist,
             borderColor,
@@ -133,6 +135,7 @@ class PrintingCandidate(BaseModel):
             smallThumbnailUrl,
             releasedAt,
             illustrationId,
+            artCropUrl,
         )
 
     def to_dict(self) -> dict:
@@ -156,6 +159,8 @@ class PrintingCandidate(BaseModel):
             result["releasedAt"] = from_union([from_none, from_str], self.releasedAt)
         if self.illustrationId is not None:
             result["illustrationId"] = from_union([from_none, from_str], self.illustrationId)
+        if self.artCropUrl is not None:
+            result["artCropUrl"] = from_union([from_none, from_str], self.artCropUrl)
         return result
 
 
