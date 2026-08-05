@@ -591,6 +591,16 @@ def normalize_crop_box(
     (border color extends uniformly through the bleed margin), confirming this is safe to apply
     unconditionally across all five fixed-fraction crop sites without a special case for any one
     of them.
+
+    NOT THE CAUSE of the trimmed-cohort's ~12x collector-line OCR failure rate (issue #683,
+    investigated 2026-08-05): this rescale is algebraically exact (verified) and reads correctly
+    against real bleed-classified images from the same sources that also produce trimmed rows.
+    The failure is a content problem, not a math problem - the `trimmed` bucket is dominated by
+    fan-made custom card renders (a black-bordered "PROXY: Not for sale" template shared across
+    several uploaders, rotated Planechase-style cards, and original crossover/meme cards) whose
+    own export dimensions coincidentally land near the trim aspect ratio without being real
+    bleed-trimmed scans - no crop box placement finds a collector line these images never had.
+    See docs/troubleshooting.md's own entry for the full sourced investigation.
     """
     if bleed_class != "trimmed":
         return box
