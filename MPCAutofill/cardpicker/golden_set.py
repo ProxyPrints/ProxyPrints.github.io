@@ -392,6 +392,17 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # (real tesseract found nothing plausible on this sample), which is an honest outcome, not a
     # placeholder: only 10/30 produced a parseable collector number on this real run, several of
     # those a 4-digit "year" collector number (mtg/proxy sets) rather than a classic 3-digit one.
+    #
+    # Re-verified 2026-08-05 (issue #677, "collapse the Stage C OCR attempt ladder" - dropped the
+    # ladder's tier 3): none of these 30 values changed. All 30 golden cards were walked through
+    # the FULL pre-#677 8-attempt ladder with per-tier attribution - same method and the same live
+    # 450-card (300 blank + 150 success) probe documented in docs/features/catalog-completion-plan.md's
+    # own "#677" section (the probe script itself is a worktree-only analysis tool, not committed
+    # here, matching this repo's established convention for one-off probes - see e.g.
+    # docs/reports/2026-07-23-ocr-preprocessing-probe.md's own LIVE STATE) - not one ever resolved
+    # (genuine match, lexicon-valid parse, or "best invalid" fallback) uniquely at the removed
+    # tier, so `COLLECTOR_LINE_OCR_EXTRACTOR_VERSION`'s v2->v3 bump changes zero values here even
+    # though it changes some values outside this set (see that version constant's own comment).
     "collector_line_ocr": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {

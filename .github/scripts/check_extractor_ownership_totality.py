@@ -50,16 +50,13 @@ Two kinds, both read via `ast`, never by importing/executing:
 
 DELIBERATE EXCLUSIONS, and why they are not silent
 ----------------------------------------------------
-`EXCLUDED_HELPERS = {"_collector_line_ocr_attempts"}` — the OCR
-attempt-tier ladder (issue #259). Named out of scope by this PR's own brief
-("being worked in parallel by other branches"); touching its ownership here
-would either fight that branch's own edits or require this script to freeze
-a design that branch is actively changing. Its own body is excluded from
-the call-scan too (not just the function name itself), so a name ONLY
-called from inside it (`preprocess_fallback_variants`, at this writing) is
-correctly not required to have an entry either — it is reachable exclusively
-through the excluded ladder, and re-included in full the day that ladder's
-own PR lands and this exclusion is lifted.
+The OCR attempt-tier ladder (`_collector_line_ocr_attempts`, issue #259) was
+excluded here (`EXCLUDED_HELPERS = {"_collector_line_ocr_attempts"}`) while a
+parallel branch was actively restructuring it — that branch was issue #677
+("collapse the Stage C OCR attempt ladder"), which has now landed, so the
+exclusion is LIFTED (`EXCLUDED_HELPERS = frozenset()`): the ladder function
+and everything reachable only through it (`preprocess_fallback_variants`)
+now carry real `EXTRACTOR_OWNERSHIP` entries like every other contributor.
 
 `local_fallback.py`'s own exported helpers (`classify_bleed_edge`,
 `classify_border_color`, `classify_frame_style`, `compute_bleed_diff_mm`,
@@ -91,9 +88,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SOURCE_REL = "MPCAutofill/cardpicker/image_evidence.py"
 
-# The OCR attempt-tier ladder (issue #259) — out of scope for this PR, being
-# worked on in parallel. See module docstring's "DELIBERATE EXCLUSIONS".
-EXCLUDED_HELPERS = frozenset({"_collector_line_ocr_attempts"})
+# No excluded helpers - the OCR attempt-tier ladder exclusion (issue #259) was lifted by issue
+# #677. See module docstring's "DELIBERATE EXCLUSIONS".
+EXCLUDED_HELPERS = frozenset()
 
 # Modules whose imported-and-called names are in this script's scope.
 # `cardpicker.local_fallback` and `cardpicker.local_phash` are deliberately
@@ -150,6 +147,12 @@ EXTRACTOR_OWNERSHIP: dict = {
     # Pre-classification short-circuit's own acceptance predicate — same
     # reach as `_short_circuit_enabled_by_env`/`_contains_digit` above.
     "_confidently_digit_free": frozenset({"collector_line_ocr", "collector_line_tsv", "artist_ocr"}),
+    # The OCR attempt-tier ladder itself (issue #259, collapsed to 2 tiers by issue #677) — the
+    # ordered (variant, config, tier) sequence collector_line_ocr's own loop consumes, which
+    # therefore governs collector_line_tsv's word-box source and artist_ocr's raw-text-reuse
+    # population too. Was `EXCLUDED_HELPERS` while #677 was in flight; that exclusion is now
+    # lifted (see module docstring).
+    "_collector_line_ocr_attempts": frozenset({"collector_line_ocr", "collector_line_tsv", "artist_ocr"}),
     # --- cardpicker.collector_line_artist ---
     # Called from both `_parse_artist_is_contradicted` (gates
     # collector_line_ocr/collector_line_tsv/artist_ocr's raw-text-reuse
@@ -171,21 +174,20 @@ EXTRACTOR_OWNERSHIP: dict = {
     "parse_collector_line": frozenset({"collector_line_ocr", "collector_line_tsv"}),
     # legal_line's own tolerant parse - called only from `_extract_legal_line`.
     "parse_legal_line": frozenset({"legal_line"}),
-    # Called directly (outside the excluded tier ladder) from
-    # `_extract_legal_line` and the artist_ocr crop+OCR fallback loop -
-    # NOT from collector_line_ocr's own tier-1 attempts, which live inside
-    # the excluded `_collector_line_ocr_attempts` generator (see module
-    # docstring's "DELIBERATE EXCLUSIONS" - that reach is this contributor's
-    # too, but is out of scope for this PR and left to the parallel branch).
-    "preprocess_variants": frozenset({"legal_line", "artist_ocr"}),
+    # Called from `_extract_legal_line`, the artist_ocr crop+OCR fallback loop, AND (since #677
+    # lifted the ladder exclusion) `_collector_line_ocr_attempts`' own tier-1 yield - all three
+    # reaches declared together.
+    "preprocess_variants": frozenset({"legal_line", "artist_ocr", "collector_line_ocr", "collector_line_tsv"}),
+    # Tier 2's own heavier-preprocessed variants (issue #259) - reachable exclusively through
+    # `_collector_line_ocr_attempts`, same reach as the ladder function itself.
+    "preprocess_fallback_variants": frozenset({"collector_line_ocr", "collector_line_tsv", "artist_ocr"}),
     # Same two in-scope call sites as `preprocess_variants` above (legal_line's
-    # OCR pass, artist_ocr's crop+OCR fallback) - not the excluded ladder.
+    # OCR pass, artist_ocr's crop+OCR fallback).
     "run_tesseract": frozenset({"legal_line", "artist_ocr"}),
     # Called directly inside compute_card_evidence's own OCR loop (the
     # `_collector_line_ocr_attempts` generator only yields preprocessed
     # variants + config + tier; the actual tesseract call, and therefore
-    # this function's own reach, is in the loop body, outside the excluded
-    # generator's subtree).
+    # this function's own reach, is in the loop body).
     "run_tesseract_text_and_words": frozenset({"collector_line_ocr", "collector_line_tsv"}),
 }
 
