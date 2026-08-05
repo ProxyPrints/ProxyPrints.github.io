@@ -2073,7 +2073,7 @@ run against it.
 **Cause**: `STATICFILES_STORAGE` is `ManifestStaticFilesStorage`
 (settings.py), which requires `staticfiles.json` — built by
 `collectstatic` — to resolve any `{% static %}`/`static()` reference.
-`MPCAutofill/urls.py` calls `static("cardpicker/favicon.ico")` at
+`MPCAutofill/MPCAutofill/urls.py` calls `static("cardpicker/favicon.ico")` at
 import time for the favicon redirect, so importing the URLconf at all
 (which `makemigrations`' system checks do) fails in any checkout that
 hasn't run `collectstatic` yet — this has nothing to do with
