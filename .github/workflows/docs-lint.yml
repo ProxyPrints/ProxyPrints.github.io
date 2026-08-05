@@ -187,3 +187,25 @@ jobs:
         run: python3 .github/scripts/tests/test_check_extractor_manifest_sync.py
       - name: Run extractor-manifest tether against the real repo
         run: python3 .github/scripts/check_extractor_manifest_sync.py
+
+  extractor-ownership-totality:
+    name: Extractor ownership totality (image_evidence.py's own call graph -> EXTRACTOR_OWNERSHIP)
+    # CODE-TO-CODE tether, one layer below extractor-manifest-sync above: the
+    # eleven `*_EXTRACTOR_VERSION` constants only cover code that bumps a
+    # KEY's own version. Module-private helpers in image_evidence.py, and
+    # callables it imports from collector_line_artist.py/local_ocr.py/
+    # local_image_quality.py, help decide what compute_card_evidence stores
+    # but carry no version of their own - a change to any of them can
+    # silently change a stored field while MANIFEST_EXTRACTOR_CURRENT_VERSIONS
+    # stays put. AST-based, stdlib only - reads source text, never imports or
+    # executes it, so no Django/third-party deps in this job. Imports
+    # check_extractor_manifest_sync.py directly for its owning-key cross-check
+    # (see that script's own module docstring), so this job also needs that
+    # sibling script present.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run extractor-ownership-totality tether unit tests
+        run: python3 .github/scripts/tests/test_check_extractor_ownership_totality.py
+      - name: Run extractor-ownership-totality tether against the real repo
+        run: python3 .github/scripts/check_extractor_ownership_totality.py

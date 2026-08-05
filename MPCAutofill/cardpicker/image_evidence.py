@@ -231,6 +231,16 @@ NOT byte identity - a future same-art-clustering consumer built on `artbox_phash
 groups may only narrow candidates (small-distance), never auto-vote, except at `d=0` for verified-
 identical uploads. This extractor emits the raw signal only - no consumer of any kind is built or
 wired in this PR.
+
+EXTRACTOR OWNERSHIP (2026-08-04, docs/features/catalog-completion-plan.md's "Stage C extractor
+ownership" section has the full rule and rationale - this is a pointer, not a restatement): every
+module-private helper in this file and every externally-imported callable it actually calls from
+`collector_line_artist.py`/`local_ocr.py`/`local_image_quality.py` is either its own versioned
+extractor or declared as a component of an existing one in `EXTRACTOR_OWNERSHIP`
+(`.github/scripts/check_extractor_ownership_totality.py`), which is checked for totality against
+this module's own call graph in CI, the same way `check_extractor_manifest_sync.py` already checks
+the eleven `*_EXTRACTOR_VERSION` constants themselves. A new module-private helper, or a newly-
+called import, needs an `EXTRACTOR_OWNERSHIP` entry the moment it is written.
 """
 
 import logging
