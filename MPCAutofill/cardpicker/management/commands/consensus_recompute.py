@@ -110,8 +110,8 @@ from cardpicker.pilot_run_lifecycle import (
 )
 from cardpicker.printing_consensus import (
     NO_MATCH,
-    md5_group_cards,
-    md5_group_key,
+    identity_group_cards,
+    identity_group_key,
     resolve_and_persist_printing,
     resolve_printing,
 )
@@ -139,10 +139,11 @@ def _would_be_printing_status(card: Card, group_card_ids: Sequence[int] | None =
     file's own scope is meant to stay a self-contained management command) - see this module's
     own docstring for why the dry-run path needs a non-writing prediction at all, unlike --apply.
 
-    `group_card_ids` is the md5 identity group `_recompute_printing` has already materialized
-    for this card (issue #473), passed through so the dry run doesn't re-derive the same group
-    per prediction. Omitting it (as `consensus_impact_report` does) is still correct, just one
-    query less efficient: `resolve_printing` derives the group itself when it isn't told.
+    `group_card_ids` is the combined identity group `_recompute_printing` has already
+    materialized for this card (issue #473, widened by #661), passed through so the dry run
+    doesn't re-derive the same group per prediction. Omitting it (as `consensus_impact_report`
+    does) is still correct, just less efficient: `resolve_printing` derives the group itself
+    when it isn't told.
     """
     result = resolve_printing(card, group_card_ids=group_card_ids)
     if result is None:
@@ -278,11 +279,11 @@ def _recompute_printing(report: dict[str, Any], apply: bool, batch_size: int, sa
         with transaction.atomic():
             cards = Card.objects.filter(pk__in=batch_ids).prefetch_related("printing_tags")
             for card in cards:
-                group_key = md5_group_key(card)
+                group_key = identity_group_key(card)
                 if group_key in seen_group_keys:
                     continue
                 seen_group_keys.add(group_key)
-                members = md5_group_cards(card)
+                members = identity_group_cards(card)
                 before_by_member = [(member, member.printing_tag_status) for member in members]
                 if apply:
                     resolve_and_persist_printing(card, members=members)

@@ -690,6 +690,24 @@ groups covering **71,208** cards, vs **16,957** md5 groups covering
 group. **Evidence is propagated across the phash notion; independence is
 enforced across the md5 notion.**
 
+**Partially narrowed for printing votes, 2026-08-05 (issue #661/PR
+#695).** The asymmetry above is unchanged for artist evidence (this
+finding's own `local_residual_classify.py` channel, still keyed on
+`Card.content_phash`, still outside `pool_group_votes`) and for Stage
+C+'s own printing-verdict propagation tier (also `content_phash`-keyed —
+see [`../identification-pipeline.md`'s "Stage C+"
+section](../identification-pipeline.md#stage-c--the-md5-group-behaves-as-one-unit)).
+It has narrowed specifically for printing-vote **pooling** itself:
+`printing_consensus.py`'s identity group
+([`../theory.md`](../theory.md)'s §4 item 3) now unions in
+`ImageEvidence.artbox_phash` distance-0 equality — a different, narrower
+hash (the art-box crop only, not the whole card) than the
+`Card.content_phash` this finding measures, so the two grains still do
+not coincide exactly, but independence is no longer enforced across md5
+alone for that one channel. Not a general resolution of K8: the finding's
+core claim — evidence propagates on a wider relation than independence is
+enforced on — remains true pipeline-wide, artist consensus included.
+
 #### K9 — The OCR lexicon contains names our own voters typed
 
 LIVE, small. `MPCAutofill/cardpicker/collector_line_artist.py`,

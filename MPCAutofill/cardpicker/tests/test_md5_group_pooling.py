@@ -246,13 +246,24 @@ class TestSingletonIsANoOp:
         vote_tuples = build_group_printing_vote_tuples(votes, pool=is_group)
         assert [vote.dedupe_key for vote in vote_tuples] == [None]
 
-    def test_singleton_read_honours_a_callers_prefetch_and_adds_no_query(self, db, django_assert_num_queries):
+    def test_singleton_read_honours_a_callers_prefetch_and_adds_one_phash_check_query(
+        self, db, django_assert_num_queries
+    ):
+        """
+        Zero EXTRA queries beyond the one issue #661 always adds: `group_printing_votes` now
+        derives `identity_group_card_ids`, not `md5_group_card_ids` alone, and the phash half of
+        that (`_card_artbox_phash`) is a query against `ImageEvidence` no matter what the md5
+        checksum lookup found - `artbox_phash` lives on a related model, not on `Card` itself
+        (see `_card_artbox_phash`'s own docstring). The checksum half stays free (a `getattr`),
+        and the caller's own `prefetch_related("printing_tags")` is still honoured for the votes
+        read itself - this is the one query the phash channel adds, not a second per-vote cost.
+        """
         card = CardFactory()
         printing = CanonicalCardFactory()
         human_vote(card, printing, "human-1")
         prefetched = list(Card.objects.filter(pk=card.pk).prefetch_related("printing_tags"))[0]
 
-        with django_assert_num_queries(0):
+        with django_assert_num_queries(1):
             votes, is_group = group_printing_votes(prefetched)
 
         assert is_group is False

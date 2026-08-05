@@ -143,14 +143,27 @@ carrying a resolved `custom-art` / `non-english` tag is skipped. `custom-art` is
 the catalogue declaring the image is _not_ a faithful depiction of a printing,
 and a checksum must not overturn that.
 
-**The phash distance-0 tier still runs, second, unchanged.** Its future is
-issue #661: the intended direction is that phash shares an _illustration_ (same
-artwork, possibly a different printing — a near-identity claim at a grain where
-a weaker claim is appropriate), not a printing verdict. Until that is built it
-stays, because it is the only propagation reaching cards with no md5 at all —
-md5 is NULL for every `LOCAL_FILE` source by design and is never invented. Both
-tiers call one propagation engine that takes the grouping as a parameter, so
-adding the illustration-grain tier later is a new grouping, not a restructure.
+**The phash distance-0 tier still runs, second, unchanged.** Issue #661 has
+since landed, as PR #695 (2026-08-05) — but as a change to a **different**
+mechanism than the one this paragraph originally anticipated. What shipped is
+a widening of `printing_consensus.py`'s own identity group (the one
+`group_printing_votes`/`resolve_printing` pool votes across at resolution
+time — see [`theory.md`§4 item
+3](theory.md#4-soundness-mechanisms)) to union in phash-d0 alongside md5. The
+propagation tier described in **this** section is untouched by that change
+and still does exactly what it always did: it propagates a _printing verdict_
+under the casting calculator's own identity, not an illustration identity,
+and it is still the only propagation reaching cards with no md5 at all — md5
+is NULL for every `LOCAL_FILE` source by design and is never invented. The
+"intended direction... phash shares an illustration" framing this paragraph
+used to describe as issue #661's own future is **not** what #661 shipped as;
+an illustration-grain propagation tier for Stage C+, if built, remains future
+work, not something PR #695 delivered (the code's own comment in
+`run_pipeline.py::_propagate_cluster_votes`, "Issue #661 holds the question
+of what phash grouping is FOR," is equally stale as of PR #695 and not yet
+corrected). Both tiers here still call one propagation engine that takes the
+grouping as a parameter, so adding that illustration-grain tier later is
+still a new grouping, not a restructure.
 
 It contains **no pipeline logic of its own**. Each stage below is reached by
 importing and calling the thing that already owned it; the command is
@@ -394,6 +407,33 @@ printing votes, so it would have fired on the first `-v2` run.
   votes (ordinary consensus since #292). Detect-and-tag only.
 - **"Marked as proxy"** (#291, planned): marker presence → tag; **absence** →
   moderation flag, batched by source (the counterfeit-risk framing).
+- **Artbox-phash exemplar index** (#508 phase 1, `artbox_exemplar_backfill.py`,
+  `ArtboxPhashExemplar`): a second, OCR-free illustration-deduction path,
+  built but not yet wired to anything. A card's own `artbox_phash` (the
+  evidence-only extractor from #480) is labelled with the `illustration_id`
+  of the printing that scan was identified as, sourced two ways — a
+  human-backed printing resolution (`printing_tag_status == RESOLVED`,
+  always human-backed by the g5 gate above), or an unopposed join-key
+  machine vote at 0.75/0.85 confidence (the artist-disagreement tier, 0.65,
+  and the no-match tier, 0.6, are both excluded — a wrong exemplar
+  propagates to every card it later matches). Every row records its own
+  seed kind and confidence, human and machine seeds stay permanently
+  distinguishable, and a bad seed retracts together with everything it
+  seeded via a shared `seed_group_key` (one md5-identity-group resolution,
+  or one source vote). **Never sourced from Scryfall images** — phash
+  comparability needs the same crop geometry our own extractor guarantees
+  and Scryfall's `art_crop` framing does not.
+
+  **What this deliberately does NOT do, in phase 1**: it does not compare
+  any unresolved card against the index, does not resolve anything, does
+  not cast an illustration or printing vote, and does not touch
+  `resolve_weighted_consensus` or the human-backed gate. The index exists
+  and is measured; nothing reads it yet. A phase 2 matching calculator
+  (comparing unresolved scans against this index at d=0/d≤2 and reusing the
+  illustration→printings vote logic the design docstring in
+  `ArtboxPhashExemplar` describes) is gated on the coverage this index
+  actually measures once seeded, the same measurement-gate discipline
+  #693 established.
 
 ## Why a bad identification is hard
 

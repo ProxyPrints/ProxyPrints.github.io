@@ -355,6 +355,71 @@ turns out to be:
    above is the identity — the pre-2026-07-25 per-record behavior,
    unchanged.
 
+   **Widened to a second identity relation, 2026-08-05** (issue #661, PR
+   #695; `printing_consensus.identity_group_card_ids` and its siblings —
+   `identity_group_cards`, `identity_group_key`,
+   `identity_group_expanded_card_ids`): the pooling target above is no
+   longer md5 checksum equality alone. `ImageEvidence.artbox_phash` (a
+   64-bit perceptual hash of the card's own art-box crop, populated by a
+   whole-catalogue Stage C pass rather than being upload-time metadata
+   like `Card.md5_checksum`) is now unioned into the same identity group
+   **at distance 0 only** — exact equality, never the narrowing-only
+   Hamming threshold `find_best_match`'s 20/5 cutoffs use elsewhere in
+   this pipeline. This is the entailment tier item 1 above already
+   reserves for phash: d=0 propagates as sound entailment ("literally the
+   same uploaded image, transitively true"), the same tier md5 checksum
+   equality occupies, so widening the pooling target to include it is
+   applying an existing rule, not adding a new one. Two files that are
+   NOT byte-identical (a re-encode, a fresh re-upload, a genuine reprint
+   using the same digital art asset) can share this hash where they would
+   never share an md5 checksum — which is exactly why the union reaches
+   cards the md5-alone group could not.
+
+   A single union of a card's md5 group and its own phash-d0 group — not
+   an iterative transitive closure — is already the full connected
+   component, because `artbox_phash` is a deterministic function of the
+   image bytes: any md5-clique member that also carries a current phash
+   necessarily carries the _same_ phash value as the rest of the clique,
+   so a phash edge reachable from one member is reachable directly from
+   any other member without visiting it first (see
+   `identity_group_card_ids`'s own docstring for the full argument, and
+   its noted tolerance: an extractor-version bump straddling two
+   byte-identical siblings' extraction times could under-group them in
+   the worst case — the same safe direction `agent_dedupe_key`'s own
+   version-bump handling elsewhere in this module accepts — never falsely
+   merge two genuinely different targets). Currency is enforced the same
+   way `modern_artist_credit.eligible_evidence_queryset` already enforces
+   it in bulk (`evidence_transfer.md5_currency_q` plus
+   `content_hash=F("card__content_phash")`): a stale `ImageEvidence` row
+   — one written before the card's current image — never seeds or joins a
+   group. A card with no current `artbox_phash` is excluded from phash
+   grouping entirely, a group of one, never collapsed into a shared
+   bucket with every other phash-less card.
+
+   This widening changes what pools, not what resolves. It replaces
+   md5-alone in `group_printing_votes`/`resolve_printing`/
+   `resolve_and_persist_printing` and in `question_feed.py`'s four
+   answered-set widening helpers (a voter who answered one member of a
+   phash-d0 group is not re-asked the same art under a sibling's
+   identifier either), and `consensus_recompute.py`'s printing-recompute
+   loop now walks the combined group instead of the md5-only one. It does
+   **not** touch the human-backed gate above (`g₅`/item 2 are unchanged),
+   and it does **not** extend to illustration or artist consensus:
+   `illustration_consensus.py` and `stage_e_dispatch.py`'s own
+   separately-inlined md5 grouping, and Stage C+'s own phash-d0
+   vote-propagation tier
+   ([`identification-pipeline.md`'s "Stage C+"
+   section](identification-pipeline.md#stage-c--the-md5-group-behaves-as-one-unit)),
+   are deliberately untouched by this change — different consumers,
+   different mechanisms, out of this widening's scope.
+
+   Measured against production the day this landed: **19,065** phash-d0
+   groups of size >1, covering **40,493** cards; of those, **22,454**
+   cards have at least one phash-sibling their md5 group alone would not
+   reach; **1,492** cards had no printing vote reachable through their
+   own md5 group but gain access to one through the union. Like §§7-10,
+   this text is pending the same owner review §§1-6 received.
+
 Together these mean the system's worst-case failure mode, even under a
 badly miscalibrated engine, is a wasted human review cycle (a bad
 suggestion surfaced for confirmation) — never a silent wrong answer
@@ -1069,18 +1134,22 @@ neighbourhood is defined by a **join key** — an md5 checksum, a
 perceptual hash, a name — and not by the batch. The set of cards
 sharing a given checksum is the same set no matter which cards happen
 to be dispatched together. Five live instances:
-`printing_consensus.md5_group_card_ids` (every card indexing a
-byte-identical image file — §4 item 3's identity group);
+`printing_consensus.identity_group_card_ids` (every card indexing a
+byte-identical image file, unioned since issue #661/PR #695 with every
+card sharing a current artbox-phash at distance 0 — §4 item 3's identity
+group, widened);
 `evidence_transfer.find_transfer_source` (the md5-sibling
 `ImageEvidence` row eligible to be copied onto a card instead of
 re-fetching it); `local_residual_classify.run_d0_sibling_artist_propagation`
 (an artist propagated from a `content_phash`-sharing sibling); and
-consensus resolution itself, on two vote types —
+consensus resolution itself, on two vote types, no longer sharing one
+grouping definition as they did before PR #695 —
 `printing_consensus.resolve_printing` reads a card's votes **pooled
-across its md5 group**, via `group_printing_votes`, and
-`illustration_consensus.resolve_illustration` does the same through
-`group_illustration_votes` (sharing this file's md5 primitives rather
-than reimplementing them, so there is one definition of a group).
+across its combined md5-union-phash-d0 identity group**, via
+`group_printing_votes`, while `illustration_consensus.resolve_illustration`
+still pools through `group_illustration_votes` over the **md5-only**
+group (this module's `md5_group_card_ids`/`md5_group_cards` primitives,
+deliberately untouched by #661/#695 — see §4 item 3's own note on scope).
 
 The illustration case also carries the propagation the other four make
 available: because the tally is defined over the group and
