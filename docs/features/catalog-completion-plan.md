@@ -1894,7 +1894,10 @@ ladder (`_collector_line_ocr_attempts`, issue #259) — both being worked on in 
 branches at the time this sweep landed. Each is already the direct, named mechanism of an existing
 versioned extractor (`geometry_bleed`/`layout_class`/`artbox_phash`/`collector_line_ocr`), so their
 omission is a sequencing decision, not a coverage gap this sweep itself leaves open — lifting each
-exclusion is one entry once its own parallel branch lands.
+exclusion is one entry once its own parallel branch lands. **The OCR-ladder half of this exclusion
+was lifted by issue #677** (see this file's own "#677" section below) — `_collector_line_ocr_attempts`
+and `preprocess_fallback_variants` now carry real `EXTRACTOR_OWNERSHIP` entries; the
+`local_fallback.py` half remains excluded, unrelated to that branch.
 
 CORRECTION TO THE ORIGINATING BRIEF: `local_art_edge.classify_art_edge_continuity` (issue #617's
 own "Extended" art-edge continuity classifier) was named as a candidate for this sweep but is NOT
@@ -1908,6 +1911,48 @@ for the same reason `local_fallback.py`/the OCR ladder are — nothing currently
 No stored `ImageEvidence` value changes as a result of this entry: all seventeen sweep-covered
 contributors were already feeding their currently-versioned extractor(s) before this landed; the
 work is declaration and CI enforcement only, not a version bump or a re-extraction trigger.
+
+**Collapse the Stage C OCR attempt ladder (issue #677, 2026-08-05)** — `_collector_line_ocr_attempts`
+(issue #259) escalated through 3 tiers/8 tesseract calls for any card whose tier 1 (2 attempts)
+failed to parse a collector number: tier 2 (4 heavier-preprocessed variants, PSM 6) then tier 3 (a
+re-try of tier 1's own variants under PSM 11). Verified against real production images before
+touching the code, not from the 2026-07-23 probes alone (those tested ADDING new preprocessing
+methods, never removing an existing tier): two fresh probes (worktree-only analysis scripts, NOT
+committed to master/any branch — MPCAutofill/scripts/experiments/ocr_ladder_tier_attribution.py,
+450 forced-escalation cards — 300 currently-blank + 150 currently-resolved, both freshly
+re-derived live 2026-08-05) walked the
+old 3-tier ladder to full completion and recorded, per card, the first tier at which a
+CANDIDATE-VALIDATED genuine match appeared. Tier 2 produced 2 genuine matches across the 450-card
+sample; tier 3 produced ZERO — only more lexicon-valid-but-uncorroborated noise (6/300 in the
+blank pool), consistent with the 2026-07-23 probes' own ~99% hopeless-art-noise characterization
+of this population. **Tier 3 removed.** Cross-checked against all 30 `golden_set.GOLDEN_CARD_IDS`
+cards the same way: none of the 30 ever resolved uniquely at tier 3, so this collapse changes zero
+golden-set expectations (see that file's own `collector_line_ocr` comment for the re-verification
+note). `COLLECTOR_LINE_OCR_EXTRACTOR_VERSION`/`COLLECTOR_LINE_TSV_EXTRACTOR_VERSION` bumped v2->v3
+(both read through the same escalation loop, per `EXTRACTOR_OWNERSHIP`'s own "bump every listed
+key together" convention). `ARTIST_OCR_EXTRACTOR_VERSION` belongs in that same bump for the
+identical reason (its raw-text reuse pass scans `collector_raw_texts`, now up to 2 entries
+shorter per card) but jumps straight to v4 instead of v3: PR #685 (merged to master separately,
+unrelated modern_artist_credit fallback wiring) already claimed "v3" for that extractor before
+this issue's bump landed, and stamping two different behaviours under one version string would
+defeat the whole point of `MANIFEST_EXTRACTOR_CURRENT_VERSIONS`'s staleness filter. `LEGAL_LINE_EXTRACTOR_VERSION`
+unchanged. `EXTRACTOR_OWNERSHIP`'s `EXCLUDED_HELPERS` entry for the ladder (added by the extractor-
+ownership-visibility entry just above) is LIFTED as part of this same change — `_collector_line_ocr_attempts`
+and `preprocess_fallback_variants` now carry real ownership entries.
+
+A second restructuring named in this issue's own brief - unifying `collector_line_ocr`'s narrow
+crop and `legal_line`'s full-width crop (same y-band, `local_ocr.DEFAULT_CROP_BOX` vs
+`LEGAL_LINE_CROP_BOX`) into ONE OCR pass - was investigated and NOT shipped: a real-image accuracy
+probe (worktree-only analysis script, NOT committed to master/any branch —
+MPCAutofill/scripts/experiments/ocr_crop_widen_accuracy.py, 150 currently-successful production
+cards) found that re-reading tier 1 from the wider crop with the SAME preprocessing
+regressed 46/150 (30.7%) of currently-correct `collector_line_set_code`/`collector_line_collector_number`
+reads - mostly proxy/watermark text (`"PsilosX Proxy"`, `"Playtest Card"`, `"NOT FOR SALE"`,
+artist full names) getting picked up by `_SET_CODE_RE`'s "search after the number" fallback in
+place of the real set code, and in some cases the wider image causing tesseract to drop the
+collector-number line entirely. Zero improvements found (0/150). This is exactly the "collapse
+costs measurable accuracy, report it rather than shipping" outcome the issue's own brief
+anticipated - the duplicated bottom-band read stays duplicated; only the ladder collapsed.
 
 **Stage C bulk driver: compute profile + concurrency/OCR-cost fix (2026-07-20)** —
 `docs/reports/2026-07-20-pipeline-compute-profile.md` measured the bulk cohort driver

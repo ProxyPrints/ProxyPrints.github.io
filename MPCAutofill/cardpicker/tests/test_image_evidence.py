@@ -1050,9 +1050,8 @@ class TestExtractCardEvidenceCollectorLineOcr:
         result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
-        assert len(configs_used) == 8  # blank tier-1 no longer qualifies - every tier tried
+        assert len(configs_used) == 6  # blank tier-1 no longer qualifies - every tier tried
         assert configs_used.count(module.TESSERACT_CONFIG) == 6
-        assert configs_used.count(module.ALTERNATE_TESSERACT_CONFIG) == 2
         assert result.short_circuited is False
 
     def test_confidently_digit_free_tier_one_still_short_circuits_by_default(self, db, monkeypatch):
@@ -1084,9 +1083,10 @@ class TestExtractCardEvidenceCollectorLineOcr:
 
     def test_no_legible_text_exhausts_every_fallback_tier_when_short_circuit_is_disabled(self, db, monkeypatch):
         """issue #259's original behavior, preserved behind the escape hatch (2026-07-21, item 1):
-        a blank crop must genuinely try every tier (2 base + 4 fallback + 2 alternate-PSM = 8
-        attempts) before recording "no-text" when `short_circuit=False` - the measurement-run
-        path a real re-profile would use to gather the plan's own "open verification gap" data."""
+        a blank crop must genuinely try every tier (2 base + 4 fallback = 6 attempts, issue #677's
+        collapsed ladder) before recording "no-text" when `short_circuit=False` - the
+        measurement-run path a real re-profile would use to gather the plan's own "open
+        verification gap" data."""
         card = CardFactory(content_phash=1)
         image = _build_card_image([(DEFAULT_CROP_BOX, "")])
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
@@ -1103,9 +1103,8 @@ class TestExtractCardEvidenceCollectorLineOcr:
         result = fetch_and_compute_card_evidence_for_tests(card, short_circuit=False)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
-        assert len(configs_used) == 8
+        assert len(configs_used) == 6
         assert configs_used.count(module.TESSERACT_CONFIG) == 6  # 2 base + 4 fallback, PSM 6
-        assert configs_used.count(module.ALTERNATE_TESSERACT_CONFIG) == 2  # base variants, PSM 11
         assert result.short_circuited is False
 
     def test_digit_bearing_tier_one_failure_still_escalates_by_default(self, db, monkeypatch):
@@ -1136,7 +1135,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
         result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
-        assert len(calls) == 8  # every tier tried - digit-bearing tier-1 text never short-circuits
+        assert len(calls) == 6  # every tier tried - digit-bearing tier-1 text never short-circuits
         assert result.short_circuited is False
 
     def test_short_circuit_only_fires_once_both_tier_one_attempts_are_digit_free(self, db, monkeypatch):
@@ -1150,10 +1149,10 @@ class TestExtractCardEvidenceCollectorLineOcr:
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: image)
 
         # attempt 1: digit-free. attempt 2: digit-bearing but unparseable (same shape as
-        # test_digit_bearing_tier_one_failure_still_escalates_by_default above). Attempts 3-8
-        # (tiers 2-3): blank, never parses either - the point is that escalation happens AT ALL,
-        # not what tiers 2-3 themselves find.
-        texts = iter(["no digits here", "abc123456789xyz", "", "", "", "", "", ""])
+        # test_digit_bearing_tier_one_failure_still_escalates_by_default above). Attempts 3-6
+        # (tier 2): blank, never parses either - the point is that escalation happens AT ALL,
+        # not what tier 2 itself finds.
+        texts = iter(["no digits here", "abc123456789xyz", "", "", "", ""])
         calls: list[str] = []
 
         def _stub(image_arg, config):
@@ -1165,7 +1164,7 @@ class TestExtractCardEvidenceCollectorLineOcr:
         result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.skip_reasons["collector_line_ocr"] == "no-text"
-        assert len(calls) == 8  # escalated past tier 1 despite attempt 1 alone being digit-free
+        assert len(calls) == 6  # escalated past tier 1 despite attempt 1 alone being digit-free
         assert result.short_circuited is False
 
     def test_happy_path_never_computes_fallback_preprocessing(self, db, monkeypatch):
@@ -1278,7 +1277,7 @@ class TestExtractCardEvidenceCollectorLineOcrSetCodeLexiconGate:
         assert result.fields["collector_line_set_code"] == "fak"
         assert result.fields["collector_line_collector_number"] == "158"
         assert "collector_line_ocr" not in result.skip_reasons  # a collector_number WAS found
-        assert len(calls) == 8  # every tier tried - no attempt ever validated
+        assert len(calls) == 6  # every tier tried - no attempt ever validated
 
     def test_pre_gate_stored_outcome_is_reproduced_exactly_when_gate_disabled(self, db, monkeypatch):
         """Same all-invalid scenario as above, but with known_set_codes=None (the gate disabled,
@@ -1494,7 +1493,7 @@ class TestExtractCardEvidenceCollectorLineArtistGate:
         assert result.fields["collector_line_collector_number"] == "158"
         assert result.fields["collector_line_set_code"] == "mom"
         assert "collector_line_ocr" not in result.skip_reasons  # a collector_number WAS found
-        assert len(calls) == 8  # every tier tried before falling back
+        assert len(calls) == 6  # every tier tried before falling back
 
     def test_contradicted_parse_is_preferred_over_a_lexicon_invalid_one(self, db, monkeypatch):
         """Fallback precedence: a lexicon-valid-but-contradicted parse beats a lexicon-INVALID
@@ -1900,25 +1899,25 @@ class TestExtractCardEvidenceArtistCropFallback:
 
 
 class TestCollectorLineOcrAttempts:
-    """Direct tests of `_collector_line_ocr_attempts` (issue #259) - the lazy, ordered
-    (image, tesseract_config, tier) generator `collector_line_ocr`'s own loop consumes. The `tier`
-    element (2026-07-21, "Recovery-arc lessons" item 1) lets the caller detect "both tier-1
-    attempts exhausted" for the pre-classification short-circuit. No tesseract call happens in
-    these tests (only `preprocess_variants`' PIL-only grayscale/threshold work, plus - when the
-    fallback tier is actually reached - `preprocess_fallback_variants`' own PIL-only work) - these
-    tests are about the ORDERING/laziness contract, not OCR output, so they're fast and don't need
-    a real card image."""
+    """Direct tests of `_collector_line_ocr_attempts` (issue #259, collapsed from 3 tiers to 2 by
+    issue #677) - the lazy, ordered (image, tesseract_config, tier) generator `collector_line_ocr`'s
+    own loop consumes. The `tier` element (2026-07-21, "Recovery-arc lessons" item 1) lets the
+    caller detect "both tier-1 attempts exhausted" for the pre-classification short-circuit. No
+    tesseract call happens in these tests (only `preprocess_variants`' PIL-only grayscale/threshold
+    work, plus - when the fallback tier is actually reached - `preprocess_fallback_variants`' own
+    PIL-only work) - these tests are about the ORDERING/laziness contract, not OCR output, so
+    they're fast and don't need a real card image."""
 
-    def test_yields_eight_attempts_in_the_documented_tier_order(self):
+    def test_yields_six_attempts_in_the_documented_tier_order(self):
         crop = Image.new("RGB", (60, 24), "black")
 
         attempts = list(module._collector_line_ocr_attempts(crop))
 
-        assert len(attempts) == 8
+        assert len(attempts) == 6  # issue #677 collapsed the old 3-tier/8-attempt ladder to 2/6
         configs = [config for _variant, config, _tier in attempts]
-        assert configs == [module.TESSERACT_CONFIG] * 6 + [module.ALTERNATE_TESSERACT_CONFIG] * 2
+        assert configs == [module.TESSERACT_CONFIG] * 6
         tiers = [tier for _variant, _config, tier in attempts]
-        assert tiers == [1, 1, 2, 2, 2, 2, 3, 3]
+        assert tiers == [1, 1, 2, 2, 2, 2]
 
     def test_never_calls_fallback_variants_if_consumer_stops_after_tier_one(self, monkeypatch):
         crop = Image.new("RGB", (60, 24), "black")
