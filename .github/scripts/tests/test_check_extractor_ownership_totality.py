@@ -30,10 +30,14 @@ import check_extractor_ownership_totality as lint  # noqa: E402
 # A minimal fixture `image_evidence.py`: one module-private helper
 # (`_helper_one`) called from `compute_card_evidence`, one scoped-external
 # import (`external_thing`, standing in for e.g. `recover_artist_from_card_text`)
-# also called from there, one excluded-ladder helper (`_collector_line_ocr_attempts`)
-# whose own internal call (`preprocess_fallback_variants`-analogue,
-# `ladder_only_thing`) must NOT be required, and the manifest wiring
-# `check_extractor_manifest_sync`'s own derivation needs to find real keys.
+# also called from there, one helper (`_would_be_excluded`) whose own internal
+# call (`ladder_only_thing`) exercises the EXCLUDED_HELPERS mechanism itself -
+# that mechanism is generic and still live in the script even though issue
+# #677 emptied the REAL `EXCLUDED_HELPERS` set (it previously held the OCR
+# ladder, `_collector_line_ocr_attempts`, while a parallel branch worked on
+# it - see the script's own module docstring); tests that need the mechanism
+# ON pass `excluded_helpers=frozenset({"_would_be_excluded"})` to `fixture_repo`
+# explicitly rather than relying on a name that is no longer excluded for real.
 SOURCE_OK = '''
 """fixture image_evidence"""
 from cardpicker.collector_line_artist import external_thing
@@ -47,7 +51,7 @@ def _helper_one(x):
     return x
 
 
-def _collector_line_ocr_attempts(cropped):
+def _would_be_excluded(cropped):
     yield ladder_only_thing(cropped)
 
 
@@ -57,7 +61,7 @@ def compute_card_evidence(card):
     extractor_versions["legal_line"] = LEGAL_LINE_EXTRACTOR_VERSION
     _helper_one(card)
     external_thing(card)
-    for _ in _collector_line_ocr_attempts(card):
+    for _ in _would_be_excluded(card):
         pass
     return extractor_versions
 '''
@@ -70,14 +74,23 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
 }
 """
 
+# Matches SOURCE_OK's default (no exclusion in effect - EXCLUDED_HELPERS is empty for real too),
+# so `_would_be_excluded`/`ladder_only_thing` need entries like any other contributor.
 OWNERSHIP_OK = {
     "_helper_one": frozenset({"fetch_health"}),
     "external_thing": frozenset({"legal_line"}),
+    "_would_be_excluded": frozenset({"legal_line"}),
+    "ladder_only_thing": frozenset({"legal_line"}),
 }
 
 
 @contextlib.contextmanager
-def fixture_repo(source: str = SOURCE_OK, cohort: str = COHORT_OK, ownership: dict = None):
+def fixture_repo(
+    source: str = SOURCE_OK,
+    cohort: str = COHORT_OK,
+    ownership: dict = None,
+    excluded_helpers: frozenset = frozenset(),
+):
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for rel, text in ((lint.SOURCE_REL, source), (manifest_sync.COHORT_REL, cohort)):
@@ -87,15 +100,18 @@ def fixture_repo(source: str = SOURCE_OK, cohort: str = COHORT_OK, ownership: di
         saved_lint_root = lint.REPO_ROOT
         saved_manifest_root = manifest_sync.REPO_ROOT
         saved_ownership = lint.EXTRACTOR_OWNERSHIP
+        saved_excluded = lint.EXCLUDED_HELPERS
         lint.REPO_ROOT = root
         manifest_sync.REPO_ROOT = root
         lint.EXTRACTOR_OWNERSHIP = OWNERSHIP_OK if ownership is None else ownership
+        lint.EXCLUDED_HELPERS = excluded_helpers
         try:
             yield root
         finally:
             lint.REPO_ROOT = saved_lint_root
             manifest_sync.REPO_ROOT = saved_manifest_root
             lint.EXTRACTOR_OWNERSHIP = saved_ownership
+            lint.EXCLUDED_HELPERS = saved_excluded
 
 
 def joined(findings) -> str:
@@ -107,23 +123,31 @@ class TestDerivation(unittest.TestCase):
         with fixture_repo():
             contributors, findings = lint.derive_reachable_contributors()
             self.assertEqual(findings, [])
-            self.assertEqual(contributors, {"_helper_one", "external_thing"})
+            self.assertEqual(contributors, {"_helper_one", "external_thing", "_would_be_excluded", "ladder_only_thing"})
 
-    def test_excluded_ladder_function_itself_is_not_a_contributor(self):
-        # _collector_line_ocr_attempts is in EXCLUDED_HELPERS by name - it
-        # must never itself require an entry.
-        with fixture_repo():
+    def test_excluded_helper_itself_is_not_a_contributor(self):
+        # a name in EXCLUDED_HELPERS must never itself require an entry -
+        # the mechanism issue #677 emptied for the real ladder but which
+        # stays generic/reusable in the script itself.
+        with fixture_repo(excluded_helpers=frozenset({"_would_be_excluded"})):
             contributors, _ = lint.derive_reachable_contributors()
-            self.assertNotIn("_collector_line_ocr_attempts", contributors)
+            self.assertNotIn("_would_be_excluded", contributors)
 
-    def test_name_called_only_inside_the_excluded_ladder_is_not_a_contributor(self):
+    def test_name_called_only_inside_an_excluded_helper_is_not_a_contributor(self):
         # ladder_only_thing is a scoped-external import, but its one call
-        # site is inside _collector_line_ocr_attempts's own body - excluded
-        # per this PR's own brief (that ladder is being worked on in
-        # parallel by another branch).
-        with fixture_repo():
+        # site is inside the excluded helper's own body.
+        with fixture_repo(excluded_helpers=frozenset({"_would_be_excluded"})):
             contributors, _ = lint.derive_reachable_contributors()
             self.assertNotIn("ladder_only_thing", contributors)
+
+    def test_no_exclusion_by_default_requires_entries_for_both(self):
+        # SOURCE_OK's own default fixture_repo() call has EXCLUDED_HELPERS
+        # empty (matching the real script since issue #677) - both names
+        # ARE contributors now, and OWNERSHIP_OK declares both.
+        with fixture_repo():
+            contributors, _ = lint.derive_reachable_contributors()
+            self.assertIn("_would_be_excluded", contributors)
+            self.assertIn("ladder_only_thing", contributors)
 
     def test_import_used_only_as_a_type_hint_is_not_a_contributor(self):
         source = SOURCE_OK.replace(
@@ -239,13 +263,16 @@ class TestAgainstRealRepo(unittest.TestCase):
             "parse_collector_line",
             "parse_legal_line",
             "run_tesseract_text_and_words",
+            # the OCR ladder itself and its own tier-2 helper (issue #677 lifted the
+            # EXCLUDED_HELPERS entry that used to hide both from this derivation)
+            "_collector_line_ocr_attempts",
+            "preprocess_fallback_variants",
         ):
             self.assertIn(name, contributors)
 
-    def test_excluded_ladder_is_really_excluded_in_the_real_module(self):
-        contributors, _ = lint.derive_reachable_contributors()
-        self.assertNotIn("_collector_line_ocr_attempts", contributors)
-        self.assertNotIn("preprocess_fallback_variants", contributors)
+    def test_no_helpers_are_excluded_in_the_real_module(self):
+        # issue #677 emptied EXCLUDED_HELPERS - the real script no longer excludes anything.
+        self.assertEqual(lint.EXCLUDED_HELPERS, frozenset())
 
     def test_every_declared_owning_key_set_is_non_empty(self):
         for name, keys in lint.EXTRACTOR_OWNERSHIP.items():
