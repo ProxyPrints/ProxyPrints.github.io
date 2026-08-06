@@ -892,7 +892,7 @@ describe("QuestionFeed", () => {
       expect(illustrationVoteCalled).toBe(false);
     });
 
-    it("clustered tiles render the candidate's art crop, falling back to the printing scan when absent; ungrouped tiles are unaffected", async () => {
+    it("renders exactly one representative tile per illustration group, preferring a member with an art crop; ungrouped tiles are unaffected", async () => {
       const withArtCrop = {
         ...groupedItem,
         candidates: [
@@ -930,10 +930,10 @@ describe("QuestionFeed", () => {
         "src",
         "https://example.com/art-crop-1.png"
       );
-      expect(within(group).getByAltText("xyz 42")).toHaveAttribute(
-        "src",
-        groupedItem.candidates[1].mediumThumbnailUrl
-      );
+      expect(within(group).queryByAltText("xyz 42")).not.toBeInTheDocument();
+      expect(
+        within(group).getByText("Same illustration - 2 printings")
+      ).toBeInTheDocument();
 
       const ungroupedGrid = await screen.findByTestId(
         "question-feed-candidate-grid-ungrouped"
@@ -942,6 +942,89 @@ describe("QuestionFeed", () => {
         "src",
         groupedItem.candidates[2].mediumThumbnailUrl
       );
+    });
+
+    it("falls back to the group's first member when no member has an art crop", async () => {
+      server.use(groupedQuestionFeedOnce());
+      renderFeed();
+      await revealCard();
+
+      const group = await screen.findByTestId(
+        "question-feed-illustration-group"
+      );
+      expect(within(group).getByAltText("abc 1")).toHaveAttribute(
+        "src",
+        groupedItem.candidates[0].mediumThumbnailUrl
+      );
+      expect(within(group).queryByAltText("xyz 42")).not.toBeInTheDocument();
+    });
+
+    it("picks whichever group member has an art crop regardless of position, and still submits the group's shared illustrationId", async () => {
+      const artCropOnSecondMember = {
+        ...groupedItem,
+        candidates: [
+          { ...groupedItem.candidates[0], artCropUrl: null },
+          {
+            ...groupedItem.candidates[1],
+            artCropUrl: "https://example.com/art-crop-2.png",
+          },
+          groupedItem.candidates[2],
+        ],
+      };
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: artCropOnSecondMember,
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      let illustrationVoteBody: Record<string, unknown> | undefined;
+      server.use(
+        http.post(
+          buildRoute("2/submitIllustrationVote/"),
+          async ({ request }) => {
+            illustrationVoteBody = (await request.json()) as Record<
+              string,
+              unknown
+            >;
+            return HttpResponse.json(
+              {
+                illustrationId: sharedIllustrationId,
+                isUnknown: false,
+                printingVoteCast: false,
+                artistVoteCast: true,
+              },
+              { status: 200 }
+            );
+          }
+        )
+      );
+      renderFeed();
+      await revealCard();
+
+      const group = await screen.findByTestId(
+        "question-feed-illustration-group"
+      );
+      const tile = within(group).getByAltText("xyz 42");
+      expect(tile).toHaveAttribute("src", "https://example.com/art-crop-2.png");
+      expect(within(group).queryByAltText("abc 1")).not.toBeInTheDocument();
+
+      fireEvent.click(tile);
+
+      await waitFor(() => expect(illustrationVoteBody).toBeDefined());
+      expect(illustrationVoteBody).toMatchObject({
+        identifier: groupedItem.card.identifier,
+        illustrationId: sharedIllustrationId,
+      });
     });
   });
 });
