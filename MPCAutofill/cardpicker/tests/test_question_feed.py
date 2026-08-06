@@ -1,3 +1,4 @@
+import uuid
 from unittest.mock import patch
 
 from django.urls import reverse
@@ -7,12 +8,14 @@ from cardpicker.artist_consensus import (
     get_contested_artist_card_ids,
     resolve_and_persist_artist,
 )
+from cardpicker.illustration_vote import cast_illustration_vote
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
 )
 from cardpicker.models import (
     ArtistVoteStatus,
+    CardPrintingTag,
     CardScanLog,
     PrintingTagStatus,
     QuestionFeedServedLog,
@@ -30,6 +33,7 @@ from cardpicker.question_feed import (
     _artist_item,
     _scryfall_illustration_url,
     _tier_1_confirm_suggestion,
+    _voter_answered_printing_card_ids,
     get_next_question_feed_item,
     get_remaining_estimate,
     is_likely_resolve_printing,
@@ -45,6 +49,20 @@ from cardpicker.tests.factories import (
     CardTagVoteFactory,
     TagFactory,
 )
+
+
+def make_shared_illustration_group(name: str = "Brainstorm") -> tuple:
+    """Two live printing candidates for a fresh `card`, sharing one `illustration_id` - the N>1
+    shared-illustration-group premise `cast_illustration_vote` (illustration_vote.py) requires to
+    take its no-CardPrintingTag-write branch. Mirrors test_illustration_vote.py's own
+    `_printing_with_illustration` helper."""
+    card = CardFactory(name=name, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+    illustration_id = uuid.uuid4()
+    artist = CanonicalArtistFactory(name="Shared Artist")
+    for _ in range(2):
+        printing = CanonicalCardFactory(name=name, artist=artist)
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=illustration_id)
+    return card, illustration_id
 
 
 def make_ai_suggested_card(anonymous_id: str = "ai-bot") -> tuple:
@@ -745,3 +763,45 @@ class TestMixComposition:
         assert item is not None
         log = QuestionFeedServedLog.objects.get(anonymous_id="anon-1")
         assert log.origin_reason != "tier_4_quick_negative_to_review"
+
+
+class TestIllustrationVoteAnsweredExclusion:
+    """Issue #713: `cast_illustration_vote` writes `CardPrintingTag` only when the shared-
+    illustration group resolves to exactly one live printing - at N>1 (the premise of the
+    cluster UI that triggers this path) it writes only `CardIllustrationVote`, which the
+    printing exclusion below must also read or the voter is re-served the very card they just
+    answered."""
+
+    def test_voter_answered_printing_card_ids_includes_n_gt_1_illustration_votes(self, db):
+        card, illustration_id = make_shared_illustration_group()
+
+        outcome = cast_illustration_vote(
+            card=card,
+            anonymous_id="voter-1",
+            illustration_id=illustration_id,
+            is_unknown=False,
+            user=None,
+            vote_surface="question-feed",
+        )
+
+        assert outcome.printing_vote_cast is False
+        assert CardPrintingTag.objects.filter(card=card, anonymous_id="voter-1").count() == 0
+        assert card.pk in _voter_answered_printing_card_ids("voter-1")
+
+    def test_a_voter_who_answers_an_n_gt_1_illustration_group_is_not_re_served_that_card(self, db):
+        card, illustration_id = make_shared_illustration_group()
+
+        first_item = get_next_question_feed_item("voter-1")
+        assert first_item is not None
+        assert first_item.card.identifier == card.identifier
+
+        cast_illustration_vote(
+            card=card,
+            anonymous_id="voter-1",
+            illustration_id=illustration_id,
+            is_unknown=False,
+            user=None,
+            vote_surface="question-feed",
+        )
+
+        assert get_next_question_feed_item("voter-1") is None

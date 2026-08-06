@@ -967,7 +967,10 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     illustration resolves, against LIVE data at write time, to exactly one
     candidate printing for this card (`printings_for_card_and_illustration`
     — N>1 casts nothing on the printing channel, matching #526's machine-side
-    rule); and a `CardArtistVote` is derived (`source=USER`,
+    rule; `question_feed._voter_answered_printing_card_ids` reads
+    `CardIllustrationVote` as well as `CardPrintingTag` so an N>1 answer still
+    excludes the card from the printing tiers, issue #713); and a
+    `CardArtistVote` is derived (`source=USER`,
     `vote_surface="illustration_vote_derived_artist"`) whenever the
     resolved artist's name doesn't indicate a combined credit (tests for
     `' & '` only — see the module's own census comment) and no
