@@ -84,6 +84,7 @@ from cardpicker.models import (
     ArtistVoteStatus,
     Card,
     CardArtistVote,
+    CardIllustrationVote,
     CardPrintingTag,
     CardScanLog,
     CardTagVote,
@@ -258,14 +259,38 @@ def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
     One indexed query, plus the expansion's own (at most two, and zero before PR-1 adds the
     checksum column - see `printing_consensus._md5_checksums_for_card_ids`).
 
+    ALSO reads `CardIllustrationVote` (issue #713). `identify_printing` has two answer paths on
+    the frontend: a single/unclustered candidate posts straight to `CardPrintingTag`, but a
+    shared-illustration cluster of N>=2 candidates posts to `illustration_vote.
+    cast_illustration_vote` instead, which writes `CardPrintingTag` ONLY when the illustration
+    resolves to exactly one live printing (see that function's own docstring) - at N>1, the
+    premise of the cluster UI that fired, nothing lands on the printing channel at all. Without
+    this, a voter who answered via the cluster path cast a real, persisted vote
+    (`CardIllustrationVote` is always written) that this exclusion could not see, so the card
+    stayed eligible and was immediately re-served - production evidence: both of the only two
+    human illustration votes on record were each followed within seconds by an `is_no_match`
+    escape vote on the same card. Every `CardIllustrationVote` row - not just the N>1 case - is
+    included unconditionally: for the N=1 case the card is already covered by the
+    `CardPrintingTag` query above, so this is a no-op union there, not a special case to branch
+    on; keeping it unconditional means one query shape covers both outcomes of
+    `cast_illustration_vote` rather than two.
+
+    NOT `CardQuestionAbstention` (issue #712/#731): that model records a human "Not sure" - a
+    real non-answer - and reusing it here for a real, weighted answer would conflate the two,
+    corrupting the exact distinction #712 was built to preserve. See this function's own tests
+    and the issue #713 PR description for the full reasoning.
+
     COMPUTED ONCE PER FEED REQUEST, in `get_next_question_feed_item`, and passed down to every
     tier that needs it (2026-07-25 gate on PR #482, condition f1: each tier calling this for
     itself multiplied the cost by the number of tiers consulted, for an answer that cannot change
     within one request). The tiers keep an optional parameter rather than a required one so a
     direct caller - a test, a shell - can still ask for one tier by `anonymous_id` alone.
     """
-    voted_card_ids = CardPrintingTag.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
-    return identity_group_expanded_card_ids(voted_card_ids)
+    voted_card_ids = set(CardPrintingTag.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True))
+    illustration_voted_card_ids = set(
+        CardIllustrationVote.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
+    )
+    return identity_group_expanded_card_ids(voted_card_ids | illustration_voted_card_ids)
 
 
 def _voter_answered_artist_card_ids(anonymous_id: str) -> set[int]:
@@ -647,7 +672,9 @@ def _log_served(anonymous_id: str, item: QuestionFeedItem, pool: str, origin_rea
     return item
 
 
-def get_next_question_feed_item(anonymous_id: str) -> Optional[QuestionFeedItem]:
+def get_next_question_feed_item(
+    anonymous_id: str, contested_card_ids: Optional[list[int]] = None
+) -> Optional[QuestionFeedItem]:
     """
     The ranked union itself. When this session's served-mix ratio (`_served_mix_ratio`) is
     below `settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO` AND the likely-resolve pool still
@@ -670,6 +697,14 @@ def get_next_question_feed_item(anonymous_id: str) -> Optional[QuestionFeedItem]
     phase-C routing signal: a card a human has declared not-official-art via `reason_tags.
     NOT_OFFICIAL_ART_REASON_TAGS` stops being served as an artist-shaped question, in both
     `_tier_2_contested` and `_tier_4_fresh` - printing questions are unaffected).
+
+    `contested_card_ids` is an optional pre-resolved value (issue #713 part 2, extending PR
+    #729's "compute once, thread as an optional parameter" convention across the view boundary
+    for the first time): `views.get_question_feed` calls `get_contested_card_ids()` once per
+    HTTP request and passes the result to both this function and `get_remaining_estimate`, since
+    both independently called it before (measured 520-562ms per call against live production
+    data) even though neither can see a vote the other cast mid-request. `None` (every direct
+    caller - tests, a shell) still resolves it here exactly as before.
     """
     answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
     answered_artist_card_ids = _voter_answered_artist_card_ids(anonymous_id)
@@ -688,12 +723,13 @@ def get_next_question_feed_item(anonymous_id: str) -> Optional[QuestionFeedItem]
     if tier_1_item is not None:
         return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
 
-    # `contested_card_ids`/`contested_artist_card_ids` are resolved ONCE here, only once we've
-    # actually fallen through to the tiers that consult them (tier 1 and the likely-resolve pool
-    # above never touch either), and reused by both tier 2 and tier 4 below - each is otherwise
+    # `contested_card_ids` may already have arrived from the caller (see docstring above); only
+    # resolve it here if not, and only once we've actually fallen through to the tiers that
+    # consult it (tier 1 and the likely-resolve pool above never touch it) - each is otherwise
     # identical on repeat calls within this same request (no vote can be cast mid-request), so
     # recomputing it once per tier just paid the same cost twice for one answer.
-    contested_card_ids = get_contested_card_ids()
+    if contested_card_ids is None:
+        contested_card_ids = get_contested_card_ids()
     contested_artist_card_ids = get_contested_artist_card_ids()
 
     tier_2_result = _tier_2_contested(
@@ -742,7 +778,7 @@ def _tag_review_card_ids_by_status() -> tuple[set[int], set[int]]:
     return contested_ids, unresolved_ids
 
 
-def get_remaining_estimate() -> QuestionFeedCounts:
+def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> QuestionFeedCounts:
     """
     "Still need help with" counts for the feed header - NOT per-voter (doesn't account for
     own-vote exclusion, which is comparatively cheap to skip here since this is advisory copy,
@@ -772,8 +808,14 @@ def get_remaining_estimate() -> QuestionFeedCounts:
     per bucket (4 buckets), for 6 queries overall. No per-card sub-queries in a loop - the only
     Python-side materialization is the tag-status scan, which was already the established
     pattern for this JSONField (see `_tag_review_card_ids_by_status`'s docstring).
+
+    `contested_card_ids` is an optional pre-resolved value - see `get_next_question_feed_item`'s
+    matching parameter docstring for why (issue #713 part 2): `views.get_question_feed` calls
+    `get_contested_card_ids()` once and passes it to both functions, since this one always needs
+    it and the other needed it as often. `None` (every other caller, e.g. `catalog_stats.py`)
+    resolves it here exactly as before.
     """
-    contested_printing_ids = get_contested_card_ids()
+    contested_printing_ids = contested_card_ids if contested_card_ids is not None else get_contested_card_ids()
     tag_contested_ids, tag_unresolved_ids = _tag_review_card_ids_by_status()
 
     confirmable = (

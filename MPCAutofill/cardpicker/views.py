@@ -2010,8 +2010,13 @@ def get_question_feed(request: HttpRequest) -> HttpResponse:
     if not anonymous_id:
         raise BadRequestException("Missing required anonymousId query parameter.")
 
-    item = get_next_question_feed_item(anonymous_id)
-    remaining_estimate = get_remaining_estimate()
+    # Resolved once and threaded to both calls below: `get_next_question_feed_item` and
+    # `get_remaining_estimate` each independently called `get_contested_card_ids()` before,
+    # measured at 520-562ms per call against live production data - on a single-gunicorn-worker
+    # deployment that's site-wide latency on every request, not one user's.
+    contested_card_ids = get_contested_card_ids()
+    item = get_next_question_feed_item(anonymous_id, contested_card_ids=contested_card_ids)
+    remaining_estimate = get_remaining_estimate(contested_card_ids)
     return JsonResponse(QuestionFeedResponse(item=item, remainingEstimate=remaining_estimate).model_dump())
 
 
