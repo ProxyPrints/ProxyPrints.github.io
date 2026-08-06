@@ -30,7 +30,7 @@ pycountry~=22.3.0
 pydantic~=2.10.0
 pytesseract~=0.3.13
 pytest~=9.0
-pytest-django~=4.11
+pytest-django==4.11.1  # exact pin: 4.12.0 raises AttributeError on PytestDjangoTestCase._pre_setup_ran_eagerly during test setup, an internal fixture-machinery attribute this project does not define or control
 pytest-elasticsearch~=4.1.1
 python-dotenv~=1.0.0
 ratelimit~=2.2.1
