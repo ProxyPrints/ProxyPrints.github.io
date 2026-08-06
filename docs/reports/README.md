@@ -122,6 +122,16 @@ a `detail` object read only when the summary signals it's needed.
   six Stage C → Stage D dependencies that no `extractor_versions` gate
   enforces.
 
+- `2026-08-06-card-location-landmark-gate.md` — STEP 1 gate result (NOT
+  MET) for locating the card's own rectangle inside a possibly
+  canvas-padded image via the rules-text-box's bottom edge: the brief's
+  single global `f`-fraction + symmetric-padding formula measured
+  against direct pixel-level ground truth on the 4 cards a prior audit
+  (crop-geometry-audit, external to this repo) flagged as confirmed
+  misclassifications — 0/4 correct (3 abstained, 1 wrong by >10x); 39.3%
+  confident rate over a 28-image stratified sample. No code changed; two
+  concrete, unattempted follow-up directions identified.
+
 Note: a separate, unrelated session also used the bare `report-relay`
 branch name for its own work (upstream-ladder CI, federation-v1 doc
 updates) — a genuine cross-session branch-name collision, not a typo.
