@@ -1,7 +1,12 @@
+from unittest.mock import patch
+
 from django.urls import reverse
 
 from cardpicker import views
-from cardpicker.artist_consensus import resolve_and_persist_artist
+from cardpicker.artist_consensus import (
+    get_contested_artist_card_ids,
+    resolve_and_persist_artist,
+)
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
@@ -17,7 +22,10 @@ from cardpicker.models import (
     VotePolarity,
     VoteSource,
 )
-from cardpicker.printing_consensus import resolve_and_persist_printing
+from cardpicker.printing_consensus import (
+    get_contested_card_ids,
+    resolve_and_persist_printing,
+)
 from cardpicker.question_feed import (
     _artist_item,
     _scryfall_illustration_url,
@@ -211,6 +219,43 @@ class TestGetNextQuestionFeedItem:
         assert item.type.value == "tag"
         assert item.card.identifier == card.identifier
         assert item.tagName == tag_b.name
+
+
+class TestContestedIdsMemoizedPerRequest:
+    """`get_contested_card_ids`/`get_contested_artist_card_ids` are expensive (issue #726:
+    330-400ms each on production data) and, before this fix, were recomputed once per tier that
+    consulted them instead of once per `get_next_question_feed_item` call."""
+
+    def test_get_contested_card_ids_computed_once_when_tier_2_and_tier_4_are_both_consulted(self, db):
+        # a plain unresolved card with no votes: tier 2 finds nothing contested and falls
+        # through to tier 4, which - before this fix - called get_contested_card_ids() a
+        # second time for the same answer within the same request
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        with (
+            patch("cardpicker.question_feed.get_contested_card_ids", wraps=get_contested_card_ids) as mock_contested,
+            patch(
+                "cardpicker.question_feed.get_contested_artist_card_ids", wraps=get_contested_artist_card_ids
+            ) as mock_contested_artist,
+        ):
+            item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == card.identifier
+        assert mock_contested.call_count == 1
+        assert mock_contested_artist.call_count == 1
+
+    def test_get_contested_card_ids_not_called_when_tier_1_serves_the_item(self, db):
+        # tier 1 (confirm_suggestion) and the likely-resolve pool both resolve before tier 2 is
+        # ever reached, so neither contested-ids function should run at all
+        make_ai_suggested_card()
+
+        with patch("cardpicker.question_feed.get_contested_card_ids", wraps=get_contested_card_ids) as mock_contested:
+            item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "confirm_suggestion"
+        assert mock_contested.call_count == 0
 
 
 class TestPhaseCNotOfficialArtRouting:
