@@ -25,6 +25,7 @@ urlpatterns = [
     path("2/printingCandidates/", views.post_printing_candidates),
     path("2/printingConsensus/", views.post_printing_consensus),
     path("2/submitPrintingTag/", views.post_submit_printing_tag),
+    path("2/submitQuestionAbstention/", views.post_submit_question_abstention),
     path("2/printingTagQueue/", views.get_printing_tag_queue),
     path("2/artistCandidates/", views.post_artist_candidates),
     path("2/artistConsensus/", views.post_artist_consensus),

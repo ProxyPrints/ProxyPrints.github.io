@@ -2940,6 +2940,52 @@ class ArtistExternalLink(BaseModel):
         return result
 
 
+class SubmitQuestionAbstentionRequest(BaseModel):
+    """
+    2/submitQuestionAbstention/ (issue #712) - hand-maintained, same provenance as
+    CastImplicitVoteRequest/RetractImplicitVoteRequest above (no JSON schema source exists for
+    request types in this repo - typed by hand against the real Python pydantic model, not
+    quicktype-generated).
+    """
+
+    anonymousId: str
+    identifier: str
+    questionType: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitQuestionAbstentionRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        questionType = from_str(obj.get("questionType"))
+        return SubmitQuestionAbstentionRequest(anonymousId, identifier, questionType)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["questionType"] = from_str(self.questionType)
+        return result
+
+
+class SubmitQuestionAbstentionResponse(BaseModel):
+    """Mirrors SubmitQuestionAbstentionRequest above - a single-purpose ack, no vote tally to
+    return since an abstention isn't a vote and never participates in consensus."""
+
+    recorded: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitQuestionAbstentionResponse":
+        assert isinstance(obj, dict)
+        recorded = from_bool(obj.get("recorded"))
+        return SubmitQuestionAbstentionResponse(recorded)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["recorded"] = from_bool(self.recorded)
+        return result
+
+
 class ArtistExternalLinksResponse(BaseModel):
     """
     2/artistExternalLinks/ - hand-maintained, NOT quicktype-generated, same provenance/reasoning

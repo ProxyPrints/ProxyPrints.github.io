@@ -696,6 +696,36 @@ export async function APISubmitPrintingTag(
   });
 }
 
+// Issue #712. Records a human "Not sure" abstention on a question-feed item - distinct from a
+// "Skip" tap, which never calls this or any other endpoint. Best-effort at the call site (see
+// QuestionFeed.tsx's submitNotSure): never blocks the Level 1 -> Level 2 transition it accompanies.
+export async function APISubmitQuestionAbstention(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  questionType: string
+): Promise<SubmitQuestionAbstentionResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/submitQuestionAbstention/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier, anonymousId, questionType }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.recorded != null) {
+      return content as SubmitQuestionAbstentionResponse;
+    }
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
 // Issue #503 (WTC phase C2) / #524. Sends ONE illustrationId (or isUnknown) for a card - NEVER
 // a printing list, since a shared-illustration group's actual printing count can only be known
 // server-side, at write time, against live data (see MPCAutofill/cardpicker/illustration_vote.py

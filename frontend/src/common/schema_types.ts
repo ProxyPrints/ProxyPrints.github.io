@@ -1091,6 +1091,22 @@ export interface RetractImplicitVoteRequest {
 }
 
 /**
+ * 2/submitQuestionAbstention/ (issue #712) - hand-maintained, mirroring
+ * MPCAutofill/cardpicker/schema_types.py's SubmitQuestionAbstentionRequest (same provenance as
+ * CastImplicitVoteRequest above - no JSON schema source exists for request types in this repo).
+ */
+export interface SubmitQuestionAbstentionRequest {
+  anonymousId: string;
+  identifier: string;
+  questionType: string;
+}
+
+/** 2/submitQuestionAbstention/ response - mirrors SubmitQuestionAbstentionResponse. */
+export interface SubmitQuestionAbstentionResponse {
+  recorded: boolean;
+}
+
+/**
  * One external link for an artist (MTG Artist Connection integration - see
  * MPCAutofill/cardpicker/artist_external_links.py's module docstring). `type` is one of the
  * fixed allowlist field names, in fixed priority order (website/artstation/inprnt/mountainmage/
