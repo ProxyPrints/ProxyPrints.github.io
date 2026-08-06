@@ -52,23 +52,23 @@ function boxesIntersect(
 }
 
 test.describe("question feed - Level 2 (candidate grid)", () => {
-  test("the attribute-chip filter is collapsed by default and expands on tap", async ({
+  test("the attribute-chip filter is shown automatically for identify_printing questions, and can be hidden", async ({
     page,
     network,
   }) => {
     network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await expect(page.getByTestId("attribute-chip-panel")).not.toBeVisible();
+    await expect(page.getByTestId("attribute-chip-panel")).toBeVisible();
     await expect(page.getByTestId("question-feed-filter-toggle")).toHaveText(
-      "Filter by attribute"
+      "Hide filters"
     );
 
     await page.getByTestId("question-feed-filter-toggle").click();
 
-    await expect(page.getByTestId("attribute-chip-panel")).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-panel")).not.toBeVisible();
     await expect(page.getByTestId("question-feed-filter-toggle")).toHaveText(
-      "Hide filters"
+      "Filter by attribute"
     );
   });
 
@@ -83,7 +83,6 @@ test.describe("question feed - Level 2 (candidate grid)", () => {
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-filter-toggle").click();
     await page.getByTestId("attribute-chip-Full Art-yes").click(); // candidate1 is fullArt=false
 
     await expect(page.getByTestId("question-feed-hidden-count")).toContainText(

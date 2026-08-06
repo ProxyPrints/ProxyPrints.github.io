@@ -117,21 +117,21 @@ function questionFeedOnce() {
 }
 
 describe("QuestionFeed", () => {
-  it("the attribute-chip filter is collapsed by default, and 'None of these' works without touching it", async () => {
+  it("the attribute-chip filter is shown automatically for identify_printing questions, and 'None of these' works without touching it", async () => {
     server.use(questionFeedOnce());
     renderFeed();
     await revealCard();
 
     expect(
-      screen.queryByTestId("attribute-chip-panel")
-    ).not.toBeInTheDocument();
+      await screen.findByTestId("attribute-chip-Full Art")
+    ).toBeInTheDocument();
     const noMatchButton = await screen.findByTestId("question-feed-no-match");
     expect(noMatchButton).not.toBeDisabled();
 
     fireEvent.click(screen.getByTestId("question-feed-filter-toggle"));
     expect(
-      await screen.findByTestId("attribute-chip-Full Art")
-    ).toBeInTheDocument();
+      screen.queryByTestId("attribute-chip-panel")
+    ).not.toBeInTheDocument();
   });
 
   it("clicking 'None of these' submits a no-match printing vote", async () => {
@@ -726,8 +726,8 @@ describe("QuestionFeed", () => {
     renderFeed();
     await revealCard();
 
-    // expand the filter and set "Full Art" positive - narrows item 1's grid to printing-2 only
-    fireEvent.click(screen.getByTestId("question-feed-filter-toggle"));
+    // identify_printing questions show the filter automatically now - set "Full Art" positive
+    // directly, narrowing item 1's grid to printing-2 only.
     fireEvent.click(await screen.findByTestId("attribute-chip-Full Art-yes"));
     await waitFor(() =>
       expect(screen.queryByTestId("attribute-chip-Full Art")).toHaveAttribute(
@@ -747,10 +747,12 @@ describe("QuestionFeed", () => {
     // survived, neither would render, reproducing the reported empty-grid symptom.
     expect(await screen.findByAltText("def 3")).toBeInTheDocument();
     expect(screen.getByAltText("ghi 4")).toBeInTheDocument();
-    // the filter panel itself resets closed too, same as any other fresh item
+    // the chip states themselves reset too, same as any other fresh item - the "Full Art"
+    // chip (still auto-shown, item 2 is identify_printing too) is untouched again, not
+    // carrying item 1's stale "positive" state forward.
     expect(
-      screen.queryByTestId("attribute-chip-panel")
-    ).not.toBeInTheDocument();
+      await screen.findByTestId("attribute-chip-Full Art")
+    ).toHaveAttribute("data-chip-state", "untouched");
   });
 
   // Issue #503 (WTC phase C2) / #524 - wiring the illustration-grouped grid (C1) to

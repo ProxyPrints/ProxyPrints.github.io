@@ -144,3 +144,20 @@ coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - Level 2 illus
 # describe both halves of the contract, and extended with a mocked handler + payload assertion
 # for the new POST - same surface (the NOT SURE button), same "no printing vote" claim kept.
 coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - confirm_suggestion question type > NOT SURE drops to Level 2's candidate grid without casting a vote — PR #731 (issue #712): renamed to "NOT SURE drops to Level 2's candidate grid without casting a printing vote, but does POST an abstention" now that NOT SURE fires a fire-and-forget POST to the new /2/submitQuestionAbstention/ endpoint; the "no printing vote" assertion is kept, extended with coverage of the new abstention POST.
+
+# Layout pass (2026-08-06, issues #705/#707/#710/#711) - A4 amendment (SPEC-wtc-rebuild.md,
+# 2026-08-05 owner ruling) supersedes the attribute-chip panel's collapsed-by-default behavior:
+# it's now shown automatically for identify_printing/confirm_suggestion questions. The old
+# title's factual claim ("collapsed by default") is false under the new default, so it was
+# renamed rather than left stale; the underlying toggle-still-works coverage is kept, not
+# dropped - see the new title's own body.
+coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - Level 2 (candidate grid) > the attribute-chip filter is collapsed by default and expands on tap — renamed to "the attribute-chip filter is shown automatically for identify_printing questions, and can be hidden" (A4 amendment, SPEC-wtc-rebuild.md): the panel now defaults to shown for this question type instead of collapsed; the toggle-still-works assertion is kept, just inverted to match the new default.
+
+# Layout pass (2026-08-06, issue #707) - AttributeChipPanel's ring-around-card composition
+# (CardArea, used only by this page's Level 2 call site) is retired: the chip panel now renders
+# in QPanel, never sharing a box with the reference card, so the "ring squeezes the card at a
+# narrow width" failure mode this test guarded against can no longer occur structurally. Dropped
+# in favour of a direct "chips never overlap the pinned card" check under a new title, covering
+# the same underlying hard constraint (chips must never occlude the reference card) against the
+# new mechanism instead of the retired one.
+coverage-ack: frontend/tests/QuestionFeedResponsive.spec.ts::question feed - Level 2 layout containment (real-device regression guard) > at 360px with the attribute-chip filter expanded, the ring collapses to a stack instead of squeezing the card — dropped: the ring-around-card composition (CardArea) it guarded is retired by issue #707 (chips render in QPanel now, never sharing a box with the card); replaced by "at 360px with the attribute-chip filter shown, the chips never overlap the pinned reference card" covering the same never-occlude constraint against the new mechanism.

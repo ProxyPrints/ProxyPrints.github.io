@@ -143,7 +143,13 @@ function PrintingQueueOrDefault() {
 export default function PrintingQueue() {
   const projectName = useProjectName();
   return (
-    <ProjectContainer>
+    // Layout pass (issue #710) - the sitewide `ContentMaxWidth` (1200px, Layout.tsx) cap left
+    // this page unable to use desktop's surplus horizontal space no matter how wide WtcHero's
+    // own max-width was raised, since the outer MaxWidthContainer was already the binding
+    // constraint. `fullWidth` is the same escape hatch /display already uses for an identical
+    // "sitewide cap squeezes this page's own wide layout" problem (Layout.tsx's own comment on
+    // MaxWidthContainer) - WtcHero/WtcHead keep their own (now wider) max-width below instead.
+    <ProjectContainer fullWidth>
       <Head>
         <title>{`${projectName} What's That Card?`}</title>
         <meta

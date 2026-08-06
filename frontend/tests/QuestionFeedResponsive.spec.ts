@@ -33,6 +33,18 @@ import { loadPageWithDefaultBackend } from "./test-utils";
  *       390/768/1400, shape-b shortlist fallback, WD3 compaction + open-shape expansion, the
  *       session counter).
  *
+ * LAYOUT PASS (2026-08-06, issues #705/#707/#710/#711) - amends the DROPPED note below on one
+ * point: `position: sticky` is back, but not the same mechanism the 2026-07-24 pass retired.
+ * WD4 killed a `100dvh`-bounded hero + a scroll-pinned card coupled to the VIEWPORT; A2 (the
+ * SPEC's 2026-08-05 amendment) reintroduces sticky scoped to the hero CONTAINER only (Subject's
+ * own `position: sticky`, QuestionFeed.tsx) so the reference card stays visible while the page
+ * scrolls - the "mobile card/questions never overlap" describe block below is still correctly
+ * dropped (that guarded a bounded-height coupling bug that mechanism can't produce), but the
+ * page is no longer sticky-free. See "reference card pinning" below for the new coverage.
+ * `AttributeChipPanel`'s ring-around-card layout (used to squeeze inside a narrow container -
+ * the old "ring collapses to a stack" test below) is also retired by this pass: the chip panel
+ * no longer shares a box with the card at all (issue #707), so it can't squeeze anything.
+ *
  * DROPPED entirely (own justification, not carried forward even as adapted tests):
  *   - "the hero card stays fully visible while the questions column scrolls independently" /
  *     "a real mouse-wheel scroll ... does not move the hero card" (both from the old "mobile
@@ -57,6 +69,11 @@ import { loadPageWithDefaultBackend } from "./test-utils";
  *   - "question-mark motif + golden action buttons" / "shared blue mystery card composition" -
  *     both asserted the retired `whatsthat-mark.svg` `<img>` glyph and the retired
  *     `QUIZ_BUTTON_GOLD`/`_NAVY` treatment (WD1). Replaced below by token-based equivalents.
+ *   - "at 360px with the attribute-chip filter expanded, the ring collapses to a stack instead
+ *     of squeezing the card" - `AttributeChipPanel`'s ring-around-card composition (`CardArea`)
+ *     is retired for this page's call site (issue #707): the chip panel now renders in QPanel,
+ *     never sharing a box with the card, so the ring-squeezing-the-card failure mode this test
+ *     guarded against is no longer structurally possible.
  */
 
 function buildRoute(route: string) {
@@ -135,33 +152,29 @@ test.describe("question feed - Level 2 layout containment (real-device regressio
     });
   }
 
-  test("at 360px with the attribute-chip filter expanded, the ring collapses to a stack instead of squeezing the card", async ({
+  test("at 360px with the attribute-chip filter shown, the chips never overlap the pinned reference card", async ({
     page,
     network,
   }) => {
-    // AttributeChipPanel/ChipRing is unforked by the WTC rebuild (spec section 4: "no
-    // structural change; inherit tokens") - this invariant is unchanged.
+    // Issue #707 - the chip panel renders in QPanel now, never sharing a box with the card
+    // (see this file's header docstring) - the hard "never occlude the reference card"
+    // constraint is checked directly instead of via the retired ring-squeeze mechanism.
     network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
     await page.setViewportSize({ width: 360, height: 844 });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     await expect(page.getByAltText(cardDocument1.name)).toBeVisible();
-    await page.getByTestId("question-feed-filter-toggle").click();
 
     const cardPanel = page.getByTestId("question-feed-card-panel");
-    const cardArea = page.getByTestId("attribute-chip-card-area");
     const fullArtChip = page.getByTestId("attribute-chip-Full Art");
     await expect(fullArtChip).toBeVisible();
 
     const panelBox = await cardPanel.boundingBox();
-    const cardAreaBox = await cardArea.boundingBox();
     const chipBox = await fullArtChip.boundingBox();
     expect(panelBox).not.toBeNull();
-    expect(cardAreaBox).not.toBeNull();
     expect(chipBox).not.toBeNull();
 
-    expect(cardAreaBox!.width).toBeGreaterThan(panelBox!.width * 0.9);
-    expect(boxesIntersect(cardAreaBox!, chipBox!)).toBe(false);
+    expect(boxesIntersect(panelBox!, chipBox!)).toBe(false);
   });
 });
 
@@ -338,7 +351,8 @@ test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-filter-toggle").click();
+    // identify_printing questions show the filter panel automatically now (issue #707) - no
+    // toggle click needed to reach it.
     const firstChip = page
       .locator('[data-testid^="attribute-chip-"][data-chip-state]')
       .first();
@@ -615,5 +629,108 @@ test.describe("question feed - session counter (WD6, quiet reward affordance)", 
     await expect(
       page.getByTestId("question-feed-session-counter")
     ).toContainText("0 tagged this session");
+  });
+});
+
+// NEW coverage (layout pass, issue #710/A2) - the reference card is pinned WITHIN the hero
+// container via `position: sticky` on Subject (QuestionFeed.tsx), not the viewport. A short
+// viewport height forces real scrollable overflow at every width below, regardless of how much
+// content the served item happens to carry.
+test.describe("question feed - reference card pinning while scrolling (issue #710, A2)", () => {
+  for (const width of [390, 800, 1400]) {
+    test(`at ${width}px, the reference card stays visible after scrolling the questions column`, async ({
+      page,
+      network,
+    }) => {
+      network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+      await page.setViewportSize({ width, height: 600 });
+      await loadPageWithDefaultBackend(page, "whatsthat");
+
+      const cardImage = page.getByAltText(cardDocument1.name);
+      await expect(cardImage).toBeVisible();
+
+      // The actual scrolling ancestor is Layout.tsx's fixed, internally-scrolling
+      // ContentContainer (`data-testid="content-container"`), not the document. A moderate,
+      // bounded scroll (not the container's absolute max) - sticky is scoped to WtcHero (A2),
+      // so it can only hold Subject stuck while WtcHero still has room below; simulates a user
+      // actively reading through the candidate grid/chip panel, the guarantee A2 makes.
+      await page.getByTestId("content-container").evaluate((el) => {
+        el.scrollTop = Math.min(120, el.scrollHeight - el.clientHeight);
+      });
+
+      await expect(cardImage).toBeInViewport();
+    });
+  }
+});
+
+// NEW coverage (layout pass, issue #710) - the sitewide 1200px ContentMaxWidth cap (Layout.tsx)
+// no longer squeezes this page (whatsthat.tsx's `fullWidth` escape hatch), and WtcHero's own
+// max-width was raised past the pre-pass 1180px binding value to actually use it.
+test.describe("question feed - desktop uses its available horizontal space (issue #710)", () => {
+  test("at a wide desktop viewport, the hero renders wider than the pre-pass 1180px cap", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await page.setViewportSize({ width: 1920, height: 900 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const hero = page.getByTestId("question-feed-current-item");
+    await expect(hero).toBeVisible();
+    const heroBox = await hero.boundingBox();
+    expect(heroBox).not.toBeNull();
+    expect(heroBox!.width).toBeGreaterThan(1200);
+  });
+});
+
+// NEW coverage (layout pass, issue #705) - SuggestedThumb (QuestionFeed.tsx) clips its resting
+// state as before but stops clipping for exactly the hover duration ZoomableThumbnail's own
+// hover rule (cardPanel.tsx) scales the art up, so the zoom is no longer cut flush at the edge.
+test.describe("question feed - hover-zoom is not clipped by its frame (issue #705)", () => {
+  test("the Level 1 reference thumbnail's frame stops clipping while hovered", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const thumb = page.getByTestId("question-feed-level1-reference-image");
+    await expect(thumb).toBeVisible();
+    const restOverflow = await thumb.evaluate(
+      (el) => window.getComputedStyle(el).overflow
+    );
+    expect(restOverflow).toBe("hidden");
+
+    await thumb.hover();
+    const hoverOverflow = await thumb.evaluate(
+      (el) => window.getComputedStyle(el).overflow
+    );
+    expect(hoverOverflow).toBe("visible");
+  });
+});
+
+// NEW coverage (layout pass, issue #711) - the Level 1 Yes button no longer carries the
+// oversized `.big` modifier, so it now reads at the same font size as its ActionGrid siblings
+// (hierarchy by position/colour, not by disproportionate size).
+test.describe("question feed - Level 1 answer-row hierarchy (issue #711)", () => {
+  test("the Yes button reads at the same font size as its 'Not sure' sibling", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const yesButton = page.getByTestId("question-feed-level1-yes");
+    const notSureButton = page.getByTestId("question-feed-level1-not-sure");
+    await expect(yesButton).toBeVisible();
+    await expect(notSureButton).toBeVisible();
+
+    const yesFontSize = await yesButton.evaluate(
+      (el) => window.getComputedStyle(el).fontSize
+    );
+    const notSureFontSize = await notSureButton.evaluate(
+      (el) => window.getComputedStyle(el).fontSize
+    );
+    expect(yesFontSize).toBe(notSureFontSize);
   });
 });
