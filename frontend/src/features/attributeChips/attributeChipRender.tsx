@@ -40,6 +40,13 @@ import {
 // reclaim the row space the owner reported as dead. Height/tap-targets are unchanged (still the
 // full 44px buttons, still directly tappable to override the implied state - see this file's
 // header comment).
+// `width: fit-content` (issue #742): an exclusion-group chip renders inside a container
+// (`LeftArea`/`RightArea`, AttributeChipPanel.tsx) that switches to `flex-direction: column`
+// once the ring/flat-stack has room to form; the flex spec's default `align-items: stretch`
+// then stretches any child with no definite cross-size to the column's full width, which is how
+// a chip meant to be a small label+buttons pill ended up spanning the whole panel with its Yes/
+// No buttons stranded far from the label. A definite width makes the chip immune to that stretch
+// regardless of an ancestor's flex-direction.
 export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
   border: 2px solid rgba(0, 0, 0, 0.25);
   border-radius: 0.5rem;
@@ -48,6 +55,7 @@ export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
   font-size: 0.85rem;
   white-space: nowrap;
   min-height: 44px;
+  width: fit-content;
   display: inline-flex;
   align-items: stretch;
   overflow: hidden;

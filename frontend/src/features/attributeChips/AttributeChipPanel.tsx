@@ -73,25 +73,48 @@ const TopArea = styled(ChipRow)`
   grid-area: top;
 `;
 
+// Issue #743: BORDER_COLOR_GROUP and FRAME_STYLE_GROUP are independent axes (a card's border
+// colour and its frame era don't imply each other), but nothing previously rendered their
+// `ExclusionGroup.label` - the two groups' chip rows ran together as one unlabelled list, so a
+// user reasonably read a correct half-collapse (one group's siblings dimming, the other
+// untouched) as a bug. Renders the label that already existed as data.
+const GroupHeading = styled.p`
+  margin: 0 0 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.55);
+  text-align: center;
+`;
+
+// A divider between the two exclusion groups (flat-stack layout only, see the `cardSlot == null`
+// branch below) - the ring layout already keeps them apart spatially (left/right of the card),
+// so it doesn't need one.
+const GroupDivider = styled.hr`
+  width: 100%;
+  margin: 0;
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+`;
+
 // Row+wrap below `sm` (matching TopArea, since the ring hasn't formed yet and there's no
 // flanking column to stack vertically inside) - becomes a genuine vertical column only once
 // the ring itself forms at `sm` and up.
-const LeftArea = styled(ChipRow)`
-  grid-area: left;
-
+const ExclusionChipRow = styled(ChipRow)`
   @media (min-width: 576px) {
     flex-direction: column;
-    align-items: stretch;
   }
 `;
 
-const RightArea = styled(ChipRow)`
-  grid-area: right;
+// Wraps a heading plus its `ExclusionChipRow` as one unit, so `ChipRing`'s grid can still
+// position the whole group (heading + chips together) as a single "left"/"right" cell.
+const LeftArea = styled.div`
+  grid-area: left;
+`;
 
-  @media (min-width: 576px) {
-    flex-direction: column;
-    align-items: stretch;
-  }
+const RightArea = styled.div`
+  grid-area: right;
 `;
 
 // position: relative so an absolutely-positioned burst rendered as part of `cardSlot` (see
@@ -183,16 +206,22 @@ export function AttributeChipPanel({
   );
   const leftArea = leftGroup != null && (
     <LeftArea>
-      {leftGroup.chips.map((chip) =>
-        renderAttributeChip(chipArgs, chip.tagName, chip.label)
-      )}
+      <GroupHeading>{leftGroup.label}</GroupHeading>
+      <ExclusionChipRow>
+        {leftGroup.chips.map((chip) =>
+          renderAttributeChip(chipArgs, chip.tagName, chip.label)
+        )}
+      </ExclusionChipRow>
     </LeftArea>
   );
   const rightArea = rightGroup != null && (
     <RightArea>
-      {rightGroup.chips.map((chip) =>
-        renderAttributeChip(chipArgs, chip.tagName, chip.label)
-      )}
+      <GroupHeading>{rightGroup.label}</GroupHeading>
+      <ExclusionChipRow>
+        {rightGroup.chips.map((chip) =>
+          renderAttributeChip(chipArgs, chip.tagName, chip.label)
+        )}
+      </ExclusionChipRow>
     </RightArea>
   );
 
@@ -203,6 +232,7 @@ export function AttributeChipPanel({
         <FlatChipStack data-testid="attribute-chip-panel">
           {topArea}
           {leftArea}
+          {leftArea != null && rightArea != null && <GroupDivider />}
           {rightArea}
         </FlatChipStack>
       </>

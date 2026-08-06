@@ -177,6 +177,17 @@ above rather than proposing anything new):**
     its ActionGrid siblings now — hierarchy comes from position (its own row, above the grid)
     and colour (`.primary`, orange) rather than from being a larger control.
 
+14. **A14: Exclusion-group chip width + group boundary (#742/#743).** `ChipGroup`
+    (`attributeChipRender.tsx`) gets an explicit `width: fit-content` — its containing row
+    switches to `flex-direction: column` once there's room to form (A10's still-present `@media (min-width: 576px)`), and a flex container's default `align-items: stretch` then stretches
+    any child with no definite cross-size to that column's full width; a definite width makes
+    the chip immune to that stretch regardless of which axis the ancestor row happens to run on.
+    `AttributeChipPanel.tsx`'s flat-stack `LeftArea`/`RightArea` (`BORDER_COLOR_GROUP`/
+    `FRAME_STYLE_GROUP`, two independent axes) now render each group's existing `label` field as
+    a heading above its chip row, plus a divider between them — previously the two groups' rows
+    ran together as one unlabelled list, so a collapse that correctly affects only one group's
+    siblings read as a bug affecting a supposedly single list.
+
 D-number scope note: D-numbers are per-proposal in this repo (proposal-h owns
 its own D1–D19; the old WTC round used W4–W7). The decisions below are the
 **WTC-rebuild round's** ledger, numbered WD1.. to avoid collision with either.
