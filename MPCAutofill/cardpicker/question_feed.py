@@ -53,6 +53,16 @@ than N copies of the same question. Both degenerate exactly to the pre-#473 beha
 whose group is itself alone, which - until that issue's PR-1 populates `Card.md5_checksum` - is
 every card in the catalogue. The artist and tag tiers are untouched by this: identity grouping
 is a statement about the IMAGE FILE, and those questions are already keyed differently.
+
+Materialised candidate pools (issue #727): `get_next_question_feed_item` now tries a
+`question_feed_pools.draw_*` call before each of the likely-resolve pool / tier 1 / tier 2 /
+tier 4 branches below, falling back to that branch's own (unchanged) live query whenever the
+pool draw returns `None` - a cache miss (never warmed, or the `"shared"` backend isn't
+configured) or this voter's exclusion/staleness filtering exhausting every entry. See
+`question_feed_pools`'s own module docstring for the full architecture (why pools are shared not
+per-voter, the random-offset serve, per-lane warm cadence, and the staleness/precedence
+reasoning) - this module still owns every tier's SELECTION semantics and every served item's
+construction; the pools only supply candidate ids faster than a live scan would.
 """
 
 from collections import defaultdict
@@ -70,6 +80,7 @@ from django.db.models import (
     When,
 )
 
+from cardpicker import question_feed_pools
 from cardpicker.artist_consensus import get_contested_artist_card_ids
 from cardpicker.attribute_tags import ATTRIBUTE_CHIP_TAG_NAMES
 from cardpicker.local_calculate_verdicts import (
@@ -672,6 +683,52 @@ def _log_served(anonymous_id: str, item: QuestionFeedItem, pool: str, origin_rea
     return item
 
 
+def _pool_contested_result(
+    answered_card_ids: set[int],
+    answered_artist_card_ids: set[int],
+    answered_tag_card_ids_by_tag: dict[str, set[int]],
+    not_official_art_card_ids: set[int],
+) -> Optional[tuple[QuestionFeedItem, str]]:
+    """Pool-backed fast path for `_tier_2_contested`: converts a drawn `(kind, card, tag_name,
+    reason)` into the same `(QuestionFeedItem, reason)` shape that function returns, using its
+    own item-builders (`_identify_printing_item`/`_artist_item`/`_tag_item`) so a pool-served item
+    is byte-for-byte the same shape a live-served one would be. `None` on a pool miss - the
+    caller falls back to `_tier_2_contested` itself."""
+    drawn = question_feed_pools.draw_contested_entry(
+        answered_card_ids, answered_artist_card_ids, answered_tag_card_ids_by_tag, not_official_art_card_ids
+    )
+    if drawn is None:
+        return None
+    kind, card, tag_name, reason = drawn
+    if kind == question_feed_pools.KIND_PRINTING:
+        return _identify_printing_item(card), reason or "tier_2_contested_printing"
+    if kind == question_feed_pools.KIND_ARTIST:
+        return _artist_item(card), reason or "tier_2_contested_artist"
+    assert tag_name is not None  # guaranteed by draw_contested_entry for KIND_TAG
+    return _tag_item(card, tag_name), reason or "tier_2_contested_tag"
+
+
+def _pool_cold_result(
+    anonymous_id: str,
+    answered_card_ids: set[int],
+    not_official_art_card_ids: set[int],
+    contested_card_ids: list[int],
+) -> Optional[tuple[QuestionFeedItem, str]]:
+    """The `_tier_4_fresh` analogue of `_pool_contested_result` above."""
+    drawn = question_feed_pools.draw_cold_entry(
+        anonymous_id, answered_card_ids, not_official_art_card_ids, contested_card_ids
+    )
+    if drawn is None:
+        return None
+    kind, card, tag_name, reason = drawn
+    if kind == question_feed_pools.KIND_PRINTING:
+        return _identify_printing_item(card), reason or "tier_4_fresh_printing"
+    if kind == question_feed_pools.KIND_ARTIST:
+        return _artist_item(card), reason or "tier_4_fresh_artist"
+    assert tag_name is not None  # guaranteed by draw_cold_entry for KIND_TAG
+    return _tag_item(card, tag_name), reason or "tier_4_fresh_tag"
+
+
 def get_next_question_feed_item(
     anonymous_id: str, contested_card_ids: Optional[list[int]] = None
 ) -> Optional[QuestionFeedItem]:
@@ -712,14 +769,19 @@ def get_next_question_feed_item(
     not_official_art_card_ids = _not_official_art_card_ids()
 
     if _served_mix_ratio(anonymous_id) < settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO:
-        likely_resolve_card = _likely_resolve_printing_card(anonymous_id, answered_card_ids)
+        likely_resolve_card = question_feed_pools.draw_resolution_imminent_card(answered_card_ids)
+        if likely_resolve_card is None:
+            likely_resolve_card = _likely_resolve_printing_card(anonymous_id, answered_card_ids)
         if likely_resolve_card is not None:
             item = _likely_resolve_item(likely_resolve_card)
             return _log_served(
                 anonymous_id, item, QuestionFeedServedPool.LIKELY_RESOLVE, "printing_one_vote_from_resolving"
             )
 
-    tier_1_item = _tier_1_confirm_suggestion(anonymous_id, answered_card_ids)
+    tier_1_card = question_feed_pools.draw_confirm_card(answered_card_ids)
+    tier_1_item = _confirm_suggestion_item(tier_1_card) if tier_1_card is not None else None
+    if tier_1_item is None:
+        tier_1_item = _tier_1_confirm_suggestion(anonymous_id, answered_card_ids)
     if tier_1_item is not None:
         return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
 
@@ -732,25 +794,31 @@ def get_next_question_feed_item(
         contested_card_ids = get_contested_card_ids()
     contested_artist_card_ids = get_contested_artist_card_ids()
 
-    tier_2_result = _tier_2_contested(
-        anonymous_id,
-        answered_card_ids,
-        answered_artist_card_ids=answered_artist_card_ids,
-        answered_tag_card_ids_by_tag=answered_tag_card_ids_by_tag,
-        not_official_art_card_ids=not_official_art_card_ids,
-        contested_card_ids=contested_card_ids,
-        contested_artist_card_ids=contested_artist_card_ids,
+    tier_2_result = _pool_contested_result(
+        answered_card_ids, answered_artist_card_ids, answered_tag_card_ids_by_tag, not_official_art_card_ids
     )
+    if tier_2_result is None:
+        tier_2_result = _tier_2_contested(
+            anonymous_id,
+            answered_card_ids,
+            answered_artist_card_ids=answered_artist_card_ids,
+            answered_tag_card_ids_by_tag=answered_tag_card_ids_by_tag,
+            not_official_art_card_ids=not_official_art_card_ids,
+            contested_card_ids=contested_card_ids,
+            contested_artist_card_ids=contested_artist_card_ids,
+        )
     if tier_2_result is not None:
         tier_2_item, tier_2_reason = tier_2_result
         return _log_served(anonymous_id, tier_2_item, QuestionFeedServedPool.REMAINDER, tier_2_reason)
 
-    tier_4_result = _tier_4_fresh(
-        anonymous_id,
-        answered_card_ids,
-        not_official_art_card_ids=not_official_art_card_ids,
-        contested_card_ids=contested_card_ids,
-    )
+    tier_4_result = _pool_cold_result(anonymous_id, answered_card_ids, not_official_art_card_ids, contested_card_ids)
+    if tier_4_result is None:
+        tier_4_result = _tier_4_fresh(
+            anonymous_id,
+            answered_card_ids,
+            not_official_art_card_ids=not_official_art_card_ids,
+            contested_card_ids=contested_card_ids,
+        )
     if tier_4_result is not None:
         tier_4_item, tier_4_reason = tier_4_result
         return _log_served(anonymous_id, tier_4_item, QuestionFeedServedPool.REMAINDER, tier_4_reason)
