@@ -79,6 +79,7 @@ import {
   SaveDeckResponse,
   SourcesResponse,
   SubmitIllustrationVoteResponse,
+  SubmitQuestionAbstentionResponse,
   Tag,
   TagConsensusResponse,
   TagsResponse,

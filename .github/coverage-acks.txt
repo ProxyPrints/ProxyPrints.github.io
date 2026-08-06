@@ -127,3 +127,10 @@ coverage-ack: frontend/tests/DisplayPage.spec.ts::DisplayPage (Proposal H, Step 
 # Same surface, same assertions, only the URL (and the describe/test title naming it) changed.
 coverage-ack: frontend/tests/ContrastAudit.spec.ts::Contrast audit - /contributions (owner defect 1+2: accordion header + body) > Contribution Guidelines accordion - collapsed and expanded — route moved /contributions -> /stats in PR #558; same surface, same assertions
 coverage-ack: frontend/tests/ContrastAudit.spec.ts::Link colour audit (owner-approved open item 2 - $link-color -> $theme-info) > a real production link (contributions guidelines' ISO-639-1 reference, inside the accordion body's panel-bg) clears strict-AAA-normal — route moved /contributions -> /stats in PR #558; same surface, same assertions
+
+# PR #731 (issue #712) - Level 1 "Not sure" now fires a fire-and-forget POST to the new
+# /2/submitQuestionAbstention/ endpoint before transitioning to Level 2, in addition to the
+# unchanged "no printing vote cast" behavior this test already covered. Renamed (not deleted) to
+# describe both halves of the contract, and extended with a mocked handler + payload assertion
+# for the new POST - same surface (the NOT SURE button), same "no printing vote" claim kept.
+coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - confirm_suggestion question type > NOT SURE drops to Level 2's candidate grid without casting a vote — PR #731 (issue #712): renamed to "NOT SURE drops to Level 2's candidate grid without casting a printing vote, but does POST an abstention" now that NOT SURE fires a fire-and-forget POST to the new /2/submitQuestionAbstention/ endpoint; the "no printing vote" assertion is kept, extended with coverage of the new abstention POST.

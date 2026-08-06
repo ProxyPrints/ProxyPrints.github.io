@@ -1463,6 +1463,11 @@ export const submitPrintingTagResolvesToPrintingCandidate2 = http.post(
     )
 );
 
+export const submitQuestionAbstentionRecorded = http.post(
+  buildRoute("2/submitQuestionAbstention/"),
+  () => HttpResponse.json({ recorded: true }, { status: 200 })
+);
+
 export const submitPrintingTagNoMatch = http.post(
   buildRoute("2/submitPrintingTag/"),
   () =>
