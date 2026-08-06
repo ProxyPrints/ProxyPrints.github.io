@@ -13,33 +13,30 @@
  * still-loading request - are treated identically here: fall back to the deterministic
  * `buildArtistSupportURL` construction. **Never a broken or empty state.**
  *
+ * **Compact by default, expandable** (issue #709 - the applet used to always stack the page-link
+ * button, up to five commerce buttons, a badge, and a credit line, up to ~8 rows deep next to
+ * whatever the surface was actually about). The default render is ONE line: the artist page link
+ * plus a small disclosure toggle. Commerce links, the signature badge, and the MTGAC credit line
+ * move into a panel that only mounts once the user opts in - every link that existed before is
+ * still reachable, just not always paid for in vertical space.
+ *
  * **Design target: zero and one commerce links, not four or five.** Measured against the real
  * 2,389-artist export: 812 have zero commerce links, 818 have exactly one, only 13 have all five
  * (instagram - added later as a last-resort exception, not a commerce field - rescues 157 of
  * those 812 down to 655; ~598 have nothing but the MTGAC page link regardless of what's
- * allowlisted). This applet ALWAYS renders the MTGAC page link and the "Source: MTG Artist
- * Connection" credit (an obligation, not decoration - site credits were part of the MTGAC
- * partnership) - commerce buttons are purely additive on top of that stable base, so the ~69% of
- * artists with zero or one link see a small, correctly-proportioned applet, not an empty box or
- * a layout built for a row of five buttons that's usually mostly missing.
- *
- * **No layout shift while loading**: the loading state and the "found: false"/zero-commerce-link
- * state render IDENTICALLY (MTGAC page link + credit only, no commerce buttons, no badge).
- * Commerce buttons and the signature-service badge are added on top once data confirms they
- * exist - for a third of all artists that's not a shift at all, since the loaded state IS the
- * base shape; for the rest, buttons appear below the stable base rather than a spinner/skeleton
- * collapsing into a completely different-shaped final layout.
- *
- * **Buttons stretch to fill the applet** (owner instruction) - every rendered `<a>`/button here
- * is full-width within whatever container the caller gives it, so the applet reads consistently
- * whether that container is a narrow table cell or a full-width rail panel.
+ * allowlisted). The "Source: MTG Artist Connection" credit (an obligation, not decoration - site
+ * credits were part of the MTGAC partnership) is always reachable through the disclosure, whether
+ * or not this particular artist has any commerce links to go with it.
  *
  * Callers gate rendering on the artist being confirmed/known (the same precedence chain
  * `Card.serialise` exposes via `canonicalArtist`, or a vote just cast) - this component has no
  * opinion on that and never widens it; it only takes `artistName` (required, non-nullable) plus
- * an optional `className` for the caller's own layout/spacing.
+ * an optional `className` for the caller's own layout/spacing, and an optional `defaultExpanded`
+ * for the one surface (the /editor rail's Artist section) that has room to show the full applet
+ * up front.
  */
-import React from "react";
+import styled from "@emotion/styled";
+import React, { useId, useState } from "react";
 
 import {
   MTGArtistConnection,
@@ -69,16 +66,68 @@ const LINK_TYPE_LABELS: Record<string, string> = {
   instagram: "Instagram",
 };
 
+// The collapsed row - primary link + toggle - never wraps to a second line, regardless of how
+// narrow the caller's container is (the question feed's illustration credit caps it at 220px).
+const CompactLine = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+`;
+
+const CompactLink = styled.a`
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+`;
+
+// The artist name is the part that can be arbitrarily long, so ellipsis lives on this inner
+// span rather than the flex anchor itself (text-overflow needs a single-line inline box, not a
+// flex container with a sibling icon).
+const CompactLinkLabel = styled.span`
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+`;
+
+const ExpandToggle = styled.button`
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--bs-border-color, currentColor);
+  border-radius: var(--r-btn, 4px);
+  color: inherit;
+  cursor: pointer;
+`;
+
 interface ArtistSupportLinkProps {
   artistName: string;
   className?: string;
+  /** The /editor rail's Artist section (ArtistSection.tsx) is a dedicated accordion pane with
+   * room for the full stacked applet, and its own Playwright coverage already asserts the credit
+   * line renders without any interaction - so that one caller opts into starting expanded. Every
+   * other caller (the question feed's inline credits, the card-detail modal's metadata table) is
+   * space-constrained next to whatever the surface is actually about, so `undefined`/`false`
+   * (the default) starts collapsed to a single line. */
+  defaultExpanded?: boolean;
 }
 
 export function ArtistSupportLink({
   artistName,
   className,
+  defaultExpanded = false,
 }: ArtistSupportLinkProps) {
   const { data } = useGetArtistExternalLinksQuery(artistName);
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const expandedPanelId = useId();
 
   // Prefer MTGAC's own authoritative pageUrl when we have it - this is the actual point of the
   // applet, not a nice-to-have: 197/2,389 (8.2%) of this project's deterministically-constructed
@@ -99,58 +148,77 @@ export function ArtistSupportLink({
       className={["artist-support-applet", className].filter(Boolean).join(" ")}
       data-testid="artist-support-applet"
     >
-      <a
-        href={pageHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={`via ${MTGArtistConnection}`}
-        className="btn btn-primary btn-sm w-100 d-block"
-        data-testid="artist-support-link"
-      >
-        {artistName} <Icon bootstrapIconName="box-arrow-up-right" />
-      </a>
-      {commerceLinks.length > 0 && (
-        <div
-          className="d-grid gap-2 mt-2"
-          data-testid="artist-support-commerce-links"
-        >
-          {commerceLinks.map((link) => (
-            <a
-              key={link.type}
-              href={link.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-outline-primary btn-sm w-100"
-              data-testid="artist-support-commerce-link"
-              data-link-type={link.type}
-            >
-              {LINK_TYPE_LABELS[link.type] ?? link.type}{" "}
-              <Icon bootstrapIconName="box-arrow-up-right" />
-            </a>
-          ))}
-        </div>
-      )}
-      {hasSignatureService && (
-        <span
-          className="badge text-bg-secondary mt-2"
-          data-testid="artist-support-signature-badge"
-        >
-          <Icon bootstrapIconName="pen" /> Mark&apos;s Signature Service
-        </span>
-      )}
-      <div
-        className="text-muted small mt-1"
-        data-testid="artist-support-credit"
-      >
-        Source:{" "}
-        <a
-          href={MTGArtistConnectionHomepageURL}
+      <CompactLine>
+        <CompactLink
+          href={pageHref}
           target="_blank"
           rel="noopener noreferrer"
+          title={`via ${MTGArtistConnection}`}
+          className="btn btn-primary btn-sm"
+          data-testid="artist-support-link"
         >
-          {MTGArtistConnection}
-        </a>
-      </div>
+          <CompactLinkLabel>{artistName}</CompactLinkLabel>
+          <Icon bootstrapIconName="box-arrow-up-right" />
+        </CompactLink>
+        <ExpandToggle
+          type="button"
+          onClick={() => setExpanded((previous) => !previous)}
+          aria-expanded={expanded}
+          aria-controls={expandedPanelId}
+          data-testid="artist-support-toggle"
+        >
+          <Icon bootstrapIconName={expanded ? "chevron-up" : "chevron-down"} />
+          <span className="visually-hidden">
+            {expanded ? "Hide artist links" : "Show more artist links"}
+          </span>
+        </ExpandToggle>
+      </CompactLine>
+      {expanded && (
+        <div id={expandedPanelId} data-testid="artist-support-expanded">
+          {commerceLinks.length > 0 && (
+            <div
+              className="d-grid gap-2 mt-2"
+              data-testid="artist-support-commerce-links"
+            >
+              {commerceLinks.map((link) => (
+                <a
+                  key={link.type}
+                  href={link.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-outline-primary btn-sm w-100"
+                  data-testid="artist-support-commerce-link"
+                  data-link-type={link.type}
+                >
+                  {LINK_TYPE_LABELS[link.type] ?? link.type}{" "}
+                  <Icon bootstrapIconName="box-arrow-up-right" />
+                </a>
+              ))}
+            </div>
+          )}
+          {hasSignatureService && (
+            <span
+              className="badge text-bg-secondary mt-2"
+              data-testid="artist-support-signature-badge"
+            >
+              <Icon bootstrapIconName="pen" /> Mark&apos;s Signature Service
+            </span>
+          )}
+          <div
+            className="text-muted small mt-1"
+            data-testid="artist-support-credit"
+          >
+            Source:{" "}
+            <a
+              href={MTGArtistConnectionHomepageURL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {MTGArtistConnection}
+            </a>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

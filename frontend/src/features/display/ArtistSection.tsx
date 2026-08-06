@@ -46,7 +46,10 @@ export function ArtistSection({ cardDocument }: ArtistSectionProps) {
               {cardDocument.canonicalArtist.name}
             </span>
           </div>
-          <ArtistSupportLink artistName={cardDocument.canonicalArtist.name} />
+          <ArtistSupportLink
+            artistName={cardDocument.canonicalArtist.name}
+            defaultExpanded
+          />
         </>
       ) : (
         <span className="text-muted">Unknown</span>

@@ -341,6 +341,62 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     ).toHaveAttribute("src", illustrationGroupCandidateC.mediumThumbnailUrl);
   });
 
+  // Issue #709 - the illustration-credit ArtistSupportLink used to always stack the page-link
+  // button, up to five commerce buttons, a badge, and a credit line next to the question - up to
+  // ~8 rows. It now defaults to one collapsed line and expands on demand; the expansion must
+  // never cover the pinned reference image (SPEC-wtc-rebuild.md Amendment A2).
+  test("the illustration-credit Artist Support Link is compact by default and its expansion never overlaps the pinned reference image", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrintingGroupedByIllustration,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const credit = page.getByTestId("question-feed-illustration-credit");
+    const applet = credit.getByTestId("artist-support-applet");
+    await expect(applet.getByTestId("artist-support-link")).toContainText(
+      "Some Artist"
+    );
+    await expect(applet.getByTestId("artist-support-credit")).toHaveCount(0);
+    await expect(
+      applet.getByTestId("artist-support-commerce-links")
+    ).toHaveCount(0);
+
+    // Collapsed: one line, well under the height a stacked applet (page link + credit, let
+    // alone commerce buttons) would need.
+    const collapsedBox = await applet.boundingBox();
+    expect(collapsedBox).not.toBeNull();
+    expect((collapsedBox as { height: number }).height).toBeLessThan(40);
+
+    await applet.getByTestId("artist-support-toggle").click();
+    await expect(applet.getByTestId("artist-support-credit")).toBeVisible();
+
+    const subjectBox = await page
+      .getByTestId("question-feed-subject-art")
+      .boundingBox();
+    const expandedBox = await applet.boundingBox();
+    expect(subjectBox).not.toBeNull();
+    expect(expandedBox).not.toBeNull();
+    expect(
+      boxesIntersect(
+        subjectBox as { x: number; y: number; width: number; height: number },
+        expandedBox as {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+        }
+      )
+    ).toBe(false);
+
+    // Collapsing again hides the credit without unmounting the applet.
+    await applet.getByTestId("artist-support-toggle").click();
+    await expect(applet.getByTestId("artist-support-credit")).toHaveCount(0);
+  });
+
   // Issue #503 (WTC phase C2) / #524 - supersedes this describe block's former "selecting a
   // grouped candidate submits the identical payload to the identical endpoint as an ungrouped
   // one" test (see .github/coverage-acks.txt for the rename ack). That title asserted phase
