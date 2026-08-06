@@ -66,9 +66,18 @@ const LINK_TYPE_LABELS: Record<string, string> = {
   instagram: "Instagram",
 };
 
+// The button shell - wraps the collapsed row and (once expanded) the disclosure panel, so the
+// panel renders within the same widget boundary as the link/toggle rather than as an unrelated
+// sibling block below it (issue #747).
+const CompactLine = styled.div`
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+`;
+
 // The collapsed row - primary link + toggle - never wraps to a second line, regardless of how
 // narrow the caller's container is (the question feed's illustration credit caps it at 220px).
-const CompactLine = styled.div`
+const CompactLineRow = styled.div`
   display: flex;
   align-items: center;
   gap: 6px;
@@ -149,76 +158,80 @@ export function ArtistSupportLink({
       data-testid="artist-support-applet"
     >
       <CompactLine>
-        <CompactLink
-          href={pageHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={`via ${MTGArtistConnection}`}
-          className="btn btn-primary btn-sm"
-          data-testid="artist-support-link"
-        >
-          <CompactLinkLabel>{artistName}</CompactLinkLabel>
-          <Icon bootstrapIconName="box-arrow-up-right" />
-        </CompactLink>
-        <ExpandToggle
-          type="button"
-          onClick={() => setExpanded((previous) => !previous)}
-          aria-expanded={expanded}
-          aria-controls={expandedPanelId}
-          data-testid="artist-support-toggle"
-        >
-          <Icon bootstrapIconName={expanded ? "chevron-up" : "chevron-down"} />
-          <span className="visually-hidden">
-            {expanded ? "Hide artist links" : "Show more artist links"}
-          </span>
-        </ExpandToggle>
-      </CompactLine>
-      {expanded && (
-        <div id={expandedPanelId} data-testid="artist-support-expanded">
-          {commerceLinks.length > 0 && (
-            <div
-              className="d-grid gap-2 mt-2"
-              data-testid="artist-support-commerce-links"
-            >
-              {commerceLinks.map((link) => (
-                <a
-                  key={link.type}
-                  href={link.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn btn-outline-primary btn-sm w-100"
-                  data-testid="artist-support-commerce-link"
-                  data-link-type={link.type}
-                >
-                  {LINK_TYPE_LABELS[link.type] ?? link.type}{" "}
-                  <Icon bootstrapIconName="box-arrow-up-right" />
-                </a>
-              ))}
-            </div>
-          )}
-          {hasSignatureService && (
-            <span
-              className="badge text-bg-secondary mt-2"
-              data-testid="artist-support-signature-badge"
-            >
-              <Icon bootstrapIconName="pen" /> Mark&apos;s Signature Service
-            </span>
-          )}
-          <div
-            className="text-muted small mt-1"
-            data-testid="artist-support-credit"
+        <CompactLineRow>
+          <CompactLink
+            href={pageHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`via ${MTGArtistConnection}`}
+            className="btn btn-primary btn-sm"
+            data-testid="artist-support-link"
           >
-            Source:{" "}
-            <a
-              href={MTGArtistConnectionHomepageURL}
-              target="_blank"
-              rel="noopener noreferrer"
+            <CompactLinkLabel>{artistName}</CompactLinkLabel>
+            <Icon bootstrapIconName="box-arrow-up-right" />
+          </CompactLink>
+          <ExpandToggle
+            type="button"
+            onClick={() => setExpanded((previous) => !previous)}
+            aria-expanded={expanded}
+            aria-controls={expandedPanelId}
+            data-testid="artist-support-toggle"
+          >
+            <Icon
+              bootstrapIconName={expanded ? "chevron-up" : "chevron-down"}
+            />
+            <span className="visually-hidden">
+              {expanded ? "Hide artist links" : "Show more artist links"}
+            </span>
+          </ExpandToggle>
+        </CompactLineRow>
+        {expanded && (
+          <div id={expandedPanelId} data-testid="artist-support-expanded">
+            {commerceLinks.length > 0 && (
+              <div
+                className="d-grid gap-2 mt-2"
+                data-testid="artist-support-commerce-links"
+              >
+                {commerceLinks.map((link) => (
+                  <a
+                    key={link.type}
+                    href={link.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-outline-primary btn-sm w-100"
+                    data-testid="artist-support-commerce-link"
+                    data-link-type={link.type}
+                  >
+                    {LINK_TYPE_LABELS[link.type] ?? link.type}{" "}
+                    <Icon bootstrapIconName="box-arrow-up-right" />
+                  </a>
+                ))}
+              </div>
+            )}
+            {hasSignatureService && (
+              <span
+                className="badge text-bg-secondary mt-2"
+                data-testid="artist-support-signature-badge"
+              >
+                <Icon bootstrapIconName="pen" /> Mark&apos;s Signature Service
+              </span>
+            )}
+            <div
+              className="text-muted small mt-1"
+              data-testid="artist-support-credit"
             >
-              {MTGArtistConnection}
-            </a>
+              Source:{" "}
+              <a
+                href={MTGArtistConnectionHomepageURL}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {MTGArtistConnection}
+              </a>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </CompactLine>
     </div>
   );
 }

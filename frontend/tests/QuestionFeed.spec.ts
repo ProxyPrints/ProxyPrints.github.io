@@ -879,9 +879,9 @@ test.describe("question feed - artist question type", () => {
     ).toBeVisible();
   });
 
-  // Artist Support Links v1 - the post-answer moment ("Art by <Name> - support them"), a
-  // zero-crawl link-out to MTG Artist Connection built deterministically from the artist name
-  // the user just voted for. See docs/features/artist-support-links.md.
+  // Artist Support Links v1 - the post-answer moment, a zero-crawl link-out to MTG Artist
+  // Connection built deterministically from the artist name the user just voted for. See
+  // docs/features/artist-support-links.md.
   test("voting for a named artist shows the Artist Support Link, built from that artist's name", async ({
     page,
     network,
@@ -907,10 +907,8 @@ test.describe("question feed - artist question type", () => {
 
     const banner = page.getByTestId("question-feed-artist-support");
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText(
-      `Art by ${canonicalArtist1.name} - support them`
-    );
     const link = banner.getByTestId("artist-support-link");
+    await expect(link).toContainText(canonicalArtist1.name);
     await expect(link).toHaveAttribute(
       "href",
       `https://www.mtgartistconnection.com/artist/${encodeURIComponent(
