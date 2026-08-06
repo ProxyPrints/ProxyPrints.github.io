@@ -4,6 +4,51 @@ Art-edge continuity - the EXTENDED-ART channel.
 Owner-directed design (2026-07-28): "we can measure by aiming our border pixel color measurement
 at two locations, one of which is adjacent to the art crop location."
 
+RETUNED 2026-08-06 (docs/reports/2026-08-06-art-edge-relative-comparison.md has the full
+before/after numbers). The original method compared each band's pixel variance against
+`local_fallback._BORDER_UNIFORMITY_STD_THRESHOLD`, an ABSOLUTE constant tuned for
+`classify_border_color`'s different question ("is this whole band a painted border at all").
+Measured against 467 real catalogue images: `extended` fired on 7 of them, and every one of
+those 7 edge-band reads was DARK (RGB like `(14,13,26)`) with a correspondingly compressed pixel
+value range, and therefore a low absolute std - EXACTLY as low as a genuine painted border reads,
+even though nothing painted was there. A fixed variance cut cannot tell "this band is flat because
+it is a border" apart from "this band is flat because it is dark, and dark content has a narrower
+value range than bright content by construction" - it was measuring darkness and reporting it as
+a border.
+
+THE FIX IS RELATIVE, NOT A RETUNED CONSTANT. Instead of asking "is this band uniform" in
+isolation, this module now asks "does this band's COLOUR match the border colour THIS card is
+already known to have" - a comparison entirely within one image, between two samples of that
+same image. `ImageEvidence.layout_class` (`classify_border_color`'s own output - black / white /
+silver / borderless) already tells us which case applies:
+
+  * `layout_class == "borderless"` - there is no border for anything to match, and a card with no
+    border cannot be extended-art by definition. `open`, decided from the stored classification
+    alone, no sampling required.
+  * otherwise - `layout_class` names a real border colour this exact image was already measured
+    to have. Sample the art-adjacent strip's own colour and compare it against that same border,
+    resampled from the same image, with a colour distance:
+      - close to the border colour -> the frame survives beside the art -> `framed`.
+      - far from the border colour -> something other than the border sits beside the art, and
+        `layout_class` already established the outer edge itself reads as a real border ->
+        `extended`.
+
+This is why the second sample point is still taken (the module is not reduced to reading
+`layout_class` alone): `layout_class` tells us WHAT colour a border would be, not whether the
+strip immediately beside THIS card's own art crop is that colour or something else. But the
+EDGE BAND's own uniformity is no longer re-tested here - `layout_class` being anything other than
+`None`/`"borderless"` already means `classify_border_color` found that band uniform enough to
+call a colour on its own, real-fetched-image-validated threshold. Re-testing it a second time
+here, on the same pixels, would just be paying for the same measurement twice.
+
+WHY A WITHIN-IMAGE COMPARISON SURVIVES WHAT AN ABSOLUTE ONE DOES NOT: overall image darkness,
+exposure, scan quality and JPEG artefacts shift a sampled band's raw colour, but they shift the
+border sample and the art-adjacent sample of the SAME image by roughly the same amount - a
+washed-out scan reads both bands lighter, a underexposed one reads both bands darker. The
+DIFFERENCE between the two samples is far more stable across those confounds than either sample's
+absolute value is, which is exactly the discriminator a fixed threshold cannot use because it
+only ever looks at one band at a time.
+
 WHY THIS IS ITS OWN MODULE AND NOT A NEW VALUE IN `local_fallback.BORDER_COLOR_TO_TAG`.
 Measured read-only against production (2026-07-28): all **4,165** printings whose Scryfall
 `frame_effects` contains `extendedart` have `border_color == "black"` - 4,165 of 4,165, with
@@ -17,52 +62,20 @@ is TEXT-derived (collector-number parsing, "Illus." anchor) and answers a differ
 (which frame ERA - old/modern/future). This one is pixel-derived and answers "how far does the
 artwork spread?". Different evidence, different question, different channel.
 
-WHAT THE SECOND SAMPLE POINT BUYS - the discriminator one point cannot make:
-
-                    | LEFT/RIGHT EDGE band | LEFT/RIGHT ART-ADJACENT band
-  normal ("framed") | uniform (border)     | uniform (frame sits between art and edge)
-  extended art      | uniform (border)     | NON-uniform (art runs out to the card's sides)
-  borderless/full   | NON-uniform (art)    | NON-uniform (art)
-
-The edge band alone cannot separate "framed" from "extended" (both uniform); the art-adjacent
-band alone cannot separate "extended" from "borderless" (both non-uniform). Only the pair does,
-which is exactly the owner's point.
-
-MEASUREMENT-INDEPENDENT ON PURPOSE. This module introduces no colour threshold and no new tuned
-number. The only threshold it reads is the EXISTING `local_fallback._BORDER_UNIFORMITY_STD_
-THRESHOLD`; the only geometry it uses is derived from the EXISTING `_BORDER_SAMPLE_BANDS` plus
-the stored `ImageEvidence.art_crop_px`. A colour-keyed signal (gold/yellow border) genuinely does
-need fresh measurements of real cards before it can ship; a uniformity COMPARISON does not, which
-is why this half could be built while that half waits on a measurement pass.
-
 TWO TRACKS, AND WHICH ONE THIS SERVES. For OFFICIAL printings nothing here is needed: Scryfall's
 `frame_effects` already carries `extendedart` as an imported fact (4,165 printings), and an
 imported fact is not a disputable claim that wants a pixel vote. This module exists for the OTHER
 track - USER-UPLOADED PROXY IMAGES, where pixels are the only source and there is no printing to
 read the fact off. That is what the local-fallback channel is for.
-
-THE DEFECT IT TARGETS, measured against production ground truth (2026-07-28; 90,857
-`ImageEvidence` rows whose card has a confirmed printing, joined to that printing's Scryfall
-`border_color`). Among cards Scryfall calls black-bordered, `classify_border_color`'s
-"not uniform -> borderless" catch-all fires on:
-
-    plain black    16.5%  (11,844 of 71,840)
-    full_art       22.8%  (191 of 836)
-    EXTENDED ART   54.9%  (620 of 1,129)   <- 3.3x the plain-black base rate
-
-Extended art is thus the single population that most reliably breaks the border classifier, and
-it breaks it into a confident WRONG answer ("Borderless") rather than an abstention. This module
-is the reading that catch-all has been standing in for. NOTE that fixing the catch-all itself is
-out of scope here and tracked separately - see this module's report and the OPEN ITEMS on
-`classify_border_color`'s silver/gold behaviour.
 """
 
+import math
+import statistics
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Optional
 
 from cardpicker.local_fallback import (
     _BORDER_SAMPLE_BANDS,
-    _BORDER_UNIFORMITY_STD_THRESHOLD,
     _sample_band,
     normalize_crop_box,
 )
@@ -94,32 +107,69 @@ ART_EDGE_OPEN = "open"
 # membership against rather than restating three string literals.
 ART_EDGE_CLASSES: tuple[str, ...] = (ART_EDGE_FRAMED, ART_EDGE_EXTENDED, ART_EDGE_OPEN)
 
+# The `layout_class` values that name an actual border colour to compare against. `None`
+# (classify_border_color's own "uniform but not a colour this taxonomy covers" abstention) is
+# deliberately excluded - there's no colour to compare the art-adjacent strip to, so the honest
+# reading is to abstain here too, not to invent a comparison against nothing. `"borderless"` is
+# also excluded from THIS set, but handled first as its own short-circuit (see the function body)
+# rather than falling into the "no comparison possible" bucket, because it isn't ambiguous -
+# borderless positively rules out `extended`.
+_ART_EDGE_BORDER_LAYOUT_CLASSES: frozenset[str] = frozenset({"black", "white", "silver"})
+
+# COLOUR-DISTANCE MEASURE: plain Euclidean distance between the art-adjacent strip's sampled mean
+# RGB and the border's sampled mean RGB (both the same `_sample_band` mean-RGB triple
+# `classify_border_color` already computes - no new extraction, no colour-space conversion added).
+# Euclidean RGB is not perceptually uniform (a fixed numeric distance is not a fixed PERCEIVED
+# difference everywhere in the space), and it is weakest exactly where two colours are both
+# desaturated and differ mainly in a way human vision weights unevenly - which is the one case
+# this taxonomy has to worry about: a genuinely grey/neutral patch of artwork sitting beside a
+# "silver" border. A perceptually-corrected metric (Lab-space, CIEDE2000) would fix that, at the
+# cost of a colour-space conversion this codebase performs nowhere else and that this module has
+# no independent evidence it needs - the black/white cases (the overwhelming majority of the
+# catalogue's borders; silver is rare) sit at the extremes of brightness where Euclidean distance
+# and perceptual distance already track each other closely. Validated against real Scryfall
+# extended-art/borderless/framed images before being trusted (see this module's validation
+# report); silver-bordered cards were not a dedicated cohort in that pass (Scryfall silver-bordered
+# printings are a small, mostly funny-set population) - if a future measurement finds silver
+# specifically needs a perceptual metric, that is this constant's own follow-up, not a reason to
+# add unproven colour machinery speculatively now.
+_ART_EDGE_COLOR_DISTANCE_THRESHOLD = 70.0
+
 
 def classify_art_edge_continuity(
     card_image: "Image.Image",
     art_crop_px: Optional[Sequence[int]],
+    layout_class: Optional[str],
     bleed_class: Optional[str] = None,
 ) -> Optional[str]:
-    """Returns 'framed' / 'extended' / 'open', or None when the reading is unusable or
-    self-contradictory. EVIDENCE-ONLY today - nothing votes on it yet (see
-    `cast_art_edge_continuity_vote`'s docstring for the gate that has to clear first).
+    """Returns 'framed' / 'extended' / 'open', or None when the reading is unusable. EVIDENCE-ONLY
+    today - nothing votes on it yet (see `cast_art_edge_continuity_vote`'s docstring for the gate
+    that has to clear first).
 
-      'framed'   - normal card: frame sits between the artwork and both side edges.
-      'extended' - artwork reaches the card's left and right sides, but a border survives at the
-                   very edge. Scryfall's `frame_effects` "extendedart".
-      'open'     - artwork reaches the edges themselves: borderless, or a full-art land.
-      None       - no usable art_crop_px, a degenerate crop, or the contradictory reading
-                   "edge is artwork but the strip further IN is flat", which no real card
-                   produces and which therefore means the geometry assumption failed rather
-                   than describing a card. Abstaining is the honest output; the alternative is
-                   inventing a class for an impossible observation.
+      'framed'   - normal card: the art-adjacent strip's colour matches the border this image is
+                   already known to have (`layout_class`).
+      'extended' - artwork reaches the card's left and right sides (the art-adjacent strip does
+                   NOT match the border colour), but `layout_class` says a border still reads at
+                   the very edge. Scryfall's `frame_effects` "extendedart".
+      'open'     - `layout_class == "borderless"`: there is no border to compare against, and a
+                   card with no border cannot be extended-art.
+      None       - no usable `art_crop_px`/degenerate crop, or `layout_class` names no border to
+                   compare against (`None` - `classify_border_color`'s own ambiguous reading).
+                   Abstaining is the honest output; the alternative is inventing a comparison
+                   against a colour nobody measured.
 
-    COORDINATE FRAMES - the one genuinely easy thing to get wrong here, and the reason this
-    argument is `art_crop_px` (pixels) rather than a fractional box. The two band families
-    arrive in DIFFERENT frames and must therefore be treated ASYMMETRICALLY:
+    `layout_class` is the caller's ALREADY-COMPUTED `classify_border_color(card_image, bleed_class)`
+    result for this same image - not recomputed here. Passing it in (rather than this function
+    calling `classify_border_color` itself) means the border-colour class and the art-edge class
+    are always read off the SAME underlying sample, and Stage C pays for that classification once,
+    not twice, per image.
 
-      * `_BORDER_SAMPLE_BANDS` are raw fractions tuned against a BLEED-INCLUSIVE image, so they
-        still need `normalize_crop_box(band, bleed_class)` applied here, exactly as
+    COORDINATE FRAMES - the one genuinely easy thing to get wrong here, and the reason
+    `art_crop_px` is pixels rather than a fractional box. The edge band and the art crop arrive in
+    DIFFERENT frames and must therefore be treated ASYMMETRICALLY:
+
+      * `_BORDER_SAMPLE_BANDS` are raw fractions tuned against a BLEED-INCLUSIVE image, so the
+        edge band still needs `normalize_crop_box(band, bleed_class)` applied here, exactly as
         `classify_border_color` applies it.
       * `art_crop_px` does NOT. `ImageEvidence` stores it already remapped: `image_evidence.
         _crop_box_to_pixels` takes `local_phash.ART_CROP_BOX`, passes it through
@@ -130,13 +180,18 @@ def classify_art_edge_continuity(
         trimmed-image correction a SECOND time and walk the band off the art entirely, on
         precisely the ~2.5% trimmed minority the remap exists to serve.
 
-    `bleed_class` is therefore consumed for the edge bands ONLY. That asymmetry is load-bearing
+    `bleed_class` is therefore consumed for the edge band ONLY. That asymmetry is load-bearing
     and is pinned by its own test.
 
     `art_crop_px` is preferred over `artbox_crop_px` deliberately: measured 2026-07-28, the
     former is populated on 220,579 of 220,579 `ImageEvidence` rows (100%) and the latter on
     64.6%, and this classifier has no fallback reading without one.
     """
+    if layout_class == "borderless":
+        return ART_EDGE_OPEN
+    if layout_class not in _ART_EDGE_BORDER_LAYOUT_CLASSES:
+        return None
+
     width, height = card_image.size
     if not art_crop_px or len(art_crop_px) != 4 or width <= 0 or height <= 0:
         return None
@@ -149,7 +204,7 @@ def classify_art_edge_continuity(
     # The left/right EDGE bands only. The top/bottom edge bands are deliberately not consulted:
     # both stay bordered on framed AND extended cards (title bar above, text box below - an
     # extended-art card keeps both), so they cannot discriminate; and on a borderless card the
-    # left/right pair already reads open without their help.
+    # left/right pair already short-circuited above.
     edge_boxes = [normalize_crop_box(_BORDER_SAMPLE_BANDS[i], bleed_class) for i in (0, 1)]
 
     # Sample the art-adjacent strips over the art's OWN vertical span - the only band of rows
@@ -170,24 +225,21 @@ def classify_art_edge_continuity(
         (art_right, art_top, right_gap_outer, art_bottom),
     ]
 
-    adjacent_stds = [s[1] for s in (_sample_band(card_image, b) for b in adjacent_boxes) if s is not None]
-    edge_stds = [s[1] for s in (_sample_band(card_image, b) for b in edge_boxes) if s is not None]
-    if not adjacent_stds or not edge_stds:
+    border_samples = [s for s in (_sample_band(card_image, b) for b in edge_boxes) if s is not None]
+    adjacent_samples = [s for s in (_sample_band(card_image, b) for b in adjacent_boxes) if s is not None]
+    if not border_samples or not adjacent_samples:
         return None
 
-    import statistics
+    # Both sides averaged into one RGB triple each, matching the old code's own "mean of both
+    # sides" precedent (there it averaged a scalar std; here it averages the mean-RGB triple
+    # `_sample_band` already returns) - a card whose left and right bands read slightly
+    # differently (uneven lighting across a scan) is still one comparison, not two disagreeing
+    # ones.
+    border_rgb = tuple(statistics.mean(sample[0][channel] for sample in border_samples) for channel in range(3))
+    adjacent_rgb = tuple(statistics.mean(sample[0][channel] for sample in adjacent_samples) for channel in range(3))
+    distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(adjacent_rgb, border_rgb)))
 
-    adjacent_uniform = statistics.mean(adjacent_stds) < _BORDER_UNIFORMITY_STD_THRESHOLD
-    edge_uniform = statistics.mean(edge_stds) < _BORDER_UNIFORMITY_STD_THRESHOLD
-
-    if adjacent_uniform:
-        # Flat beside the art. If the edge outboard of it is flat too, that is an ordinary
-        # framed card; if the edge is busy while the strip INBOARD of it is flat, the geometry
-        # assumption has failed - real cards do not put artwork outside their own frame.
-        return ART_EDGE_FRAMED if edge_uniform else None
-    # Artwork beside the art crop. Whether a border survives at the very edge is what separates
-    # extended art from a genuinely borderless card.
-    return ART_EDGE_EXTENDED if edge_uniform else ART_EDGE_OPEN
+    return ART_EDGE_FRAMED if distance < _ART_EDGE_COLOR_DISTANCE_THRESHOLD else ART_EDGE_EXTENDED
 
 
 def cast_art_edge_continuity_vote(
@@ -204,19 +256,10 @@ def cast_art_edge_continuity_vote(
     proxy render that already inflates `classify_border_color`'s borderless bucket), and a
     negative vote from an unvalidated class is a claim, not an abstention.
 
-    NOT WIRED INTO ANY RUNNER YET - deliberately, and this is the honest limit of this PR.
-    `classify_art_edge_continuity` is validated against CONSTRUCTED cases (its tests), not
-    against real card images, and the established precedent in this codebase is that every
-    fixed-fraction crop box was tuned against real fetched images before it was trusted
-    (`local_fallback`'s own module comment on the 40-source validation).
-
-    THE GATE BEFORE THIS MAY VOTE, stated concretely so it is checkable rather than aspirational:
-    run the classifier over the `ImageEvidence` rows whose confirmed printing carries Scryfall's
-    own `frame_effects` "extendedart" (1,129 such rows in the 2026-07-28 join) and report
-    agreement against that imported fact, plus the false-positive rate over a same-sized sample
-    of confirmed NON-extended black-bordered cards. That labelling is free and needs no human
-    pass - it is the same ground truth this module's docstring quotes. Until that runs, this
-    function exists so the wiring is reviewable, and casts nothing.
+    NOT WIRED INTO ANY RUNNER YET - deliberately, and this is the honest limit of this PR. The
+    retuned relative-comparison classifier (docs/reports/2026-08-06-art-edge-relative-comparison.md)
+    is stored as `ImageEvidence.art_edge_class` evidence-only; whether it should ever cast a vote
+    is a separate decision this PR does not make, and depends on that evidence existing first.
     """
     if art_edge_class != ART_EDGE_EXTENDED:
         return None

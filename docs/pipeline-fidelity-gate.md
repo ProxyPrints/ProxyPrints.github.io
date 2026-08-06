@@ -1331,25 +1331,36 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   statement about illustration matching's yield.
 - **`art-edge-continuity-v1`** (`ART_EDGE_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_art_edge.py`](../MPCAutofill/cardpicker/local_art_edge.py)) —
-  **DECLARED, NOT YET LIVE. Zero votes, zero `CardScanLog` rows, and no
-  runner calls it — by design, not by dormancy.** It is the extended-art
-  channel: a two-sample-point pixel comparison (card edge vs. the band
-  adjacent to the art crop) that classifies a card image as
-  `framed`/`extended`/`open` and would cast the pre-existing "Extended"
-  attribute tag. It is listed here because this roster's whole purpose is
-  that a calculator producing no output "reads as clean by being
-  invisible" — so the identity is declared and recorded BEFORE it can
-  write anything, the same reasoning `local_fallback`'s skip-reason block
-  gives for declaring its constants ahead of first write.
-  **The gate it has not yet cleared**: the classifier is validated against
-  constructed images only, never against real card images. Before it votes,
-  run it over the `ImageEvidence` rows whose confirmed printing carries
-  Scryfall's own `frame_effects` `extendedart` (1,129 such rows in the
-  2026-07-28 join) and report agreement against that imported fact, plus
-  the false-positive rate over a same-sized sample of confirmed
-  non-extended black-bordered cards. That labelling is free and needs no
-  human pass. Do not read its zero vote count as a measured statement
-  about extended-art detection's yield — nothing has been measured yet.
+  **DECLARED, NOT LIVE. Zero votes, zero `CardScanLog` rows, and no
+  runner calls it — by a measured gate, not by dormancy.** It is the
+  extended-art channel: a within-image colour comparison (does the band
+  adjacent to the art crop match the border colour `ImageEvidence. layout_class` already found for this same image?) that classifies a
+  card image as `framed`/`extended`/`open` and would cast the
+  pre-existing "Extended" attribute tag. It is listed here because this
+  roster's whole purpose is that a calculator producing no output "reads
+  as clean by being invisible" — so the identity is declared and
+  recorded BEFORE it can write anything, the same reasoning
+  `local_fallback`'s skip-reason block gives for declaring its constants
+  ahead of first write.
+  **The gate ran 2026-08-06 and did not clear**
+  (docs/reports/2026-08-06-art-edge-relative-comparison.md): fetched
+  Scryfall's own images for 30 confirmed `extendedart` printings, 20
+  confirmed `borderless` printings, and 20 confirmed ordinary
+  black-bordered printings (Scryfall's `frame_effects`/`border_color` is
+  the label, Scryfall's own image is the pixels — no name-matching step
+  in between, unlike the catalog-cohort measurement this one superseded).
+  Result: 0 of 30 genuine extended-art images read `extended` (worse than
+  the pre-retune absolute-variance classifier's 1 of 30 on the same
+  images), with 0 false positives on either negative cohort. Root cause:
+  `classify_border_color`'s own catch-all reads 20 of the 30 extended-art
+  images as `borderless` (a pre-existing, out-of-scope defect this
+  channel inherits via `layout_class`), and for the remaining 10 where it
+  correctly reads `black`, `normalize_crop_box`'s trimmed-image remap
+  (Scryfall images are always geometrically "trimmed" - no bleed margin)
+  shrinks the edge sample band to only ~0.5% of image width, too thin to
+  give a reliable border-colour reference. Do not read its zero vote
+  count as an unmeasured channel — it has been measured, and the measured
+  answer is "not yet".
   Tracked: [issue #721](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/721).
 - **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —

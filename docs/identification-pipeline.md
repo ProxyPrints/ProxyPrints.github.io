@@ -469,9 +469,15 @@ three were documented, deliberate states, not defects:
 - art-edge-continuity (`local_art_edge.classify_art_edge_continuity`)
   casting nothing — its own docstring states it is "EVIDENCE-ONLY
   today — nothing votes on it yet", gated behind
-  `cast_art_edge_continuity_vote` pending a validation pass against
-  Scryfall's own `frame_effects`. A stated deferral, not an unwired
-  accident.
+  `cast_art_edge_continuity_vote`. That validation pass against
+  Scryfall's own `frame_effects` ran 2026-08-06
+  (docs/reports/2026-08-06-art-edge-relative-comparison.md) after a
+  retune from an absolute per-band variance test to a within-image
+  colour-distance comparison against the card's own already-classified
+  border (`ImageEvidence.layout_class`) — and did not clear the stated
+  bar: 0 of 30 genuine Scryfall extended-art images read `extended`.
+  Still evidence-only by a measured result, not merely a stated
+  deferral.
 
 **The general form — the magnitude/exception split.** Quantitative
 facts live in EVIDENCE COLUMNS; votes surface only the actionable
