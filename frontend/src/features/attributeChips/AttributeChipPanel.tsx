@@ -104,6 +104,15 @@ const CardArea = styled.div`
   position: relative;
 `;
 
+// A caller with no card to center (QuestionFeed.tsx's Level 2, since the reference card lives
+// in its own pinned Subject column now - issue #707) gets a plain vertical stack of the same
+// three ChipRow groups instead of the ring - there's no card slot for a ring to form around.
+const FlatChipStack = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+`;
+
 interface AttributeChipPanelProps {
   backendURL: string;
   cardIdentifier: string;
@@ -115,8 +124,9 @@ interface AttributeChipPanelProps {
   onChipStatesChange: (next: Record<string, ChipVoteState>) => void;
   /** The card image/reveal-overlay/caption, rendered dead center with chips forming a ring
    * around it - passed in rather than owned here so QuestionFeed.tsx keeps sole ownership of
-   * the reveal-animation state machine (revealed/onAnimationEnd) that slot's contents depend on. */
-  cardSlot: React.ReactNode;
+   * the reveal-animation state machine (revealed/onAnimationEnd) that slot's contents depend
+   * on. Omitted entirely by a caller with nothing to center (FlatChipStack above). */
+  cardSlot?: React.ReactNode;
   /** Called instead of the usual error toast when a submission is rejected with 429 - this
    * component has only one caller (QuestionFeed.tsx), so this is effectively always provided,
    * but stays optional to match the same safe-default convention as the other funnel
@@ -155,38 +165,58 @@ export function AttributeChipPanel({
   // arbitrary but fixed assignment, not a semantic left/right meaning for either group.
   const [leftGroup, rightGroup] = EXCLUSION_GROUPS;
 
+  const legend = hasAttributeLean(confidence) && (
+    <p
+      className="text-muted small text-center mb-2"
+      data-testid="attribute-chip-legend"
+    >
+      Chip color shows how community + machine votes lean - not a confirmed
+      fact.
+    </p>
+  );
+  const topArea = (
+    <TopArea>
+      {STANDALONE_CHIPS.map((chip) =>
+        renderAttributeChip(chipArgs, chip.tagName, chip.label)
+      )}
+    </TopArea>
+  );
+  const leftArea = leftGroup != null && (
+    <LeftArea>
+      {leftGroup.chips.map((chip) =>
+        renderAttributeChip(chipArgs, chip.tagName, chip.label)
+      )}
+    </LeftArea>
+  );
+  const rightArea = rightGroup != null && (
+    <RightArea>
+      {rightGroup.chips.map((chip) =>
+        renderAttributeChip(chipArgs, chip.tagName, chip.label)
+      )}
+    </RightArea>
+  );
+
+  if (cardSlot == null) {
+    return (
+      <>
+        {legend}
+        <FlatChipStack data-testid="attribute-chip-panel">
+          {topArea}
+          {leftArea}
+          {rightArea}
+        </FlatChipStack>
+      </>
+    );
+  }
+
   return (
     <>
-      {hasAttributeLean(confidence) && (
-        <p
-          className="text-muted small text-center mb-2"
-          data-testid="attribute-chip-legend"
-        >
-          Chip color shows how community + machine votes lean - not a confirmed
-          fact.
-        </p>
-      )}
+      {legend}
       <ChipRing data-testid="attribute-chip-panel">
-        <TopArea>
-          {STANDALONE_CHIPS.map((chip) =>
-            renderAttributeChip(chipArgs, chip.tagName, chip.label)
-          )}
-        </TopArea>
-        {leftGroup != null && (
-          <LeftArea>
-            {leftGroup.chips.map((chip) =>
-              renderAttributeChip(chipArgs, chip.tagName, chip.label)
-            )}
-          </LeftArea>
-        )}
+        {topArea}
+        {leftArea}
         <CardArea data-testid="attribute-chip-card-area">{cardSlot}</CardArea>
-        {rightGroup != null && (
-          <RightArea>
-            {rightGroup.chips.map((chip) =>
-              renderAttributeChip(chipArgs, chip.tagName, chip.label)
-            )}
-          </RightArea>
-        )}
+        {rightArea}
       </ChipRing>
     </>
   );

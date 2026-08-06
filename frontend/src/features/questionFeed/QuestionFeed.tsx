@@ -116,7 +116,7 @@ const WtcHead = styled.div`
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-  max-width: 1180px;
+  max-width: 1600px;
   margin: 0 auto 12px;
 
   @media (max-width: 520px) {
@@ -168,7 +168,7 @@ const SolvedDots = styled.span`
 const WtcHero = styled.div`
   container-type: inline-size;
   container-name: hero;
-  max-width: 1180px;
+  max-width: 1600px;
   margin: 0 auto;
   display: flex;
   flex-wrap: wrap;
@@ -176,10 +176,20 @@ const WtcHero = styled.div`
   align-items: start;
 `;
 
+// Reference-card visibility (issue #710, A2 amendment) - pinned WITHIN the hero container via
+// `position: sticky`, not the page viewport (WD4's rejection of viewport-COUPLED positioning
+// stands; this is scoped to WtcHero's own box, since a flex item's sticky containing block is
+// its flex container - it stays pinned only as long as WtcHero itself, whose height spans the
+// taller QPanel column too, hasn't scrolled past). Applies unconditionally at every hero
+// width, including the WD3-compacted horizontal strip below the 560px fold - there is no
+// separate mobile-only rule to keep the "always visible" guarantee genuinely universal.
 const Subject = styled.div`
   flex: 1 1 300px;
   min-width: 0;
   max-width: clamp(240px, 30cqi, 340px);
+  position: sticky;
+  top: 16px;
+  z-index: 1;
 
   /* Continuous fold point (section 3's table): the subject compacts to horizontal (WD3) on a
      narrow CONTAINER, not a narrow viewport - keeps the confirm hero reachable near the top
@@ -348,6 +358,18 @@ const IllustrationCredit = styled.div`
   margin-bottom: 8px;
 `;
 
+// Issue #707 - the attribute-chip panel's home now that it no longer replaces the subject
+// card slot (see plainCardPanel's own comment). Framed like the page's other secondary
+// panels (SuggestedCard/NegWrap/OpenWrap) rather than left bare, so it reads as a distinct,
+// dismissible section of QPanel instead of loose content between the prompt and the grid.
+const FilterPanelWrap = styled.div`
+  background: var(--conf);
+  border: 1px solid var(--divider);
+  border-radius: var(--r-card);
+  padding: 10px 12px;
+  margin: 10px 0;
+`;
+
 // The spec's `.btn` base + variants (section 1c) - min 44px thumb targets (mobile funnel
 // pass, WCAG 2.5.5/Apple HIG), replacing the old `ThumbButton`/`FilterToggleButton` gold
 // overrides with plain token-derived variants. A native <button>, not a react-bootstrap
@@ -467,6 +489,14 @@ const SuggestedThumb = styled.div`
   overflow: hidden;
   border: 1px solid var(--divider);
   position: relative;
+
+  /* Issue #705 - clips the resting thumbnail to its rounded frame as before, but stops
+     clipping for exactly as long as the pointer is over it, which is also exactly when
+     ZoomableThumbnail's own hover rule (cardPanel.tsx) scales its <img> up - letting the
+     zoomed art escape uncropped instead of being cut flush at this box's edge. */
+  &:hover {
+    overflow: visible;
+  }
 `;
 
 const SuggestedMeta = styled.div`
@@ -780,7 +810,15 @@ export function QuestionFeed() {
         setSelectedCandidateId(null);
         setConfirmedArtistName(null);
         setRateLimited(false);
-        setFilterExpanded(false);
+        // Issue #707 / A4 amendment - shown automatically for the two candidate-type shapes
+        // (identify_printing's shortlist, confirm_suggestion once dropped to Level 2), where
+        // the attribute chips actually narrow something; artist/tag items never reach the
+        // branch that reads this at all, so their default is moot.
+        setFilterExpanded(
+          newItem != null &&
+            (newItem.type === "identify_printing" ||
+              newItem.type === "confirm_suggestion")
+        );
         setLevel3ChipStates({});
         setLanded(false);
         setStage(initialStage(newItem));
@@ -1257,8 +1295,10 @@ export function QuestionFeed() {
     </SubjectCardBox>
   );
 
-  // Plain card panel, no chip ring - Level 2's default while its filter disclosure is
-  // collapsed (i.e. the common case).
+  // The one card panel Level 2 ever renders now (issue #707) - the attribute-chip panel no
+  // longer replaces this with a ring-around-card composition; it renders separately in QPanel
+  // (level2Body below) instead, so the pinned reference card (Subject, A2) is never swapped
+  // out or occluded by it.
   const plainCardPanel = (
     <CardPanel data-testid="question-feed-card-panel">{subjectCard}</CardPanel>
   );
@@ -1268,29 +1308,6 @@ export function QuestionFeed() {
     <StaticCardPanel data-testid="question-feed-level1-card-panel">
       {subjectCard}
     </StaticCardPanel>
-  );
-
-  // The chip-ring version, only mounted when Level 2's "Filter by attribute" disclosure is
-  // open - same AttributeChipPanel as before, just no longer unconditional chrome. Keeps its
-  // pre-rebuild simple presentation (art + name below, no SubjectCard chrome) - the ring's own
-  // CardArea box is sized differently from the default subject slot.
-  const filterCardPanel = (
-    <CardPanel data-testid="question-feed-card-panel">
-      <AttributeChipPanel
-        backendURL={backendURL}
-        cardIdentifier={item.card.identifier}
-        tagConfidence={item.tagConfidence ?? {}}
-        chipStates={chipStates}
-        onChipStatesChange={setChipStates}
-        cardSlot={
-          <>
-            {cardArt}
-            <div className="text-center mt-1">{item.card.name}</div>
-          </>
-        }
-        onRateLimited={() => setRateLimited(true)}
-      />
-    </CardPanel>
   );
 
   let cardNode: React.ReactNode;
@@ -1344,7 +1361,7 @@ export function QuestionFeed() {
               </SuggestedCard>
               <ActionStack>
                 <Btn
-                  className="primary big block"
+                  className="primary block"
                   disabled={submitting}
                   onClick={() =>
                     item.suggestedPrinting != null &&
@@ -1450,7 +1467,7 @@ export function QuestionFeed() {
     } else {
       // Level 2 - the candidate grid, or (isOpenEndedShape) the dashed "tricky one" framing
       // for a zero-candidate identify_printing item (shape d, ANNEX B).
-      cardNode = filterExpanded ? filterCardPanel : plainCardPanel;
+      cardNode = plainCardPanel;
       const shapePillClass =
         item.type === "confirm_suggestion"
           ? "easy"
@@ -1598,6 +1615,18 @@ export function QuestionFeed() {
               No strong machine candidate. This is one of the harder ones - take
               your time.
             </QHint>
+          )}
+          {filterExpanded && (
+            <FilterPanelWrap data-testid="question-feed-filter-panel">
+              <AttributeChipPanel
+                backendURL={backendURL}
+                cardIdentifier={item.card.identifier}
+                tagConfidence={item.tagConfidence ?? {}}
+                chipStates={chipStates}
+                onChipStatesChange={setChipStates}
+                onRateLimited={() => setRateLimited(true)}
+              />
+            </FilterPanelWrap>
           )}
           {hiddenCount > 0 && (
             <p

@@ -120,6 +120,63 @@ PR #446 shipped:**
    button size, and reference-card visibility). Refer to the epic for current status
    rather than duplicating its contents here.
 
+---
+
+**AMENDMENTS — 2026-08-06, closing #705/#707/#710/#711 as one layout pass (implements A1/A2/A4
+above rather than proposing anything new):**
+
+8. **A8: A2's sticky mechanism, concretely.** `Subject` (QuestionFeed.tsx) carries
+   `position: sticky; top: 16px` unconditionally — including inside the WD3-compacted
+   horizontal strip below the hero's 560px fold, so "visible at every viewport" is genuinely
+   universal, not a wide-container-only affordance. No `useViewportTier`/media-query gate: the
+   rule is never conditional on viewport width, satisfying A1's container-first policy. The
+   actual scrolling ancestor sticky resolves against is Layout.tsx's `ContentContainer`
+   (`position: fixed; overflow-y: scroll`, top-offset by the real navbar height already) — not
+   `document` — so no additional navbar-height accounting was needed in QuestionFeed.tsx itself.
+
+9. **A9: Desktop horizontal space — the actual constraint was one level up.** WtcHero/WtcHead's
+   own `max-width` (1180px, §1c) was never the binding constraint on desktop: the sitewide
+   `ContentMaxWidth` (1200px, `Layout.tsx`) wraps every route in a `MaxWidthContainer` that
+   capped this page just as tightly regardless of WtcHero's own value. `whatsthat.tsx` now
+   passes `fullWidth` to `ProjectContainer` — the same escape hatch `/display` already uses for
+   an identical problem (`Layout.tsx`'s own comment on `MaxWidthContainer`) — and WtcHero/WtcHead's
+   `max-width` moves from 1180px to 1600px (superseding that one §1c row; every other binding
+   value in the table is unchanged). This is a static value, not a viewport breakpoint or `vw`
+   unit, so A1 stands: the hero still doesn't size itself against the viewport, it simply has
+   more room to fold its existing `clamp()`/`auto-fill` primitives into on a wide screen.
+
+10. **A10: WD6's ring-around-card composition retired for this page (supersedes the
+    §4/§5 "shortlist container" and "AttributeChipPanel" rows' original composition, not
+    listed as a change row there).** A4 makes the panel auto-visible far more often than its
+    old opt-in toggle ever did, and `AttributeChipPanel`'s `ChipRing` reflows via `@media (min-width: 576px)` — a viewport query, not a container query — which inside the narrow
+    (`clamp(240px,30cqi,340px)`) Subject column it used to render in would squeeze three chip
+    groups into a box that never has room for them, at exactly the widths A4 now shows it by
+    default. Resolution: the panel no longer shares a box with the card at all. It renders in
+    QPanel instead (its own `cardSlot` prop is now optional; omitting it swaps `ChipRing` for a
+    plain `FlatChipStack` — three stacked `ChipRow`s, no ring), which trivially satisfies A4's
+    "never occlude the reference card" hard constraint by construction (different flex column
+    from the now-pinned Subject, A2) rather than by geometry that has to keep working as chip
+    counts change.
+
+11. **A11: Chip collapse (#707b).** An implied-negative chip (§ "chip (tri-state)" row,
+    `attributeChipRender.tsx`) collapses its label away instead of only dimming — the reserved
+    "dead space" the owner reported. Its two state buttons (and their full 44px tap targets,
+    including the existing tap-to-override-the-implied-state affordance) are unchanged; only
+    the label text's box is removed.
+
+12. **A12: Hover-zoom clipping (#705) — root cause was one level higher than the binding
+    table's own rows.** `ZoomableThumbnail`/`ArtPlaceholder` (both unchanged) were never the
+    defect; their two immediate ancestors on this page (`SuggestedThumb`, `CandidateButton`)
+    each clip with `overflow: hidden` for the resting state's own rounded-corner look, which
+    also clips the hover-scale. Both now add `&:hover { overflow: visible; }` — clipping stays
+    for the resting state, releases for exactly the hover duration the zoom needs it to. No
+    §1c row changes (radius/size/colour are untouched).
+
+13. **A13: Yes button (#711).** Drops `.big` (17px/800-weight/oversized padding) from the
+    Level 1 Yes button; keeps `.block` (full width). Reads at the same 15px/600-weight text as
+    its ActionGrid siblings now — hierarchy comes from position (its own row, above the grid)
+    and colour (`.primary`, orange) rather than from being a larger control.
+
 D-number scope note: D-numbers are per-proposal in this repo (proposal-h owns
 its own D1–D19; the old WTC round used W4–W7). The decisions below are the
 **WTC-rebuild round's** ledger, numbered WD1.. to avoid collision with either.

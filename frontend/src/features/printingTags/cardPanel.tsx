@@ -239,6 +239,13 @@ export const CandidateButton = styled.button`
   text-align: left;
   cursor: pointer;
 
+  /* Issue #705 - same fix as SuggestedThumb (QuestionFeed.tsx): clip to the rounded tile at
+     rest, stop clipping for exactly the hover duration ZoomableThumbnail scales its <img> up,
+     so the resting look is unchanged but the zoom is no longer cut flush at this edge. */
+  &:hover {
+    overflow: visible;
+  }
+
   &:disabled {
     opacity: 0.6;
     cursor: default;

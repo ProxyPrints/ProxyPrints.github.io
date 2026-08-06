@@ -33,10 +33,17 @@ import {
 // Size, AA) call for, on the ring's own answer controls. min-height guarantees the real hit
 // area of the group as a whole regardless of label length; flex centering keeps the label
 // vertically centered against the taller Yes/No buttons beside it.
+// Issue #707b - an implied-negative chip (a sibling of an explicitly-positive exclusion-group
+// chip) used to stay full width/height at 0.45 opacity, reserving exactly as much row space as
+// before the selection that dimmed it. It now collapses its LABEL away (below) - narrowing to
+// just its two state buttons - rather than only dimming, so several dimmed siblings actually
+// reclaim the row space the owner reported as dead. Height/tap-targets are unchanged (still the
+// full 44px buttons, still directly tappable to override the implied state - see this file's
+// header comment).
 export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
   border: 2px solid rgba(0, 0, 0, 0.25);
   border-radius: 0.5rem;
-  opacity: ${(props) => (props.impliedNegative ? 0.45 : 1)};
+  opacity: ${(props) => (props.impliedNegative ? 0.6 : 1)};
   color: inherit;
   font-size: 0.85rem;
   white-space: nowrap;
@@ -46,10 +53,11 @@ export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
   overflow: hidden;
 `;
 
-export const ChipLabel = styled.span<{ fill: string }>`
+export const ChipLabel = styled.span<{ fill: string; collapsed?: boolean }>`
   background-color: ${(props) => props.fill};
-  padding: 0.35rem 0.5rem;
-  display: inline-flex;
+  padding: ${(props) => (props.collapsed ? "0" : "0.35rem 0.5rem")};
+  width: ${(props) => (props.collapsed ? "0" : "auto")};
+  display: ${(props) => (props.collapsed ? "none" : "inline-flex")};
   align-items: center;
 `;
 
@@ -168,7 +176,10 @@ export function renderAttributeChip(
       data-chip-state={explicitState}
       title={lean ?? undefined}
     >
-      <ChipLabel fill={confidenceFill(confidence[tagName] ?? 0)}>
+      <ChipLabel
+        fill={confidenceFill(confidence[tagName] ?? 0)}
+        collapsed={impliedNegative}
+      >
         {getTagDisplayName(label)}
       </ChipLabel>
       <ChipStateButton
