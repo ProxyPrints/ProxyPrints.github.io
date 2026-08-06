@@ -104,6 +104,25 @@ ILLUSTRATION_MIN_SHARE = env.float("ILLUSTRATION_MIN_SHARE", default=PRINTING_TA
 # Selection-layer only - this setting is never read by vote_consensus.py and changes no vote's
 # weight/threshold/gate. See docs/features/printing-tags.md's "Unified question feed" section.
 QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO = env.float("QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO", default=0.51)
+
+# issue #727: per-lane candidate-pool warm cadence (minutes) - each is its own settings-driven
+# knob, not one global interval, so lane 1 ("churns with every vote cast, wants minutes") and
+# lane 4 ("changes only as the pipeline extracts new evidence, tolerates hours") can be tuned
+# independently without a migration or code change. See cardpicker.question_feed_pools's own
+# module docstring for the full architecture and cardpicker/migrations/
+# 0105_question_feed_pools_schedule.py for the django-q2 Schedule rows these back.
+QUESTION_FEED_POOL_WARM_MINUTES_RESOLUTION_IMMINENT = env.int(
+    "QUESTION_FEED_POOL_WARM_MINUTES_RESOLUTION_IMMINENT", default=5
+)
+QUESTION_FEED_POOL_WARM_MINUTES_CONFIRM = env.int("QUESTION_FEED_POOL_WARM_MINUTES_CONFIRM", default=15)
+QUESTION_FEED_POOL_WARM_MINUTES_CONTESTED = env.int("QUESTION_FEED_POOL_WARM_MINUTES_CONTESTED", default=60)
+QUESTION_FEED_POOL_WARM_MINUTES_COLD = env.int("QUESTION_FEED_POOL_WARM_MINUTES_COLD", default=240)
+
+# Max candidates materialised per lane per sub-kind (printing/artist/tag) at each warm - bounds
+# both the cache blob size and the read-time random-offset scan cost. A generous cap, not a
+# tuned-to-the-edge number - see cardpicker.question_feed_pools's own module docstring.
+QUESTION_FEED_POOL_SIZE = env.int("QUESTION_FEED_POOL_SIZE", default=500)
+
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
 # client-generated anonymous ID (IP as a fallback if that header is somehow missing). Shared
 # across printing-tag/artist-vote/tag-vote submission (_printing_tag_rate_limit_key/_rate are

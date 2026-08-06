@@ -31,12 +31,18 @@ from cardpicker.printing_consensus import (
 )
 from cardpicker.question_feed import (
     _artist_item,
+    _likely_resolve_printing_card,
     _scryfall_illustration_url,
     _tier_1_confirm_suggestion,
     _voter_answered_printing_card_ids,
     get_next_question_feed_item,
     get_remaining_estimate,
     is_likely_resolve_printing,
+)
+from cardpicker.question_feed_pools import (
+    LANE_CONFIRM,
+    LANE_RESOLUTION_IMMINENT,
+    warm_pool_cache,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
@@ -805,3 +811,87 @@ class TestIllustrationVoteAnsweredExclusion:
         )
 
         assert get_next_question_feed_item("voter-1") is None
+
+
+class TestGetNextQuestionFeedItemUsesPools:
+    """`get_next_question_feed_item` tries a materialised pool (issue #727) before each of its
+    four live tiers, falling back to the live query unchanged whenever the pool draw returns
+    `None`. Every other test in this file runs with the pool cache cold (never warmed) and
+    still passes - proving the fallback path alone reproduces every pre-#727 behaviour; these
+    tests instead warm a pool first and prove the SERVED item still matches, and that the live
+    tier is skipped once the pool already answered."""
+
+    def test_serves_the_same_item_from_a_warmed_resolution_imminent_pool(self, db):
+        card, _ = make_one_vote_from_resolving_card()
+        warm_pool_cache(LANE_RESOLUTION_IMMINENT)
+
+        with patch(
+            "cardpicker.question_feed._likely_resolve_printing_card", wraps=_likely_resolve_printing_card
+        ) as mock_live:
+            item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == card.identifier
+        mock_live.assert_not_called()
+
+    def test_serves_the_same_item_from_a_warmed_confirm_pool(self, db):
+        card, printing = make_ai_suggested_card()
+        warm_pool_cache(LANE_CONFIRM)
+
+        with patch("cardpicker.question_feed._tier_1_confirm_suggestion") as mock_live:
+            item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "confirm_suggestion"
+        assert item.card.identifier == card.identifier
+        mock_live.assert_not_called()
+
+    def test_falls_back_to_the_live_tier_when_the_pool_is_cold(self, db):
+        # no warm_pool_cache call at all - the exact state every other test class in this file
+        # runs under
+        card, _ = make_ai_suggested_card()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == card.identifier
+
+    def test_falls_back_to_the_live_tier_when_this_voters_exclusion_exhausts_the_pool(self, db):
+        card, printing = make_ai_suggested_card(anonymous_id="ai-bot")
+        card.artist_vote_status = ArtistVoteStatus.RESOLVED
+        card.save()
+        warm_pool_cache(LANE_CONFIRM)
+        # this voter already answered the only pooled candidate - the pool draw must exhaust
+        # and fall through to the live tier, which (with no other data) also finds nothing
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER, anonymous_id="anon-1")
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is None or item.card.identifier != card.identifier
+
+    def test_a_resolved_card_falls_through_past_a_stale_pool_entry_to_the_live_remainder(self, db):
+        """Staleness: a card served by tier 1 resolves between the pool's warm and this
+        request. The pool draw must reject it (still `UNRESOLVED`-only), and the request must
+        still get served from whatever else genuinely qualifies today."""
+        stale_card, printing = make_ai_suggested_card(anonymous_id="ai-bot")
+        warm_pool_cache(LANE_CONFIRM)
+        stale_card.printing_tag_status = PrintingTagStatus.RESOLVED
+        stale_card.artist_vote_status = ArtistVoteStatus.RESOLVED
+        stale_card.save()
+        fresh_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == fresh_card.identifier
+
+    def test_shared_cache_not_configured_falls_back_to_the_live_tier(self, db):
+        from django.test import override_settings
+
+        card, _ = make_ai_suggested_card()
+        caches_without_shared = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+        with override_settings(CACHES=caches_without_shared):
+            item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == card.identifier
