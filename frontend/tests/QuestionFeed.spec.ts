@@ -232,7 +232,7 @@ test.describe("question feed - Level 3 (conditional open-attribute confirm)", ()
 // frequently-absent shape (CanonicalPrintingMetadata.illustration_id, see
 // local_illustration.py:137's isnull filter).
 test.describe("question feed - Level 2 illustration grouping", () => {
-  test("every candidate in a mixed illustration set still renders in the grid - none silently dropped", async ({
+  test("every candidate in a mixed illustration set is accounted for - a group collapses to its one representative tile, ungrouped candidates still render individually", async ({
     page,
     network,
   }) => {
@@ -242,12 +242,26 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
+    // candidateA carries the art crop, so it's the group's chosen representative
+    // (QuestionFeed.tsx's `group.find((c) => c.artCropUrl) ?? group[0]`) - the group renders
+    // ONE tile for the whole cluster, not one per member.
+    await expect(
+      page.locator(
+        `[data-card-identifier="${illustrationGroupCandidateA.identifier}"]`
+      )
+    ).toHaveCount(1);
+    // candidateB shares the illustration but loses the representative pick to A - it renders
+    // no tile of its own anywhere; its vote is carried by A's tile, not silently dropped.
+    await expect(
+      page.locator(
+        `[data-card-identifier="${illustrationGroupCandidateB.identifier}"]`
+      )
+    ).toHaveCount(0);
+
     // The regression guard this task calls out explicitly: an exact count, not just "at least
     // one" - a candidate silently vanishing (e.g. because it has no illustrationId) is exactly
     // the correctness regression a weaker assertion would miss.
     for (const candidate of [
-      illustrationGroupCandidateA,
-      illustrationGroupCandidateB,
       illustrationGroupCandidateC,
       illustrationGroupCandidateD,
     ]) {
@@ -257,7 +271,7 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     }
   });
 
-  test("candidates sharing an illustration render inside one illustration-group container; unique/null-illustration candidates don't", async ({
+  test("only the illustration group's representative candidate renders inside its one illustration-group container; unique/null-illustration candidates don't", async ({
     page,
     network,
   }) => {
@@ -278,11 +292,13 @@ test.describe("question feed - Level 2 illustration grouping", () => {
         `[data-card-identifier="${illustrationGroupCandidateA.identifier}"]`
       )
     ).toHaveCount(1);
+    // candidateB shares the illustration but has no art crop, so A wins the representative
+    // pick and the group renders only A's tile - not B's.
     await expect(
       group.locator(
         `[data-card-identifier="${illustrationGroupCandidateB.identifier}"]`
       )
-    ).toHaveCount(1);
+    ).toHaveCount(0);
 
     // candidateC (distinct illustrationId, no sibling) and candidateD (null illustrationId)
     // both render OUTSIDE the clustered group - neither forms (or joins) a cluster of one.
@@ -298,7 +314,7 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     ).toHaveCount(0);
   });
 
-  test("clustered tiles render each candidate's art crop, falling back to the printing scan when absent; ungrouped tiles keep the printing scan regardless", async ({
+  test("the illustration group's one tile renders its representative candidate's art crop; ungrouped tiles keep the printing scan regardless", async ({
     page,
     network,
   }) => {
@@ -314,11 +330,6 @@ test.describe("question feed - Level 2 illustration grouping", () => {
         `[data-card-identifier="${illustrationGroupCandidateA.identifier}"] img`
       )
     ).toHaveAttribute("src", illustrationGroupCandidateA.artCropUrl as string);
-    await expect(
-      group.locator(
-        `[data-card-identifier="${illustrationGroupCandidateB.identifier}"] img`
-      )
-    ).toHaveAttribute("src", illustrationGroupCandidateB.mediumThumbnailUrl);
 
     const ungroupedGrid = page.getByTestId(
       "question-feed-candidate-grid-ungrouped"

@@ -127,3 +127,13 @@ coverage-ack: frontend/tests/DisplayPage.spec.ts::DisplayPage (Proposal H, Step 
 # Same surface, same assertions, only the URL (and the describe/test title naming it) changed.
 coverage-ack: frontend/tests/ContrastAudit.spec.ts::Contrast audit - /contributions (owner defect 1+2: accordion header + body) > Contribution Guidelines accordion - collapsed and expanded — route moved /contributions -> /stats in PR #558; same surface, same assertions
 coverage-ack: frontend/tests/ContrastAudit.spec.ts::Link colour audit (owner-approved open item 2 - $link-color -> $theme-info) > a real production link (contributions guidelines' ISO-639-1 reference, inside the accordion body's panel-bg) clears strict-AAA-normal — route moved /contributions -> /stats in PR #558; same surface, same assertions
+
+# PR #730 - QuestionFeed.tsx's illustration-group render now emits ONE representative tile per
+# group (`group.find((c) => c.artCropUrl) ?? group[0]`) instead of one tile per member, so a
+# non-representative member (candidateB in this fixture set) no longer gets its own DOM tile
+# anywhere - it's represented by the group's shared vote, not silently dropped. The three old
+# titles asserted the retired one-tile-per-member behavior; all three are renamed (not deleted)
+# to describe the new representative-tile contract, same surface, same fixture set.
+coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - Level 2 illustration grouping > every candidate in a mixed illustration set still renders in the grid - none silently dropped — PR #730: renamed to "every candidate in a mixed illustration set is accounted for - a group collapses to its one representative tile, ungrouped candidates still render individually" now that a group renders one representative tile, not one tile per member.
+coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - Level 2 illustration grouping > candidates sharing an illustration render inside one illustration-group container; unique/null-illustration candidates don't — PR #730: renamed to "only the illustration group's representative candidate renders inside its one illustration-group container; unique/null-illustration candidates don't", same reason as the sibling ack above.
+coverage-ack: frontend/tests/QuestionFeed.spec.ts::question feed - Level 2 illustration grouping > clustered tiles render each candidate's art crop, falling back to the printing scan when absent; ungrouped tiles keep the printing scan regardless — PR #730: renamed to "the illustration group's one tile renders its representative candidate's art crop; ungrouped tiles keep the printing scan regardless", same reason as the sibling acks above.
