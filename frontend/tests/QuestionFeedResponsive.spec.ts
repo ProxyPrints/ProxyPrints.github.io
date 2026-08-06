@@ -709,9 +709,10 @@ test.describe("question feed - hover-zoom is not clipped by its frame (issue #70
   });
 });
 
-// NEW coverage (layout pass, issue #711) - the Level 1 Yes button no longer carries the
-// oversized `.big` modifier, so it now reads at the same font size as its ActionGrid siblings
-// (hierarchy by position/colour, not by disproportionate size).
+// Issue #711 / #740 - the Level 1 Yes button carries neither the oversized `.big` modifier
+// nor the full-width `.block` modifier, so it reads at the same font size and a
+// content-sized width, like its ActionGrid siblings. Hierarchy comes from position (its own
+// row, above the grid) and its `.primary` colour, not from disproportionate size.
 test.describe("question feed - Level 1 answer-row hierarchy (issue #711)", () => {
   test("the Yes button reads at the same font size as its 'Not sure' sibling", async ({
     page,
@@ -732,5 +733,28 @@ test.describe("question feed - Level 1 answer-row hierarchy (issue #711)", () =>
       (el) => window.getComputedStyle(el).fontSize
     );
     expect(yesFontSize).toBe(notSureFontSize);
+  });
+
+  test("the Yes button sizes to its content instead of spanning full width (issue #740)", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    await page.setViewportSize({ width: 800, height: 900 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const yesButton = page.getByTestId("question-feed-level1-yes");
+    const notSureButton = page.getByTestId("question-feed-level1-not-sure");
+    await expect(yesButton).toBeVisible();
+    await expect(notSureButton).toBeVisible();
+
+    const yesBox = await yesButton.boundingBox();
+    const notSureBox = await notSureButton.boundingBox();
+    expect(yesBox).not.toBeNull();
+    expect(notSureBox).not.toBeNull();
+    // A content-sized button's width tracks its label length, not a fixed ratio - 1.5x is a
+    // generous tolerance for "Yes — that's the one" being a longer label than "Not sure",
+    // while still catching a full-width regression (which measures ~2x at this viewport).
+    expect(yesBox!.width).toBeLessThan(notSureBox!.width * 1.5);
   });
 });

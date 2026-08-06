@@ -341,6 +341,52 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     ).toHaveAttribute("src", illustrationGroupCandidateC.mediumThumbnailUrl);
   });
 
+  // Issue #746 - the illustration crop isn't card-shaped, so its tile's frame must not force
+  // the full-card 63/88 ratio the way an ungrouped (full-scan) tile's frame still does.
+  test("the illustration group's tile uses a landscape frame; an ungrouped tile keeps the card-ratio frame", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrintingGroupedByIllustration,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    // Measured on the art frame itself (question-feed-candidate-art-frame), not the whole
+    // tile - the tile's total height also includes the caption strip below the frame, whose
+    // own fixed text height would dilute the frame's actual aspect ratio at narrow tile
+    // widths where the caption is a larger fraction of the total.
+    const group = page.getByTestId("question-feed-illustration-group");
+    const groupFrameBox = await group
+      .locator(
+        `[data-card-identifier="${illustrationGroupCandidateA.identifier}"]`
+      )
+      .getByTestId("question-feed-candidate-art-frame")
+      .boundingBox();
+    expect(groupFrameBox).not.toBeNull();
+    const groupFrameRatio = groupFrameBox!.width / groupFrameBox!.height;
+    // Landscape (584/444 ~= 1.315) - wider than tall.
+    expect(groupFrameRatio).toBeGreaterThan(1.2);
+    expect(groupFrameRatio).toBeLessThan(1.4);
+
+    const ungroupedGrid = page.getByTestId(
+      "question-feed-candidate-grid-ungrouped"
+    );
+    const ungroupedFrameBox = await ungroupedGrid
+      .locator(
+        `[data-card-identifier="${illustrationGroupCandidateC.identifier}"]`
+      )
+      .getByTestId("question-feed-candidate-art-frame")
+      .boundingBox();
+    expect(ungroupedFrameBox).not.toBeNull();
+    const ungroupedFrameRatio =
+      ungroupedFrameBox!.width / ungroupedFrameBox!.height;
+    // Portrait card ratio (63/88 ~= 0.716) - taller than wide.
+    expect(ungroupedFrameRatio).toBeGreaterThan(0.65);
+    expect(ungroupedFrameRatio).toBeLessThan(0.78);
+  });
+
   // Issue #709 - the illustration-credit ArtistSupportLink used to always stack the page-link
   // button, up to five commerce buttons, a badge, and a credit line next to the question - up to
   // ~8 rows. It now defaults to one collapsed line and expands on demand; the expansion must
@@ -695,6 +741,48 @@ test.describe("question feed - confirm_suggestion question type", () => {
       expect(controlBox).not.toBeNull();
       expect(boxesIntersect(cardBox!, controlBox!)).toBe(false);
     }
+  });
+});
+
+// Issue #741 - the subject art title used to sit absolutely-positioned inside the artwork's
+// own box, covering its bottom edge; it now renders below the art in normal document flow.
+test.describe("question feed - subject art title placement (issue #741)", () => {
+  test("at Level 1, the title never overlaps the artwork, and sits below it", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const artBox = await page
+      .getByTestId("question-feed-subject-art-image")
+      .boundingBox();
+    const titleBox = await page
+      .getByTestId("question-feed-subject-art-title")
+      .boundingBox();
+    expect(artBox).not.toBeNull();
+    expect(titleBox).not.toBeNull();
+    expect(boxesIntersect(artBox!, titleBox!)).toBe(false);
+    expect(titleBox!.y).toBeGreaterThanOrEqual(artBox!.y + artBox!.height);
+  });
+
+  test("at Level 2 (pinned subject sidebar), the title never overlaps the artwork, and sits below it", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedIdentifyPrinting, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const artBox = await page
+      .getByTestId("question-feed-subject-art-image")
+      .boundingBox();
+    const titleBox = await page
+      .getByTestId("question-feed-subject-art-title")
+      .boundingBox();
+    expect(artBox).not.toBeNull();
+    expect(titleBox).not.toBeNull();
+    expect(boxesIntersect(artBox!, titleBox!)).toBe(false);
+    expect(titleBox!.y).toBeGreaterThanOrEqual(artBox!.y + artBox!.height);
   });
 });
 
