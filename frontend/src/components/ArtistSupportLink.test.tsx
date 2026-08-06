@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { Provider } from "react-redux";
 
@@ -18,13 +18,26 @@ import { setupStore } from "@/store/store";
 
 import { ArtistSupportLink, buildArtistSupportURL } from "./ArtistSupportLink";
 
-function renderApplet(artistName: string, backend = localBackend) {
+function renderApplet(
+  artistName: string,
+  backend = localBackend,
+  defaultExpanded = false
+) {
   const store = setupStore({ backend });
   render(
     <Provider store={store}>
-      <ArtistSupportLink artistName={artistName} />
+      <ArtistSupportLink
+        artistName={artistName}
+        defaultExpanded={defaultExpanded}
+      />
     </Provider>
   );
+}
+
+// Issue #709 - the applet defaults to collapsed (a single line: the page-link + a disclosure
+// toggle); this expands it so tests can assert on the commerce links/badge/credit it reveals.
+function expandApplet() {
+  fireEvent.click(screen.getByTestId("artist-support-toggle"));
 }
 
 describe("buildArtistSupportURL", () => {
@@ -42,7 +55,7 @@ describe("buildArtistSupportURL", () => {
 });
 
 describe("ArtistSupportLink applet", () => {
-  it("never renders as an empty box: the MTGAC page link and the credit are present before any network response resolves", () => {
+  it("never renders as an empty box: the MTGAC page link is present before any network response resolves, collapsed to a single line by default", () => {
     // no server.use(...) at all - the request is in flight (or, with noBackend below, never
     // even fires) - the applet's base shape must already be there, not a spinner/empty state.
     renderApplet("Harold McNeill");
@@ -52,9 +65,10 @@ describe("ArtistSupportLink applet", () => {
       "href",
       buildArtistSupportURL("Harold McNeill")
     );
-    expect(screen.getByTestId("artist-support-credit")).toHaveTextContent(
-      "MTG Artist Connection"
-    );
+    expect(screen.getByTestId("artist-support-toggle")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("artist-support-credit")
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByTestId("artist-support-commerce-links")
     ).not.toBeInTheDocument();
@@ -63,7 +77,36 @@ describe("ArtistSupportLink applet", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("with no remote backend configured, still renders the fallback applet and makes no request at all", () => {
+  it("expanding the collapsed applet reveals the credit line, even with nothing else to show", () => {
+    renderApplet("Harold McNeill");
+
+    expandApplet();
+
+    expect(screen.getByTestId("artist-support-credit")).toHaveTextContent(
+      "MTG Artist Connection"
+    );
+  });
+
+  it("collapsing again after expanding hides the credit line without unmounting the applet", () => {
+    renderApplet("Harold McNeill");
+
+    expandApplet();
+    expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
+
+    expandApplet();
+    expect(
+      screen.queryByTestId("artist-support-credit")
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("artist-support-applet")).toBeInTheDocument();
+  });
+
+  it("defaultExpanded starts the applet open, with the credit line visible without any interaction (the /editor rail's usage)", () => {
+    renderApplet("Harold McNeill", localBackend, true);
+
+    expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
+  });
+
+  it("with no remote backend configured, still renders the fallback link and makes no request at all", () => {
     // No server.use(...) either - if a request were made, MSW's onUnhandledRequest: "error"
     // config would fail this test, so a clean pass here IS the "no request" assertion.
     renderApplet("Harold McNeill", noBackend);
@@ -72,6 +115,8 @@ describe("ArtistSupportLink applet", () => {
       "href",
       buildArtistSupportURL("Harold McNeill")
     );
+
+    expandApplet();
     expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
   });
 
@@ -85,6 +130,7 @@ describe("ArtistSupportLink applet", () => {
         buildArtistSupportURL("Harold McNeill")
       )
     );
+    expandApplet();
     expect(
       screen.queryByTestId("artist-support-commerce-links")
     ).not.toBeInTheDocument();
@@ -94,7 +140,7 @@ describe("ArtistSupportLink applet", () => {
     expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
   });
 
-  it("zero commerce links (found: true): still renders the MTGAC page link and the credit, no commerce buttons, no empty box", async () => {
+  it("zero commerce links (found: true): still renders the MTGAC page link and (once expanded) the credit, no commerce buttons, no empty box", async () => {
     server.use(artistExternalLinksZeroLinks);
     renderApplet(ArtistExternalLinksTestArtists.zeroLinks);
 
@@ -106,6 +152,7 @@ describe("ArtistSupportLink applet", () => {
         )}`
       )
     );
+    expandApplet();
     expect(
       screen.queryByTestId("artist-support-commerce-links")
     ).not.toBeInTheDocument();
@@ -137,9 +184,14 @@ describe("ArtistSupportLink applet", () => {
     );
   });
 
-  it("exactly one commerce link renders one stretched button", async () => {
+  it("exactly one commerce link renders one stretched button, reachable via the expand toggle", async () => {
     server.use(artistExternalLinksOneLink);
     renderApplet(ArtistExternalLinksTestArtists.oneLink);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("artist-support-toggle")).toBeInTheDocument()
+    );
+    expandApplet();
 
     const links = await screen.findAllByTestId("artist-support-commerce-link");
     expect(links).toHaveLength(1);
@@ -153,6 +205,7 @@ describe("ArtistSupportLink applet", () => {
   it("full row (5 commerce links) renders in the fixed priority order, capped at 5", async () => {
     server.use(artistExternalLinksFullRow);
     renderApplet(ArtistExternalLinksTestArtists.fullRow);
+    expandApplet();
 
     const links = await screen.findAllByTestId("artist-support-commerce-link");
     expect(links).toHaveLength(5);
@@ -168,6 +221,7 @@ describe("ArtistSupportLink applet", () => {
   it("an artist whose only link is instagram surfaces it (the 157-artist rescue scenario)", async () => {
     server.use(artistExternalLinksInstagramOnly);
     renderApplet(ArtistExternalLinksTestArtists.instagramOnly);
+    expandApplet();
 
     const links = await screen.findAllByTestId("artist-support-commerce-link");
     expect(links).toHaveLength(1);
@@ -178,6 +232,7 @@ describe("ArtistSupportLink applet", () => {
   it("the Mark's Signature Service flag renders as a badge, never as a link", async () => {
     server.use(artistExternalLinksWithSignatureBadge);
     renderApplet(ArtistExternalLinksTestArtists.signatureService);
+    expandApplet();
 
     const badge = await screen.findByTestId("artist-support-signature-badge");
     expect(badge.tagName).toBe("SPAN");
@@ -193,9 +248,10 @@ describe("ArtistSupportLink applet", () => {
     }
   });
 
-  it("the MTG Artist Connection credit is always present and links to their homepage", async () => {
+  it("the MTG Artist Connection credit is always reachable and links to their homepage", async () => {
     server.use(artistExternalLinksOneLink);
     renderApplet(ArtistExternalLinksTestArtists.oneLink);
+    expandApplet();
 
     const credit = await screen.findByTestId("artist-support-credit");
     expect(credit).toHaveTextContent("MTG Artist Connection");
@@ -214,6 +270,7 @@ describe("ArtistSupportLink applet", () => {
     expect(primaryLink).toHaveAttribute("target", "_blank");
     expect(primaryLink).toHaveAttribute("rel", "noopener noreferrer");
 
+    expandApplet();
     const commerceLink = await screen.findByTestId(
       "artist-support-commerce-link"
     );
