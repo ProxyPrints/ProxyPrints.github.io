@@ -928,7 +928,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(select).toHaveValue("force-bleed");
   });
 
-  test("the promoted artist line shows a plain credit + the MTG Artist Connection applet (page-link button, credit line) for a card with a known canonical artist (M2 applet round, docs/features/artist-support-links.md)", async ({
+  test("the promoted artist line shows the MTG Artist Connection applet (page-link button, credit line) for a card with a known canonical artist (M2 applet round, docs/features/artist-support-links.md)", async ({
     page,
     network,
   }) => {
@@ -942,14 +942,6 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1 card 8 (xyz) 001");
     await page.getByTestId("page-preview-slot").first().click();
-
-    // Plain (non-linked) credit line names the artist.
-    await expect(page.getByTestId("display-artist-section")).toContainText(
-      "Art by"
-    );
-    await expect(page.getByTestId("display-artist-section")).toContainText(
-      "Alpha Artist"
-    );
 
     // M2 round: ArtistSupportLink is now a self-contained applet (RTK Query fetch, no
     // caller-supplied children/className for button styling - see ArtistSupportLink.tsx's own

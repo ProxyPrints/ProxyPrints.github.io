@@ -747,8 +747,8 @@ export function QuestionFeed() {
   const [fetchToken, setFetchToken] = useState<number>(0);
   // Artist Support Links v1 - set once the user casts a real (non-"Unknown") artist vote on an
   // "artist"-type item, via ArtistVotePicker's onArtistConfirmed below. Drives the post-answer
-  // "Art by <Name> - support them" banner - reset on every new item alongside the other
-  // per-question state, so it can't bleed into the next question.
+  // ArtistSupportLink banner - reset on every new item alongside the other per-question state,
+  // so it can't bleed into the next question.
   const [confirmedArtistName, setConfirmedArtistName] = useState<string | null>(
     null
   );
@@ -1711,9 +1711,6 @@ export function QuestionFeed() {
                 </IllustrationGroupLabel>
                 {illustrationArtist != null && (
                   <IllustrationCredit data-testid="question-feed-illustration-credit">
-                    <div className="text-muted small mb-1">
-                      Illustration by {illustrationArtist}
-                    </div>
                     <ArtistSupportLink artistName={illustrationArtist} />
                   </IllustrationCredit>
                 )}
@@ -1869,9 +1866,6 @@ export function QuestionFeed() {
             />
             {confirmedArtistName != null && (
               <div className="mt-2" data-testid="question-feed-artist-support">
-                <div className="text-muted small mb-1">
-                  Art by {confirmedArtistName} - support them
-                </div>
                 <ArtistSupportLink artistName={confirmedArtistName} />
               </div>
             )}
