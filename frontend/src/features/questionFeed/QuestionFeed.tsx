@@ -78,6 +78,7 @@ import {
   CandidateGrid,
   CARD_ASPECT_RATIO,
   CardPanel,
+  IllustrationArtPlaceholder,
   MysteryCard,
   randomFlavorText,
   RevealWrapper,
@@ -217,29 +218,39 @@ const SubjectCardBox = styled.div`
   }
 `;
 
+// Issue #741 - the art frame and the title bar are now two stacked boxes rather than one
+// box with the title absolutely positioned over the art's own bottom edge (SubjectArtImage
+// owns the sizing/aspect-ratio, SubjectArtTitle is a normal-flow sibling below it), so the
+// title can never cover the artwork it labels. SubjectArt itself is just the flex column
+// that holds both - at the hero's compact fold it becomes the 132px-wide row item WD3
+// specifies, stretched to the row's height by SubjectCardBox's `align-items: stretch`.
 const SubjectArt = styled.div`
-  aspect-ratio: ${CARD_ASPECT_RATIO};
   position: relative;
 
   @container hero (max-width: 560px) {
+    display: flex;
+    flex-direction: column;
     flex: 0 0 132px;
     width: 132px;
+  }
+`;
+
+const SubjectArtImage = styled.div`
+  position: relative;
+  aspect-ratio: ${CARD_ASPECT_RATIO};
+
+  @container hero (max-width: 560px) {
+    flex: 1;
     aspect-ratio: auto;
   }
 `;
 
 const SubjectArtTitle = styled.div`
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 2;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+  background: rgba(0, 0, 0, 0.72);
   color: #fff;
   font-weight: 700;
   font-size: clamp(13px, 3.4cqi, 17px);
-  padding: 22px 10px 8px;
-  text-shadow: 0 1px 2px #000;
+  padding: 6px 10px;
 `;
 
 const SubjectCap = styled.div`
@@ -445,6 +456,14 @@ const ActionStack = styled.div`
   flex-direction: column;
   gap: 9px;
   margin-top: 4px;
+
+  /* Issue #740 - dropping .block from the Yes button (this stack's first child) only sizes
+     it to its content if it also opts out of the flex column's default align-items: stretch;
+     ActionGrid (the second child) keeps stretching, since its own grid needs the full row
+     width to lay out its three siblings. */
+  > button:first-child {
+    align-self: flex-start;
+  }
 `;
 
 const ActionGrid = styled.div`
@@ -1280,13 +1299,18 @@ export function QuestionFeed() {
   );
 
   // The full subject card composition (SPEC-wtc-rebuild.md's "subject card"/"subject art"/
-  // "subject art title"/"subject caption" rows) - art with the card name overlaid at its own
-  // bottom edge, plus a caption strip below explaining what the subject IS.
+  // "subject art title"/"subject caption" rows) - art, the card name below it in its own row
+  // (issue #741 - previously overlaid on the art's own bottom edge), plus a caption strip
+  // explaining what the subject IS.
   const subjectCard = (
     <SubjectCardBox>
       <SubjectArt data-testid="question-feed-subject-art">
-        {cardArt}
-        <SubjectArtTitle>{item.card.name}</SubjectArtTitle>
+        <SubjectArtImage data-testid="question-feed-subject-art-image">
+          {cardArt}
+        </SubjectArtImage>
+        <SubjectArtTitle data-testid="question-feed-subject-art-title">
+          {item.card.name}
+        </SubjectArtTitle>
       </SubjectArt>
       <SubjectCap>
         <span className="glyph">?</span>
@@ -1361,7 +1385,7 @@ export function QuestionFeed() {
               </SuggestedCard>
               <ActionStack>
                 <Btn
-                  className="primary block"
+                  className="primary"
                   disabled={submitting}
                   onClick={() =>
                     item.suggestedPrinting != null &&
@@ -1493,7 +1517,11 @@ export function QuestionFeed() {
         // Illustration clusters (below) pass candidate.artCropUrl, falling back to the full
         // scan when a candidate's metadata sidecar has none - see this function's own comment
         // on showArtistCaption for why grouped tiles diverge from the ungrouped default here.
-        imageUrl: string = candidate.mediumThumbnailUrl
+        imageUrl: string = candidate.mediumThumbnailUrl,
+        // Issue #746 - an illustration crop isn't card-shaped, so illustration clusters (below)
+        // pass IllustrationArtPlaceholder instead of the card-ratio ArtPlaceholder every
+        // ungrouped (full-scan) tile keeps by default.
+        Frame: typeof ArtPlaceholder = ArtPlaceholder
       ) => (
         <CandidateButton
           key={candidate.identifier}
@@ -1507,7 +1535,7 @@ export function QuestionFeed() {
           onClick={onSelect}
           {...getPrintingCandidateDataAttributes(item.card.name, candidate)}
         >
-          <ArtPlaceholder>
+          <Frame data-testid="question-feed-candidate-art-frame">
             <MysteryCard />
             <ZoomableThumbnail>
               <img
@@ -1522,7 +1550,7 @@ export function QuestionFeed() {
                 <Spinner size={1.5} zIndex={2} positionAbsolute />
               </div>
             )}
-          </ArtPlaceholder>
+          </Frame>
           <CandidateCaption>
             <div className="cn">
               <SetIcon expansionCode={candidate.expansionCode} />{" "}
@@ -1703,7 +1731,13 @@ export function QuestionFeed() {
                       ),
                     false,
                     representative.artCropUrl ||
-                      representative.mediumThumbnailUrl
+                      representative.mediumThumbnailUrl,
+                    // Only the illustration-crop image is landscape-shaped - the
+                    // mediumThumbnailUrl fallback above is still a full card scan, so it
+                    // keeps the card-ratio frame.
+                    representative.artCropUrl
+                      ? IllustrationArtPlaceholder
+                      : ArtPlaceholder
                   )}
                 </CandidateGrid>
               </IllustrationGroup>
@@ -1792,21 +1826,25 @@ export function QuestionFeed() {
     // substitute the Scryfall art crop when the item carries one (see subjectImageSrc).
     cardNode = (
       <SubjectCardBox>
-        <SubjectArt>
-          <img
-            ref={cardImageRef}
-            src={subjectImageSrc}
-            alt={item.card.name}
-            data-testid={
-              item.type === "artist" ? "question-feed-artist-art" : undefined
-            }
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            onLoad={() => onCardImageSettled(false)}
-            onError={() =>
-              onCardImageSettled(item.card.mediumThumbnailUrl !== "")
-            }
-          />
-          <SubjectArtTitle>{item.card.name}</SubjectArtTitle>
+        <SubjectArt data-testid="question-feed-subject-art">
+          <SubjectArtImage data-testid="question-feed-subject-art-image">
+            <img
+              ref={cardImageRef}
+              src={subjectImageSrc}
+              alt={item.card.name}
+              data-testid={
+                item.type === "artist" ? "question-feed-artist-art" : undefined
+              }
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              onLoad={() => onCardImageSettled(false)}
+              onError={() =>
+                onCardImageSettled(item.card.mediumThumbnailUrl !== "")
+              }
+            />
+          </SubjectArtImage>
+          <SubjectArtTitle data-testid="question-feed-subject-art-title">
+            {item.card.name}
+          </SubjectArtTitle>
         </SubjectArt>
       </SubjectCardBox>
     );

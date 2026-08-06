@@ -43,6 +43,8 @@ export const revealAnimation = keyframes`
 export const RevealWrapper = styled.div`
   position: relative;
   overflow: hidden;
+  width: 100%;
+  height: 100%;
 `;
 
 // The one "mystery card" backdrop every blue/purple-tinted placeholder on the page renders -
@@ -146,8 +148,18 @@ export const StaticCardPanel = styled.div`
 // so the enlarged art is fully visible rather than cut off at the original box edge -
 // raised above its siblings on hover so it doesn't render underneath the neighbouring grid
 // cells it now overlaps.
+//
+// Issue #746 - `position: absolute; inset: 0` (rather than a normal-flow box the img sizes
+// via a `height: 100%` percentage) so this never counts as in-flow content for its
+// aspect-ratio'd ArtPlaceholder/IllustrationArtPlaceholder parent to size itself around: a
+// percentage height on a replaced element (the <img> inside) resolves against an
+// indeterminate ancestor by falling back to the image's own intrinsic ratio, which was
+// silently overriding the parent's declared aspect-ratio with whatever ratio the loaded
+// image happened to have. Taking this box out of flow removes that override path, so the
+// parent's aspect-ratio is what actually renders, matching what its own token table says.
 export const ZoomableThumbnail = styled.div`
-  position: relative;
+  position: absolute;
+  inset: 0;
   z-index: 0;
 
   img {
@@ -208,6 +220,31 @@ export const ArtPlaceholder = styled.div`
      contained within this box on its own, and clipping at this level would re-break
      ZoomableThumbnail's hover-zoom (built specifically *without* overflow: hidden so the
      enlarged art can pop out uncropped). */
+
+  img {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+`;
+
+// Issue #746 - the harvested Scryfall illustration crop (candidate.artCropUrl) is not
+// card-shaped, so forcing it through ArtPlaceholder's 63/88 card frame either crops its edges
+// or letterboxes it. This frame's ratio is measured from the actual crop region instead of
+// assumed: MPCAutofill's local_phash.ART_CROP_BOX (the fractional box every art crop is
+// harvested from) resolves to pixel regions of width:height ~= 584:444 across the golden-set
+// fixtures (MPCAutofill/cardpicker/golden_set.py `art_crop_px` entries, e.g.
+// `[48, 92, 632, 536]`) - a landscape ratio, nothing like the full card's portrait 63/88. Same
+// object-fit/hover-zoom contract as ArtPlaceholder, just sized to what an illustration crop
+// actually looks like.
+export const ILLUSTRATION_CROP_ASPECT_RATIO = "584 / 444";
+
+export const IllustrationArtPlaceholder = styled.div`
+  position: relative;
+  width: 100%;
+  aspect-ratio: ${ILLUSTRATION_CROP_ASPECT_RATIO};
 
   img {
     position: relative;
@@ -288,12 +325,17 @@ export const CandidateCaption = styled.div`
 // "continuous fold points" table) - an intrinsic auto-fill grid in container units, replacing
 // the old `MobileCandidateScroller` horizontal-scroll wrapper (retired, WD8) with a grid that
 // folds continuously (6 -> 4 -> 3 -> 2 columns) as the hero container narrows, no breakpoint.
+// Issue #746 - the harvested artwork IS the subject of the question being asked, so a
+// 78-116px tile read as "far too small by default" against that role. Raised to
+// 120-190px (still an intrinsic auto-fill clamp, no viewport breakpoint - section 3's
+// container-first policy) so a candidate's art is legible enough to actually compare on
+// sight, at the cost of fewer columns per row on a narrow container.
 export const CandidateGrid = styled.div`
   display: grid;
   gap: clamp(7px, 1.6cqi, 11px);
   margin-top: 4px;
   grid-template-columns: repeat(
     auto-fill,
-    minmax(clamp(78px, 15cqi, 116px), 1fr)
+    minmax(clamp(120px, 24cqi, 190px), 1fr)
   );
 `;
