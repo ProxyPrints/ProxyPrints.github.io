@@ -1300,7 +1300,23 @@ executable until this exists):
   by source (28 distinct sources, drawn 2026-07-19, seeded), pinned
   rather than re-randomized per test run. `GOLDEN_EXPECTATIONS` is
   populated incrementally, one extractor at a time, by whichever PR
-  builds that extractor.
+  builds that extractor. Grew to 32 cards 2026-08-05 (issue #683's own
+  follow-up): two DELIBERATE additions, not a re-draw, closing two
+  named coverage gaps neither the original 30 nor issue #689's
+  investigation closed — a genuine (non-photographic, Scryfall
+  `border_crop`-sourced) real-printing `trimmed` card (35449, "Fierce
+  Guardianship") and a real sideways `layout:planar` card (130028,
+  "Bowie Base One"). See `golden_set.py`'s own `GOLDEN_CARD_IDS`
+  comment for the full verification (including a near-miss: a
+  convincingly-formatted but fabricated "MH3-AI" credit line on
+  another sampled card that was checked against the live Scryfall API
+  and rejected rather than pinned). These two cards' values were
+  recorded before the #677 ladder collapse below landed; unlike the
+  original 30, they were not part of #677's own re-verification pass
+  and a live re-check was not reachable during the branch/master
+  reconcile that landed alongside #677 — see `golden_set.py`'s
+  `collector_line_ocr` comment for exactly which values are provably
+  unaffected and which remain an open item.
 - 21 new tests (`test_image_evidence.py`, `test_golden_set.py`), all
   passing; full suite 979 passed / 4 failed (the known pre-existing
   baseline: moxfield x2, sources OpenSSL x2 — nothing new broke);

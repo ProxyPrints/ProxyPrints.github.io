@@ -34,15 +34,53 @@ if TYPE_CHECKING:
 # the same community-drive-coverage convention the Drive API verification test used), plus 3
 # cards from the project's own source for coverage, all filtered to `content_phash__isnull=False`
 # (already hashed at ingest - ImageEvidence keys on this hash, see models.py's own docstring).
+#
+# Pinned 2026-08-05 (issue #683's own follow-up, closing two coverage gaps neither the original
+# 30 nor issue #689's investigation closed): two DELIBERATE additions, not a re-draw.
+#
+# 35449 ("Fierce Guardianship", source CompC) closes the trimmed-geometry gap. Issue #689
+# established (25+ images, 10+ sources: WarpDandy/Rickman/Gikkman/RustyShackleford/
+# Berndt_Toast83/Polymancer/Clutchnorris/Chili Axe + long-tail) that the `trimmed` bucket is
+# DOMINATED by fan-made custom renders, but that investigation sampled only the 8 highest-volume
+# sources (88.4% of the 2,786-card trimmed population by row count) plus "several" long-tail
+# ones - it did not claim to have checked whether a genuine real-printing image exists anywhere
+# in the remaining 11.6% (56 distinct sources, 323 cards). This PR sampled 7 cards from 6 of
+# those previously-unchecked long-tail sources (Monza81, Mursu, MrTeferi, Mithrane, CompC,
+# TorskeRavn, Kevin Kneupper) and visually inspected each fetched image. "Aminatou, Veil Piercer"
+# (TorskeRavn) and "Witch-Blessed Meadow" (Kevin Kneupper) both
+# LOOKED like real prints (correctly-formatted collector lines, real-sounding set codes) but
+# were confirmed FAKE against the live Scryfall API: "Witch-Blessed Meadow"'s real printing is
+# MH3 #239 by Tyler Walpole (painted art, modal DFC) - the catalogued image's "MH3-AI • EN Kevin
+# Kneupper ft. Midjourney" credit line names a set ("MH3-AI") that does not exist on Scryfall, a
+# convincingly-formatted fabrication, not evidence of a real bleed-trimmed printing. "Fierce
+# Guardianship" (35449), by contrast, verified genuine: Scryfall's own `c20/35` record has
+# artist Randy Vargas and the EXACT flavor text ("Hunt somewhere else. This is your only
+# warning." —Gavi, nest warden) visible in the fetched image. This is a real card, but NOT a
+# photographic scan - dimensionally and by its blank white-border-free edges it matches
+# Scryfall's own `border_crop` image asset (which programmatically crops the outer border away
+# server-side, landing at the same near-63:88 trim aspect ratio a physically bleed-trimmed scan
+# would), not a camera/scanner capture of a physical card. No genuine PHOTOGRAPHIC bleed-trimmed
+# scan turned up in this sample - see this module's own `geometry_bleed`/`crop_coordinates`
+# comments for what that does and does not mean for what this pin can catch.
+#
+# 130028 ("Bowie Base One", source PippoChiri) closes the sideways-layout gap: a real Scryfall
+# `layout:planar` card (Zendikar Rising Planechase, confirmed against a live Scryfall
+# `layout:planar or layout:scheme` search, not guessed from the card name), landscape-oriented
+# with all text rotated 90° from what every extractor's fixed-fraction crop boxes assume. See
+# `collector_line_ocr`/`artist_ocr`/`legal_line`'s own comments for what this card's real run
+# actually produced - it is NOT the clean across-the-board abstention a naive prediction would
+# expect.
 GOLDEN_CARD_IDS: list[int] = [
     35,
     37,
     40,
+    35449,
     37962,
     39520,
     41039,
     102138,
     128981,
+    130028,
     144933,
     145081,
     145532,
@@ -98,17 +136,22 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # 2026-07-20 (issue #216) against a real, no-persistence extract_card_evidence() run over all
     # 30 golden cards, same host-venv/real-network-fetch method as every extractor above -
     # 30/30 fetched cleanly (PNG or JPEG, no fetch_failed on this real run).
+    #
+    # 35449/130028 (2026-08-05 additions, see GOLDEN_CARD_IDS's own comment) recorded against the
+    # same real, no-persistence run - both fetched cleanly as PNG.
     "fetch_health": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
             35: {"fetch_ok": True, "fetch_image_format": "PNG"},
             37: {"fetch_ok": True, "fetch_image_format": "PNG"},
             40: {"fetch_ok": True, "fetch_image_format": "PNG"},
+            35449: {"fetch_ok": True, "fetch_image_format": "PNG"},
             37962: {"fetch_ok": True, "fetch_image_format": "PNG"},
             39520: {"fetch_ok": True, "fetch_image_format": "PNG"},
             41039: {"fetch_ok": True, "fetch_image_format": "PNG"},
             102138: {"fetch_ok": True, "fetch_image_format": "JPEG"},
             128981: {"fetch_ok": True, "fetch_image_format": "JPEG"},
+            130028: {"fetch_ok": True, "fetch_image_format": "PNG"},
             144933: {"fetch_ok": True, "fetch_image_format": "PNG"},
             145081: {"fetch_ok": True, "fetch_image_format": "PNG"},
             145532: {"fetch_ok": True, "fetch_image_format": "PNG"},
@@ -142,17 +185,25 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # trimmed (90%/10%) - a higher trimmed share than the 40-source validation's ~2.5% baseline
     # (local_fallback.py's own bleed-classification section), but this is a small n=30
     # stratified-by-source sample, not a re-measurement of that baseline.
+    #
+    # 35449 ("Fierce Guardianship") is the 2026-08-05 genuine-trimmed-printing addition (see
+    # GOLDEN_CARD_IDS's own comment for the verification) - "trimmed", same class as the
+    # original 3. 130028 ("Bowie Base One", a real sideways Planechase plane) is "bleed" - its
+    # aspect ratio is standard bleed-inclusive; it is the LAYOUT, not the geometry, that's
+    # sideways, so normalize_crop_box's trimmed-only remap never engages for it.
     "geometry_bleed": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
             35: "bleed",
             37: "bleed",
             40: "bleed",
+            35449: "trimmed",
             37962: "bleed",
             39520: "bleed",
             41039: "bleed",
             102138: "bleed",
             128981: "bleed",
+            130028: "bleed",
             144933: "bleed",
             145081: "bleed",
             145532: "trimmed",
@@ -184,17 +235,23 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # an "ambiguous" skip_reason in the real run (a border sample outside the v1 taxonomy) - kept
     # as-is rather than discarded, since a golden set that only ever pins clean-positive outcomes
     # would never catch a regression in the ambiguous path.
+    #
+    # 35449/130028 (2026-08-05 additions): both "black" - a real second data point for the
+    # ordinary majority-class path, not chosen for this field's own sake (their rationale for
+    # being pinned at all lives on GOLDEN_CARD_IDS's own comment).
     "layout_class": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
             35: "borderless",
             37: "black",
             40: "black",
+            35449: "black",
             37962: "black",
             39520: "black",
             41039: "borderless",
             102138: "black",
             128981: "black",
+            130028: "black",
             144933: "borderless",
             145081: "borderless",
             145532: "black",
@@ -245,6 +302,15 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
                 "artist_crop_px": [0, 758, 680, 925],
                 "art_crop_px": [48, 92, 632, 536],
             },
+            # 35449 ("Fierce Guardianship", 2026-08-05 trimmed-genuine-printing addition): a
+            # DIFFERENT trimmed box than 145532/150472/189166 above - real evidence this is a
+            # different physical aspect ratio (662x925, Scryfall's own border_crop dimensions)
+            # from the black-bordered custom-render template those three share.
+            35449: {
+                "collector_line_crop_px": [10, 859, 222, 924],
+                "artist_crop_px": [0, 780, 662, 925],
+                "art_crop_px": [18, 66, 644, 542],
+            },
             37962: {
                 "collector_line_crop_px": [41, 832, 238, 893],
                 "artist_crop_px": [0, 758, 681, 925],
@@ -266,6 +332,15 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
                 "art_crop_px": [48, 92, 632, 536],
             },
             128981: {
+                "collector_line_crop_px": [41, 832, 238, 893],
+                "artist_crop_px": [0, 758, 680, 925],
+                "art_crop_px": [48, 92, 632, 536],
+            },
+            # 130028 ("Bowie Base One", 2026-08-05 sideways-layout addition): identical box to
+            # the bleed majority - it is `bleed_class` alone that gates this remap, and this
+            # card's aspect ratio is standard bleed-inclusive despite its sideways CONTENT (see
+            # `collector_line_ocr`'s own comment for what that mismatch actually produces).
+            130028: {
                 "collector_line_crop_px": [41, 832, 238, 893],
                 "artist_crop_px": [0, 758, 680, 925],
                 "art_crop_px": [48, 92, 632, 536],
@@ -403,17 +478,55 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # (genuine match, lexicon-valid parse, or "best invalid" fallback) uniquely at the removed
     # tier, so `COLLECTOR_LINE_OCR_EXTRACTOR_VERSION`'s v2->v3 bump changes zero values here even
     # though it changes some values outside this set (see that version constant's own comment).
+    #
+    # 35449 ("Fierce Guardianship", 2026-08-05): blank, despite this being a genuine real
+    # printing with a real, legible "035 R / C20 * EN RANDY VARGAS" line - real evidence that
+    # normalize_crop_box's remapped `collector_line_crop_px` for THIS trimmed image lands short
+    # of that text (the raw string actually turns up one crop over, in `artist_ocr_raw_text`
+    # instead - see that key's own extraction notes), a genuinely different failure mode than
+    # the original 3 trimmed pins' clean "nothing there to find" case.
+    #
+    # 130028 ("Bowie Base One", 2026-08-05): {"set_code": "not", "collector_number": "2024"} -
+    # NOT an abstention. This card's own uploader-added credit strip ("2024 P Not For Sale / MTG
+    # EN CALDER MOORE") sits at the same on-screen position a portrait card's real collector line
+    # would, so the parser confidently extracts a (set_code, collector_number) pair from it -
+    # "not" is not a real Scryfall set code, this is a false positive, not a correct read. Real
+    # evidence the extractor does not simply abstain on sideways layouts; it can silently return
+    # a plausible-looking wrong answer.
+    #
+    # 35449/130028 against the #677 ladder collapse (2026-08-05, re-verified by a real run this
+    # same day): both cards' values above were recorded BEFORE #677 landed, against the old
+    # 3-tier/8-attempt ladder. This reconcile fetched both images directly from the CDN
+    # (image_cdn_fetch.py's own URL shape, at DEFAULT_FETCH_DPI=250 - confirmed as the pins' own
+    # fetch resolution by matching the recorded crop-coordinate pixel boxes exactly at that size)
+    # and called `compute_card_evidence` directly against current code - no persistence, no DB
+    # access, since that function takes only primitives and a PIL image (see its own docstring).
+    # Every value pinned for both cards above, including 130028's collector_line_ocr match
+    # ({"set_code": "not", "collector_number": "2024"}) and both cards' collector_line_tsv=True,
+    # came back identical under the current 2-tier ladder - not merely unfalsified, positively
+    # reproduced. `known_set_codes`/`artist_lexicon` were left at their DB-backed defaults (None -
+    # this reconcile touched no database), which disables the set-code lexicon-validity gate at
+    # image_evidence.py:1185; that doesn't undermine this specific result, because 130028's own
+    # accepted parse is already known to be lexicon-INVALID ("not" is not a real Scryfall set
+    # code, see GOLDEN_CARD_IDS's own comment) - so no attempt across the ladder, gate on or off,
+    # was ever accepted as genuinely valid, meaning the gate-disabled "first collector-number-
+    # bearing attempt wins immediately" outcome and the gate-enabled "first collector-number-
+    # bearing attempt becomes the eventual best-invalid fallback" outcome are the same attempt
+    # either way. Reproducing it unchanged under the now-shorter 2-tier ladder confirms that
+    # attempt was always at tier 1 or 2, never the removed tier 3.
     "collector_line_ocr": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
             35: {"set_code": "", "collector_number": "0013"},
             37: {"set_code": "j25", "collector_number": "0002"},
             40: {"set_code": "", "collector_number": "3"},
+            35449: {"set_code": "", "collector_number": ""},
             37962: {"set_code": "sld", "collector_number": "142"},
             39520: {"set_code": "", "collector_number": ""},
             41039: {"set_code": "", "collector_number": ""},
             102138: {"set_code": "", "collector_number": ""},
             128981: {"set_code": "", "collector_number": ""},
+            130028: {"set_code": "not", "collector_number": "2024"},
             144933: {"set_code": "", "collector_number": ""},
             145081: {"set_code": "", "collector_number": ""},
             145532: {"set_code": "", "collector_number": ""},
@@ -448,6 +561,13 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # outcome" rationale layout_class's own comment gives for card 207913's ambiguous read - a
     # golden set that only ever pins positive matches would never catch a regression in the
     # "correctly found nothing" path.
+    #
+    # 35449/130028 (2026-08-05 additions) are covered automatically by the `GOLDEN_CARD_IDS`
+    # comprehension below, not a separate literal - both really did produce this same blank
+    # abstention on their real runs (130028's raw artist-crop OCR text is genuine rules-text
+    # noise from the card's own sideways body, not an "Illus." credit, so `illus_anchor_fired`
+    # correctly stays False even though real text was present - see `collector_line_ocr`'s own
+    # comment for that card's OTHER extractor, which does NOT abstain on the same image).
     "artist_ocr": [
         GoldenExpectation(card_id=cid, value={"name": "", "illus_anchor_fired": False}) for cid in GOLDEN_CARD_IDS
     ],
@@ -459,17 +579,24 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # word (including several cards where collector_line_ocr itself found no PARSEABLE collector
     # number - tesseract read something, it just didn't fit the collector-number regex, a
     # genuinely different, weaker outcome than a fully blank crop).
+    #
+    # 35449/130028 (2026-08-05 additions): both True - both cards' own OCR crops found real,
+    # non-blank text (see `collector_line_ocr`'s own comment for why that text still failed to
+    # PARSE for 35449, and produced a false-positive parse for 130028) - a fully blank TSV would
+    # be a THIRD, different outcome this bool exists to distinguish from both.
     "collector_line_tsv": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
             35: True,
             37: True,
             40: True,
+            35449: True,
             37962: True,
             39520: False,
             41039: True,
             102138: False,
             128981: True,
+            130028: True,
             144933: True,
             145081: True,
             145532: False,
@@ -509,17 +636,24 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # 'trimmed'-classified cards (145532/150472/189166) show visibly different crop-coordinate
     # numbers than the majority, same real evidence of normalize_crop_box's remap being engaged
     # that issue #148's own crop_coordinates expectation notes.
+    #
+    # 35449/130028 (2026-08-05 additions): both produced a real, non-degenerate hash - 35449's
+    # trimmed box matches the remapped-geometry pattern the original trimmed pins already show,
+    # 130028's matches the ordinary bleed majority (this extractor keys on `bleed_class`, not on
+    # sideways-ness, so a genuine card being landscape-oriented does not move this crop box).
     "symbol_region": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
             35: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
             37: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
             40: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            35449: {"symbol_crop_px": [535, 512, 662, 760], "phash_present": True},
             37962: {"symbol_crop_px": [531, 509, 681, 740], "phash_present": True},
             39520: {"symbol_crop_px": [529, 509, 678, 740], "phash_present": True},
             41039: {"symbol_crop_px": [529, 509, 678, 740], "phash_present": True},
             102138: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
             128981: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
+            130028: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
             144933: {"symbol_crop_px": [530, 509, 680, 740], "phash_present": True},
             145081: {"symbol_crop_px": [529, 509, 678, 740], "phash_present": True},
             145532: {"symbol_crop_px": [535, 512, 662, 760], "phash_present": True},
@@ -569,17 +703,26 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # `_PROXY_MARKER_RE` (no word boundary between the brand prefix and "PROXY"), but is no longer
     # what the current parser produces; `local_ocr.py`'s own regex comment has the full false-
     # positive analysis for the widening this pin now reflects.
+    #
+    # 35449/130028 (2026-08-05 additions): 35449 abstains cleanly (this extractor's own crop
+    # region is a different band than collector_line_ocr's, and finds nothing on this real card
+    # either). 130028 detects year "2024" and a proxy marker, both CORRECT reads this time - the
+    # uploader's own "2024 P Not For Sale" credit line sits inside `legal_line_crop_px`'s wider
+    # band, which happens to catch it cleanly even though `collector_line_ocr`'s narrower crop
+    # (see that key's own comment) mis-parsed the same on-screen text as a fake set code.
     "legal_line": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
             35: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
             37: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
             40: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
+            35449: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
             37962: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
             39520: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
             41039: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
             102138: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
             128981: {"legal_line_copyright_year": "1998", "legal_line_proxy_marker_detected": True},
+            130028: {"legal_line_copyright_year": "2024", "legal_line_proxy_marker_detected": True},
             144933: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
             145081: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": True},
             145532: {"legal_line_copyright_year": "", "legal_line_proxy_marker_detected": False},
@@ -616,18 +759,28 @@ GOLDEN_EXPECTATIONS: dict[str, list[GoldenExpectation]] = {
     # all-negative outcome (real fetched production images essentially never arrive
     # part-way-downloaded), not a placeholder - kept as-is per every prior extractor's own "don't
     # discard a real all-negative/all-positive outcome" rationale (see e.g. artist_ocr's comment).
+    # 35449/130028 (2026-08-05 additions) are covered by the same `GOLDEN_CARD_IDS` comprehension
+    # below and extend the same all-negative outcome - neither arrived truncated either.
     "quality_signals": [GoldenExpectation(card_id=cid, value=False) for cid in GOLDEN_CARD_IDS],
+    # 35449/130028 (2026-08-05 additions) are recorded at only 4 decimal places, unlike the
+    # original 30's full float precision above. `compute_bleed_diff_mm` (local_fallback.py) has
+    # rounded its own return value to 4 places since that function's first commit (2026-07-15,
+    # predating even the original 30's own 2026-07-19 pin date) - this IS its real output, called
+    # live and transcribed as-is; how the original 30 obtained more digits than the function has
+    # ever produced is a pre-existing discrepancy in this file, not reproduced here.
     "bleed_diff_mm": [
         GoldenExpectation(card_id=cid, value=value)
         for cid, value in {
             35: -0.018877551020422434,
             37: -0.018877551020422434,
             40: -0.018877551020422434,
+            35449: 3.2111,
             37962: -0.21229508196720515,
             39520: 0.36325910931173766,
             41039: 0.36325910931173766,
             102138: -0.018877551020422434,
             128981: -0.018877551020422434,
+            130028: -0.0189,
             144933: -0.018877551020422434,
             145081: 0.36325910931173766,
             145532: 3.211121673003796,
