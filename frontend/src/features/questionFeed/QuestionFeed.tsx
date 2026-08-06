@@ -90,6 +90,7 @@ import {
   APIGetQuestionFeed,
   APISubmitIllustrationVote,
   APISubmitPrintingTag,
+  APISubmitQuestionAbstention,
   APISubmitTagVote,
 } from "@/store/api";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
@@ -1046,6 +1047,21 @@ export function QuestionFeed() {
 
   const skip = () => advance();
 
+  // Records the "Not sure" abstention (issue #712) and moves on - fire-and-forget, same
+  // best-effort convention as the auto-tag-chip casts in selectCandidate above: the write is
+  // informative, not gating, so a failed request never blocks the stage transition.
+  const submitNotSure = () => {
+    if (backendURL != null && item != null) {
+      APISubmitQuestionAbstention(
+        backendURL,
+        item.card.identifier,
+        getOrCreateAnonymousId(),
+        item.type
+      ).catch(() => undefined);
+    }
+    setStage("level2");
+  };
+
   // Level 1's NO. In the general case this casts no vote itself - there's no backend concept of
   // "reject just this one candidate specifically," only a positive vote for a specific printing
   // or a generic isNoMatch for the whole set (see selectCandidate above) - so it purely records
@@ -1342,7 +1358,7 @@ export function QuestionFeed() {
                   <Btn
                     className="secondary"
                     disabled={submitting}
-                    onClick={() => setStage("level2")}
+                    onClick={submitNotSure}
                     data-testid="question-feed-level1-not-sure"
                   >
                     Not sure

@@ -29,6 +29,7 @@ import {
   submitPrintingTagNoMatch,
   submitPrintingTagResolvesToPrintingCandidate1,
   submitPrintingTagResolvesToPrintingCandidate2,
+  submitQuestionAbstentionRecorded,
   submitTagVoteResolvesToApply,
 } from "@/mocks/handlers";
 
@@ -486,15 +487,23 @@ test.describe("question feed - confirm_suggestion question type", () => {
       .toBe(printingCandidate1.identifier);
   });
 
-  test("NOT SURE drops to Level 2's candidate grid without casting a vote", async ({
+  test("NOT SURE drops to Level 2's candidate grid without casting a printing vote, but does POST an abstention", async ({
     page,
     network,
   }) => {
     let printingTagSubmitted = false;
-    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    let abstentionBody: { identifier?: string; questionType?: string } = {};
+    network.use(
+      questionFeedConfirmSuggestion,
+      submitQuestionAbstentionRecorded,
+      ...defaultHandlers
+    );
     page.on("request", (request) => {
       if (request.url().includes("/2/submitPrintingTag/")) {
         printingTagSubmitted = true;
+      }
+      if (request.url().includes("/2/submitQuestionAbstention/")) {
+        abstentionBody = request.postDataJSON();
       }
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
@@ -507,6 +516,11 @@ test.describe("question feed - confirm_suggestion question type", () => {
     await expect(suggestedCandidate).toBeVisible();
     await expect(suggestedCandidate).toHaveClass(/highlighted/);
     expect(printingTagSubmitted).toBe(false);
+
+    await expect
+      .poll(() => abstentionBody.identifier)
+      .toBe(cardDocument1.identifier);
+    expect(abstentionBody.questionType).toBe("confirm_suggestion");
   });
 
   test("NO drops to Level 2's candidate grid, excluding the rejected suggestion, without casting a vote", async ({

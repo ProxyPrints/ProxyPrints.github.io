@@ -2150,6 +2150,16 @@ class CardScanLog(models.Model):
     call sites) - not a separately-invented vocabulary - so a `grep` for a skip reason in the
     log output and a `WHERE skip_reason = '...'` query agree on what string to look for.
 
+    MACHINE abstention only. `CardQuestionAbstention` (below) is this model's HUMAN counterpart -
+    issue #712's "Not sure" signal on a `cardpicker.question_feed` item - and is deliberately a
+    separate model rather than a shared one: this model's `run_id`/`skip_reason`/
+    `evidence_types_used`/`survivor_pks` are all calculator-run bookkeeping with no human
+    equivalent, and the resume-exclusion query this model serves
+    (`local_identify_printing_tags._eligible_base_queryset`) must never be satisfied by a human
+    tapping "Not sure" - the two express different facts ("this engine did not vote" vs. "this
+    person looked and could not tell") and conflating them would let one silently stand in for
+    the other in either direction.
+
     A card can have at most one CURRENT scan-log row per (card, anonymous_id) that actually
     matters for the resume-exclusion query (see local_identify_printing_tags._eligible_base_
     queryset) - older rows for the same pair are historical (multiple runs can each abstain on
@@ -2214,6 +2224,50 @@ class CardScanLog(models.Model):
 
     def __str__(self) -> str:
         return f"card={self.card_id} anonymous_id={self.anonymous_id} skip_reason={self.skip_reason}"
+
+
+class CardQuestionAbstention(models.Model):
+    """
+    Issue #712. Records that a voter ENGAGED with a `cardpicker.question_feed` item and found it
+    genuinely ambiguous ("Not sure") - real information about the card (this question is hard
+    to answer for this specific image), unlike a "Skip" tap, which carries no signal about the
+    card at all and writes nothing here or anywhere else (see QuestionFeed.tsx's `skip`).
+
+    This is a HUMAN abstention - the counterpart to `CardScanLog`'s MACHINE abstention (see that
+    model's own docstring for why the two are deliberately separate models). Like `CardScanLog`,
+    deliberately NOT a subclass of `AbstractWeightedVote`: an abstention is not a vote, carries
+    no source/confidence/user/polarity, and must never be reachable via `vote_consensus`'s
+    resolution machinery even by accident.
+
+    `question_type` mirrors `QuestionFeedItem.type` (e.g. "confirm_suggestion" /
+    "identify_printing") - the same free-text convention `QuestionFeedServedLog.question_type`
+    already uses, for the same reason: the question feed's own type vocabulary is the single
+    source of truth, and duplicating it as a second closed enum here would just be a second
+    place for the two to drift apart.
+
+    Unique on (card, anonymous_id, question_type); the write path is `get_or_create`, so a voter
+    tapping "Not sure" more than once on the same pair (e.g. across repeat serves) records the
+    fact once, not once per tap. This is also exactly the shape a future exclusion query needs
+    (issue #713, not built here): "has this anonymous_id already abstained on this card for this
+    question_type" is a single indexed equality lookup against this table's own unique
+    constraint, e.g. `CardQuestionAbstention.objects.filter(card_id=..., anonymous_id=...,
+    question_type=...).exists()`.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="question_abstentions")
+    anonymous_id = models.CharField(max_length=40)
+    question_type = models.CharField(max_length=32)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["card", "anonymous_id", "question_type"], name="cardquestionabstention_unique"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"card={self.card_id} anonymous_id={self.anonymous_id} question_type={self.question_type}"
 
 
 class SavedDeckKind(models.TextChoices):
@@ -2792,6 +2846,7 @@ __all__ = [
     "ProjectMember",
     "PilotRunLedger",
     "CardScanLog",
+    "CardQuestionAbstention",
     "SavedDeckKind",
     "SavedDeck",
     "UserCryptoProfile",

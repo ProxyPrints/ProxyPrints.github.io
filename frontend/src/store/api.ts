@@ -79,6 +79,7 @@ import {
   SaveDeckResponse,
   SourcesResponse,
   SubmitIllustrationVoteResponse,
+  SubmitQuestionAbstentionResponse,
   Tag,
   TagConsensusResponse,
   TagsResponse,
@@ -688,6 +689,36 @@ export async function APISubmitPrintingTag(
       return content as PrintingConsensusResponse;
     }
     // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+// Issue #712. Records a human "Not sure" abstention on a question-feed item - distinct from a
+// "Skip" tap, which never calls this or any other endpoint. Best-effort at the call site (see
+// QuestionFeed.tsx's submitNotSure): never blocks the Level 1 -> Level 2 transition it accompanies.
+export async function APISubmitQuestionAbstention(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  questionType: string
+): Promise<SubmitQuestionAbstentionResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/submitQuestionAbstention/"),
+    {
+      method: "POST",
+      body: JSON.stringify({ identifier, anonymousId, questionType }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.recorded != null) {
+      return content as SubmitQuestionAbstentionResponse;
+    }
     throw {
       name: content.name,
       message: content.message,

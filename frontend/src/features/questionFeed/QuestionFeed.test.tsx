@@ -1027,4 +1027,78 @@ describe("QuestionFeed", () => {
       });
     });
   });
+
+  // Issue #712 - "Not sure" and "Skip" used to be indistinguishable no-ops; this locks in the
+  // split: "Not sure" records an abstention, "Skip" still writes nothing.
+  describe("Not sure vs. Skip (issue #712)", () => {
+    const confirmSuggestionItem = {
+      ...identifyPrintingItem,
+      type: "confirm_suggestion",
+      suggestedPrinting: identifyPrintingItem.candidates[0],
+    };
+
+    function serveConfirmSuggestionOnce() {
+      return http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: confirmSuggestionItem,
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      );
+    }
+
+    it("tapping Level 1 'Not sure' POSTs an abstention for this card and question type, then advances to Level 2", async () => {
+      server.use(serveConfirmSuggestionOnce());
+      let abstentionBody: Record<string, unknown> | undefined;
+      server.use(
+        http.post(
+          buildRoute("2/submitQuestionAbstention/"),
+          async ({ request }) => {
+            abstentionBody = (await request.json()) as Record<string, unknown>;
+            return HttpResponse.json({ recorded: true }, { status: 200 });
+          }
+        )
+      );
+      renderFeed();
+      await revealCard();
+
+      fireEvent.click(
+        await screen.findByTestId("question-feed-level1-not-sure")
+      );
+
+      await waitFor(() => expect(abstentionBody).toBeDefined());
+      expect(abstentionBody).toMatchObject({
+        identifier: confirmSuggestionItem.card.identifier,
+        questionType: "confirm_suggestion",
+      });
+      expect(
+        await screen.findByTestId("question-feed-level2")
+      ).toBeInTheDocument();
+    });
+
+    it("tapping Level 1 'Skip' never calls submitQuestionAbstention", async () => {
+      server.use(serveConfirmSuggestionOnce());
+      let abstentionCalls = 0;
+      server.use(
+        http.post(buildRoute("2/submitQuestionAbstention/"), () => {
+          abstentionCalls += 1;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        })
+      );
+      renderFeed();
+      await revealCard();
+
+      fireEvent.click(await screen.findByTestId("question-feed-level1-skip"));
+      await revealCard();
+
+      expect(abstentionCalls).toBe(0);
+    });
+  });
 });

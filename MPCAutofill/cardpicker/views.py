@@ -73,6 +73,7 @@ from cardpicker.models import (
     Card,
     CardArtistVote,
     CardPrintingTag,
+    CardQuestionAbstention,
     CardReport,
     CardScanLog,
     CardTagVote,
@@ -218,6 +219,8 @@ from cardpicker.schema_types import (
     SubmitIllustrationVoteRequest,
     SubmitIllustrationVoteResponse,
     SubmitPrintingTagRequest,
+    SubmitQuestionAbstentionRequest,
+    SubmitQuestionAbstentionResponse,
     SubmitTagVoteRequest,
     TagConsensusEntry,
     TagConsensusRequest,
@@ -1112,6 +1115,36 @@ def post_submit_printing_tag(request: HttpRequest) -> HttpResponse:
         resolved = resolve_and_persist_printing(card)
 
     return JsonResponse(_build_printing_consensus_response(card, resolved).model_dump())
+
+
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_submit_question_abstention(request: HttpRequest) -> HttpResponse:
+    """
+    Issue #712. Records a human abstention ("Not sure") on a question-feed item - the counterpart
+    to `CardScanLog`'s machine abstention, see `CardQuestionAbstention`'s own docstring for why
+    the two are separate models. `get_or_create` makes repeat taps on the same (card,
+    anonymousId, questionType) idempotent. Reuses the printing-tag submission's rate-limit
+    plumbing (`_printing_tag_rate_limit_key`/`_printing_tag_rate_limit_rate`), the same rate
+    budget every other question-feed write already shares, not a separate budget.
+    """
+
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(name="Rate limited", message="Too many abstentions - please slow down.").model_dump(),
+            status=429,
+        )
+
+    req = SubmitQuestionAbstentionRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    CardQuestionAbstention.objects.get_or_create(
+        card=card, anonymous_id=req.anonymousId, question_type=req.questionType
+    )
+    return JsonResponse(SubmitQuestionAbstentionResponse(recorded=True).model_dump())
 
 
 def _build_artist_consensus_response(

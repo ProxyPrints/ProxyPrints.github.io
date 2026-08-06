@@ -15,6 +15,7 @@ from .models import (
     CardArtistVote,
     CardIllustrationVote,
     CardPrintingTag,
+    CardQuestionAbstention,
     CardReport,
     CardScanLog,
     CardTagVote,
@@ -298,6 +299,14 @@ class AdminCardScanLog(admin.ModelAdmin[CardScanLog]):
     list_filter = ("anonymous_id", "skip_reason")
     search_fields = ("run_id",)
     ordering = ("-scanned_at",)
+
+
+@admin.register(CardQuestionAbstention)
+class AdminCardQuestionAbstention(admin.ModelAdmin[CardQuestionAbstention]):
+    list_display = ("card", "anonymous_id", "question_type", "created_at")
+    list_filter = ("question_type",)
+    search_fields = ("anonymous_id",)
+    ordering = ("-created_at",)
 
 
 @admin.register(EnvelopeTrip)

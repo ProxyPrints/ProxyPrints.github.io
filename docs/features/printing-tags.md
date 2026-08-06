@@ -727,6 +727,23 @@ printings, artists, tags, and moderation from one screen.
   `question_feed._served_mix_ratio` reads it back as two cheap indexed
   `COUNT`s, never a per-row scan. Append-only, same convention as
   `CardScanLog` — never read by any consensus computation.
+- **"Not sure" abstention** (issue #712): Level 1's "Yes"/"No, different
+  printing" both cast a real vote (see `selectCandidate`/`rejectSuggestion`
+  in `QuestionFeed.tsx`); "Not sure" and "Skip" used to be indistinguishable
+  no-ops — neither wrote anything. They are now split: "Not sure" means the
+  voter engaged and found the image genuinely ambiguous, real information
+  about the CARD, so it POSTs `2/submitQuestionAbstention/` and is recorded
+  in `CardQuestionAbstention` (`card`, `anonymous_id`, `question_type`,
+  unique together, `get_or_create`-idempotent per repeat tap) before the
+  same `setStage("level2")` transition it always did. "Skip" carries no
+  signal about the card at all and still writes nothing anywhere — that
+  stays a deliberate no-op, not a bug. `CardQuestionAbstention` is the
+  HUMAN counterpart to `CardScanLog`'s MACHINE abstention (see that
+  model's own docstring for why they're separate tables) and is, like it,
+  NOT an `AbstractWeightedVote` subclass — an abstention never enters
+  `vote_consensus`. A future exclusion query (issue #713, not built by
+  this addition) reads it back as a single indexed equality lookup:
+  `CardQuestionAbstention.objects.filter(card_id=..., anonymous_id=..., question_type=...).exists()`.
 - **Remaining-work count**: `get_remaining_estimate()` returns
   `QuestionFeedCounts` (`schemas/schemas/QuestionFeedCounts.json`), not a
   single number. `total` is a `.distinct().count()` union across
