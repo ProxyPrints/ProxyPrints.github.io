@@ -177,12 +177,23 @@ above rather than proposing anything new):**
     its ActionGrid siblings now — hierarchy comes from position (its own row, above the grid)
     and colour (`.primary`, orange) rather than from being a larger control.
 
+14. **A14: Exclusion-group chip width + group boundary (#742/#743).** `ChipGroup`
+    (`attributeChipRender.tsx`) gets an explicit `width: fit-content` — its containing row
+    switches to `flex-direction: column` once there's room to form (A10's still-present `@media (min-width: 576px)`), and a flex container's default `align-items: stretch` then stretches
+    any child with no definite cross-size to that column's full width; a definite width makes
+    the chip immune to that stretch regardless of which axis the ancestor row happens to run on.
+    `AttributeChipPanel.tsx`'s flat-stack `LeftArea`/`RightArea` (`BORDER_COLOR_GROUP`/
+    `FRAME_STYLE_GROUP`, two independent axes) now render each group's existing `label` field as
+    a heading above its chip row, plus a divider between them — previously the two groups' rows
+    ran together as one unlabelled list, so a collapse that correctly affects only one group's
+    siblings read as a bug affecting a supposedly single list.
+
 ---
 
 **AMENDMENTS — 2026-08-06, closing #740/#741/#746 (subject-card presentation defects live on
 this page after the 2026-08-06 layout pass above):**
 
-14. **A14: A3 corrected — the title overlay was a real, separate defect (#741).** A3 concluded
+15. **A15: A3 corrected — the title overlay was a real, separate defect (#741).** A3 concluded
     the gradient overlay was not the defect and attributed the reported symptom entirely to
     #705's hover-grow clipping. That conclusion doesn't hold: `SubjectArtTitle` was
     `position: absolute; left: 0; right: 0; bottom: 0` inside `SubjectArt`'s own box — its
@@ -198,7 +209,7 @@ this page after the 2026-08-06 layout pass above):**
     there's no longer art underneath it to fade over. Size/spacing (font-size clamp, weight)
     is unchanged.
 
-15. **A15: A13 superseded — `.block` dropped too (#740).** A13 kept `.block` on the Level 1 Yes
+16. **A16: A13 superseded — `.block` dropped too (#740).** A13 kept `.block` on the Level 1 Yes
     button on the reasoning that font-size parity plus position/colour was enough for
     hierarchy. Live measurement after A13 shipped showed the button still ~2x its "Not sure"
     sibling's width (494px vs 243px at an 800px viewport) — `.block`'s `width: 100%` was still
@@ -212,7 +223,7 @@ this page after the 2026-08-06 layout pass above):**
     row width to lay out its own three siblings) keeps the default. The button now sizes to its
     label like its siblings; hierarchy is position (its own row, above the grid) and colour only.
 
-16. **A16: Candidate grid size + a second, non-card art frame (#746).** Two coupled changes to
+17. **A17: Candidate grid size + a second, non-card art frame (#746).** Two coupled changes to
     the "candidate grid"/"candidate tile" §1c rows, both scoped to Level 2's candidate tiles
     (not the subject art, which was already sized to the `.subject` column's own `clamp(240px, 30cqi, 340px)`):
     - **Size.** `CandidateGrid`'s `grid-template-columns` minmax floor/ceiling moves from
@@ -321,7 +332,7 @@ Every visible element on the affected page. Values are binding.
 | subject `.subject`   | —                                                                                                                                       | `flex:1 1 300px; max-width:clamp(240px,30cqi,340px)`                                                                                                          | —           |
 | subject card         | bg `--raised`, border `--divider`                                                                                                       | —                                                                                                                                                             | `--r-card`  |
 | subject art          | bright card-art (real image in app)                                                                                                     | `aspect-ratio:63/88`                                                                                                                                          | —           |
-| subject art title    | `#fff` on `rgba(0,0,0,.72)` (A14 — flat bar below the art, superseding the overlay gradient)                                            | `font-size:clamp(13px,3.4cqi,17px)`; weight 700                                                                                                               | —           |
+| subject art title    | `#fff` on `rgba(0,0,0,.72)` (A15 — flat bar below the art, superseding the overlay gradient)                                            | `font-size:clamp(13px,3.4cqi,17px)`; weight 700                                                                                                               | —           |
 | subject caption      | `--muted` on `--conf`; glyph `--accent`                                                                                                 | pad `8px 11px`; font 12px                                                                                                                                     | —           |
 | qhead prompt         | `--text`                                                                                                                                | `font-size:clamp(17px,3.4cqi,22px)`; weight 800                                                                                                               | —           |
 | shapepill.easy       | ink `--btn-ink` on `--success`                                                                                                          | pad `3px 10px`; 11px; upper                                                                                                                                   | `--r-pill`  |
@@ -343,8 +354,8 @@ Every visible element on the affected page. Values are binding.
 | suggested set        | `--muted` monospace                                                                                                                     | 13px                                                                                                                                                          | —           |
 | confidence pill      | `--accent`, 1px `--accent`                                                                                                              | pad `2px 9px`; 11px/700; dot 7px                                                                                                                              | `--r-pill`  |
 | landed feedback      | `--success` on `color-mix(success 12%)`, 1px `color-mix(success 45%)`                                                                   | pad `5px 12px`; 13px; mt 12px                                                                                                                                 | `--r-pill`  |
-| candidate grid       | —                                                                                                                                       | `grid; gap clamp(7px,1.6cqi,11px); grid-template-columns:repeat(auto-fill,minmax(clamp(120px,24cqi,190px),1fr))` (A16, superseding `clamp(78px,15cqi,116px)`) | —           |
-| candidate tile       | bg `--raised`, border `--divider`; `.sel` outline `2px --accent`                                                                        | art `aspect 63/88`; illustration-group representative tile (has an `artCropUrl`) uses `aspect 584/444` instead (A16)                                          | `--r-card`  |
+| candidate grid       | —                                                                                                                                       | `grid; gap clamp(7px,1.6cqi,11px); grid-template-columns:repeat(auto-fill,minmax(clamp(120px,24cqi,190px),1fr))` (A17, superseding `clamp(78px,15cqi,116px)`) | —           |
+| candidate tile       | bg `--raised`, border `--divider`; `.sel` outline `2px --accent`                                                                        | art `aspect 63/88`; illustration-group representative tile (has an `artCropUrl`) uses `aspect 584/444` instead (A17)                                          | `--r-card`  |
 | candidate caption    | name `--text` 700, set `--muted` monospace 10px                                                                                         | pad `5px 7px 6px`; 11px                                                                                                                                       | —           |
 | negative wrapper     | 1px `--danger` on `color-mix(danger 8%,--conf)`                                                                                         | pad 13px                                                                                                                                                      | `--r-card`  |
 | negative header      | `--danger`                                                                                                                              | `clamp(15px,3cqi,18px)`; 800                                                                                                                                  | —           |
