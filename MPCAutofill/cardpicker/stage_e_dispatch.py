@@ -279,6 +279,17 @@ class DispatchOutcome:
     stage_d_border_chip_votes: int = 0
     stage_d_frame_chip_votes: int = 0
     stage_d_bleed_chip_votes: int = 0
+    # EVIDENCE-ONLY CALCULATORS (2026-08-05, closing the "10 of ~28 channels" wiring audit - see
+    # `_run_evidence_only_calculators`' own docstring for the FREE/EXPENSIVE classification of
+    # every channel this closes and every one it deliberately leaves open). All four read only
+    # data this pass has already stored - `ImageEvidence`, `Card.content_phash`, resolved artist
+    # chains - and fetch nothing, so wiring them costs the conveyor no network or fetch budget.
+    stage_d_ai_art_votes: int = 0
+    stage_d_art_hash_artist_votes: int = 0
+    stage_d_lands_votes: int = 0
+    stage_d_lands_already_voted: int = 0
+    stage_d_residual_artist_votes: int = 0
+    stage_d_residual_tag_votes: int = 0
     # Stream B (md5 verdict-transfer gate): how many cards in this batch had their Stage D verdict
     # satisfied via propagation from a same-md5 sibling's existing CardPrintingTag row instead of
     # running through the four calculators and three chips. Zero when the gate found nothing to
@@ -1230,6 +1241,98 @@ def _run_attribute_chip_casters(
         )
 
 
+def _run_evidence_only_calculators(
+    run_id: str, card_ids: Optional[list[int]], outcome: DispatchOutcome, dry_run: bool = False
+) -> None:
+    """
+    FOUR MORE CHANNELS WIRED INTO THE CONVEYOR (2026-08-05, closing the wiring audit that asked
+    "does a full-catalogue pass actually invoke every declared calculator identity, or only the
+    ones a name-match against this file happens to find"). `ai-art-detector-v1`
+    (`local_detect_ai_art.run_ai_art_detector`), `residual-classify-v1`/`art-hash-artist-v1`
+    (`local_residual_classify.run_frame_mismatch_recovery`/`run_d0_sibling_artist_propagation`)
+    and `lands-artist-decomp-v1` (`local_lands_identify.run_lands_identify`) had a real, tested
+    `card_ids`-scoped code path (issue #533's own batch-scoping prerequisite already applied to
+    each) but no caller reachable from this module or `stream_full_catalog.py` - a channel that
+    never runs and a channel that runs and casts zero votes are indistinguishable from the
+    outside, which is the whole defect this wiring closes.
+
+    WHY THESE FOUR AND NOT THE OTHER SIX UNWIRED IDENTITIES the same audit found (`docs/
+    pipeline-fidelity-gate.md`'s roster has the full accounting): every one of these four reads
+    ONLY data this pass has already stored - `ImageEvidence` OCR text, `Card.content_phash`,
+    already-resolved artist/printing chains - and fetches no image, runs no tesseract, calls no
+    external API. `run_frame_mismatch_recovery`/`run_lands_identify` each accept an OCR/fallback
+    refetch budget for the LIVE-FETCH portion of their own pipeline; both are called here with
+    every such budget forced to 0, which their own docstrings document as "the scoped, genuinely
+    free [...] path" - the live-fetch branches stay unreachable from this conveyor, exactly like
+    every other calculator's own fetch work stays inside Stage C, never Stage D.
+    `deductive-backfill-v1`/`local-name-frequency-v1` were the other two candidates that looked
+    fetch-free on the same reading; both were left OUT because neither has a `card_ids` parameter
+    at all - each rebuilds a whole-catalogue in-memory index (`CanonicalNameIndex`,
+    113k+ `CanonicalCard` rows) from scratch on every call, so wiring either one here would mean
+    paying that full-catalogue rebuild on every single micro-batch rather than once per pass. See
+    `docs/pipeline-fidelity-gate.md` for that finding and the other four EXPENSIVE identities
+    (`art-edge-continuity-v1`, `local-ocr-v1`, `local-phash-v1`, `local-fallback-v1`) this same
+    audit left deliberately unwired, with a reason and a tracked issue for each.
+
+    ORDER: `run_frame_mismatch_recovery` runs BEFORE `run_d0_sibling_artist_propagation`
+    deliberately - the former calls `resolve_and_persist_artist` on every card it recovers, and a
+    freshly-resolved artist from one card in this batch is exactly the kind of signal the latter's
+    sibling-propagation read (`Card.canonical_artist`/`canonical_card__artist`/
+    `inferred_canonical_card__artist`/`inferred_canonical_artist`) can pick up for a d=0 twin
+    later in the SAME batch. Getting this backwards costs nothing this batch cannot recover next
+    time it revisits the same card, but costs one batch's worth of reach for free. Otherwise order
+    is irrelevant here, same reasoning as `_run_attribute_chip_casters`' own docstring: none of
+    these four reads any other NEW calculator's output, only stored evidence and pre-existing
+    resolved fields.
+
+    A MISSING TAG SEED MUST NOT DESTROY A MICRO-BATCH, same discipline as
+    `_run_attribute_chip_casters`. Only `run_ai_art_detector` can raise for this (a missing
+    "AI-Generated" `Tag` row) - `run_frame_mismatch_recovery` already degrades gracefully when
+    "altered-frame" is unseeded (skips the tag vote, still casts the artist vote; see its own
+    docstring), and the other two calculators here have no `Tag` dependency at all. By the time
+    this runs, the four printing calculators and the three attribute chips above have already
+    written their votes, so letting a `RuntimeError` out would fail the WHOLE dispatch over an
+    operator setup gap in one advisory tag - caught, logged, `stage_d_ai_art_votes` stays 0.
+    """
+    from cardpicker.local_detect_ai_art import run_ai_art_detector
+    from cardpicker.local_lands_identify import run_lands_identify
+    from cardpicker.local_residual_classify import (
+        run_d0_sibling_artist_propagation,
+        run_frame_mismatch_recovery,
+    )
+
+    try:
+        ai_art_result = run_ai_art_detector(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_ai_art_votes = ai_art_result.votes_written
+    except RuntimeError as exc:
+        logger.error(
+            "AI-art detector skipped for run_id=%s: %s Stage D's printing votes for this batch "
+            "are unaffected and already written. Run `seed_default_tags` to close this - until "
+            "then stage_d_ai_art_votes stays at zero on every dispatch.",
+            run_id,
+            exc,
+        )
+
+    residual_result = run_frame_mismatch_recovery(
+        run_id=run_id,
+        dry_run=dry_run,
+        ocr_refetch_budget=0,
+        fallback_refetch_budget=0,
+        card_ids=card_ids,
+    )
+    outcome.stage_d_residual_artist_votes = residual_result.artist_votes_written
+    outcome.stage_d_residual_tag_votes = residual_result.tag_votes_written
+
+    art_hash_result = run_d0_sibling_artist_propagation(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+    outcome.stage_d_art_hash_artist_votes = art_hash_result.votes_written
+
+    lands_result = run_lands_identify(
+        run_id=run_id, dry_run=dry_run, sample_size=None, fetch_budget=0, card_ids=card_ids
+    )
+    outcome.stage_d_lands_votes = lands_result.votes_written
+    outcome.stage_d_lands_already_voted = lands_result.already_voted
+
+
 def _run_stage_d(
     batch_ids: Optional[list[int]],
     run_id: str,
@@ -1345,6 +1448,9 @@ def _run_stage_d(
     # from neither engine, two of them at zero rows with no substitute. Zero image fetches.
     seam("stage-d:attribute-chips")
     _run_attribute_chip_casters(run_id=run_id, card_ids=batch_ids, outcome=outcome, dry_run=dry_run)
+
+    seam("stage-d:evidence-only")
+    _run_evidence_only_calculators(run_id=run_id, card_ids=batch_ids, outcome=outcome, dry_run=dry_run)
 
 
 def _partition_by_md5_verdict(
@@ -1676,6 +1782,15 @@ def dispatch_micro_batch(
                     "stage_d_illustration_votes": outcome.stage_d_illustration_votes,
                     "stage_d_illustration_already_voted": outcome.stage_d_illustration_already_voted,
                     "stage_d_slow_path_routed": outcome.stage_d_slow_path_routed,
+                    "stage_d_border_chip_votes": outcome.stage_d_border_chip_votes,
+                    "stage_d_frame_chip_votes": outcome.stage_d_frame_chip_votes,
+                    "stage_d_bleed_chip_votes": outcome.stage_d_bleed_chip_votes,
+                    "stage_d_ai_art_votes": outcome.stage_d_ai_art_votes,
+                    "stage_d_art_hash_artist_votes": outcome.stage_d_art_hash_artist_votes,
+                    "stage_d_lands_votes": outcome.stage_d_lands_votes,
+                    "stage_d_lands_already_voted": outcome.stage_d_lands_already_voted,
+                    "stage_d_residual_artist_votes": outcome.stage_d_residual_artist_votes,
+                    "stage_d_residual_tag_votes": outcome.stage_d_residual_tag_votes,
                     "stage_d_verdict_transfer_votes": outcome.stage_d_verdict_transfer_votes,
                     "peak_rss_mb": peak_rss_mb,
                     "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,

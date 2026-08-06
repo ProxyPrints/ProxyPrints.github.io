@@ -603,7 +603,8 @@ class Command(BaseCommand):
         """
         self.stdout.write(
             "STAGE D: join-key -> fallback -> illustration -> slow-path, then the border / "
-            "frame-style / bleed-edge attribute chips"
+            "frame-style / bleed-edge attribute chips, then ai-art / residual-classify / "
+            "art-hash-artist / lands-artist-decomp"
             + ("" if cohort_ids is None else f" (scoped to {len(cohort_ids)} cards)")
         )
         outcome = DispatchOutcome(status="monolith", run_id=run_id)
@@ -636,6 +637,12 @@ class Command(BaseCommand):
             "border_chip_votes": outcome.stage_d_border_chip_votes,
             "frame_chip_votes": outcome.stage_d_frame_chip_votes,
             "bleed_chip_votes": outcome.stage_d_bleed_chip_votes,
+            "ai_art_votes": outcome.stage_d_ai_art_votes,
+            "art_hash_artist_votes": outcome.stage_d_art_hash_artist_votes,
+            "lands_votes": outcome.stage_d_lands_votes,
+            "lands_already_voted": outcome.stage_d_lands_already_voted,
+            "residual_artist_votes": outcome.stage_d_residual_artist_votes,
+            "residual_tag_votes": outcome.stage_d_residual_tag_votes,
             "verdict_transfer_votes": outcome.stage_d_verdict_transfer_votes,
         }
         self.stdout.write(f"STAGE D: {result}")
@@ -656,7 +663,8 @@ class Command(BaseCommand):
         self.stdout.write(f"STREAMING C→D: {batch_decision.describe()}")
         self.stdout.write(f"STAGE C: run_stage_e_streaming (micro-batches of {batch_size})")
         self.stdout.write(
-            "STAGE D: join-key -> fallback -> illustration -> slow-path, then the border / frame / bleed chips"
+            "STAGE D: join-key -> fallback -> illustration -> slow-path, then the border / frame / bleed "
+            "chips, then ai-art / residual-classify / art-hash-artist / lands-artist-decomp"
         )
 
         max_batches: Optional[int] = options.get("max_batches")
@@ -691,6 +699,12 @@ class Command(BaseCommand):
             "stage_d_border_chip_votes": 0,
             "stage_d_frame_chip_votes": 0,
             "stage_d_bleed_chip_votes": 0,
+            "stage_d_ai_art_votes": 0,
+            "stage_d_art_hash_artist_votes": 0,
+            "stage_d_lands_votes": 0,
+            "stage_d_lands_already_voted": 0,
+            "stage_d_residual_artist_votes": 0,
+            "stage_d_residual_tag_votes": 0,
             "stage_d_verdict_transfer_votes": 0,
         }
 

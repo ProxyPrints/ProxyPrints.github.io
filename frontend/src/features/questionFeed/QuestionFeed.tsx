@@ -1635,6 +1635,14 @@ export function QuestionFeed() {
             const illustrationArtist = group
               .map((candidate) => candidate.artist)
               .find((artist) => artist.trim() !== "");
+            // selectIllustrationGroup already submits one illustrationId for the whole
+            // cluster (see that function's own comment), so one tile fully represents what
+            // is being voted on - showing every member here just repeats the same artwork
+            // up to N times. Prefer a member with an art crop, the same signal a tile's own
+            // image already prefers (renderCandidateTile's imageUrl default below), and fall
+            // back to the first member so the same data always picks the same tile.
+            const representative =
+              group.find((candidate) => candidate.artCropUrl) ?? group[0];
             return (
               <IllustrationGroup
                 key={group[0].illustrationId}
@@ -1653,19 +1661,20 @@ export function QuestionFeed() {
                   </IllustrationCredit>
                 )}
                 <CandidateGrid>
-                  {group.map((candidate) =>
-                    renderCandidateTile(
-                      candidate,
-                      () =>
-                        // every member of `group` shares this non-null illustrationId - see the
-                        // grouping logic above, which only clusters candidates that have one.
-                        selectIllustrationGroup(
-                          candidate.illustrationId as string,
-                          candidate
-                        ),
-                      false,
-                      candidate.artCropUrl || candidate.mediumThumbnailUrl
-                    )
+                  {renderCandidateTile(
+                    representative,
+                    () =>
+                      // every member of `group` shares this non-null illustrationId - see
+                      // the grouping logic above, which only clusters candidates that have
+                      // one - so submitting the representative's illustrationId is
+                      // identical to submitting any other member's.
+                      selectIllustrationGroup(
+                        representative.illustrationId as string,
+                        representative
+                      ),
+                    false,
+                    representative.artCropUrl ||
+                      representative.mediumThumbnailUrl
                   )}
                 </CandidateGrid>
               </IllustrationGroup>

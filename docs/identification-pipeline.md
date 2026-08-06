@@ -435,6 +435,66 @@ printing votes, so it would have fired on the first `-v2` run.
   actually measures once seeded, the same measurement-gate discipline
   #693 established.
 
+## Reading a zero-row channel
+
+**A zero-row channel is evidence we never ran it, not evidence it is
+unnecessary. Nothing is culled without a positive reason.** (Ruling
+closes GitHub issue #618; rehomed here so it survives that issue's
+closure.)
+
+**Corollary 1 — a zero-row IDENTITY is not a zero-row CHANNEL.** A
+superseding caster writes under a NEW identity; the old identity stays
+at zero forever. An audit counting by identity will report a channel
+dead while its replacement carries hundreds of thousands of rows.
+Observed 2026-08-05: `local-fallback-v1` reads 0 while
+`frame-style-cast-v1` carries ~151,161 rows for the same conceptual
+channel. Count by TAG, not by identity; enumerate every identity that
+has ever written a channel's tag before concluding it is silent — never
+assume one identity per channel.
+
+**Corollary 2 — read the channel's own stated intent before calling it
+defective.** Three channels read as broken in a single audit and all
+three were documented, deliberate states, not defects:
+
+- `local-fallback-v1` at zero — superseded by a purpose-built caster
+  (PR #654).
+- bleed-edge (`bleed-edge-cast-v1`) emitting only negative votes —
+  `local_fallback.cast_bleed_edge_vote`'s own docstring records that this
+  negative-only design superseded an original both-directions design on
+  2026-07-15: `appropriate-bleed` is a SENSITIVE tag requiring moderator
+  co-sign, and voting APPLY on the routine ~97.5% case "would flood
+  moderation with confirmations of normalcy rather than surfacing the
+  rare real exception, which is what a SENSITIVE tag is for." Absence of
+  a vote **is** the documented convention for normal bleed.
+- art-edge-continuity (`local_art_edge.classify_art_edge_continuity`)
+  casting nothing — its own docstring states it is "EVIDENCE-ONLY
+  today — nothing votes on it yet", gated behind
+  `cast_art_edge_continuity_vote` pending a validation pass against
+  Scryfall's own `frame_effects`. A stated deferral, not an unwired
+  accident.
+
+**The general form — the magnitude/exception split.** Quantitative
+facts live in EVIDENCE COLUMNS; votes surface only the actionable
+EXCEPTION. Bleed is the worked example: `local_fallback. compute_bleed_diff_mm` runs unconditionally inside `image_evidence.py`'s
+per-card field computation (`image_evidence.py:1053`) and persists a
+signed per-edge measurement to `ImageEvidence.bleed_diff_mm` (column
+since migration `0087_imageevidence_bleed_diff_mm`; negative =
+over-bleed, positive = under-bleed), while the vote channel
+(`cast_bleed_edge_vote`) tags only the exception — a confidently
+`'trimmed'` reading. Anything reasoning about HOW BADLY a card bleeds
+reads `bleed_diff_mm` directly, never the vote. Therefore: a channel's
+row count cannot be interpreted on its own — read its
+docstring/design record, and check whether a companion evidence column
+already carries the magnitude, before calling a silent vote channel
+broken.
+
+This is a different claim from `channel_report.py`'s own "WHY ZERO
+GATES" principle (`OPS-CORR-0008`: a channel that produces nothing must
+be treated as a run failure unless declared otherwise). That rule is
+about the REPORTING INSTRUMENT failing to notice a real silent channel;
+this ruling is about correctly INTERPRETING a zero once the instrument
+has already surfaced it.
+
 ## Why a bad identification is hard
 
 Candidates are name-constrained (a wrong match must be a real printing _of the

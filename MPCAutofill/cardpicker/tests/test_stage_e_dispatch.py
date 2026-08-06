@@ -29,9 +29,18 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
 from cardpicker import stage_e_dispatch
+from cardpicker.default_tags import seed_default_tags
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import ExtractionResult
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
+from cardpicker.local_detect_ai_art import AI_ART_ANONYMOUS_ID, AI_GENERATED_TAG_NAME
+from cardpicker.local_identify_printing_tags import PHASH_ANONYMOUS_ID
+from cardpicker.local_lands_identify import LANDS_ANONYMOUS_ID
+from cardpicker.local_residual_classify import (
+    ALTERED_FRAME_TAG_NAME,
+    ART_HASH_ARTIST_ANONYMOUS_ID,
+    RESIDUAL_CLASSIFY_ANONYMOUS_ID,
+)
 from cardpicker.management.commands.run_image_evidence_cohort import (
     MANIFEST_EXTRACTOR_CURRENT_VERSIONS,
     MANIFEST_EXTRACTOR_KEYS,
@@ -40,8 +49,10 @@ from cardpicker.management.commands.stream_backstop_sweep import (
     _next_stage_d_backlog_ids,
 )
 from cardpicker.models import (
+    CardArtistVote,
     CardPrintingTag,
     CardScanLog,
+    CardTagVote,
     EnvelopeTrip,
     ImageEvidence,
     PilotRunLedger,
@@ -66,10 +77,12 @@ from cardpicker.stage_e_dispatch import (
     dispatch_micro_batch,
 )
 from cardpicker.tests.factories import (
+    CanonicalArtistFactory,
     CanonicalCardFactory,
     CardFactory,
     CardPrintingTagFactory,
     ImageEvidenceFactory,
+    TagFactory,
 )
 
 STREAMING_ON = override_settings(STAGE_E_STREAMING_ENABLED=True)
@@ -622,6 +635,128 @@ class TestEndToEndMicroBatch:
         assert outcome.status == "completed"
         assert outcome.stage_c_completed == 0
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+
+
+class TestEvidenceOnlyCalculators:
+    """The four channels `_run_evidence_only_calculators` wires into `_run_stage_d`
+    (2026-08-05): each test proves its own channel actually FIRES during a real
+    `dispatch_micro_batch` call - asserting on the vote/counter that lands on the batch's own
+    `DispatchOutcome`, never on the underlying calculator function called in isolation (that
+    isolated coverage already exists in each calculator's own test module). Every fixture below
+    gives its card(s) CURRENT `ImageEvidence` up front (`_full_evidence`) so Stage C is skipped
+    and the assertion is isolated to Stage D, matching `TestEndToEndMicroBatch`'s own convention."""
+
+    @STREAMING_ON
+    def test_ai_art_detector_fires_and_casts_a_tag_vote(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _full_evidence(card, artist_ocr_name="Midjourney")
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("evidence-backed card should never re-fetch for Stage C")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_ai_art_votes == 1
+        vote = CardTagVote.objects.get(card=card, anonymous_id=AI_ART_ANONYMOUS_ID)
+        assert vote.tag.name == AI_GENERATED_TAG_NAME
+
+        ledger = PilotRunLedger.objects.get(command="stage_e_streaming_dispatch")
+        assert ledger.counters["stage_d_ai_art_votes"] == 1
+
+    @STREAMING_ON
+    def test_ai_art_detector_missing_tag_seed_does_not_halt_the_batch(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # "AI-Generated" deliberately NOT seeded - mirrors _run_attribute_chip_casters' own
+        # missing-seed test convention: an operator setup gap in one advisory channel must not
+        # fail the whole dispatch, and the other three evidence-only channels still run.
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        source_card = CardFactory(content_phash=555, canonical_card=printing)
+        sibling = CardFactory(content_phash=555)
+        for c in (source_card, sibling):
+            _full_evidence(c)
+        _install_stage_c_stub(monkeypatch, fetch_result=lambda card, dpi=None: (_ for _ in ()).throw(AssertionError))
+
+        outcome = dispatch_micro_batch(card_ids=[source_card.pk, sibling.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_ai_art_votes == 0
+        assert outcome.stage_d_art_hash_artist_votes == 1
+
+    @STREAMING_ON
+    def test_residual_classify_fires_the_phash_only_path_and_casts_dual_yield_votes(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        TagFactory(name=ALTERED_FRAME_TAG_NAME)
+        artist = CanonicalArtistFactory()
+        CanonicalCardFactory(name="Forest", image_hash=100, artist=artist)
+        card = CardFactory(name="Forest", content_phash=100)
+        _full_evidence(card)
+        # A durable flag from an EARLIER pass - this channel's own eligibility read, not
+        # something Stage C produces on this dispatch.
+        CardScanLog.objects.create(card=card, anonymous_id=PHASH_ANONYMOUS_ID, skip_reason="frame-mismatch")
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("phash-flagged recovery must never fetch - it is the free path")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_residual_artist_votes == 1
+        assert outcome.stage_d_residual_tag_votes == 1
+        artist_vote = CardArtistVote.objects.get(card=card, anonymous_id=RESIDUAL_CLASSIFY_ANONYMOUS_ID)
+        assert artist_vote.artist_id == artist.pk
+        tag_vote = CardTagVote.objects.get(card=card, anonymous_id=RESIDUAL_CLASSIFY_ANONYMOUS_ID)
+        assert tag_vote.tag.name == ALTERED_FRAME_TAG_NAME
+
+    @STREAMING_ON
+    def test_art_hash_artist_propagation_fires_for_a_d0_sibling(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        artist = CanonicalArtistFactory()
+        printing = CanonicalCardFactory(artist=artist)
+        source_card = CardFactory(content_phash=555, canonical_card=printing)
+        sibling = CardFactory(content_phash=555)
+        for c in (source_card, sibling):
+            _full_evidence(c)
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("d0 sibling propagation must never fetch")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[source_card.pk, sibling.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_art_hash_artist_votes == 1
+        vote = CardArtistVote.objects.get(card=sibling, anonymous_id=ART_HASH_ARTIST_ANONYMOUS_ID)
+        assert vote.artist_id == artist.pk
+
+    @STREAMING_ON
+    def test_lands_identify_fires_the_evidence_backed_singleton_path(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        artist = CanonicalArtistFactory(name="Rebecca Guay")
+        printing = CanonicalCardFactory(name="Plains", artist=artist, image_hash=7)
+        card = CardFactory(name="Plains", content_phash=7)
+        _full_evidence(card, artist_ocr_name="Rebecca Guay")
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("evidence-backed lands card must never fetch at fetch_budget=0")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_lands_votes == 1
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=LANDS_ANONYMOUS_ID)
         assert vote.printing_id == printing.pk
 
 

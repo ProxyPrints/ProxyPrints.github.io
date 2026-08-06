@@ -473,6 +473,8 @@ def _tier_2_contested(
     answered_artist_card_ids: Optional[set[int]] = None,
     answered_tag_card_ids_by_tag: Optional[dict[str, set[int]]] = None,
     not_official_art_card_ids: Optional[set[int]] = None,
+    contested_card_ids: Optional[list[int]] = None,
+    contested_artist_card_ids: Optional[list[int]] = None,
 ) -> Optional[tuple[QuestionFeedItem, str]]:
     if answered_card_ids is None:
         answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
@@ -482,9 +484,13 @@ def _tier_2_contested(
         answered_tag_card_ids_by_tag = _voter_answered_tag_card_ids_by_tag(anonymous_id)
     if not_official_art_card_ids is None:
         not_official_art_card_ids = _not_official_art_card_ids()
+    if contested_card_ids is None:
+        contested_card_ids = get_contested_card_ids()
+    if contested_artist_card_ids is None:
+        contested_artist_card_ids = get_contested_artist_card_ids()
 
     printing_card = (
-        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=get_contested_card_ids())
+        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=contested_card_ids)
         .exclude(pk__in=answered_card_ids)
         .order_by("-date_created")
         .first()
@@ -493,7 +499,7 @@ def _tier_2_contested(
         return _identify_printing_item(printing_card), "tier_2_contested_printing"
 
     artist_card = (
-        Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=get_contested_artist_card_ids())
+        Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=contested_artist_card_ids)
         .exclude(pk__in=answered_artist_card_ids)
         .exclude(pk__in=not_official_art_card_ids)
         .order_by("-date_created")
@@ -537,6 +543,7 @@ def _tier_4_fresh(
     anonymous_id: str,
     answered_card_ids: Optional[set[int]] = None,
     not_official_art_card_ids: Optional[set[int]] = None,
+    contested_card_ids: Optional[list[int]] = None,
 ) -> Optional[tuple[QuestionFeedItem, str]]:
     # named "tier 4" (not renumbered to 3) even though moderation's former tier 3 was removed
     # (see module docstring) - keeps this name stable against every docstring/test/comment
@@ -563,9 +570,11 @@ def _tier_4_fresh(
         answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
     if not_official_art_card_ids is None:
         not_official_art_card_ids = _not_official_art_card_ids()
+    if contested_card_ids is None:
+        contested_card_ids = get_contested_card_ids()
     printing_card = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
-        .exclude(pk__in=get_contested_card_ids())
+        .exclude(pk__in=contested_card_ids)
         .exclude(pk__in=answered_card_ids)
         .annotate(vote_count=Count("printing_tags", distinct=True))
         .annotate(origin_reason=_latest_stage_d_origin_reason_subquery())
@@ -679,18 +688,33 @@ def get_next_question_feed_item(anonymous_id: str) -> Optional[QuestionFeedItem]
     if tier_1_item is not None:
         return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
 
+    # `contested_card_ids`/`contested_artist_card_ids` are resolved ONCE here, only once we've
+    # actually fallen through to the tiers that consult them (tier 1 and the likely-resolve pool
+    # above never touch either), and reused by both tier 2 and tier 4 below - each is otherwise
+    # identical on repeat calls within this same request (no vote can be cast mid-request), so
+    # recomputing it once per tier just paid the same cost twice for one answer.
+    contested_card_ids = get_contested_card_ids()
+    contested_artist_card_ids = get_contested_artist_card_ids()
+
     tier_2_result = _tier_2_contested(
         anonymous_id,
         answered_card_ids,
         answered_artist_card_ids=answered_artist_card_ids,
         answered_tag_card_ids_by_tag=answered_tag_card_ids_by_tag,
         not_official_art_card_ids=not_official_art_card_ids,
+        contested_card_ids=contested_card_ids,
+        contested_artist_card_ids=contested_artist_card_ids,
     )
     if tier_2_result is not None:
         tier_2_item, tier_2_reason = tier_2_result
         return _log_served(anonymous_id, tier_2_item, QuestionFeedServedPool.REMAINDER, tier_2_reason)
 
-    tier_4_result = _tier_4_fresh(anonymous_id, answered_card_ids, not_official_art_card_ids=not_official_art_card_ids)
+    tier_4_result = _tier_4_fresh(
+        anonymous_id,
+        answered_card_ids,
+        not_official_art_card_ids=not_official_art_card_ids,
+        contested_card_ids=contested_card_ids,
+    )
     if tier_4_result is not None:
         tier_4_item, tier_4_reason = tier_4_result
         return _log_served(anonymous_id, tier_4_item, QuestionFeedServedPool.REMAINDER, tier_4_reason)

@@ -1200,6 +1200,81 @@ casters for these two chips inside the live-fetch pilot and inside
 so both chips sat at zero rows with nothing able to re-derive them. See
 `docs/features/printing-tags.md`, "Who actually casts the attribute chips".
 
+### Wiring status — the streaming conveyor's `_run_stage_d` (2026-08-05)
+
+The question this section answers: for EVERY identity the roster tether
+derives from code (19 today, 2 of them not real vote-casting calculators —
+`evidence-transfer-v1`/`question-feed-hypothetical-vote`, see
+`CALCULATOR_ROSTER_ALLOWLIST` in `.github/scripts/docs_lint.py` — leaving
+17 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
+or the streaming conveyor's own `stage_e_dispatch._run_stage_d`) actually
+INVOKE it, verified by a real call site rather than a name match against
+this file? A prior claim in circulation held that a pass casts on "10 of
+roughly 28" channels — the derived roster is 17 real identities, not ~28,
+and as of this pass **11 of 17** are invoked by a real call site (up from 7
+before this pass — see below), 6 are deliberately unwired with a stated
+reason.
+
+**Wired before this pass (7):** `stage-d-join-key-v1`, `stage-d-fallback-v1`,
+`stage-d-illustration-v2`, `stage-d-slow-path-v1` (all four
+`local_calculate_verdicts.py`, called directly by `_run_stage_d`), plus
+`layout-class-cast-v1`/`frame-style-cast-v1`/`bleed-edge-cast-v1` (PR #654,
+`_run_attribute_chip_casters`). `stage-d-slow-path-v1` is a router that
+casts 0 votes by construction (see its own entry above) but IS invoked,
+which is why it counts as wired here despite never appearing in a
+vote-count table.
+
+**Newly wired by this pass (4)** — `ai-art-detector-v1`,
+`lands-artist-decomp-v1`, `residual-classify-v1`, `art-hash-artist-v1`, via
+a new `_run_evidence_only_calculators` step in `_run_stage_d`. All four
+read only already-stored evidence (`ImageEvidence` OCR fields,
+`Card.content_phash`, already-resolved artist/printing chains) and fetch
+no image — `run_lands_identify`/`run_frame_mismatch_recovery` are called
+with every live-fetch budget forced to 0, which their own docstrings
+already documented as "the scoped, genuinely free [...] path". Per-card
+cost was not independently benchmarked beyond what each calculator's own
+docstring already measures (`run_lands_identify`'s cached
+`CandidateNameIndex` build: 1.48s once per worker process, not per card;
+every other cost is a plain indexed DB read) — no full-catalogue timing
+run was performed as part of this pass, consistent with the constraint
+that no management command or backfill ran against the live, contended
+database while writing it. See the PR that shipped this wiring for the
+per-channel dispatch-level tests (each proven to fire, and proven to fail
+when the wiring call is removed).
+
+**Deliberately left unwired (6), with a reason and a tracked issue each:**
+
+- `art-edge-continuity-v1` — genuinely FREE, but the module's own author
+  gated it behind a stated validation precondition (agreement/false-positive
+  rate against Scryfall's own `frame_effects` ground truth) that has not
+  run. See its own entry below and
+  [issue #721](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/721).
+- `deductive-backfill-v1`, `local-name-frequency-v1` — read only
+  already-stored data (no fetch/OCR/network), but NEITHER has a `card_ids`
+  batch-scoping parameter: each rebuilds a whole-catalogue in-memory index
+  or census from scratch on every call, so wiring either into a
+  25-card-at-a-time conveyor as-is would mean paying a full-catalogue-scale
+  cost on every single micro-batch. Classified EXPENSIVE on IMPLEMENTATION
+  grounds, not data-source grounds — a real finding, not an oversight. See
+  [issue #722](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/722).
+- `local-ocr-v1`, `local-phash-v1`, `local-fallback-v1` — these three
+  identities' PRIMARY caster (`run_pilot`/`run_fallback_for_card`) computes
+  its verdict from a real image for the first time, requiring a live CDN
+  fetch plus tesseract (OCR) or a hash computation over pixels (phash);
+  unlike the four newly-wired channels, there is no stored-evidence
+  reconstruction path for the PRIMARY computation (some votes under these
+  same identities are already cast for free as a side effect of OTHER
+  calculators' own evidence-only paths, e.g. `lands-artist-decomp-v1`'s
+  OCR-resolved branch — that is not this identity's own engine running for
+  free). See
+  [issue #723](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/723).
+
+Backfill for the 4 newly-wired channels, against the EXISTING catalogue
+(not future passes, which the wiring above already covers), is a SEPARATE
+deliverable per this project's own practice (wiring ≠ backfill) — stated in
+the PR that shipped this wiring, not run as part of it, since a
+full-catalogue pass was live and the database was contended at the time.
+
 ### Calculator roster — the three identities this page omitted (2026-07-29)
 
 Until 2026-07-29 this page enumerated **eleven** calculator identities.
@@ -1275,6 +1350,7 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   non-extended black-bordered cards. That labelling is free and needs no
   human pass. Do not read its zero vote count as a measured statement
   about extended-art detection's yield — nothing has been measured yet.
+  Tracked: [issue #721](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/721).
 - **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —
   **ZERO output of any kind. Under diagnosis; may be retired.** The
@@ -1284,7 +1360,10 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   votes and no `CardScanLog` rows** — not even a skip log, which means it
   is not merely abstaining, it is not being reached. Whether it gets
   fixed or deleted is undecided; it is recorded here as a known hole
-  rather than left off the page.
+  rather than left off the page. Also missing a `card_ids` batch-scoping
+  parameter (2026-08-05 finding), which is a separate, more concrete blocker
+  than "under diagnosis" alone conveys — see the "Wiring status" section
+  above and [issue #722](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/722).
 
 ### Calculator roster — the identity the tether itself could not see (2026-07-29)
 

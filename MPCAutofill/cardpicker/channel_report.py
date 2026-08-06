@@ -85,6 +85,13 @@ silent channel therefore fails the report unless it carries an explicit
 `ZeroDeclaration` with a written reason, and a channel that is declared
 silent and then STARTS producing rows fails too, because that is a real
 event nobody predicted.
+
+This is a claim about the INSTRUMENT: it must not stay silent about a
+silent channel. It is a different claim from how to READ a zero once this
+instrument has surfaced it - see docs/identification-pipeline.md's own
+"Reading a zero-row channel" section (count by tag not identity; check the
+channel's own docstring and any companion evidence column before calling
+it defective) for that.
 """
 
 from __future__ import annotations
