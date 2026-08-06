@@ -42,21 +42,23 @@ section-by-section implementation mapping.
 
 ---
 
-**AMENDMENTS — owner decisions closing live-state issues on 2026-08-05 (three days after
-PR #446 shipped):**
+**AMENDMENTS — 2026-08-05, closing live-state issues found three days after
+PR #446 shipped:**
 
 1. **A1: Container-first policy reaffirmed (WD1).** The policy stated at §3 lines
    185–190 — components style against their CONTAINER (`@container`), layout folds
    continuously, no viewport sizing — remains binding and is WTC's first consumer.
-   No amendment to the policy itself; this reaffirmation documents the owner's
-   explicit confirmation that this is not a proposal but the governing standard for
-   this surface and its successors.
+   No amendment to the policy itself. It is recorded as binding rather than proposed
+   because it already governs shipped code: describing a rule the implementation
+   follows as a proposal misstates what the code does.
 
 2. **A2: WD4 amended — reference image pinned within container, not viewport
    (§3 "Page scroll model").** WD4 currently retires sticky/bounded-height positioning
    in favour of "an ordinary scrolling document," relying on WD3's subject-compaction
-   to keep the confirm hero reachable (lines 213–219). The owner requires the
-   reference image VISIBLE AT ALL TIMES, at every viewport. The reconciliation:
+   to keep the confirm hero reachable (lines 213–219). That is not sufficient: the
+   reference image must remain visible at all times, at every viewport, because it is
+   the subject the question is about — a reader who has scrolled it out of view cannot
+   answer without scrolling back. The reconciliation:
    the reference image is PINNED WITHIN ITS CONTAINER, not viewport-sticky. The
    page remains an ordinary scrolling document (WD4's rejection of viewport-coupled
    positioning stands), but the image is held fixed within its own `@container hero`
@@ -69,8 +71,8 @@ PR #446 shipped):**
 
 3. **A3: §1c binding table confirmed — no amendment needed.** Issue #708 reported the
    reference image's title overlay (SubjectArtTitle, gradient + text) as blocking the
-   bottom corner, which appeared to conflict with the binding table. Owner re-examination:
-   the gradient itself is not the defect. The actual symptom is #705's hover-grow clipping
+   bottom corner, which appeared to conflict with the binding table. On re-examination
+   the gradient is not the defect. The actual symptom is #705's hover-grow clipping
    (cards render in boxes with `overflow: hidden`, and the image scales up 1.6× on hover,
    so the clipping crops the edges). The binding table stands. A future note on the
    interaction between hover-scale transforms and container overflow may be useful; the
@@ -78,19 +80,21 @@ PR #446 shipped):**
 
 4. **A4: WD6 amended — AttributeChipPanel shown automatically by question type (§6
    "Features-accounted checklist").** WD6 currently carries AttributeChipPanel as
-   Level-2 disclosure, opt-in behind a toggle (line 281, checkbox item). Owner decision
-   supersedes: the chip panel is SHOWN AUTOMATICALLY based on the TYPE OF QUESTION being
-   asked, not behind a manual toggle. Hard constraint couples to A2: the chip panel must
+   Level-2 disclosure, opt-in behind a toggle (line 281, checkbox item). That is
+   superseded: the chip panel is SHOWN AUTOMATICALLY based on the TYPE OF QUESTION being
+   asked, not behind a manual toggle. A panel that must be opened before it can help is
+   one most people never open, and which chips are relevant is already determined by the
+   question being asked — so the disclosure step costs reach without adding information. Hard constraint couples to A2: the chip panel must
    NEVER occlude or hide the reference image — the pinning mechanism (A2) and the panel's
    visibility/placement must be co-designed to respect this.
 
 5. **A5: Annex A amended — served-mix logging seam retired (§7).** Annex A (lines 315–334)
    calls for logging served-mix composition per session so a future audit could correlate
-   click-latency / agreement-rate against easy-question exposure. Owner decision: no
-   build item for user-action telemetry beyond what a feature strictly requires. The
-   logging seam is RETIRED. Why: the difficulty-lane model (A6) was chosen partly BECAUSE
-   it requires no telemetry — it reads entirely off existing vote state. Reason recorded
-   with the retirement so a future reader understands the decision, not a gap.
+   click-latency / agreement-rate against easy-question exposure. The seam is RETIRED.
+   Difficulty is derived from stored vote state under A6, so the logging would record
+   nothing the data does not already carry, and user behaviour is not tracked beyond what
+   a feature strictly requires. The Annex A text is retained rather than deleted so a
+   future reader sees the reasoning rather than a gap.
 
 6. **A6: Difficulty-lane model recorded (new § before Annex A).** Question difficulty
    is derived from DATA STATE, never from user profiling or behavioural tracking:
