@@ -16,6 +16,7 @@ from cardpicker.models import (
     CardReportReason,
     CardTagVote,
     CardTypes,
+    HiddenCard,
     Source,
     TagModerationClass,
     TagVoteStatus,
@@ -151,10 +152,19 @@ class TestPostReportCard:
         pass
 
     @staticmethod
-    def report(client, card, reason: str, text: str | None = None, anonymous_id: str = "anon-1"):
+    def report(
+        client,
+        card,
+        reason: str,
+        text: str | None = None,
+        anonymous_id: str = "anon-1",
+        hide: bool | None = None,
+    ):
         body: dict = {"identifier": card.identifier, "anonymousId": anonymous_id, "reason": reason}
         if text is not None:
             body["text"] = text
+        if hide is not None:
+            body["hide"] = hide
         return client.post(reverse(views.post_report_card), body, content_type="application/json")
 
     def test_report_writes_audit_row(self, client):
@@ -244,6 +254,50 @@ class TestPostReportCard:
         card = CardFactory()
         assert self.report(client, card, "broken_image", anonymous_id="anon-a").status_code == 200
         assert self.report(client, card, "broken_image", anonymous_id="anon-b").status_code == 200
+
+    def test_hide_true_writes_hidden_card_in_the_same_transaction(self, client):
+        card = CardFactory()
+        response = self.report(client, card, "broken_image", hide=True)
+        assert response.status_code == 200
+        # the report always lands, and the hide adds the exclusion alongside it - never in
+        # place of the report (the `HiddenCard` docstring's contract)
+        report = CardReport.objects.get()
+        assert report.card == card
+        hidden = HiddenCard.objects.get()
+        assert hidden.card == card
+        assert hidden.anonymous_id == "anon-1"
+
+    def test_hide_absent_or_false_never_writes_a_hidden_card(self, client):
+        card = CardFactory()
+        self.report(client, card, "broken_image")
+        self.report(client, card, "broken_image", anonymous_id="anon-2", hide=False)
+        assert CardReport.objects.count() == 2
+        assert HiddenCard.objects.count() == 0
+
+    def test_repeat_hide_is_a_no_op_via_get_or_create(self, client):
+        card = CardFactory()
+        self.report(client, card, "broken_image", hide=True)
+        self.report(client, card, "broken_image", hide=True)
+        assert CardReport.objects.count() == 2
+        assert HiddenCard.objects.count() == 1
+
+    def test_hide_is_scoped_per_anonymous_id(self, client):
+        card = CardFactory()
+        self.report(client, card, "broken_image", anonymous_id="anon-a", hide=True)
+        # a second identity reporting the same card without hide must not inherit the exclusion
+        self.report(client, card, "broken_image", anonymous_id="anon-b")
+        hidden = HiddenCard.objects.get()
+        assert hidden.anonymous_id == "anon-a"
+
+    def test_rate_limited_report_with_hide_writes_nothing(self, client, settings):
+        settings.CARD_REPORT_RATE = "1/d"
+        card = CardFactory()
+        assert self.report(client, card, "broken_image", anonymous_id="anon-rate").status_code == 200
+        assert self.report(client, card, "nsfw", anonymous_id="anon-rate", hide=True).status_code == 429
+        # the 429 path returns before the transaction, so neither row exists for the hidden
+        # report - a hide can never outlive the report it travels with
+        assert CardReport.objects.count() == 1
+        assert HiddenCard.objects.count() == 0
 
 
 class TestRejectUntrustedOrigin:

@@ -6,8 +6,10 @@ import {
 
 import { Back, Front, QueryTags } from "@/common/constants";
 import {
+  getExistingAnonymousId,
   getLocalStorageSearchSettings,
   setLocalStorageFavorites,
+  setLocalStorageHiddenCardIds,
   setLocalStorageManualOverrides,
 } from "@/common/cookies";
 import { isLikelyDriveFileId } from "@/common/orphanCard";
@@ -37,6 +39,7 @@ import {
   setFavoriteRender,
   toggleFavoriteRender,
 } from "@/store/slices/favoritesSlice";
+import { hideCard } from "@/store/slices/hiddenCardsSlice";
 import { recordInvalidIdentifier } from "@/store/slices/invalidIdentifiersSlice";
 import {
   addMembers,
@@ -429,6 +432,25 @@ startAppListening({
   effect: async (action, { getState }) => {
     const state = getState();
     setLocalStorageManualOverrides(state.project.manualOverrides);
+  },
+});
+
+startAppListening({
+  actionCreator: hideCard,
+  /**
+   * Persist the per-anonymous_id hidden set to localStorage on every hide (issue #714), so
+   * the client-side mirror survives a reload. A hide only ever follows a successful report
+   * submission, which has already minted the anonymous id - so the id always exists here.
+   */
+  effect: async (action, { getState }) => {
+    const anonymousId = getExistingAnonymousId();
+    if (anonymousId == null) {
+      return;
+    }
+    setLocalStorageHiddenCardIds(
+      anonymousId,
+      getState().hiddenCards.hiddenIdentifiers
+    );
   },
 });
 

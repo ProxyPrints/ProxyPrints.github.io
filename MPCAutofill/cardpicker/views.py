@@ -79,6 +79,7 @@ from cardpicker.models import (
     CardTagVote,
     CardTypes,
     DFCPair,
+    HiddenCard,
     PrintingTagStatus,
     SavedDeck,
     SavedDeckKind,
@@ -1891,6 +1892,14 @@ def post_report_card(request: HttpRequest) -> HttpResponse:
     report still lands and the vote is skipped - same graceful degradation as the no-match
     reason strips. broken_image/other write the report row only.
 
+    A report may optionally carry `hide=True` (`ReportCardRequest.hide`, additive to the
+    existing payload) - a per-anonymous_id request that this card be excluded from that
+    identity's own future question-feed items (see docs/features/moderation.md's hidden-card
+    section). The `HiddenCard` row is written in the SAME transaction as the `CardReport`,
+    never in place of one: the report always lands regardless, and `hide` only ever adds the
+    exclusion. `get_or_create` makes a repeat `hide=True` for the same (card, anonymous_id) a
+    no-op rather than an IntegrityError; a `hide=False` or absent `hide` never creates one.
+
     Rate limited per anonymous ID (IP fallback) via CARD_REPORT_RATE (default 10/day) - the
     vote only happens inside this view, so the one limit covers both effects. Same
     single-worker in-process-cache caveat as post_submit_printing_tag.
@@ -1920,6 +1929,8 @@ def post_report_card(request: HttpRequest) -> HttpResponse:
         CardReport.objects.create(
             card=card, anonymous_id=req.anonymousId, user=user, reason=req.reason.value, text=req.text or ""
         )
+        if req.hide:
+            HiddenCard.objects.get_or_create(card=card, anonymous_id=req.anonymousId)
         tag_name = REPORT_REASON_TO_TAG_NAME.get(req.reason.value)
         if tag_name is not None:
             tag = Tag.objects.filter(name=tag_name).first()

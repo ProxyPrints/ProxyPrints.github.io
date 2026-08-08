@@ -2143,6 +2143,7 @@ class ReportCardRequest(BaseModel):
     anonymousId: str
     identifier: str
     reason: Reason
+    hide: Optional[bool] = None
     text: Optional[str] = None
 
     @staticmethod
@@ -2151,14 +2152,17 @@ class ReportCardRequest(BaseModel):
         anonymousId = from_str(obj.get("anonymousId"))
         identifier = from_str(obj.get("identifier"))
         reason = Reason(obj.get("reason"))
+        hide = from_union([from_bool, from_none], obj.get("hide"))
         text = from_union([from_str, from_none], obj.get("text"))
-        return ReportCardRequest(anonymousId, identifier, reason, text)
+        return ReportCardRequest(anonymousId, identifier, reason, hide, text)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["anonymousId"] = from_str(self.anonymousId)
         result["identifier"] = from_str(self.identifier)
         result["reason"] = to_enum(Reason, self.reason)
+        if self.hide is not None:
+            result["hide"] = from_union([from_bool, from_none], self.hide)
         if self.text is not None:
             result["text"] = from_union([from_str, from_none], self.text)
         return result

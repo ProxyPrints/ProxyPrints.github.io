@@ -137,6 +137,11 @@ export const ManualOverridesKey = "manualOverrides";
 // full rationale on why this specific, narrow, owner-approved case is exempt from this repo's
 // usual "no localStorage for state that should survive a clear-site-data test" rule.
 export const PinnedSourcesKey = "pinnedSources";
+// Per-anonymous_id set of card identifiers the visitor hid for themselves via a `hide=True`
+// card report (issue #714 - see docs/features/moderation.md's hidden-card section). A prefix:
+// the full storage key appends the anonymous_id, so a new anonymous identity starts with an
+// empty hidden set (the server-side `HiddenCard` rows are scoped the same way).
+export const HiddenCardIdsKey = "hiddenCardIds";
 
 export const Brackets: Array<number> = [
   18, 36, 55, 72, 90, 108, 126, 144, 162, 180, 198, 216, 234, 396, 504, 612,

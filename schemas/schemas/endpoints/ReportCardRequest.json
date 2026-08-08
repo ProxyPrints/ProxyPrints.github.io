@@ -9,7 +9,8 @@
       "type": "string",
       "enum": ["nsfw", "low_quality", "wrong_card", "broken_image", "other"]
     },
-    "text": { "type": "string", "maxLength": 280 }
+    "text": { "type": "string", "maxLength": 280 },
+    "hide": { "type": "boolean" }
   },
   "required": ["identifier", "anonymousId", "reason"],
   "additionalProperties": false
