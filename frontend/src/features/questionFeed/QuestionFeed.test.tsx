@@ -385,7 +385,7 @@ describe("QuestionFeed", () => {
     ).toHaveTextContent("Suggested match");
   });
 
-  it("shows the suggested printing's own reference image on Level 1 (regression: dropped when Level 1 was introduced in #49)", async () => {
+  it("shows the suggested printing's own reference image on the suggested-match question (regression: dropped when the suggestion slot was introduced in #49)", async () => {
     server.use(
       http.get(buildRoute("2/questionFeed/"), () =>
         HttpResponse.json(
@@ -410,7 +410,7 @@ describe("QuestionFeed", () => {
     await revealCard();
 
     const referenceImage = within(
-      await screen.findByTestId("question-feed-level1-reference-image")
+      await screen.findByTestId("question-feed-suggestion-reference-image")
     ).getByRole("img");
     expect(referenceImage).toHaveAttribute(
       "src",
@@ -1056,8 +1056,28 @@ describe("QuestionFeed", () => {
       );
     }
 
-    it("tapping Level 1 'Not sure' POSTs an abstention for this card and question type, then advances to Level 2", async () => {
-      server.use(serveConfirmSuggestionOnce());
+    it("tapping the suggested-match 'Not sure' POSTs an abstention for this card and question type, then advances to the next question", async () => {
+      // The de-laddered flow (issue #728): "Not sure" means "I can't resolve this" - it
+      // records the abstention (issue #712) and advances to the next question rather than
+      // falling into a level1 -> level2 re-ask of the same candidates.
+      let feedFetchCount = 0;
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () => {
+          feedFetchCount += 1;
+          return HttpResponse.json(
+            {
+              item: confirmSuggestionItem,
+              remainingEstimate: {
+                total: 1,
+                confirmable: 1,
+                contested: 0,
+                fresh: 0,
+              },
+            },
+            { status: 200 }
+          );
+        })
+      );
       let abstentionBody: Record<string, unknown> | undefined;
       server.use(
         http.post(
@@ -1072,7 +1092,7 @@ describe("QuestionFeed", () => {
       await revealCard();
 
       fireEvent.click(
-        await screen.findByTestId("question-feed-level1-not-sure")
+        await screen.findByTestId("question-feed-suggestion-not-sure")
       );
 
       await waitFor(() => expect(abstentionBody).toBeDefined());
@@ -1080,12 +1100,11 @@ describe("QuestionFeed", () => {
         identifier: confirmSuggestionItem.card.identifier,
         questionType: "confirm_suggestion",
       });
-      expect(
-        await screen.findByTestId("question-feed-level2")
-      ).toBeInTheDocument();
+      // advances to the next question - no level2 re-ask of the same candidates
+      await waitFor(() => expect(feedFetchCount).toBe(2));
     });
 
-    it("tapping Level 1 'Skip' never calls submitQuestionAbstention", async () => {
+    it("tapping 'Skip' never calls submitQuestionAbstention", async () => {
       server.use(serveConfirmSuggestionOnce());
       let abstentionCalls = 0;
       server.use(
@@ -1097,7 +1116,7 @@ describe("QuestionFeed", () => {
       renderFeed();
       await revealCard();
 
-      fireEvent.click(await screen.findByTestId("question-feed-level1-skip"));
+      fireEvent.click(await screen.findByTestId("question-feed-skip"));
       await revealCard();
 
       expect(abstentionCalls).toBe(0);

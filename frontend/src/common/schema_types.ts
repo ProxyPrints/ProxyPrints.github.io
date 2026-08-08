@@ -832,6 +832,7 @@ export interface PrintingTagQueueResponse {
 
 export interface ReportCardRequest {
   anonymousId: string;
+  hide?: boolean;
   identifier: string;
   reason: Reason;
   text?: string;
@@ -3720,6 +3721,7 @@ const typeMap: any = {
   ReportCardRequest: o(
     [
       { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "hide", js: "hide", typ: u(undefined, true) },
       { json: "identifier", js: "identifier", typ: "" },
       { json: "reason", js: "reason", typ: r("Reason") },
       { json: "text", js: "text", typ: u(undefined, "") },

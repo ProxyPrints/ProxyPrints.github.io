@@ -362,12 +362,17 @@ def _fetch_unresolved_printing_card(card_id: int) -> Optional[Card]:
     return Card.objects.filter(pk=card_id, printing_tag_status=PrintingTagStatus.UNRESOLVED).first()
 
 
-def draw_resolution_imminent_card(answered_card_ids: set[int]) -> Optional[Card]:
+def draw_resolution_imminent_card(
+    answered_card_ids: set[int], hidden_card_ids: Optional[set[int]] = None
+) -> Optional[Card]:
     entries = _get_cached_pool(LANE_RESOLUTION_IMMINENT)
     if not entries:
         return None
+    hidden_card_ids = hidden_card_ids or set()
     for entry in _iter_from_random_offset(entries):
         if entry.card_id in answered_card_ids:
+            continue
+        if entry.card_id in hidden_card_ids:
             continue
         card = _fetch_unresolved_printing_card(entry.card_id)
         if card is not None:
@@ -375,12 +380,15 @@ def draw_resolution_imminent_card(answered_card_ids: set[int]) -> Optional[Card]
     return None
 
 
-def draw_confirm_card(answered_card_ids: set[int]) -> Optional[Card]:
+def draw_confirm_card(answered_card_ids: set[int], hidden_card_ids: Optional[set[int]] = None) -> Optional[Card]:
     entries = _get_cached_pool(LANE_CONFIRM)
     if not entries:
         return None
+    hidden_card_ids = hidden_card_ids or set()
     for entry in _iter_from_random_offset(entries):
         if entry.card_id in answered_card_ids:
+            continue
+        if entry.card_id in hidden_card_ids:
             continue
         card = _fetch_unresolved_printing_card(entry.card_id)
         if card is not None:
@@ -393,16 +401,24 @@ def draw_contested_entry(
     answered_artist_card_ids: set[int],
     answered_tag_card_ids_by_tag: dict[str, set[int]],
     not_official_art_card_ids: set[int],
+    hidden_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[str, Card, Optional[str], Optional[str]]]:
     """Returns `(kind, card, tag_name, reason)` for the first unexcluded, unstale entry found
     from a random offset, or `None`. Exclusion sets match `_tier_2_contested`'s own exactly - all
     three (`answered_card_ids`/`answered_artist_card_ids`/`answered_tag_card_ids_by_tag`) are
     already the md5-widened, per-request-memoised sets `get_next_question_feed_item` computes
-    once and threads through, same as the live tier."""
+    once and threads through, same as the live tier. `hidden_card_ids` (this voter's
+    `question_feed._voter_hidden_card_ids` set, `None` for a direct caller meaning no hidden
+    exclusion) applies to all three kinds at once - the live tier excludes a hidden card from
+    its printing AND artist querysets and its tag loop, and this reproduces that card-level
+    exclusion here rather than per-kind."""
     entries = _get_cached_pool(LANE_CONTESTED)
     if not entries:
         return None
+    hidden_card_ids = hidden_card_ids or set()
     for entry in _iter_from_random_offset(entries):
+        if entry.card_id in hidden_card_ids:
+            continue
         if entry.kind == KIND_PRINTING:
             if entry.card_id in answered_card_ids:
                 continue
@@ -432,6 +448,7 @@ def draw_cold_entry(
     answered_card_ids: set[int],
     not_official_art_card_ids: set[int],
     contested_card_ids: list[int],
+    hidden_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[str, Card, Optional[str], Optional[str]]]:
     """The cold-lane analogue of `draw_contested_entry`. `contested_card_ids` is re-checked
     in-memory (a card can have gone from fresh to contested since this pool's last warm) -
@@ -441,12 +458,17 @@ def draw_cold_entry(
     itself keeps its own pre-existing unwidened form for both (see that function's own docstring
     for why: the widened convention is scoped to `_tier_2_contested` only), so reproducing it
     here means one extra indexed query per artist/tag candidate scanned rather than a second,
-    possibly-diverging exclusion rule."""
+    possibly-diverging exclusion rule. `hidden_card_ids` (`question_feed._voter_hidden_card_ids`,
+    `None` for a direct caller meaning no hidden exclusion) is applied card-level, same as the
+    contested lane above."""
     entries = _get_cached_pool(LANE_COLD)
     if not entries:
         return None
+    hidden_card_ids = hidden_card_ids or set()
     contested_card_id_set = set(contested_card_ids)
     for entry in _iter_from_random_offset(entries):
+        if entry.card_id in hidden_card_ids:
+            continue
         if entry.kind == KIND_PRINTING:
             if entry.card_id in answered_card_ids or entry.card_id in contested_card_id_set:
                 continue
