@@ -651,7 +651,7 @@ policy; see that function's docstring). That read is one small SELECT on
 on the 2026-08-06 deploy wave.
 
 **Schedule uniqueness.** `django_q.Schedule.name` is UNIQUE as of
-`0106_question_feed_pools_schedule_dedupe.py`, which also collapsed the
+`0107_question_feed_pools_schedule_dedupe.py`, which also collapsed the
 duplicate schedule rows that wave produced (two concurrent `migrate` runs
 raced 0105's `get_or_create`). All schedule-creating migrations now use
 `get_or_create`; any future one must too, or the constraint turns a re-run

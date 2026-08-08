@@ -149,16 +149,16 @@ class TestQuestionFeedPoolsScheduleMigration:
         migration_module().create_schedules(django_apps, None)
 
 
-MIGRATION_NAME_0106 = "0106_question_feed_pools_schedule_dedupe"
+MIGRATION_NAME_0107 = "0107_question_feed_pools_schedule_dedupe"
 
 
 def dedupe_migration_module() -> ModuleType:
-    return importlib.import_module(f"cardpicker.migrations.{MIGRATION_NAME_0106}")
+    return importlib.import_module(f"cardpicker.migrations.{MIGRATION_NAME_0107}")
 
 
 @pytest.mark.django_db
 class TestDedupeQuestionFeedPoolsSchedules:
-    """Tests for `0106_question_feed_pools_schedule_dedupe.py` - the fix for the duplicate
+    """Tests for `0107_question_feed_pools_schedule_dedupe.py` - the fix for the duplicate
     django-q2 `Schedule` rows in production (ids 6/7, 8/9, 10/11, 12/13 in the 2026-08-06 deploy
     wave: two concurrent `migrate` runs raced 0105's `get_or_create`). The migration collapses
     each duplicated name back to its earliest row and adds a UNIQUE constraint on `name` so the
@@ -173,7 +173,7 @@ class TestDedupeQuestionFeedPoolsSchedules:
         from django.db import connection
         from django.db.migrations.executor import MigrationExecutor
 
-        forwards = [("cardpicker", MIGRATION_NAME_0106)]
+        forwards = [("cardpicker", MIGRATION_NAME_0107)]
         backwards = [("cardpicker", "0105_question_feed_pools_schedule")]
 
         original = Schedule.objects.get(name=self.DUPLICATED_NAME)
