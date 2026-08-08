@@ -21,6 +21,7 @@ import cardSpacingReducer from "@/store/slices/cardSpacingSlice";
 import favoritesReducer from "@/store/slices/favoritesSlice";
 import fileDownloadsReducer from "@/store/slices/fileDownloadsSlice";
 import finishSettingsReducer from "@/store/slices/finishSettingsSlice";
+import hiddenCardsReducer from "@/store/slices/hiddenCardsSlice";
 import invalidIdentifiersReducer from "@/store/slices/invalidIdentifiersSlice";
 import marginProfileReducer from "@/store/slices/marginProfileSlice";
 import modalsReducer from "@/store/slices/modalsSlice";
@@ -50,6 +51,7 @@ const rootReducer = combineReducers({
   invalidIdentifiers: invalidIdentifiersReducer,
   fileDownloads: fileDownloadsReducer,
   favorites: favoritesReducer,
+  hiddenCards: hiddenCardsReducer,
   savedDeckSession: savedDeckSessionReducer,
   // Homepage participation graph's in-session "you contributed" state - see
   // features/stats/sessionContributionSlice.ts's own module comment.

@@ -245,4 +245,54 @@ export function getOrCreateAnonymousId(): string {
   return generated;
 }
 
+/**
+ * The existing anonymous id, or `null` when this browser has never generated one. Read-only
+ * counterpart of `getOrCreateAnonymousId` - consumers that must not mint an identity just by
+ * loading (e.g. hydrating per-id state at app start) use this.
+ */
+export function getExistingAnonymousId(): string | null {
+  return localStorage.getItem(AnonymousIdKey);
+}
+
+//# endregion
+
+//# region hidden card ids
+
+/**
+ * The identifiers of cards this visitor hid for themselves (issue #714 - a `hide=True` card
+ * report; see docs/features/moderation.md's hidden-card section). Per-anonymous_id: stored
+ * under `HiddenCardIdsKey:<anonymousId>` so the client-side mirror keeps the exact scoping of
+ * the server-side `HiddenCard` rows, and a new/cleared identity starts with an empty set.
+ * Persisted eagerly on write so the current session's views can drop a hidden card without a
+ * refetch; the durable exclusion is the server-side question-feed read filter.
+ */
+export function getLocalStorageHiddenCardIds(anonymousId: string): Set<string> {
+  const serialised = localStorage.getItem(`${HiddenCardIdsKey}:${anonymousId}`);
+  if (serialised == null) {
+    return new Set();
+  }
+  try {
+    const parsed: unknown = JSON.parse(serialised);
+    if (
+      Array.isArray(parsed) &&
+      parsed.every((entry) => typeof entry === "string")
+    ) {
+      return new Set(parsed);
+    }
+    return new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function setLocalStorageHiddenCardIds(
+  anonymousId: string,
+  hiddenIdentifiers: Iterable<string>
+): void {
+  localStorage.setItem(
+    `${HiddenCardIdsKey}:${anonymousId}`,
+    JSON.stringify([...hiddenIdentifiers])
+  );
+}
+
 //# endregion

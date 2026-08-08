@@ -65,10 +65,13 @@ reasoning) - this module still owns every tier's SELECTION semantics and every s
 construction; the pools only supply candidate ids faster than a live scan would.
 """
 
+import hashlib
 from collections import defaultdict
-from typing import Hashable, Optional
+from typing import Any, Hashable, Optional
 
 from django.conf import settings
+from django.core.cache import caches
+from django.core.cache.backends.base import InvalidCacheBackendError
 from django.db.models import (
     Case,
     Count,
@@ -99,6 +102,7 @@ from cardpicker.models import (
     CardPrintingTag,
     CardScanLog,
     CardTagVote,
+    HiddenCard,
     PrintingTagStatus,
     QuestionFeedServedLog,
     QuestionFeedServedPool,
@@ -373,6 +377,34 @@ def _not_official_art_card_ids() -> set[int]:
     return identity_group_expanded_card_ids(human_backed_card_ids)
 
 
+def _voter_hidden_card_ids(anonymous_id: str) -> set[int]:
+    """
+    Every card this anonymous_id has hidden for themselves via a `hide=True` card report
+    (`HiddenCard`, written by `views.post_report_card` in the same transaction as the report
+    - see docs/features/moderation.md's hidden-card section). The exclusion set every feed
+    candidate below is filtered against, so a card a voter asked to stop seeing never comes
+    back in that identity's own future feed items, across every question kind - printing,
+    artist and tag questions all key on the same card, so one card-level exclusion covers
+    all three (unlike the answered-card exclusions, none of which is question-kind-agnostic).
+
+    Widened to each card's full md5 identity group (`identity_group_expanded_card_ids`), same
+    as `_voter_answered_printing_card_ids`/`_voter_answered_artist_card_ids`: this module's
+    identity-grouping premise is that a byte-identical image file is ONE identification
+    target (issue #473), and a voter who hid "this image" hid the group, not just the one
+    member the report modal happened to be showing - otherwise the feed would immediately
+    re-serve the same artwork under a sibling identifier and the hide would look broken.
+    Degenerates exactly to the card-scoped behavior while no `Card.md5_checksum` rows exist
+    (the pre-PR-1 state, same as every other widened exclusion here).
+
+    COMPUTED ONCE PER FEED REQUEST, in `get_next_question_feed_item`, and passed down to
+    every branch that needs it (the 2026-07-25 gate on PR #482, condition f1 convention);
+    the tiers keep an optional parameter so a direct caller - a test, a shell - can still
+    ask for one tier by `anonymous_id` alone.
+    """
+    hidden_card_ids = HiddenCard.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
+    return identity_group_expanded_card_ids(hidden_card_ids)
+
+
 def is_likely_resolve_printing(card: Card) -> bool:
     """
     True when ONE hypothetical additional agreeing human vote (`VoteSource.USER` weight) added
@@ -424,13 +456,17 @@ def is_likely_resolve_printing(card: Card) -> bool:
     return winning_key == leading_key
 
 
-def _likely_resolve_printing_card(anonymous_id: str, answered_card_ids: Optional[set[int]] = None) -> Optional[Card]:
+def _likely_resolve_printing_card(
+    anonymous_id: str, answered_card_ids: Optional[set[int]] = None, hidden_card_ids: Optional[set[int]] = None
+) -> Optional[Card]:
     """
     First UNRESOLVED printing card (in `date_created` order, same scan convention tier 1 uses)
     that both carries at least one existing `CardPrintingTag` row and passes
     `is_likely_resolve_printing` - the >=51% mix-composition policy's own supply pool (see this
     module's docstring for the ratio policy this feeds, and `get_next_question_feed_item` for
-    where it's consulted).
+    where it's consulted). `hidden_card_ids` (this voter's `_voter_hidden_card_ids` set, or a
+    direct caller's own) is excluded like `answered_card_ids` - a card this voter hid for
+    themselves must not resurface through this pool either.
 
     Cost/approach (compute-per-serve, no caching layer - stated per this change's own spec):
     pre-filters to `printing_tags__isnull=False` (97,212 of 218,345 cards at the 2026-07-24 data
@@ -457,9 +493,12 @@ def _likely_resolve_printing_card(anonymous_id: str, answered_card_ids: Optional
     """
     if answered_card_ids is None:
         answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
+    if hidden_card_ids is None:
+        hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
     candidates = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, printing_tags__isnull=False)
         .exclude(pk__in=answered_card_ids)
+        .exclude(pk__in=hidden_card_ids)
         .distinct()
         .order_by("date_created")
     )
@@ -482,10 +521,12 @@ def _likely_resolve_item(card: Card) -> QuestionFeedItem:
 
 
 def _tier_1_confirm_suggestion(
-    anonymous_id: str, answered_card_ids: Optional[set[int]] = None
+    anonymous_id: str, answered_card_ids: Optional[set[int]] = None, hidden_card_ids: Optional[set[int]] = None
 ) -> Optional[QuestionFeedItem]:
     if answered_card_ids is None:
         answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
+    if hidden_card_ids is None:
+        hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
     cards = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
@@ -493,6 +534,7 @@ def _tier_1_confirm_suggestion(
         )
         .exclude(printing_tags__source__in=[VoteSource.USER, VoteSource.ADMIN, VoteSource.FEDERATED])
         .exclude(pk__in=answered_card_ids)
+        .exclude(pk__in=hidden_card_ids)
         .distinct()
         .order_by("date_created")
     )
@@ -511,6 +553,7 @@ def _tier_2_contested(
     not_official_art_card_ids: Optional[set[int]] = None,
     contested_card_ids: Optional[list[int]] = None,
     contested_artist_card_ids: Optional[list[int]] = None,
+    hidden_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[QuestionFeedItem, str]]:
     if answered_card_ids is None:
         answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
@@ -524,10 +567,13 @@ def _tier_2_contested(
         contested_card_ids = get_contested_card_ids()
     if contested_artist_card_ids is None:
         contested_artist_card_ids = get_contested_artist_card_ids()
+    if hidden_card_ids is None:
+        hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
 
     printing_card = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=contested_card_ids)
         .exclude(pk__in=answered_card_ids)
+        .exclude(pk__in=hidden_card_ids)
         .order_by("-date_created")
         .first()
     )
@@ -538,6 +584,7 @@ def _tier_2_contested(
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=contested_artist_card_ids)
         .exclude(pk__in=answered_artist_card_ids)
         .exclude(pk__in=not_official_art_card_ids)
+        .exclude(pk__in=hidden_card_ids)
         .order_by("-date_created")
         .first()
     )
@@ -553,6 +600,8 @@ def _tier_2_contested(
         # (dropping the tag axis) would silently hide every other still-open tag on a card the
         # moment this voter touches any one tag on it.
         if card_id in answered_tag_card_ids_by_tag.get(tag_name, set()):
+            continue
+        if card_id in hidden_card_ids:
             continue
         card = Card.objects.get(pk=card_id)
         status = card.tag_vote_statuses.get(tag_name)
@@ -580,6 +629,7 @@ def _tier_4_fresh(
     answered_card_ids: Optional[set[int]] = None,
     not_official_art_card_ids: Optional[set[int]] = None,
     contested_card_ids: Optional[list[int]] = None,
+    hidden_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[QuestionFeedItem, str]]:
     # named "tier 4" (not renumbered to 3) even though moderation's former tier 3 was removed
     # (see module docstring) - keeps this name stable against every docstring/test/comment
@@ -608,10 +658,13 @@ def _tier_4_fresh(
         not_official_art_card_ids = _not_official_art_card_ids()
     if contested_card_ids is None:
         contested_card_ids = get_contested_card_ids()
+    if hidden_card_ids is None:
+        hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
     printing_card = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=contested_card_ids)
         .exclude(pk__in=answered_card_ids)
+        .exclude(pk__in=hidden_card_ids)
         .annotate(vote_count=Count("printing_tags", distinct=True))
         .annotate(origin_reason=_latest_stage_d_origin_reason_subquery())
         .annotate(
@@ -636,6 +689,7 @@ def _tier_4_fresh(
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
         .exclude(artist_votes__anonymous_id=anonymous_id)
         .exclude(pk__in=not_official_art_card_ids)
+        .exclude(pk__in=hidden_card_ids)
         .order_by("-date_created")
         .first()
     )
@@ -645,6 +699,8 @@ def _tier_4_fresh(
     for card_id, tag_name in get_tag_review_queue_pairs():
         # see tier 2's identical comment above - scoped to (card, tag, anonymous_id)
         if CardTagVote.objects.filter(card_id=card_id, tag__name=tag_name, anonymous_id=anonymous_id).exists():
+            continue
+        if card_id in hidden_card_ids:
             continue
         card = Card.objects.get(pk=card_id)
         status = card.tag_vote_statuses.get(tag_name)
@@ -688,14 +744,22 @@ def _pool_contested_result(
     answered_artist_card_ids: set[int],
     answered_tag_card_ids_by_tag: dict[str, set[int]],
     not_official_art_card_ids: set[int],
+    hidden_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[QuestionFeedItem, str]]:
     """Pool-backed fast path for `_tier_2_contested`: converts a drawn `(kind, card, tag_name,
     reason)` into the same `(QuestionFeedItem, reason)` shape that function returns, using its
     own item-builders (`_identify_printing_item`/`_artist_item`/`_tag_item`) so a pool-served item
     is byte-for-byte the same shape a live-served one would be. `None` on a pool miss - the
-    caller falls back to `_tier_2_contested` itself."""
+    caller falls back to `_tier_2_contested` itself. `hidden_card_ids` is threaded to
+    `draw_contested_entry` unchanged (this voter's `_voter_hidden_card_ids` set); `None` means
+    no hidden exclusion, which only a direct caller ever exercises - `get_next_question_feed_item`
+    always passes the computed set."""
     drawn = question_feed_pools.draw_contested_entry(
-        answered_card_ids, answered_artist_card_ids, answered_tag_card_ids_by_tag, not_official_art_card_ids
+        answered_card_ids,
+        answered_artist_card_ids,
+        answered_tag_card_ids_by_tag,
+        not_official_art_card_ids,
+        hidden_card_ids,
     )
     if drawn is None:
         return None
@@ -713,10 +777,13 @@ def _pool_cold_result(
     answered_card_ids: set[int],
     not_official_art_card_ids: set[int],
     contested_card_ids: list[int],
+    hidden_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[QuestionFeedItem, str]]:
-    """The `_tier_4_fresh` analogue of `_pool_contested_result` above."""
+    """The `_tier_4_fresh` analogue of `_pool_contested_result` above. `hidden_card_ids` is
+    threaded to `draw_cold_entry` unchanged; `None` means no hidden exclusion (see that
+    function's own docstring for the same direct-caller-only caveat)."""
     drawn = question_feed_pools.draw_cold_entry(
-        anonymous_id, answered_card_ids, not_official_art_card_ids, contested_card_ids
+        anonymous_id, answered_card_ids, not_official_art_card_ids, contested_card_ids, hidden_card_ids
     )
     if drawn is None:
         return None
@@ -753,7 +820,12 @@ def get_next_question_feed_item(
     docstrings for why this is scoped to that tier only), and `_not_official_art_card_ids` (the
     phase-C routing signal: a card a human has declared not-official-art via `reason_tags.
     NOT_OFFICIAL_ART_REASON_TAGS` stops being served as an artist-shaped question, in both
-    `_tier_2_contested` and `_tier_4_fresh` - printing questions are unaffected).
+    `_tier_2_contested` and `_tier_4_fresh` - printing questions are unaffected). One more
+    request-scoped exclusion rides the same convention (issue #714): `_voter_hidden_card_ids`
+    (a card this voter hid for themselves via a `hide=True` card report - see that function's
+    docstring), threaded to EVERY branch below, since unlike the answered-card exclusions it is
+    question-kind-agnostic: a hidden card must not resurface as a printing, artist OR tag
+    question.
 
     `contested_card_ids` is an optional pre-resolved value (issue #713 part 2, extending PR
     #729's "compute once, thread as an optional parameter" convention across the view boundary
@@ -767,21 +839,31 @@ def get_next_question_feed_item(
     answered_artist_card_ids = _voter_answered_artist_card_ids(anonymous_id)
     answered_tag_card_ids_by_tag = _voter_answered_tag_card_ids_by_tag(anonymous_id)
     not_official_art_card_ids = _not_official_art_card_ids()
+    # This voter's own hidden-card exclusion (issue #714 - `HiddenCard` rows written by
+    # `views.post_report_card` when a report carries `hide=True`): computed ONCE here and
+    # threaded to every branch below, same convention as the other request-scoped exclusions,
+    # so a card this identity hid for themselves never comes back in their feed, whichever
+    # tier would otherwise have served it.
+    hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
 
     if _served_mix_ratio(anonymous_id) < settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO:
-        likely_resolve_card = question_feed_pools.draw_resolution_imminent_card(answered_card_ids)
+        likely_resolve_card = question_feed_pools.draw_resolution_imminent_card(
+            answered_card_ids, hidden_card_ids=hidden_card_ids
+        )
         if likely_resolve_card is None:
-            likely_resolve_card = _likely_resolve_printing_card(anonymous_id, answered_card_ids)
+            likely_resolve_card = _likely_resolve_printing_card(
+                anonymous_id, answered_card_ids, hidden_card_ids=hidden_card_ids
+            )
         if likely_resolve_card is not None:
             item = _likely_resolve_item(likely_resolve_card)
             return _log_served(
                 anonymous_id, item, QuestionFeedServedPool.LIKELY_RESOLVE, "printing_one_vote_from_resolving"
             )
 
-    tier_1_card = question_feed_pools.draw_confirm_card(answered_card_ids)
+    tier_1_card = question_feed_pools.draw_confirm_card(answered_card_ids, hidden_card_ids=hidden_card_ids)
     tier_1_item = _confirm_suggestion_item(tier_1_card) if tier_1_card is not None else None
     if tier_1_item is None:
-        tier_1_item = _tier_1_confirm_suggestion(anonymous_id, answered_card_ids)
+        tier_1_item = _tier_1_confirm_suggestion(anonymous_id, answered_card_ids, hidden_card_ids=hidden_card_ids)
     if tier_1_item is not None:
         return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
 
@@ -795,7 +877,11 @@ def get_next_question_feed_item(
     contested_artist_card_ids = get_contested_artist_card_ids()
 
     tier_2_result = _pool_contested_result(
-        answered_card_ids, answered_artist_card_ids, answered_tag_card_ids_by_tag, not_official_art_card_ids
+        answered_card_ids,
+        answered_artist_card_ids,
+        answered_tag_card_ids_by_tag,
+        not_official_art_card_ids,
+        hidden_card_ids=hidden_card_ids,
     )
     if tier_2_result is None:
         tier_2_result = _tier_2_contested(
@@ -806,18 +892,26 @@ def get_next_question_feed_item(
             not_official_art_card_ids=not_official_art_card_ids,
             contested_card_ids=contested_card_ids,
             contested_artist_card_ids=contested_artist_card_ids,
+            hidden_card_ids=hidden_card_ids,
         )
     if tier_2_result is not None:
         tier_2_item, tier_2_reason = tier_2_result
         return _log_served(anonymous_id, tier_2_item, QuestionFeedServedPool.REMAINDER, tier_2_reason)
 
-    tier_4_result = _pool_cold_result(anonymous_id, answered_card_ids, not_official_art_card_ids, contested_card_ids)
+    tier_4_result = _pool_cold_result(
+        anonymous_id,
+        answered_card_ids,
+        not_official_art_card_ids,
+        contested_card_ids,
+        hidden_card_ids=hidden_card_ids,
+    )
     if tier_4_result is None:
         tier_4_result = _tier_4_fresh(
             anonymous_id,
             answered_card_ids,
             not_official_art_card_ids=not_official_art_card_ids,
             contested_card_ids=contested_card_ids,
+            hidden_card_ids=hidden_card_ids,
         )
     if tier_4_result is not None:
         tier_4_item, tier_4_reason = tier_4_result
@@ -844,6 +938,45 @@ def _tag_review_card_ids_by_status() -> tuple[set[int], set[int]]:
         if TagVoteStatus.UNRESOLVED in values:
             unresolved_ids.add(card_id)
     return contested_ids, unresolved_ids
+
+
+_REMAINING_ESTIMATE_CACHE_KEY = "question-feed-remaining-estimate:v1"
+_REMAINING_ESTIMATE_CACHE_TTL = 300  # seconds - see get_remaining_estimate's docstring
+
+
+def _remaining_estimate_cache_key(contested_card_ids: Optional[list[int]]) -> str:
+    """
+    Cache key for `get_remaining_estimate`'s four counts, derived from the function's effective
+    inputs so two callers that resolved different contested id-sets never share a cached value.
+
+    `None` (the caller lets this function resolve the contested id-set itself) maps to a single
+    stable key - the resolved set is an implementation detail, and a stable key is what lets the
+    cache actually hit across requests. A pre-resolved set (the view path, issue #713 part 2)
+    maps to a digest of that set's CONTENT, so a caller that resolved a different set than the
+    one a cached value was computed against gets a miss and a fresh compute, never another
+    caller's stale counts. The digest is sha1 over the sorted set - never Python's builtin
+    `hash`, which is salted per process and would produce different keys in the warmer and the
+    endpoint - and stays well under the DatabaseCache's 255-character key column.
+    """
+    if contested_card_ids is None:
+        return _REMAINING_ESTIMATE_CACHE_KEY
+    digest = hashlib.sha1(repr(sorted(set(contested_card_ids))).encode()).hexdigest()
+    return f"{_REMAINING_ESTIMATE_CACHE_KEY}:{digest}"
+
+
+def _remaining_estimate_shared_cache() -> Optional[Any]:
+    """
+    The cross-process `"shared"` cache (see `settings.CACHES` and `docs/infrastructure.md`'s
+    cache section), or `None` on a pre-#543 environment.
+
+    Same read-side degradation convention as `question_feed_pools._shared_cache_for_read`: a
+    missing alias is an ordinary miss and the caller falls back to computing the counts live -
+    the feed must never 500 because an advisory-header cache isn't configured.
+    """
+    try:
+        return caches["shared"]
+    except InvalidCacheBackendError:
+        return None
 
 
 def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> QuestionFeedCounts:
@@ -882,7 +1015,27 @@ def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> Qu
     `get_contested_card_ids()` once and passes it to both functions, since this one always needs
     it and the other needed it as often. `None` (every other caller, e.g. `catalog_stats.py`)
     resolves it here exactly as before.
+
+    CACHING (2026-08-07): the four counts are cached on the cross-process `"shared"` cache
+    (issue #538/#543 - never `default`, which is per-process `LocMemCache` and would make a
+    warmer and the endpoint disagree silently) for `_REMAINING_ESTIMATE_CACHE_TTL` (300s).
+    Measured against live production after the 2026-08-06 deploy wave, the uncached body is
+    ~7.45s per feed request (2 id-set scans + 4 `.distinct().count()` buckets); a cache hit
+    skips all of it for one small indexed SELECT on `shared_cache`. These counts are "advisory
+    copy, not a candidate set" (see the docstring header above), so the TTL IS the invalidation
+    policy - votes change the counts, but a 300s-stale header is the accepted window and there
+    are deliberately no invalidation hooks on vote submission. The key is derived from the
+    function's effective inputs (see `_remaining_estimate_cache_key`): one key when
+    `contested_card_ids` is `None`, a digest of the resolved set when the caller passes one, so
+    a request that resolved a different contested set never reads another request's cached
+    counts. Cache miss -> compute -> store, exactly as before otherwise.
     """
+    shared_cache = _remaining_estimate_shared_cache()
+    cache_key = _remaining_estimate_cache_key(contested_card_ids)
+    cached = shared_cache.get(cache_key) if shared_cache is not None else None
+    if cached is not None:
+        return cached
+
     contested_printing_ids = contested_card_ids if contested_card_ids is not None else get_contested_card_ids()
     tag_contested_ids, tag_unresolved_ids = _tag_review_card_ids_by_status()
 
@@ -926,7 +1079,10 @@ def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> Qu
         .count()
     )
 
-    return QuestionFeedCounts(total=total, confirmable=confirmable, contested=contested, fresh=fresh)
+    counts = QuestionFeedCounts(total=total, confirmable=confirmable, contested=contested, fresh=fresh)
+    if shared_cache is not None:
+        shared_cache.set(cache_key, counts, _REMAINING_ESTIMATE_CACHE_TTL)
+    return counts
 
 
 __all__ = [

@@ -530,7 +530,7 @@ test.describe("question feed - Level 2 illustration grouping", () => {
 });
 
 test.describe("question feed - confirm_suggestion question type", () => {
-  test("lands on Level 1 - a single suggested printing, no grid - and shows the 'Is it this one?' prompt", async ({
+  test("lands on the suggested-match question - the suggestion is asked about in its own slot on page one, never re-judged as a grid tile", async ({
     page,
     network,
   }) => {
@@ -540,21 +540,28 @@ test.describe("question feed - confirm_suggestion question type", () => {
     await expect(
       page.getByTestId("question-feed-suggestion-prompt")
     ).toContainText("Is it this one?");
-    await expect(page.getByTestId("question-feed-level1-yes")).toBeVisible();
-    // no candidate grid at Level 1 - only reachable via NOT SURE/NO
+    await expect(
+      page.getByTestId("question-feed-suggestion-yes")
+    ).toBeVisible();
+    // Issue #728 - the de-laddered feed shows the rest of the candidates on the SAME page,
+    // and the suggested candidate is never re-presented as a tile (judged once, in its slot).
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
     ).toHaveCount(0);
+    await expect(
+      page.locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
+    ).toBeVisible();
 
-    // Regression check (#49 dropped this): Level 1 still needs its own reference render of the
-    // suggested printing to compare against - "Is it this one?" is unanswerable from text alone.
-    // `getByRole("img")` (not a plain `img` locator) - round 3's shared `<MysteryCard />` (own
-    // comment, cardPanel.tsx) renders a SECOND `<img>` in this same container (its own "?" glyph,
-    // `alt=""`), which a bare `locator("img")` now matches too, causing a Playwright strict-mode
-    // violation. `alt=""` strips an <img> from the accessibility tree entirely, so `getByRole`
-    // (unlike a tag-selector) unambiguously resolves to just the real reference thumbnail below.
+    // Regression check (#49 dropped this): the suggestion slot still needs its own reference
+    // render of the suggested printing to compare against - "Is it this one?" is
+    // unanswerable from text alone. `getByRole("img")` (not a plain `img` locator) - round
+    // 3's shared `<MysteryCard />` (own comment, cardPanel.tsx) renders a SECOND `<img>` in
+    // this same container (its own "?" glyph, `alt=""`), which a bare `locator("img")` now
+    // matches too, causing a Playwright strict-mode violation. `alt=""` strips an <img> from
+    // the accessibility tree entirely, so `getByRole` (unlike a tag-selector) unambiguously
+    // resolves to just the real reference thumbnail below.
     const referenceImage = page
-      .getByTestId("question-feed-level1-reference-image")
+      .getByTestId("question-feed-suggestion-reference-image")
       .getByRole("img");
     await expect(referenceImage).toBeVisible();
     await expect(referenceImage).toHaveAttribute(
@@ -563,7 +570,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
     );
   });
 
-  test("YES confirms the suggested printing directly, without visiting the grid", async ({
+  test("YES on the suggestion casts the printing vote for it directly", async ({
     page,
     network,
   }) => {
@@ -581,19 +588,20 @@ test.describe("question feed - confirm_suggestion question type", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-level1-yes").click();
+    await page.getByTestId("question-feed-suggestion-yes").click();
 
     await expect
       .poll(() => submittedPrintingIdentifier)
       .toBe(printingCandidate1.identifier);
   });
 
-  test("NOT SURE drops to Level 2's candidate grid without casting a printing vote, but does POST an abstention", async ({
+  test("NOT SURE records an abstention and advances to the next question, without casting a printing vote", async ({
     page,
     network,
   }) => {
     let printingTagSubmitted = false;
     let abstentionBody: { identifier?: string; questionType?: string } = {};
+    let feedFetchCount = 0;
     network.use(
       questionFeedConfirmSuggestion,
       submitQuestionAbstentionRecorded,
@@ -606,32 +614,31 @@ test.describe("question feed - confirm_suggestion question type", () => {
       if (request.url().includes("/2/submitQuestionAbstention/")) {
         abstentionBody = request.postDataJSON();
       }
+      if (request.url().includes("/2/questionFeed/")) {
+        feedFetchCount += 1;
+      }
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-level1-not-sure").click();
+    await page.getByTestId("question-feed-suggestion-not-sure").click();
 
-    const suggestedCandidate = page.locator(
-      `[data-card-identifier="${printingCandidate1.identifier}"]`
-    );
-    await expect(suggestedCandidate).toBeVisible();
-    await expect(suggestedCandidate).toHaveClass(/highlighted/);
+    // Issue #728 - "Not sure" means "I can't resolve this": abstention + advance to the next
+    // question, not a second page re-judging the same candidates.
     expect(printingTagSubmitted).toBe(false);
-
+    await expect.poll(() => feedFetchCount).toBeGreaterThanOrEqual(2);
     await expect
       .poll(() => abstentionBody.identifier)
       .toBe(cardDocument1.identifier);
     expect(abstentionBody.questionType).toBe("confirm_suggestion");
   });
 
-  test("NO drops to Level 2's candidate grid, excluding the rejected suggestion, without casting a vote", async ({
+  test("NO on the suggestion collapses its slot (never a selectable tile again) and keeps the remaining candidates selectable on the same page, without casting a vote", async ({
     page,
     network,
   }) => {
-    // Double-asking fix: a candidate the user just rejected at Level 1 is never
-    // re-presented as a selectable tile at Level 2 within the same item - see
-    // rejectSuggestion/rejectedCandidateIds in QuestionFeed.tsx. This mock has two
-    // candidates, so the remaining one (printingCandidate2) should still show.
+    // Issue #728 - the rejected suggestion is never re-presented as a selectable tile; the
+    // remaining candidate (printingCandidate2) stays selectable on the SAME page (no stage
+    // transition). See rejectSuggestion/rejectedCandidateIds in QuestionFeed.tsx.
     let printingTagSubmitted = false;
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     page.on("request", (request) => {
@@ -641,7 +648,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-level1-no").click();
+    await page.getByTestId("question-feed-suggestion-no").click();
 
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
@@ -649,6 +656,10 @@ test.describe("question feed - confirm_suggestion question type", () => {
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
     ).toBeVisible();
+    // contextual copy replaces the suggestion slot's "Is it this one?"
+    await expect(
+      page.getByTestId("question-feed-suggestion-prompt")
+    ).toContainText("Is it any official printing at all?");
     expect(printingTagSubmitted).toBe(false);
   });
 

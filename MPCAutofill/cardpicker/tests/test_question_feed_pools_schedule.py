@@ -147,3 +147,83 @@ class TestQuestionFeedPoolsScheduleMigration:
         # Restore the default-cadence row for any later test in this session.
         Schedule.objects.filter(name="warm_question_feed_pool_confirm").delete()
         migration_module().create_schedules(django_apps, None)
+
+
+MIGRATION_NAME_0106 = "0106_question_feed_pools_schedule_dedupe"
+
+
+def dedupe_migration_module() -> ModuleType:
+    return importlib.import_module(f"cardpicker.migrations.{MIGRATION_NAME_0106}")
+
+
+@pytest.mark.django_db
+class TestDedupeQuestionFeedPoolsSchedules:
+    """Tests for `0106_question_feed_pools_schedule_dedupe.py` - the fix for the duplicate
+    django-q2 `Schedule` rows in production (ids 6/7, 8/9, 10/11, 12/13 in the 2026-08-06 deploy
+    wave: two concurrent `migrate` runs raced 0105's `get_or_create`). The migration collapses
+    each duplicated name back to its earliest row and adds a UNIQUE constraint on `name` so the
+    race cannot recur. Same shape as the 0105 tests above: drive the real `MigrationExecutor`
+    backwards/forwards."""
+
+    DUPLICATED_NAME = "warm_question_feed_pool_confirm"
+
+    def test_dedupe_collapses_duplicate_rows_keeping_the_earliest(self):
+        from django_q.models import Schedule
+
+        from django.db import connection
+        from django.db.migrations.executor import MigrationExecutor
+
+        forwards = [("cardpicker", MIGRATION_NAME_0106)]
+        backwards = [("cardpicker", "0105_question_feed_pools_schedule")]
+
+        original = Schedule.objects.get(name=self.DUPLICATED_NAME)
+        original_id = original.id
+        try:
+            # Reverse past 0106: the UNIQUE constraint is dropped, putting the database back in
+            # the pre-fix state where a racing `migrate` could insert a second row per name.
+            MigrationExecutor(connection).migrate(backwards)
+            Schedule.objects.create(
+                name=self.DUPLICATED_NAME,
+                func="django.core.management.call_command",
+                args="'warm_question_feed_pools', 'confirm'",
+                schedule_type="I",
+                minutes=15,
+            )
+            assert Schedule.objects.filter(name=self.DUPLICATED_NAME).count() == 2
+
+            MigrationExecutor(connection).migrate(forwards)
+            rows = Schedule.objects.filter(name=self.DUPLICATED_NAME).order_by("id")
+            assert rows.count() == 1
+            assert rows.first().id == original_id  # the earliest row was kept
+        finally:
+            executor = MigrationExecutor(connection)
+            executor.loader.build_graph()
+            executor.migrate(forwards)
+        assert Schedule.objects.filter(name=self.DUPLICATED_NAME).count() == 1
+
+    def test_dedupe_leaves_singleton_names_untouched(self):
+        from django_q.models import Schedule
+
+        before = {s.name: s.id for s in Schedule.objects.all()}
+        dedupe_migration_module().dedupe_schedules(django_apps, None)
+        after = {s.name: s.id for s in Schedule.objects.all()}
+        assert before == after
+
+    def test_unique_constraint_blocks_a_second_row_for_an_existing_name(self):
+        from django_q.models import Schedule
+
+        from django.db import IntegrityError
+
+        with pytest.raises(IntegrityError):
+            Schedule.objects.create(
+                name=self.DUPLICATED_NAME,
+                func="django.core.management.call_command",
+                args="'warm_question_feed_pools', 'confirm'",
+                schedule_type="I",
+                minutes=15,
+            )
+
+    def test_migration_declares_itself_reversible(self):
+        operations = dedupe_migration_module().Migration.operations
+        assert len(operations) == 2
+        assert all(operation.reversible for operation in operations)
