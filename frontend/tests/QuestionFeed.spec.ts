@@ -530,7 +530,7 @@ test.describe("question feed - Level 2 illustration grouping", () => {
 });
 
 test.describe("question feed - confirm_suggestion question type", () => {
-  test("lands on Level 1 - a single suggested printing, no grid - and shows the 'Is it this one?' prompt", async ({
+  test("lands on the suggested-match question - the suggestion is asked about in its own slot on page one, never re-judged as a grid tile", async ({
     page,
     network,
   }) => {
@@ -540,21 +540,28 @@ test.describe("question feed - confirm_suggestion question type", () => {
     await expect(
       page.getByTestId("question-feed-suggestion-prompt")
     ).toContainText("Is it this one?");
-    await expect(page.getByTestId("question-feed-level1-yes")).toBeVisible();
-    // no candidate grid at Level 1 - only reachable via NOT SURE/NO
+    await expect(
+      page.getByTestId("question-feed-suggestion-yes")
+    ).toBeVisible();
+    // Issue #728 - the de-laddered feed shows the rest of the candidates on the SAME page,
+    // and the suggested candidate is never re-presented as a tile (judged once, in its slot).
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
     ).toHaveCount(0);
+    await expect(
+      page.locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
+    ).toBeVisible();
 
-    // Regression check (#49 dropped this): Level 1 still needs its own reference render of the
-    // suggested printing to compare against - "Is it this one?" is unanswerable from text alone.
-    // `getByRole("img")` (not a plain `img` locator) - round 3's shared `<MysteryCard />` (own
-    // comment, cardPanel.tsx) renders a SECOND `<img>` in this same container (its own "?" glyph,
-    // `alt=""`), which a bare `locator("img")` now matches too, causing a Playwright strict-mode
-    // violation. `alt=""` strips an <img> from the accessibility tree entirely, so `getByRole`
-    // (unlike a tag-selector) unambiguously resolves to just the real reference thumbnail below.
+    // Regression check (#49 dropped this): the suggestion slot still needs its own reference
+    // render of the suggested printing to compare against - "Is it this one?" is
+    // unanswerable from text alone. `getByRole("img")` (not a plain `img` locator) - round
+    // 3's shared `<MysteryCard />` (own comment, cardPanel.tsx) renders a SECOND `<img>` in
+    // this same container (its own "?" glyph, `alt=""`), which a bare `locator("img")` now
+    // matches too, causing a Playwright strict-mode violation. `alt=""` strips an <img> from
+    // the accessibility tree entirely, so `getByRole` (unlike a tag-selector) unambiguously
+    // resolves to just the real reference thumbnail below.
     const referenceImage = page
-      .getByTestId("question-feed-level1-reference-image")
+      .getByTestId("question-feed-suggestion-reference-image")
       .getByRole("img");
     await expect(referenceImage).toBeVisible();
     await expect(referenceImage).toHaveAttribute(
@@ -563,7 +570,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
     );
   });
 
-  test("YES confirms the suggested printing directly, without visiting the grid", async ({
+  test("YES on the suggestion casts the printing vote for it directly", async ({
     page,
     network,
   }) => {
@@ -581,19 +588,20 @@ test.describe("question feed - confirm_suggestion question type", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-level1-yes").click();
+    await page.getByTestId("question-feed-suggestion-yes").click();
 
     await expect
       .poll(() => submittedPrintingIdentifier)
       .toBe(printingCandidate1.identifier);
   });
 
-  test("NOT SURE drops to Level 2's candidate grid without casting a printing vote, but does POST an abstention", async ({
+  test("NOT SURE records an abstention and advances to the next question, without casting a printing vote", async ({
     page,
     network,
   }) => {
     let printingTagSubmitted = false;
     let abstentionBody: { identifier?: string; questionType?: string } = {};
+    let feedFetchCount = 0;
     network.use(
       questionFeedConfirmSuggestion,
       submitQuestionAbstentionRecorded,
@@ -606,32 +614,31 @@ test.describe("question feed - confirm_suggestion question type", () => {
       if (request.url().includes("/2/submitQuestionAbstention/")) {
         abstentionBody = request.postDataJSON();
       }
+      if (request.url().includes("/2/questionFeed/")) {
+        feedFetchCount += 1;
+      }
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-level1-not-sure").click();
+    await page.getByTestId("question-feed-suggestion-not-sure").click();
 
-    const suggestedCandidate = page.locator(
-      `[data-card-identifier="${printingCandidate1.identifier}"]`
-    );
-    await expect(suggestedCandidate).toBeVisible();
-    await expect(suggestedCandidate).toHaveClass(/highlighted/);
+    // Issue #728 - "Not sure" means "I can't resolve this": abstention + advance to the next
+    // question, not a second page re-judging the same candidates.
     expect(printingTagSubmitted).toBe(false);
-
+    await expect.poll(() => feedFetchCount).toBeGreaterThanOrEqual(2);
     await expect
       .poll(() => abstentionBody.identifier)
       .toBe(cardDocument1.identifier);
     expect(abstentionBody.questionType).toBe("confirm_suggestion");
   });
 
-  test("NO drops to Level 2's candidate grid, excluding the rejected suggestion, without casting a vote", async ({
+  test("NO on the suggestion collapses its slot (never a selectable tile again) and keeps the remaining candidates selectable on the same page, without casting a vote", async ({
     page,
     network,
   }) => {
-    // Double-asking fix: a candidate the user just rejected at Level 1 is never
-    // re-presented as a selectable tile at Level 2 within the same item - see
-    // rejectSuggestion/rejectedCandidateIds in QuestionFeed.tsx. This mock has two
-    // candidates, so the remaining one (printingCandidate2) should still show.
+    // Issue #728 - the rejected suggestion is never re-presented as a selectable tile; the
+    // remaining candidate (printingCandidate2) stays selectable on the SAME page (no stage
+    // transition). See rejectSuggestion/rejectedCandidateIds in QuestionFeed.tsx.
     let printingTagSubmitted = false;
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     page.on("request", (request) => {
@@ -641,7 +648,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-level1-no").click();
+    await page.getByTestId("question-feed-suggestion-no").click();
 
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
@@ -649,6 +656,10 @@ test.describe("question feed - confirm_suggestion question type", () => {
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
     ).toBeVisible();
+    // contextual copy replaces the suggestion slot's "Is it this one?"
+    await expect(
+      page.getByTestId("question-feed-suggestion-prompt")
+    ).toContainText("Is it any official printing at all?");
     expect(printingTagSubmitted).toBe(false);
   });
 
@@ -656,16 +667,17 @@ test.describe("question feed - confirm_suggestion question type", () => {
     page,
     network,
   }) => {
-    // Owner-reported dedup bug (docs/features/printing-tags.md's questionFeed section): Level 1
-    // "Is it M21 203?" -> NO, where M21 203 was the card's ONLY candidate. Previously (this test
-    // used to assert `printingTagSubmitted === false` here - that assertion WAS the bug, not a
-    // correct behavior spec) "No" cast no vote at all and merely revealed a further "None of
-    // these" tap the user still had to make; if that tap never happened, no CardPrintingTag row
-    // ever existed for question_feed.py's tier-1 exclusion to match against, so the exact same
-    // question resurfaced on the next feed fetch. Since there is nothing else this card's "No"
-    // could mean (no other candidate exists), it must now be treated as the terminal answer:
-    // the same isNoMatch vote "None of these" itself casts is submitted the moment "No" is
-    // tapped, with no further tap required.
+    // Owner-reported dedup bug (docs/features/printing-tags.md's questionFeed section): the
+    // suggestion slot's "Is it M21 203?" -> NO, where M21 203 was the card's ONLY candidate.
+    // Previously (this test used to assert `printingTagSubmitted === false` here - that
+    // assertion WAS the bug, not a correct behavior spec) "No" cast no vote at all and merely
+    // revealed a further "None of these" tap the user still had to make; if that tap never
+    // happened, no CardPrintingTag row ever existed for question_feed.py's tier-1 exclusion to
+    // match against, so the exact same question resurfaced on the next feed fetch. Since there
+    // is nothing else this card's "No" could mean (no other candidate exists), it must now be
+    // treated as the terminal answer: the same isNoMatch vote "None of these" itself casts is
+    // submitted the moment "No" is tapped, with no further tap required. (Issue #728 - the
+    // ladder is gone, so this lives on the same page; the singleton path is unchanged.)
     let submittedPrinting: {
       printingIdentifier?: string;
       isNoMatch?: boolean;
@@ -682,7 +694,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-level1-no").click();
+    await page.getByTestId("question-feed-suggestion-no").click();
 
     // the rejected candidate is never a selectable tile again
     await expect(
@@ -709,11 +721,12 @@ test.describe("question feed - confirm_suggestion question type", () => {
     network,
   }) => {
     // Regression guard for a real-device-only bug (not reproducible in this sandbox's
-    // Chromium): Level 1 previously reused Level 2's sticky, negative-z-index CardPanel for
-    // its own short single-screen layout, which composited incorrectly on a real phone -
-    // answer controls painted overlapping the card art instead of cleanly below it. The fix
-    // (StaticCardPanel - see cardPanel.tsx) puts everything back in normal document flow;
-    // this asserts that property directly via bounding-box math rather than relying on visual
+    // Chromium): the pinned reference card (Subject, A2) used a sticky, negative-z-index
+    // CardPanel that composited incorrectly on a real phone at narrow widths - answer controls
+    // painted overlapping the card art instead of cleanly below it. The de-laddered feed
+    // (issue #728) renders this same card panel for every candidate question, so the guard
+    // now covers the whole single-page surface: suggestion slot + bottom row. This asserts
+    // the non-overlap property directly via bounding-box math rather than relying on visual
     // diffing this sandbox can't validate against real hardware anyway.
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     await page.setViewportSize({ width: 390, height: 844 });
@@ -721,9 +734,11 @@ test.describe("question feed - confirm_suggestion question type", () => {
 
     // The card's full box (art + starburst + name caption), not just the <img> - the
     // real-device bug this guards against overlapped the caption too, not only the artwork.
-    const cardPanel = page.getByTestId("question-feed-level1-card-panel");
+    const cardPanel = page.getByTestId("question-feed-card-panel");
     await expect(page.getByAltText(cardDocument1.name)).toBeVisible();
-    await expect(page.getByTestId("question-feed-level1-yes")).toBeVisible();
+    await expect(
+      page.getByTestId("question-feed-suggestion-yes")
+    ).toBeVisible();
 
     const cardBox = await cardPanel.boundingBox();
     expect(cardBox).not.toBeNull();
@@ -731,10 +746,12 @@ test.describe("question feed - confirm_suggestion question type", () => {
     const controls = [
       page.getByTestId("question-feed-tier-badge"),
       page.getByTestId("question-feed-suggestion-prompt"),
-      page.getByTestId("question-feed-level1-yes"),
-      page.getByTestId("question-feed-level1-not-sure"),
-      page.getByTestId("question-feed-level1-no"),
-      page.getByTestId("question-feed-level1-skip"),
+      page.getByTestId("question-feed-suggestion-yes"),
+      page.getByTestId("question-feed-suggestion-not-sure"),
+      page.getByTestId("question-feed-suggestion-no"),
+      page.getByTestId("question-feed-no-match"),
+      page.getByTestId("question-feed-custom-art"),
+      page.getByTestId("question-feed-skip"),
     ];
     for (const control of controls) {
       const controlBox = await control.boundingBox();
