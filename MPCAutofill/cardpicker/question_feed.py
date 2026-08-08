@@ -65,10 +65,13 @@ reasoning) - this module still owns every tier's SELECTION semantics and every s
 construction; the pools only supply candidate ids faster than a live scan would.
 """
 
+import hashlib
 from collections import defaultdict
-from typing import Hashable, Optional
+from typing import Any, Hashable, Optional
 
 from django.conf import settings
+from django.core.cache import caches
+from django.core.cache.backends.base import InvalidCacheBackendError
 from django.db.models import (
     Case,
     Count,
@@ -846,6 +849,45 @@ def _tag_review_card_ids_by_status() -> tuple[set[int], set[int]]:
     return contested_ids, unresolved_ids
 
 
+_REMAINING_ESTIMATE_CACHE_KEY = "question-feed-remaining-estimate:v1"
+_REMAINING_ESTIMATE_CACHE_TTL = 300  # seconds - see get_remaining_estimate's docstring
+
+
+def _remaining_estimate_cache_key(contested_card_ids: Optional[list[int]]) -> str:
+    """
+    Cache key for `get_remaining_estimate`'s four counts, derived from the function's effective
+    inputs so two callers that resolved different contested id-sets never share a cached value.
+
+    `None` (the caller lets this function resolve the contested id-set itself) maps to a single
+    stable key - the resolved set is an implementation detail, and a stable key is what lets the
+    cache actually hit across requests. A pre-resolved set (the view path, issue #713 part 2)
+    maps to a digest of that set's CONTENT, so a caller that resolved a different set than the
+    one a cached value was computed against gets a miss and a fresh compute, never another
+    caller's stale counts. The digest is sha1 over the sorted set - never Python's builtin
+    `hash`, which is salted per process and would produce different keys in the warmer and the
+    endpoint - and stays well under the DatabaseCache's 255-character key column.
+    """
+    if contested_card_ids is None:
+        return _REMAINING_ESTIMATE_CACHE_KEY
+    digest = hashlib.sha1(repr(sorted(set(contested_card_ids))).encode()).hexdigest()
+    return f"{_REMAINING_ESTIMATE_CACHE_KEY}:{digest}"
+
+
+def _remaining_estimate_shared_cache() -> Optional[Any]:
+    """
+    The cross-process `"shared"` cache (see `settings.CACHES` and `docs/infrastructure.md`'s
+    cache section), or `None` on a pre-#543 environment.
+
+    Same read-side degradation convention as `question_feed_pools._shared_cache_for_read`: a
+    missing alias is an ordinary miss and the caller falls back to computing the counts live -
+    the feed must never 500 because an advisory-header cache isn't configured.
+    """
+    try:
+        return caches["shared"]
+    except InvalidCacheBackendError:
+        return None
+
+
 def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> QuestionFeedCounts:
     """
     "Still need help with" counts for the feed header - NOT per-voter (doesn't account for
@@ -882,7 +924,27 @@ def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> Qu
     `get_contested_card_ids()` once and passes it to both functions, since this one always needs
     it and the other needed it as often. `None` (every other caller, e.g. `catalog_stats.py`)
     resolves it here exactly as before.
+
+    CACHING (2026-08-07): the four counts are cached on the cross-process `"shared"` cache
+    (issue #538/#543 - never `default`, which is per-process `LocMemCache` and would make a
+    warmer and the endpoint disagree silently) for `_REMAINING_ESTIMATE_CACHE_TTL` (300s).
+    Measured against live production after the 2026-08-06 deploy wave, the uncached body is
+    ~7.45s per feed request (2 id-set scans + 4 `.distinct().count()` buckets); a cache hit
+    skips all of it for one small indexed SELECT on `shared_cache`. These counts are "advisory
+    copy, not a candidate set" (see the docstring header above), so the TTL IS the invalidation
+    policy - votes change the counts, but a 300s-stale header is the accepted window and there
+    are deliberately no invalidation hooks on vote submission. The key is derived from the
+    function's effective inputs (see `_remaining_estimate_cache_key`): one key when
+    `contested_card_ids` is `None`, a digest of the resolved set when the caller passes one, so
+    a request that resolved a different contested set never reads another request's cached
+    counts. Cache miss -> compute -> store, exactly as before otherwise.
     """
+    shared_cache = _remaining_estimate_shared_cache()
+    cache_key = _remaining_estimate_cache_key(contested_card_ids)
+    cached = shared_cache.get(cache_key) if shared_cache is not None else None
+    if cached is not None:
+        return cached
+
     contested_printing_ids = contested_card_ids if contested_card_ids is not None else get_contested_card_ids()
     tag_contested_ids, tag_unresolved_ids = _tag_review_card_ids_by_status()
 
@@ -926,7 +988,10 @@ def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> Qu
         .count()
     )
 
-    return QuestionFeedCounts(total=total, confirmable=confirmable, contested=contested, fresh=fresh)
+    counts = QuestionFeedCounts(total=total, confirmable=confirmable, contested=contested, fresh=fresh)
+    if shared_cache is not None:
+        shared_cache.set(cache_key, counts, _REMAINING_ESTIMATE_CACHE_TTL)
+    return counts
 
 
 __all__ = [
