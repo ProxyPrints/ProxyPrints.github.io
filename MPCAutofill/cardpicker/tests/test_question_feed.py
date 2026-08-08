@@ -1,6 +1,7 @@
 import uuid
 from unittest.mock import patch
 
+from django.core.cache import caches
 from django.urls import reverse
 
 from cardpicker import views
@@ -17,6 +18,7 @@ from cardpicker.models import (
     ArtistVoteStatus,
     CardPrintingTag,
     CardScanLog,
+    HiddenCard,
     PrintingTagStatus,
     QuestionFeedServedLog,
     QuestionFeedServedPool,
@@ -244,6 +246,41 @@ class TestGetNextQuestionFeedItem:
         assert item.card.identifier == card.identifier
         assert item.tagName == tag_b.name
 
+    def test_a_hidden_card_is_excluded_from_this_voters_feed(self, db):
+        """Issue #714: a card this voter hid for themselves (`HiddenCard`, written by
+        `views.post_report_card` when a report carries `hide=True`) must never come back in
+        their own feed items, whichever tier would otherwise have served it."""
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        HiddenCard.objects.create(card=card, anonymous_id="anon-1")
+
+        item = get_next_question_feed_item("anon-1")
+
+        # the only candidate is hidden for this voter - nothing else exists, so None
+        assert item is None or item.card.identifier != card.identifier
+
+    def test_a_hidden_card_is_still_served_to_other_voters(self, db):
+        """The exclusion is per-anonymous_id, not global: hiding a card for yourself never
+        hides it for anyone else - same scoping as every other vote/report table here."""
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        HiddenCard.objects.create(card=card, anonymous_id="anon-1")
+
+        item = get_next_question_feed_item("anon-2")
+
+        assert item is not None
+        assert item.card.identifier == card.identifier
+
+    def test_a_hidden_card_is_excluded_even_when_it_is_the_only_contested_candidate(self, db):
+        """Tier 2's contested printing half must respect the hidden exclusion too - a card the
+        voter hid must not resurface just because it became the highest-priority contested one."""
+        hidden_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=hidden_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=hidden_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        HiddenCard.objects.create(card=hidden_card, anonymous_id="anon-1")
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is None or item.card.identifier != hidden_card.identifier
+
 
 class TestContestedIdsMemoizedPerRequest:
     """`get_contested_card_ids`/`get_contested_artist_card_ids` are expensive (issue #726:
@@ -403,9 +440,21 @@ class TestScryfallIllustrationUrl:
         assert item.scryfallIllustrationUrl is None
 
 
+def _remaining_estimate(*args, **kwargs):
+    """`get_remaining_estimate()` with the shared cache cleared first.
+
+    The tests in `TestGetRemainingEstimate` assert exact count deltas around DB mutations, but
+    production may legitimately serve a <=300s-stale advisory count (the TTL is the invalidation
+    policy - see the function's docstring). Clearing the cache before each call makes the
+    assertions see a fresh compute, which is what they are actually testing.
+    """
+    caches["shared"].clear()
+    return get_remaining_estimate(*args, **kwargs)
+
+
 class TestGetRemainingEstimate:
     def test_is_non_negative(self, db):
-        counts = get_remaining_estimate()
+        counts = _remaining_estimate()
         assert counts.total >= 0
         assert counts.confirmable >= 0
         assert counts.contested >= 0
@@ -416,14 +465,14 @@ class TestGetRemainingEstimate:
         printing.count() + artist.count() + len(tag_pairs), so a single fresh card - UNRESOLVED
         on both printing and artist by default - added 2 to the total instead of 1. `total` is
         now a distinct-card union, so it must add exactly 1."""
-        before = get_remaining_estimate().total
+        before = _remaining_estimate().total
         # CardFactory() defaults both printing_tag_status and artist_vote_status to UNRESOLVED
         CardFactory()
-        after = get_remaining_estimate().total
+        after = _remaining_estimate().total
         assert after == before + 1
 
     def test_total_counts_fresh_confirmable_and_contested_cards_but_not_resolved_ones(self, db):
-        before = get_remaining_estimate().total
+        before = _remaining_estimate().total
 
         # confirmable: unresolved printing with a machine-sourced vote, no human vote yet
         confirmable_card, _ = make_ai_suggested_card(anonymous_id="ai-bot")
@@ -436,13 +485,13 @@ class TestGetRemainingEstimate:
         # resolved: must not be counted
         CardFactory(printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
 
-        after = get_remaining_estimate().total
+        after = _remaining_estimate().total
         assert after == before + 3
 
     def test_confirmable_counts_cards_with_an_unconfirmed_ai_suggestion(self, db):
-        before = get_remaining_estimate().confirmable
+        before = _remaining_estimate().confirmable
         make_ai_suggested_card(anonymous_id="ai-bot")
-        after = get_remaining_estimate().confirmable
+        after = _remaining_estimate().confirmable
         assert after == before + 1
 
     def test_confirmable_excludes_cards_with_a_human_vote_already(self, db):
@@ -451,56 +500,101 @@ class TestGetRemainingEstimate:
         # human vote moves it out of "confirmable" (no longer machine-only), and since it's not
         # conflicting with the machine vote, it's not contested either - not asserted here, just
         # confirming it leaves the confirmable bucket
-        assert get_remaining_estimate().confirmable == 0
+        assert _remaining_estimate().confirmable == 0
 
     def test_contested_counts_conflicting_printing_votes(self, db):
-        before = get_remaining_estimate().contested
+        before = _remaining_estimate().contested
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
         CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
-        after = get_remaining_estimate().contested
+        after = _remaining_estimate().contested
         assert after == before + 1
 
     def test_contested_counts_conflicting_artist_votes(self, db):
-        before = get_remaining_estimate().contested
+        before = _remaining_estimate().contested
         card = CardFactory(printing_tag_status=PrintingTagStatus.RESOLVED)
         CardArtistVoteFactory(card=card, artist=CanonicalArtistFactory(), source=VoteSource.USER)
         CardArtistVoteFactory(card=card, artist=CanonicalArtistFactory(), source=VoteSource.USER)
         resolve_and_persist_artist(card)
         card.refresh_from_db()
         assert card.artist_vote_status == ArtistVoteStatus.CONTESTED
-        after = get_remaining_estimate().contested
+        after = _remaining_estimate().contested
         assert after == before + 1
 
     def test_fresh_counts_totally_untouched_cards(self, db):
-        before = get_remaining_estimate().fresh
+        before = _remaining_estimate().fresh
         # unresolved on both printing and artist, but `fresh` (like `total`) is a distinct-card
         # count, so this one card only adds 1 even though it matches both axes' OR clauses
         CardFactory()
-        after = get_remaining_estimate().fresh
+        after = _remaining_estimate().fresh
         assert after == before + 1
 
     def test_fresh_excludes_contested_printing_cards(self, db):
-        before = get_remaining_estimate().fresh
+        before = _remaining_estimate().fresh
         card = CardFactory(
             printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
         )
         CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
         CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
-        after = get_remaining_estimate().fresh
+        after = _remaining_estimate().fresh
         assert after == before
 
     def test_pending_approval_pairs_are_not_counted(self, db):
         # this feed's "remaining" counts are ordinary-tagging advisory copy only - pending
         # moderation reports have their own badge on the dedicated Moderation tab instead
         # (see this module's docstring)
-        before = get_remaining_estimate()
+        before = _remaining_estimate()
         make_pending_pair()
-        after = get_remaining_estimate()
+        after = _remaining_estimate()
         assert after.total == before.total
         assert after.confirmable == before.confirmable
         assert after.contested == before.contested
         assert after.fresh == before.fresh
+
+
+class TestGetRemainingEstimateCaching:
+    """The 300s shared-cache wrapper (see `get_remaining_estimate`'s docstring): the four counts
+    are advisory header copy, so the TTL is the invalidation policy and there are deliberately no
+    invalidation hooks. These tests assert the cache is actually hit on a second call within the
+    TTL, and that the key is derived from the function's effective inputs - a pre-resolved
+    contested set must never read a cached value computed against a different set."""
+
+    def test_second_call_within_ttl_hits_the_cache(self, db):
+        """The measured ~7.45s of the uncached feed (2026-08-06 deploy wave) is 2 id-set scans
+        plus 4 `.distinct().count()` buckets; a cache hit skips all of it. Two calls with
+        `contested_card_ids=None` share the single stable key, so the contested set must be
+        resolved exactly once: the first call computes and stores, the second returns the stored
+        value without touching the data-access functions at all."""
+        with patch("cardpicker.question_feed.get_contested_card_ids", return_value=[1, 2, 3]) as resolve:
+            first = get_remaining_estimate()
+            second = get_remaining_estimate()
+            assert resolve.call_count == 1  # the second call was served by the cache
+        assert first == second
+
+    def test_a_pre_resolved_set_keys_the_cache_by_its_content(self, db):
+        """The view path (issue #713 part 2) passes a contested set resolved earlier in the
+        request; the key must incorporate that set's content so two requests that resolved
+        different sets never share a cached value. Same set twice -> second call hits; a
+        different set -> miss, recomputed."""
+        with patch(
+            "cardpicker.question_feed._tag_review_card_ids_by_status",
+            side_effect=[(set(), set()), (set(), set()), (set(), set())],
+        ) as tag_review:
+            get_remaining_estimate([1, 2, 3])
+            get_remaining_estimate([1, 2, 3])
+            assert tag_review.call_count == 1  # same set: second call hit the cache
+
+            get_remaining_estimate([4, 5, 6])
+            assert tag_review.call_count == 2  # different set: different cache entry, recomputed
+
+    def test_clearing_the_cache_forces_a_recompute(self, db):
+        """The TTL is the only invalidation mechanism - there are no invalidation hooks - so a
+        value evicted (or never stored) must be recomputed on the next call."""
+        with patch("cardpicker.question_feed.get_contested_card_ids", return_value=[1, 2, 3]) as resolve:
+            get_remaining_estimate()
+            caches["shared"].clear()
+            get_remaining_estimate()
+            assert resolve.call_count == 2
 
 
 class TestGetQuestionFeedView:
