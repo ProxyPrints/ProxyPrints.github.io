@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("cardpicker", "0105_question_feed_pools_schedule"),
+        ("cardpicker", "0107_question_feed_pools_schedule_dedupe"),
     ]
 
     operations = [
