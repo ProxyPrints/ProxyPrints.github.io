@@ -466,6 +466,7 @@ describe("QuestionFeed", () => {
 
   it("shows a submitting indicator only on the tapped candidate, not the others or 'No match'", async () => {
     server.use(questionFeedOnce());
+    server.use(submitTagVoteResolvesToApply);
     let resolveSubmit: () => void = () => undefined;
     const submitPromise = new Promise<void>((resolve) => {
       resolveSubmit = resolve;
@@ -483,7 +484,7 @@ describe("QuestionFeed", () => {
     await revealCard();
 
     const tappedCandidate = await screen.findByAltText("xyz 42");
-    fireEvent.click(tappedCandidate);
+    fireEvent.click(tappedCandidate.closest("button") || tappedCandidate);
 
     await waitFor(() =>
       expect(
