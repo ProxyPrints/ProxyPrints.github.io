@@ -134,6 +134,42 @@ describe("QuestionFeed", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("the feed's filter panel hides exclusion-group siblings of an explicit positive (context-dependent disqualification)", async () => {
+    server.use(
+      questionFeedOnce(),
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          tagName: string;
+          polarity: number;
+        };
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: body.polarity,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+    await revealCard();
+    await screen.findByTestId("attribute-chip-Black Border");
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("attribute-chip-Black Border")
+          .getAttribute("data-chip-state")
+      ).toBe("positive")
+    );
+    // the contradicted siblings are pruned from the feed's panel, not just dimmed
+    expect(screen.queryByTestId("attribute-chip-White Border")).toBeNull();
+    expect(screen.queryByTestId("attribute-chip-Silver Border")).toBeNull();
+  });
+
   it("clicking 'None of these' submits a no-match printing vote", async () => {
     server.use(questionFeedOnce());
     let submittedIsNoMatch: boolean | undefined;

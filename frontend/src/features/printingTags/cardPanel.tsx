@@ -275,6 +275,10 @@ export const CandidateButton = styled.button`
   color: inherit;
   text-align: left;
   cursor: pointer;
+  /* DESIGN-REPASS Rule 2 (#715) - kills the mobile double-tap-zoom gesture that swallows a
+     fast single tap (the first tap starts a zoom, the second lands the click, reading as
+     "needs two taps"), so every tap on a candidate tile registers on the first press. */
+  touch-action: manipulation;
 
   /* Issue #705 - same fix as SuggestedThumb (QuestionFeed.tsx): clip to the rounded tile at
      rest, stop clipping for exactly the hover duration ZoomableThumbnail scales its <img> up,

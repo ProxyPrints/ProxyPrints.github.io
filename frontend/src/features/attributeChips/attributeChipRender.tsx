@@ -25,7 +25,7 @@ import React from "react";
 
 import {
   ChipVoteState,
-  findExclusionGroup,
+  isChipContradicted,
 } from "@/features/attributeChips/attributeChips";
 
 // Mobile funnel pass (thumb-native tap targets): measured at ~30px tall against the previous
@@ -63,7 +63,7 @@ export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
 
 export const ChipLabel = styled.span<{ fill: string; collapsed?: boolean }>`
   background-color: ${(props) => props.fill};
-  padding: ${(props) => (props.collapsed ? "0" : "0.35rem 0.5rem")};
+  padding: ${(props) => (props.collapsed ? "0" : "0.3rem 0.45rem")};
   width: ${(props) => (props.collapsed ? "0" : "auto")};
   display: ${(props) => (props.collapsed ? "none" : "inline-flex")};
   align-items: center;
@@ -90,10 +90,11 @@ export const ChipStateButton = styled.button<{
   font-weight: ${(props) => (props.$active ? 700 : 400)};
   min-height: 44px;
   min-width: 32px;
-  padding: 0.35rem 0.4rem;
+  padding: 0.3rem 0.3rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  touch-action: manipulation;
 
   &:disabled {
     opacity: 0.5;
@@ -103,7 +104,7 @@ export const ChipStateButton = styled.button<{
 export const ChipRow = styled.div`
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.3rem;
   justify-content: center;
 `;
 
@@ -157,15 +158,7 @@ export function renderAttributeChip(
   const explicitState = chipStates[tagName] ?? "untouched";
   const isPositive = explicitState === "positive";
   const isNegative = explicitState === "negative";
-  const group = findExclusionGroup(tagName);
-  const impliedNegative =
-    explicitState === "untouched" &&
-    group != null &&
-    group.chips.some(
-      (sibling) =>
-        sibling.tagName !== tagName &&
-        (chipStates[sibling.tagName] ?? "untouched") === "positive"
-    );
+  const impliedNegative = isChipContradicted(tagName, chipStates);
   const lean = leanTooltip(confidence[tagName] ?? 0);
   const disabled = submittingTagName != null;
   const setState = (desired: "positive" | "negative") =>

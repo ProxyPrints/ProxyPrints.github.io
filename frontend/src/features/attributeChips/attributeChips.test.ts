@@ -9,6 +9,7 @@ import {
   findExclusionGroup,
   getAutoTagChips,
   getOpenExclusionGroups,
+  isChipContradicted,
   nextChipState,
 } from "./attributeChips";
 
@@ -124,5 +125,45 @@ describe("getOpenExclusionGroups", () => {
   it("flags Border Color as open for a candidate outside black/white/silver", () => {
     const openGroups = getOpenExclusionGroups(printingCandidate2);
     expect(openGroups.map((group) => group.id)).toEqual(["borderColor"]);
+  });
+});
+
+describe("isChipContradicted", () => {
+  it("is true for an untouched exclusion-group sibling of an explicit positive", () => {
+    expect(
+      isChipContradicted("White Border", { "Black Border": "positive" })
+    ).toBe(true);
+    expect(
+      isChipContradicted("Silver Border", { "Black Border": "positive" })
+    ).toBe(true);
+  });
+
+  it("is false for the chip that owns the positive vote itself", () => {
+    expect(
+      isChipContradicted("Black Border", { "Black Border": "positive" })
+    ).toBe(false);
+  });
+
+  it("is false for an explicitly-voted sibling, even when a group-mate is positive", () => {
+    // an explicit negative is itself an active filter, not a disqualified option
+    expect(
+      isChipContradicted("White Border", {
+        "Black Border": "positive",
+        "White Border": "negative",
+      })
+    ).toBe(false);
+  });
+
+  it("is false for a negative vote alone - it does not rule out any sibling value", () => {
+    expect(
+      isChipContradicted("White Border", { "Black Border": "negative" })
+    ).toBe(false);
+  });
+
+  it("is false for standalone chips, which have no exclusion group", () => {
+    expect(isChipContradicted("Full Art", { "Full Art": "positive" })).toBe(
+      false
+    );
+    expect(isChipContradicted("Full Art", {})).toBe(false);
   });
 });

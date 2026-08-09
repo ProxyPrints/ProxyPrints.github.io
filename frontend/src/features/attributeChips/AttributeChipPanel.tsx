@@ -27,8 +27,10 @@ import {
 } from "@/features/attributeChips/attributeChipRender";
 import {
   ALL_ATTRIBUTE_CHIPS,
+  AttributeChipDef,
   ChipVoteState,
   EXCLUSION_GROUPS,
+  isChipContradicted,
   STANDALONE_CHIPS,
 } from "@/features/attributeChips/attributeChips";
 import { useTagVoting } from "@/features/attributeChips/useTagVoting";
@@ -155,6 +157,15 @@ interface AttributeChipPanelProps {
    * but stays optional to match the same safe-default convention as the other funnel
    * components (see ArtistVotePicker.tsx's identical prop for the full rationale). */
   onRateLimited?: () => void;
+  /** Context-dependent disqualification (DESIGN-REPASS-2026-08.md Rule 5): when true, an
+   * untouched chip whose own exclusion group already has an explicitly-positive sibling is
+   * hidden entirely rather than rendered dimmed (implied-negative). An active positive answer
+   * has already ruled the sibling values out - a card has one border color / one frame era -
+   * so the disqualified chips are dropped to reclaim their row space, mirroring how the deeper
+   * question grids prune options that contradict the answer given. False (default) keeps the
+   * historical dim-and-collapse treatment for callers that want the full taxonomy visible
+   * (the /display rail's AttributesSection). */
+  pruneContradicted?: boolean;
 }
 
 export function AttributeChipPanel({
@@ -165,6 +176,7 @@ export function AttributeChipPanel({
   onChipStatesChange,
   cardSlot,
   onRateLimited,
+  pruneContradicted = false,
 }: AttributeChipPanelProps) {
   const getTagDisplayName = useTagDisplayName();
   const { confidence, submittingTagName, tap } = useTagVoting({
@@ -184,6 +196,14 @@ export function AttributeChipPanel({
     getTagDisplayName,
   };
 
+  // Context-dependent disqualification (pruneContradicted) filters the render list, not the
+  // vote state - a disqualified chip is hidden but stays "untouched" in chipStates, so it
+  // springs straight back the moment its group's positive answer is retracted.
+  const visibleChips = (chips: AttributeChipDef[]) =>
+    pruneContradicted
+      ? chips.filter((chip) => !isChipContradicted(chip.tagName, chipStates))
+      : chips;
+
   // EXCLUSION_GROUPS[0] (Border Color) renders left, [1] (Frame Style) renders right - an
   // arbitrary but fixed assignment, not a semantic left/right meaning for either group.
   const [leftGroup, rightGroup] = EXCLUSION_GROUPS;
@@ -199,7 +219,7 @@ export function AttributeChipPanel({
   );
   const topArea = (
     <TopArea>
-      {STANDALONE_CHIPS.map((chip) =>
+      {visibleChips(STANDALONE_CHIPS).map((chip) =>
         renderAttributeChip(chipArgs, chip.tagName, chip.label)
       )}
     </TopArea>
@@ -208,7 +228,7 @@ export function AttributeChipPanel({
     <LeftArea>
       <GroupHeading>{leftGroup.label}</GroupHeading>
       <ExclusionChipRow>
-        {leftGroup.chips.map((chip) =>
+        {visibleChips(leftGroup.chips).map((chip) =>
           renderAttributeChip(chipArgs, chip.tagName, chip.label)
         )}
       </ExclusionChipRow>
@@ -218,7 +238,7 @@ export function AttributeChipPanel({
     <RightArea>
       <GroupHeading>{rightGroup.label}</GroupHeading>
       <ExclusionChipRow>
-        {rightGroup.chips.map((chip) =>
+        {visibleChips(rightGroup.chips).map((chip) =>
           renderAttributeChip(chipArgs, chip.tagName, chip.label)
         )}
       </ExclusionChipRow>

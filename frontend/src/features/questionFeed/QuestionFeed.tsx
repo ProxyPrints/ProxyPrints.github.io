@@ -81,6 +81,7 @@ import {
   CandidateGrid,
   CARD_ASPECT_RATIO,
   CardPanel,
+  ILLUSTRATION_CROP_ASPECT_RATIO,
   IllustrationArtPlaceholder,
   MysteryCard,
   randomFlavorText,
@@ -236,9 +237,15 @@ const SubjectArt = styled.div`
   }
 `;
 
-const SubjectArtImage = styled.div`
+// DESIGN-REPASS Rule 3 (#746) - `$landscape` is set only by the artist-question subject slot,
+// whose image is the harvested Scryfall illustration crop (a landscape 584/444 region, not a
+// card scan). Rendering it in the portrait card frame cropped its top and bottom off inside a
+// box sized for a card; the landscape frame is the same ratio the illustration-group candidate
+// tiles already use, so the same artwork reads at the same proportions wherever it appears.
+const SubjectArtImage = styled.div<{ $landscape?: boolean }>`
   position: relative;
-  aspect-ratio: ${CARD_ASPECT_RATIO};
+  aspect-ratio: ${(props) =>
+    props.$landscape ? ILLUSTRATION_CROP_ASPECT_RATIO : CARD_ASPECT_RATIO};
 
   @container hero (max-width: 560px) {
     flex: 1;
@@ -365,8 +372,17 @@ const IllustrationGroupLabel = styled.p`
 // Caps the width of the reused ArtistSupportLink applet so a full-bleed button (its own
 // "stretch to fill" rule - see the component's docstring, not overridden here) reads as a
 // compact cluster credit rather than a page-width CTA repeated once per cluster.
-const IllustrationCredit = styled.div`
+// DESIGN-REPASS Rule 6 (#711-adjacent MTGAC work) - the ArtistSupportLink applet renders in two
+// places on this surface (under an illustration cluster's credit, and under the artist
+// question's post-answer moment) and must look the same in both. The illustration credit
+// always capped it at 220px; the post-answer banner had no cap and let the collapsed row's
+// primary link stretch to the full question-panel width. One shared cap makes the two renders
+// identical instead of one tidy 220px line and one full-width button.
+const ArtistCredit = styled.div`
   max-width: 220px;
+`;
+
+const IllustrationCredit = styled(ArtistCredit)`
   margin-bottom: 8px;
 `;
 
@@ -402,16 +418,13 @@ const Btn = styled.button`
   cursor: pointer;
   line-height: 1.2;
   text-align: center;
+  /* DESIGN-REPASS Rule 2 (#715) - opt out of the mobile double-tap-zoom gesture, which
+     otherwise swallows a fast single tap and reads as "this button needs two taps". */
+  touch-action: manipulation;
 
   &:disabled {
     opacity: 0.6;
     cursor: default;
-  }
-
-  &.big {
-    font-size: 17px;
-    font-weight: 800;
-    padding: 10px 20px;
   }
 
   &.block {
@@ -642,6 +655,7 @@ const TriStateChip = styled.button`
   color: var(--text);
   border: 1px solid var(--muted);
   border-radius: var(--r-btn);
+  touch-action: manipulation;
 
   &:disabled {
     opacity: 0.6;
@@ -724,6 +738,16 @@ export function QuestionFeed() {
   const [imageGeneration, setImageGeneration] = useState<number>(0);
   const cardImageRef = useRef<HTMLImageElement>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  // DESIGN-REPASS Rule 2 (#715) - `disabled={submitting}` only takes effect on the re-render
+  // React batches AFTER the current event handler returns, so two taps inside that window (a
+  // double-click, or a stray second tap on a tile) both re-enter the vote handler and cast the
+  // vote twice. This ref is set synchronously at handler entry and read at the top of every
+  // handler, closing the window - the second entry is dropped, not queued - while the state
+  // flag keeps driving the disabled/visual state. Advance-only handlers (skip, Not sure) hold
+  // it until the next item lands (the fetch effect clears it) so a double-tap can't skip two
+  // cards; vote handlers release it in their own `.finally` (a Level 3 transition must re-enable
+  // the chips immediately).
+  const voteInFlightRef = useRef<boolean>(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
     null
   );
@@ -816,6 +840,9 @@ export function QuestionFeed() {
         setImageLoaded(false);
         setImageErrored(false);
         setImageGeneration((previous) => previous + 1);
+        // A new item has landed (or the feed is empty) - release any advance-only in-flight
+        // ref (skip / Not sure) so the next question's controls are live immediately.
+        voteInFlightRef.current = false;
         // A genuinely empty configured URL (this test suite's own fixture convention - real
         // cards always carry a real CDN URL) has nothing to load at all, so it's settled right
         // here rather than waiting on any image event.
@@ -844,6 +871,7 @@ export function QuestionFeed() {
         setLevel3Active(false);
       })
       .catch(() => {
+        voteInFlightRef.current = false;
         setItem(null);
         setFetchError(true);
       })
@@ -914,9 +942,10 @@ export function QuestionFeed() {
     candidate: PrintingCandidate | undefined,
     isNoMatch: boolean
   ) => {
-    if (backendURL == null || item == null) {
+    if (backendURL == null || item == null || voteInFlightRef.current) {
       return;
     }
+    voteInFlightRef.current = true;
     setSubmitting(true);
     setSelectedCandidateId(candidate?.identifier ?? "no-match");
     const anonymousId = getOrCreateAnonymousId();
@@ -969,6 +998,7 @@ export function QuestionFeed() {
       })
       .catch(reportVoteFailed)
       .finally(() => {
+        voteInFlightRef.current = false;
         setSubmitting(false);
         setSelectedCandidateId(null);
       });
@@ -989,9 +1019,10 @@ export function QuestionFeed() {
     illustrationId: string,
     tappedCandidate: PrintingCandidate
   ) => {
-    if (backendURL == null || item == null) {
+    if (backendURL == null || item == null || voteInFlightRef.current) {
       return;
     }
+    voteInFlightRef.current = true;
     setSubmitting(true);
     setSelectedCandidateId(tappedCandidate.identifier);
     const anonymousId = getOrCreateAnonymousId();
@@ -1010,6 +1041,7 @@ export function QuestionFeed() {
       })
       .catch(reportVoteFailed)
       .finally(() => {
+        voteInFlightRef.current = false;
         setSubmitting(false);
         setSelectedCandidateId(null);
       });
@@ -1019,9 +1051,10 @@ export function QuestionFeed() {
   // instead of "None of these" -> the reason strip, since the tap already told us why (see
   // reason_tags.py's existing seeded "custom-art" tag - no new endpoint).
   const classifyAsCustomArt = () => {
-    if (backendURL == null || item == null) {
+    if (backendURL == null || item == null || voteInFlightRef.current) {
       return;
     }
+    voteInFlightRef.current = true;
     setSubmitting(true);
     setSelectedCandidateId("custom-art");
     const anonymousId = getOrCreateAnonymousId();
@@ -1048,6 +1081,7 @@ export function QuestionFeed() {
       })
       .catch(reportVoteFailed)
       .finally(() => {
+        voteInFlightRef.current = false;
         setSubmitting(false);
         setSelectedCandidateId(null);
       });
@@ -1069,6 +1103,9 @@ export function QuestionFeed() {
   };
 
   const confirmLevel3 = () => {
+    if (voteInFlightRef.current) {
+      return;
+    }
     if (backendURL == null || item == null) {
       advance();
       return;
@@ -1081,6 +1118,7 @@ export function QuestionFeed() {
       advance();
       return;
     }
+    voteInFlightRef.current = true;
     setSubmitting(true);
     Promise.all(
       picked.map(([tagName]) =>
@@ -1100,10 +1138,21 @@ export function QuestionFeed() {
         advance();
       })
       .catch(reportVoteFailed)
-      .finally(() => setSubmitting(false));
+      .finally(() => {
+        voteInFlightRef.current = false;
+        setSubmitting(false);
+      });
   };
 
-  const skip = () => advance();
+  // Advance-only handlers hold the in-flight ref until the next item lands (the fetch effect
+  // clears it) - a double-tap on Skip / Not sure must not advance two cards at once.
+  const skip = () => {
+    if (voteInFlightRef.current) {
+      return;
+    }
+    voteInFlightRef.current = true;
+    advance();
+  };
 
   // Records the "Not sure" abstention (issue #712) and moves on - fire-and-forget, same
   // best-effort convention as the auto-tag-chip casts in selectCandidate above: the write is
@@ -1111,6 +1160,10 @@ export function QuestionFeed() {
   // ladder to fall into (issue #728): "Not sure" means "I can't resolve this", so it advances
   // to the next question rather than re-asking the same candidates on another page.
   const submitNotSure = () => {
+    if (voteInFlightRef.current) {
+      return;
+    }
+    voteInFlightRef.current = true;
     if (backendURL != null && item != null) {
       APISubmitQuestionAbstention(
         backendURL,
@@ -1635,6 +1688,7 @@ export function QuestionFeed() {
                 chipStates={chipStates}
                 onChipStatesChange={setChipStates}
                 onRateLimited={() => setRateLimited(true)}
+                pruneContradicted
               />
             </FilterPanelWrap>
           )}
@@ -1808,7 +1862,10 @@ export function QuestionFeed() {
     cardNode = (
       <SubjectCardBox>
         <SubjectArt data-testid="question-feed-subject-art">
-          <SubjectArtImage data-testid="question-feed-subject-art-image">
+          <SubjectArtImage
+            $landscape={item.type === "artist"}
+            data-testid="question-feed-subject-art-image"
+          >
             <img
               ref={cardImageRef}
               src={subjectImageSrc}
@@ -1849,9 +1906,12 @@ export function QuestionFeed() {
               }}
             />
             {confirmedArtistName != null && (
-              <div className="mt-2" data-testid="question-feed-artist-support">
+              <ArtistCredit
+                className="mt-2"
+                data-testid="question-feed-artist-support"
+              >
                 <ArtistSupportLink artistName={confirmedArtistName} />
-              </div>
+              </ArtistCredit>
             )}
             <ActionRow>
               <Btn className="ghost" onClick={skip}>

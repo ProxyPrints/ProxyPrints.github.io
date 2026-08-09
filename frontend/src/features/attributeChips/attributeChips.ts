@@ -151,6 +151,37 @@ export function findExclusionGroup(
 }
 
 /**
+ * True when a chip is contradicted by the current vote state: it is itself untouched AND an
+ * explicitly-positive sibling in its own exclusion group already answers the group's question
+ * (a card has exactly one border color / one frame era, so "Black Border" being yes leaves
+ * "White Border"/"Silver Border" factually disqualified). Standalone chips and explicitly-
+ * voted chips (positive or negative) are never contradicted - the latter are themselves the
+ * active filters that disqualify others.
+ *
+ * Surfaces may either dim such chips (implied-negative styling) or hide them entirely -
+ * the question feed's filter panel hides them (context-dependent disqualification,
+ * DESIGN-REPASS-2026-08.md Rule 5), mirroring how the deeper question grids drop any option
+ * that contradicts the answer already given, rather than only greying it out.
+ */
+export function isChipContradicted(
+  tagName: string,
+  chipStates: Record<string, ChipVoteState>
+): boolean {
+  if ((chipStates[tagName] ?? "untouched") !== "untouched") {
+    return false;
+  }
+  const group = findExclusionGroup(tagName);
+  if (group == null) {
+    return false;
+  }
+  return group.chips.some(
+    (sibling) =>
+      sibling.tagName !== tagName &&
+      (chipStates[sibling.tagName] ?? "untouched") === "positive"
+  );
+}
+
+/**
  * Filters candidates against the current explicit chip vote states: a positive chip drops
  * any candidate that doesn't match it, a negative chip drops any candidate that does. Implied-
  * negative (exclusion-group sibling) styling never contributes an extra filter condition on
