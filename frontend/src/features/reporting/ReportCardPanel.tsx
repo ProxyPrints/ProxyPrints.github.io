@@ -63,7 +63,9 @@ export function ReportCardPanel({ cardDocument }: ReportCardPanelProps) {
         getOrCreateAnonymousId(),
         reason,
         text,
-        hideForMe
+        // `undefined` (not `false`) when unchecked: JSON.stringify drops undefined, so the
+        // wire payload is exactly the old one when the user doesn't opt in to hiding.
+        hideForMe || undefined
       );
       if (hideForMe) {
         // issue #714: the modal disappears via Modals.tsx's hidden-identifier gate; the
