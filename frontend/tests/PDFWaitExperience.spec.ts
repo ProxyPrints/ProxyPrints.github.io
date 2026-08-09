@@ -138,11 +138,18 @@ test.describe("PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG
 
         const embed = page.getByTestId("pdf-wait-game");
         await expect(embed).toBeVisible({ timeout: 15_000 });
-        // The real, unforked QuestionFeed funnel - Level 1 YES/NOT SURE/NO/SKIP.
+        // The real, unforked QuestionFeed - the de-laddered single-page candidate question
+        // (issue #728): the suggested-match slot (YES/NOT SURE/NO) with the rest of the
+        // candidates on the same page, no level1 -> level2 funnel.
         await expect(embed.getByTestId("question-feed")).toBeVisible({
           timeout: 15_000,
         });
-        await expect(embed.getByTestId("question-feed-level1")).toBeVisible();
+        await expect(
+          embed.getByTestId("question-feed-candidate-question")
+        ).toBeVisible();
+        await expect(
+          embed.getByTestId("question-feed-suggestion-yes")
+        ).toBeVisible();
         await expect(embed.getByTestId("pdf-wait-game-ribbon")).toBeVisible();
       })(),
     ]);

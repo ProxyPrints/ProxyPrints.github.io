@@ -298,7 +298,7 @@ test.describe("question feed - container-first hero layout (section 3, WTC rebui
 // `.btn { min-height: 44px }` base class (SPEC-wtc-rebuild.md section 1c) instead of the
 // retired `ThumbButton`/`FilterToggleButton` styled overrides.
 test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
-  test("Level 1's stacked answer buttons meet the 44px floor", async ({
+  test("the suggested-match slot's answer buttons meet the 44px floor", async ({
     page,
     network,
   }) => {
@@ -307,10 +307,9 @@ test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     for (const testId of [
-      "question-feed-level1-yes",
-      "question-feed-level1-not-sure",
-      "question-feed-level1-no",
-      "question-feed-level1-skip",
+      "question-feed-suggestion-yes",
+      "question-feed-suggestion-not-sure",
+      "question-feed-suggestion-no",
     ]) {
       const box = await page.getByTestId(testId).boundingBox();
       expect(box).not.toBeNull();
@@ -687,14 +686,14 @@ test.describe("question feed - desktop uses its available horizontal space (issu
 // state as before but stops clipping for exactly the hover duration ZoomableThumbnail's own
 // hover rule (cardPanel.tsx) scales the art up, so the zoom is no longer cut flush at the edge.
 test.describe("question feed - hover-zoom is not clipped by its frame (issue #705)", () => {
-  test("the Level 1 reference thumbnail's frame stops clipping while hovered", async ({
+  test("the suggestion slot's reference thumbnail frame stops clipping while hovered", async ({
     page,
     network,
   }) => {
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const thumb = page.getByTestId("question-feed-level1-reference-image");
+    const thumb = page.getByTestId("question-feed-suggestion-reference-image");
     await expect(thumb).toBeVisible();
     const restOverflow = await thumb.evaluate(
       (el) => window.getComputedStyle(el).overflow
@@ -709,11 +708,11 @@ test.describe("question feed - hover-zoom is not clipped by its frame (issue #70
   });
 });
 
-// Issue #711 / #740 - the Level 1 Yes button carries neither the oversized `.big` modifier
-// nor the full-width `.block` modifier, so it reads at the same font size and a
+// Issue #711 / #740 - the suggestion slot's Yes button carries neither the oversized `.big`
+// modifier nor the full-width `.block` modifier, so it reads at the same font size and a
 // content-sized width, like its ActionGrid siblings. Hierarchy comes from position (its own
 // row, above the grid) and its `.primary` colour, not from disproportionate size.
-test.describe("question feed - Level 1 answer-row hierarchy (issue #711)", () => {
+test.describe("question feed - suggestion-slot answer-row hierarchy (issue #711)", () => {
   test("the Yes button reads at the same font size as its 'Not sure' sibling", async ({
     page,
     network,
@@ -721,8 +720,8 @@ test.describe("question feed - Level 1 answer-row hierarchy (issue #711)", () =>
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const yesButton = page.getByTestId("question-feed-level1-yes");
-    const notSureButton = page.getByTestId("question-feed-level1-not-sure");
+    const yesButton = page.getByTestId("question-feed-suggestion-yes");
+    const notSureButton = page.getByTestId("question-feed-suggestion-not-sure");
     await expect(yesButton).toBeVisible();
     await expect(notSureButton).toBeVisible();
 
@@ -743,8 +742,8 @@ test.describe("question feed - Level 1 answer-row hierarchy (issue #711)", () =>
     await page.setViewportSize({ width: 800, height: 900 });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const yesButton = page.getByTestId("question-feed-level1-yes");
-    const notSureButton = page.getByTestId("question-feed-level1-not-sure");
+    const yesButton = page.getByTestId("question-feed-suggestion-yes");
+    const notSureButton = page.getByTestId("question-feed-suggestion-not-sure");
     await expect(yesButton).toBeVisible();
     await expect(notSureButton).toBeVisible();
 

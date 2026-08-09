@@ -28,8 +28,11 @@
  *     volume-rewarding/direction-neutral, the ONLY reward surface; no streak/score/confetti)
  *     and the quiet "confirm-lands" fade (ANNEX C) shown on a successful confirm/pick while the
  *     next item is in flight.
- *   - Preserved verbatim: Level 1/2/3 flows, `getAutoTagChips` auto-tagging on candidate pick,
- *     no-re-presentation (`rejectedCandidateIds`), the singleton-NO terminal vote, per-item
+ *   - Preserved verbatim: the candidate question's interaction contract (issue #728 removed
+ *     the level1 -> level2 funnel, not the answers - see the de-laddering notes at
+ *     `initialStage`'s old site, `rejectSuggestion`, and `candidateQuestionBody`),
+ *     `getAutoTagChips` auto-tagging on candidate pick, no-re-presentation
+ *     (`rejectedCandidateIds`), the singleton-NO terminal vote, per-item
  *     state reset inside the fetch `.then()` (not a keyed `useEffect` - the stale-filter fix),
  *     the rate-limit banner, `data-card-*` attributes + the `mpc:card-selected` event (via
  *     `getPrintingCandidateDataAttributes`, unchanged), every `data-testid` this file's own
@@ -82,7 +85,6 @@ import {
   MysteryCard,
   randomFlavorText,
   RevealWrapper,
-  StaticCardPanel,
   ZoomableThumbnail,
 } from "@/features/printingTags/cardPanel";
 import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
@@ -98,7 +100,6 @@ import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 
 type FollowUp = "none" | "no-match-reason";
-type CandidateStage = "level1" | "level2" | "level3";
 
 // ---------------------------------------------------------------------------------------
 // Layout primitives (SPEC-wtc-rebuild.md section 1c's per-element binding table + section 3's
@@ -695,12 +696,6 @@ function normalizeQuestionFeedCounts(
   return raw;
 }
 
-function initialStage(item: QuestionFeedItem | null): CandidateStage {
-  return item?.type === "confirm_suggestion" && item?.suggestedPrinting != null
-    ? "level1"
-    : "level2";
-}
-
 export function QuestionFeed() {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
@@ -736,11 +731,11 @@ export function QuestionFeed() {
     initialChipStates()
   );
   const [followUp, setFollowUp] = useState<FollowUp>("none");
-  // Candidate identifiers the user has explicitly said NO to (Level 1 only - "Not sure" is
-  // genuine uncertainty, not a rejection, and deliberately never adds here) within THIS item's
-  // flow - reset on every new item below. Design rule (owner-directed): a candidate the user
-  // has just rejected is never re-presented as a selectable answer at a later level within the
-  // same item - see rejectSuggestion below and the filtered candidate list this feeds.
+  // The one candidate the user has explicitly said NO to within THIS item's flow (issue #728:
+  // with the ladder gone this can only ever be the suggested candidate - the only candidate
+  // rejected by name; "Not sure" is genuine uncertainty, not a rejection, and deliberately
+  // never adds here). Drives the suggestion slot's "you said not this one" collapse - reset on
+  // every new item below.
   const [rejectedCandidateIds, setRejectedCandidateIds] = useState<Set<string>>(
     new Set()
   );
@@ -758,10 +753,14 @@ export function QuestionFeed() {
   // gets a persistent inline notice rather than a transient, alarm-toned toast.
   const [rateLimited, setRateLimited] = useState<boolean>(false);
 
-  const [stage, setStage] = useState<CandidateStage>("level2");
-  // Collapsed by default (decision: chip-as-filter survives on Level 2, but off-path for the
-  // common case). Selecting a candidate below ignores this entirely; it only ever narrows
-  // which tiles are shown.
+  // The de-laddered feed (issue #728) has no fixed level1 -> level2 -> level3 sequence. The
+  // only remaining "stage" is the data-driven post-selection attribute confirmation (formerly
+  // Level 3), entered solely when a selected candidate leaves an exclusion group open - never
+  // a fixed-sequence step.
+  const [level3Active, setLevel3Active] = useState<boolean>(false);
+  // Collapsed by default (decision: chip-as-filter survives on the candidate grid, but
+  // off-path for the common case). Selecting a candidate below ignores this entirely; it only
+  // ever narrows which tiles are shown.
   const [filterExpanded, setFilterExpanded] = useState<boolean>(false);
   // Level 3 only ever asks about groups an already-selected candidate left open - keyed by
   // tagName, but only ever contains chips from getOpenExclusionGroups(pendingCandidate).
@@ -830,9 +829,9 @@ export function QuestionFeed() {
         setConfirmedArtistName(null);
         setRateLimited(false);
         // Issue #707 / A4 amendment - shown automatically for the two candidate-type shapes
-        // (identify_printing's shortlist, confirm_suggestion once dropped to Level 2), where
-        // the attribute chips actually narrow something; artist/tag items never reach the
-        // branch that reads this at all, so their default is moot.
+        // (identify_printing's shortlist, confirm_suggestion's candidate page), where the
+        // attribute chips actually narrow something; artist/tag items never reach the branch
+        // that reads this at all, so their default is moot.
         setFilterExpanded(
           newItem != null &&
             (newItem.type === "identify_printing" ||
@@ -840,7 +839,9 @@ export function QuestionFeed() {
         );
         setLevel3ChipStates({});
         setLanded(false);
-        setStage(initialStage(newItem));
+        // The only remaining "stage" (issue #728) is the post-selection attribute
+        // confirmation - every new item starts outside it.
+        setLevel3Active(false);
       })
       .catch(() => {
         setItem(null);
@@ -957,7 +958,7 @@ export function QuestionFeed() {
                 )
               )
             );
-            setStage("level3");
+            setLevel3Active(true);
           } else {
             setLanded(true);
             advance();
@@ -1106,7 +1107,9 @@ export function QuestionFeed() {
 
   // Records the "Not sure" abstention (issue #712) and moves on - fire-and-forget, same
   // best-effort convention as the auto-tag-chip casts in selectCandidate above: the write is
-  // informative, not gating, so a failed request never blocks the stage transition.
+  // informative, not gating, so a failed request never blocks the transition. There is no
+  // ladder to fall into (issue #728): "Not sure" means "I can't resolve this", so it advances
+  // to the next question rather than re-asking the same candidates on another page.
   const submitNotSure = () => {
     if (backendURL != null && item != null) {
       APISubmitQuestionAbstention(
@@ -1116,14 +1119,15 @@ export function QuestionFeed() {
         item.type
       ).catch(() => undefined);
     }
-    setStage("level2");
+    advance();
   };
 
-  // Level 1's NO. In the general case this casts no vote itself - there's no backend concept of
-  // "reject just this one candidate specifically," only a positive vote for a specific printing
-  // or a generic isNoMatch for the whole set (see selectCandidate above) - so it purely records
-  // the rejection client-side so Level 2's candidate list (below) excludes it, then falls
-  // through to the SAME setStage("level2") transition as before.
+  // The suggestion slot's NO. In the general case this casts no vote itself - there's no
+  // backend concept of "reject just this one candidate specifically," only a positive vote for
+  // a specific printing or a generic isNoMatch for the whole set (see selectCandidate above) -
+  // so it purely records the rejection client-side and collapses the suggestion slot into the
+  // "you said not this one" context; the remaining candidate grid (below) carries the question
+  // on the SAME page. No stage transition (issue #728).
   //
   // EXCEPTION - the singleton case (owner-reported dedup bug, docs/features/printing-tags.md's
   // questionFeed section): when the suggested printing is the card's ONLY candidate, rejecting
@@ -1132,14 +1136,12 @@ export function QuestionFeed() {
   // that gap: the vote persists at the moment "No" is tapped, with or without any further tap.
   const rejectSuggestion = () => {
     if (item?.suggestedPrinting == null) {
-      setStage("level2");
       return;
     }
     const rejectedIdentifier = item.suggestedPrinting.identifier;
     setRejectedCandidateIds((previous) =>
       new Set(previous).add(rejectedIdentifier)
     );
-    setStage("level2");
     const remainingCandidates = (item.candidates ?? []).filter(
       (candidate) => candidate.identifier !== rejectedIdentifier
     );
@@ -1194,19 +1196,27 @@ export function QuestionFeed() {
   const isCandidateType =
     item.type === "confirm_suggestion" || item.type === "identify_printing";
   const allCandidates = item.candidates ?? [];
-  // Excludes anything the user rejected at Level 1 ("No" - see rejectSuggestion) BEFORE the
-  // chip filter applies, so a rejected candidate is never offered again as a selectable tile
-  // for the rest of this item's flow, regardless of chip state.
-  const nonRejectedCandidates = allCandidates.filter(
-    (candidate) => !rejectedCandidateIds.has(candidate.identifier)
+  // Issue #728 - the suggested candidate is judged exactly ONCE, in its own slot above, and is
+  // never re-offered as a grid tile (the old Level 2 re-presented it "highlighted" - the same
+  // candidate asked about twice). The grid is the REST of the candidates; the rejected set
+  // (which only ever holds the suggested id, see rejectSuggestion) is belt-and-braces for that
+  // same exclusion and drives the "you said not this one" context above.
+  const suggestedCandidateId =
+    item.type === "confirm_suggestion"
+      ? item.suggestedPrinting?.identifier ?? null
+      : null;
+  const gridCandidates = allCandidates.filter(
+    (candidate) =>
+      candidate.identifier !== suggestedCandidateId &&
+      !rejectedCandidateIds.has(candidate.identifier)
   );
   const visibleCandidates = filterCandidatesByChipStates(
-    nonRejectedCandidates,
+    gridCandidates,
     chipStates
   );
-  const hiddenCount = nonRejectedCandidates.length - visibleCandidates.length;
+  const hiddenCount = gridCandidates.length - visibleCandidates.length;
 
-  // Issue #503 (WTC phase C1) - group the level-2 grid by shared Scryfall illustration. A
+  // Issue #503 (WTC phase C1) - group the candidate grid by shared Scryfall illustration. A
   // cluster only forms for >=2 candidates sharing a non-null illustrationId; every other
   // candidate - a unique illustrationId, or no illustrationId at all
   // (CanonicalPrintingMetadata.illustration_id is nullable and frequently absent, see
@@ -1242,18 +1252,24 @@ export function QuestionFeed() {
     (candidate) => !groupedCandidateIds.has(candidate.identifier)
   );
 
-  const suggestionRejectedWithNoneLeft =
+  // The user tapped "No, different printing" - the suggestion slot collapses into a "you said
+  // not this one" context line and the remaining grid carries the question (issue #728: this
+  // stays on the same page; it is not a stage transition).
+  const suggestionRejected =
     item.type === "confirm_suggestion" &&
     item.suggestedPrinting != null &&
-    rejectedCandidateIds.has(item.suggestedPrinting.identifier) &&
-    nonRejectedCandidates.length === 0;
+    rejectedCandidateIds.has(item.suggestedPrinting.identifier);
+  // Singleton rejection (owner-reported dedup bug, docs/features/printing-tags.md): when the
+  // suggested printing was the card's ONLY candidate, rejecting it empties the grid and
+  // rejectSuggestion already cast the "None of these" vote - this only gates presentation.
+  const suggestionRejectedWithNoneLeft =
+    suggestionRejected && gridCandidates.length === 0;
 
   // Shape (d) - open-ended (ANNEX B): an `identify_printing` item with no shortlist at all
   // (the smallest slice - cold-start/no-evidence). Framed as the "tricky one" (WD7) instead of
   // the neutral pick-grid shape.
   const isOpenEndedShape =
     isCandidateType &&
-    stage === "level2" &&
     item.type === "identify_printing" &&
     allCandidates.length === 0;
 
@@ -1319,119 +1335,19 @@ export function QuestionFeed() {
     </SubjectCardBox>
   );
 
-  // The one card panel Level 2 ever renders now (issue #707) - the attribute-chip panel no
-  // longer replaces this with a ring-around-card composition; it renders separately in QPanel
-  // (level2Body below) instead, so the pinned reference card (Subject, A2) is never swapped
-  // out or occluded by it.
+  // The one card panel the candidate question renders (issue #707) - the attribute-chip panel
+  // no longer replaces this with a ring-around-card composition; it renders separately in
+  // QPanel (candidateQuestionBody below) instead, so the pinned reference card (Subject, A2)
+  // is never swapped out or occluded by it.
   const plainCardPanel = (
     <CardPanel data-testid="question-feed-card-panel">{subjectCard}</CardPanel>
-  );
-
-  // Level 1 only - the compact single-card confirmation screen.
-  const level1CardPanel = (
-    <StaticCardPanel data-testid="question-feed-level1-card-panel">
-      {subjectCard}
-    </StaticCardPanel>
   );
 
   let cardNode: React.ReactNode;
   let questionsNode: React.ReactNode;
 
   if (isCandidateType) {
-    if (stage === "level1" && item.suggestedPrinting != null) {
-      cardNode = level1CardPanel;
-      questionsNode = (
-        <div data-testid="question-feed-level1">
-          {!revealed ? (
-            <div className="text-center py-4">
-              <Spinner size={2} />
-            </div>
-          ) : (
-            <>
-              <QHead>
-                <ShapePill
-                  className="easy"
-                  data-testid="question-feed-tier-badge"
-                >
-                  Suggested match
-                </ShapePill>
-              </QHead>
-              <SuggestedCard>
-                <SuggestedThumb data-testid="question-feed-level1-reference-image">
-                  <ArtPlaceholder>
-                    <MysteryCard />
-                    <ZoomableThumbnail>
-                      <img
-                        src={item.suggestedPrinting.mediumThumbnailUrl}
-                        alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
-                      />
-                    </ZoomableThumbnail>
-                  </ArtPlaceholder>
-                </SuggestedThumb>
-                <SuggestedMeta>
-                  <SuggestedName>{item.card.name}</SuggestedName>
-                  <SuggestedSet>
-                    <SetIcon
-                      expansionCode={item.suggestedPrinting.expansionCode}
-                    />{" "}
-                    {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                    {item.suggestedPrinting.collectorNumber}
-                  </SuggestedSet>
-                  <ConfidencePill data-testid="question-feed-suggestion-prompt">
-                    <i />
-                    Is it this one?
-                  </ConfidencePill>
-                </SuggestedMeta>
-              </SuggestedCard>
-              <ActionStack>
-                <Btn
-                  className="primary"
-                  disabled={submitting}
-                  onClick={() =>
-                    item.suggestedPrinting != null &&
-                    selectCandidate(item.suggestedPrinting, false)
-                  }
-                  data-testid="question-feed-level1-yes"
-                >
-                  {submitting ? <Spinner size={1} /> : "Yes — that's the one"}
-                </Btn>
-                <ActionGrid>
-                  <Btn
-                    className="secondary"
-                    disabled={submitting}
-                    onClick={submitNotSure}
-                    data-testid="question-feed-level1-not-sure"
-                  >
-                    Not sure
-                  </Btn>
-                  <Btn
-                    className="secondary"
-                    disabled={submitting}
-                    onClick={rejectSuggestion}
-                    data-testid="question-feed-level1-no"
-                  >
-                    No, different printing
-                  </Btn>
-                  <Btn
-                    className="ghost"
-                    disabled={submitting}
-                    onClick={skip}
-                    data-testid="question-feed-level1-skip"
-                  >
-                    Skip
-                  </Btn>
-                </ActionGrid>
-              </ActionStack>
-              {landed && (
-                <LandedFeedback data-testid="question-feed-landed">
-                  ✓ Tagged — nice. Next card loading…
-                </LandedFeedback>
-              )}
-            </>
-          )}
-        </div>
-      );
-    } else if (stage === "level3") {
+    if (level3Active) {
       cardNode = plainCardPanel;
       questionsNode = (
         <div data-testid="question-feed-level3">
@@ -1489,8 +1405,10 @@ export function QuestionFeed() {
         </div>
       );
     } else {
-      // Level 2 - the candidate grid, or (isOpenEndedShape) the dashed "tricky one" framing
-      // for a zero-candidate identify_printing item (shape d, ANNEX B).
+      // The single candidate question (issue #728 - the level1/level2 ladder is gone): the
+      // candidate grid, or (isOpenEndedShape) the dashed "tricky one" framing for a
+      // zero-candidate identify_printing item (shape d, ANNEX B). The suggested candidate
+      // (when present) renders in its own slot above the grid and never as a tile.
       cardNode = plainCardPanel;
       const shapePillClass =
         item.type === "confirm_suggestion"
@@ -1525,12 +1443,6 @@ export function QuestionFeed() {
       ) => (
         <CandidateButton
           key={candidate.identifier}
-          className={
-            item.type === "confirm_suggestion" &&
-            item.suggestedPrinting?.identifier === candidate.identifier
-              ? "highlighted"
-              : ""
-          }
           disabled={submitting}
           onClick={onSelect}
           {...getPrintingCandidateDataAttributes(item.card.name, candidate)}
@@ -1564,9 +1476,9 @@ export function QuestionFeed() {
       // Problem 2 (owner report, 2026-08-04): a not-official-printing reason (the artwork is
       // genuine, this scan just isn't one of the listed printings) means the remaining
       // question - which printing - is still answerable from this same item's own candidate
-      // list, so this returns to the existing Level 2 grid with its filter panel already
-      // expanded instead of skipping to the next item, reusing the funnel's existing chip
-      // narrowing (filterCandidatesByChipStates) rather than any new selector or vote shape.
+      // list, so this returns to the candidate grid with its filter panel already expanded
+      // instead of skipping to the next item, reusing the existing chip narrowing
+      // (filterCandidatesByChipStates) rather than any new selector or vote shape.
       // A not-official-art reason (custom-art/ai-art/external-ip) has nothing left to narrow
       // towards - that axis keeps advancing straight through, unchanged.
       const onNoMatchReasonDone = (chosenTagName?: string) => {
@@ -1576,14 +1488,22 @@ export function QuestionFeed() {
             NO_MATCH_REASON_TAG_GROUPS["not-official-printing"]
               .tagNames as readonly string[]
           ).includes(chosenTagName);
-        if (isNotOfficialPrinting && nonRejectedCandidates.length > 0) {
+        if (isNotOfficialPrinting && gridCandidates.length > 0) {
           setFollowUp("none");
           setFilterExpanded(true);
           return;
         }
         advance();
       };
-      const level2Body = (
+      // The de-laddered candidate question (issue #728): the suggested candidate (when
+      // present) is asked about ONCE, in its own slot, with the rest of the candidates in the
+      // grid on the SAME page - no level1 -> level2 funnel re-presents it as a highlighted
+      // tile. "Art matches, not an official printing" is a first-class fallback here (bottom
+      // row), not a Level-2-only escape hatch. Answers resolve or advance by what they mean:
+      // Yes casts the vote; No collapses this slot and leaves the grid to carry the question;
+      // Not sure records an abstention and advances; the bottom row resolves the whole
+      // question (none of these / custom art / skip).
+      const candidateQuestionBody = (
         <>
           <QHead>
             <ShapePill
@@ -1597,7 +1517,76 @@ export function QuestionFeed() {
           </QHead>
           {item.type === "confirm_suggestion" &&
             item.suggestedPrinting != null &&
-            (suggestionRejectedWithNoneLeft ? (
+            !suggestionRejected && (
+              <>
+                <SuggestedCard>
+                  <SuggestedThumb data-testid="question-feed-suggestion-reference-image">
+                    <ArtPlaceholder>
+                      <MysteryCard />
+                      <ZoomableThumbnail>
+                        <img
+                          src={item.suggestedPrinting.mediumThumbnailUrl}
+                          alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
+                        />
+                      </ZoomableThumbnail>
+                    </ArtPlaceholder>
+                  </SuggestedThumb>
+                  <SuggestedMeta>
+                    <SuggestedName>{item.card.name}</SuggestedName>
+                    <SuggestedSet>
+                      <SetIcon
+                        expansionCode={item.suggestedPrinting.expansionCode}
+                      />{" "}
+                      {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                      {item.suggestedPrinting.collectorNumber}
+                    </SuggestedSet>
+                    <ConfidencePill data-testid="question-feed-suggestion-prompt">
+                      <i />
+                      Is it this one?
+                    </ConfidencePill>
+                  </SuggestedMeta>
+                </SuggestedCard>
+                <ActionStack>
+                  <Btn
+                    className="primary"
+                    disabled={submitting}
+                    onClick={() =>
+                      item.suggestedPrinting != null &&
+                      selectCandidate(item.suggestedPrinting, false)
+                    }
+                    data-testid="question-feed-suggestion-yes"
+                  >
+                    {submitting ? <Spinner size={1} /> : "Yes — that's the one"}
+                  </Btn>
+                  <ActionGrid>
+                    <Btn
+                      className="secondary"
+                      disabled={submitting}
+                      onClick={submitNotSure}
+                      data-testid="question-feed-suggestion-not-sure"
+                    >
+                      Not sure
+                    </Btn>
+                    <Btn
+                      className="secondary"
+                      disabled={submitting}
+                      onClick={rejectSuggestion}
+                      data-testid="question-feed-suggestion-no"
+                    >
+                      No, different printing
+                    </Btn>
+                  </ActionGrid>
+                </ActionStack>
+                {landed && (
+                  <LandedFeedback data-testid="question-feed-landed">
+                    ✓ Tagged — nice. Next card loading…
+                  </LandedFeedback>
+                )}
+              </>
+            )}
+          {item.type === "confirm_suggestion" &&
+            item.suggestedPrinting != null &&
+            suggestionRejected && (
               <>
                 <Prompt data-testid="question-feed-suggestion-prompt">
                   Got it - not that one. Is it any official printing at all?
@@ -1623,14 +1612,7 @@ export function QuestionFeed() {
                   </div>
                 </div>
               </>
-            ) : (
-              <Prompt data-testid="question-feed-suggestion-prompt">
-                Which of these is it?{" "}
-                <SetIcon expansionCode={item.suggestedPrinting.expansionCode} />{" "}
-                {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                {item.suggestedPrinting.collectorNumber} was suggested
-              </Prompt>
-            ))}
+            )}
           {item.type === "identify_printing" && (
             <Prompt>
               {isOpenEndedShape
@@ -1810,11 +1792,13 @@ export function QuestionFeed() {
           <Spinner size={2} />
         </div>
       ) : isOpenEndedShape ? (
-        <div data-testid="question-feed-level2">
-          <OpenWrap>{level2Body}</OpenWrap>
+        <div data-testid="question-feed-candidate-question">
+          <OpenWrap>{candidateQuestionBody}</OpenWrap>
         </div>
       ) : (
-        <div data-testid="question-feed-level2">{level2Body}</div>
+        <div data-testid="question-feed-candidate-question">
+          {candidateQuestionBody}
+        </div>
       );
     }
   } else {

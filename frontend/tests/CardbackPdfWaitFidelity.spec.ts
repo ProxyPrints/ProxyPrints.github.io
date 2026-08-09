@@ -239,9 +239,9 @@ for (const viewport of [
         "rgb(11, 21, 32)"
       );
 
-      // E.4 `.tbtn.yes` (ThumbButton, QuestionFeed's own shipped idiom, reproduced verbatim) -
-      // min-height 44px floor.
-      const yesButton = embed.getByTestId("question-feed-level1-yes");
+      // E.4 `.tbtn.yes` equivalent (the suggestion slot's primary Yes button, QuestionFeed's
+      // own shipped idiom, reproduced verbatim) - min-height 44px floor.
+      const yesButton = embed.getByTestId("question-feed-suggestion-yes");
       await expect(yesButton).toBeVisible({ timeout: 15_000 });
       const yesHeight = await yesButton.evaluate(
         (el) => el.getBoundingClientRect().height

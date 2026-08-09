@@ -642,6 +642,21 @@ gain `--workers` — tracked on issue #538, not to be done as a drive-by.
   If usage grows past that, the next step is a real cache service (issue
   #538, option 2), not a bigger table.
 
+**Consumers (as of 2026-08-07).** The four question-feed candidate pools
+(`cardpicker/question_feed_pools.py`, warmed per-lane by django-q2 — see
+`0105_question_feed_pools_schedule.py`), and `question_feed. get_remaining_estimate`'s four header counts (300s TTL, keyed by the
+resolved contested id-set — advisory copy, so the TTL is the invalidation
+policy; see that function's docstring). That read is one small SELECT on
+`shared_cache` per request, replacing ~7.45s of live scans/counts measured
+on the 2026-08-06 deploy wave.
+
+**Schedule uniqueness.** `django_q.Schedule.name` is UNIQUE as of
+`0107_question_feed_pools_schedule_dedupe.py`, which also collapsed the
+duplicate schedule rows that wave produced (two concurrent `migrate` runs
+raced 0105's `get_or_create`). All schedule-creating migrations now use
+`get_or_create`; any future one must too, or the constraint turns a re-run
+into an unhandled `IntegrityError`.
+
 ## Database footprint (baseline snapshot)
 
 One-query snapshot, 2026-07-19, before `ImageEvidence` (Stage C of the
