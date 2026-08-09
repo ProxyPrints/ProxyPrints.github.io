@@ -421,6 +421,77 @@ describe("QuestionFeed", () => {
     ).toHaveTextContent("Suggested match");
   });
 
+  it("a rejected Level 1 suggestion stays reachable in the candidate grid as a de-emphasised, re-selectable tile (issue #748)", async () => {
+    // #748 - rejecting the suggested printing must not drop it from the surface: the
+    // suggestion slot collapses into the "you said not this one" context, and the candidate
+    // grid gains the rejected candidate as a de-emphasised (`data-rejected`) tile that stays
+    // fully selectable - tapping it re-casts the candidate as a real pick, the reconsider
+    // path for a mis-tapped "No, different printing".
+    const confirmSuggestionItem = {
+      ...identifyPrintingItem,
+      type: "confirm_suggestion",
+      suggestedPrinting: identifyPrintingItem.candidates[0],
+    };
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: confirmSuggestionItem,
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    let submittedIdentifier: string | undefined;
+    server.use(
+      http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          printingIdentifier?: string;
+        };
+        submittedIdentifier = body.printingIdentifier;
+        return HttpResponse.json(
+          { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+    await revealCard();
+
+    // Before rejection: the suggested candidate is judged in its own slot (#728), so the
+    // grid shows only the OTHER candidate - the suggested one never re-appears as a tile.
+    const initialGrid = await screen.findByTestId(
+      "question-feed-candidate-grid-ungrouped"
+    );
+    expect(within(initialGrid).getAllByRole("button")).toHaveLength(1);
+
+    // Reject the suggestion: the slot collapses into context, and the rejected candidate
+    // joins the grid as a de-emphasised, still-selectable tile rather than vanishing.
+    fireEvent.click(await screen.findByTestId("question-feed-suggestion-no"));
+    expect(
+      await screen.findByTestId("question-feed-rejected-context")
+    ).toHaveTextContent("You said: not");
+    const grid = screen.getByTestId("question-feed-candidate-grid-ungrouped");
+    expect(within(grid).getAllByRole("button")).toHaveLength(2);
+    const rejectedNote = await screen.findByTestId(
+      "question-feed-rejected-tile-note"
+    );
+    expect(rejectedNote).toHaveTextContent("you said no");
+    const rejectedTile = rejectedNote.closest("button");
+    expect(rejectedTile).not.toBeNull();
+    expect(rejectedTile!.getAttribute("data-rejected")).toBe("true");
+
+    // The reconsider path: tapping the rejected tile casts it as a real pick.
+    fireEvent.click(rejectedTile!);
+    await waitFor(() => expect(submittedIdentifier).toBe("printing-1"));
+  });
+
   it("shows the suggested printing's own reference image on the suggested-match question (regression: dropped when the suggestion slot was introduced in #49)", async () => {
     server.use(
       http.get(buildRoute("2/questionFeed/"), () =>
