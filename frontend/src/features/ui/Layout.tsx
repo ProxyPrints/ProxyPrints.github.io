@@ -7,7 +7,9 @@ import { Provider } from "react-redux";
 
 import { ContentMaxWidth } from "@/common/constants";
 import {
+  getExistingAnonymousId,
   getLocalStorageFavorites,
+  getLocalStorageHiddenCardIds,
   getLocalStorageManualOverrides,
 } from "@/common/cookies";
 import { useAppDispatch } from "@/common/types";
@@ -26,6 +28,7 @@ import { CryptoSessionProvider } from "@/features/savedDecks/cryptoSession";
 import { Toasts } from "@/features/toasts/Toasts";
 import ProjectNavbar from "@/features/ui/Navbar";
 import { setAllFavoriteRenders } from "@/store/slices/favoritesSlice";
+import { setAllHiddenCardIdentifiers } from "@/store/slices/hiddenCardsSlice";
 import { setAllManualOverrides } from "@/store/slices/projectSlice";
 import store from "@/store/store";
 
@@ -134,6 +137,16 @@ export function LayoutWithoutReduxProvider({ children }: PropsWithChildren) {
     const manualOverrides = getLocalStorageManualOverrides();
     if (Object.keys(manualOverrides).length > 0) {
       dispatch(setAllManualOverrides(manualOverrides));
+    }
+    // Hydrate the hidden-card mirror for the existing anonymous identity only - never mint a
+    // new one just by loading (issue #714); a hide writes the same set back via listener.
+    const existingAnonymousId = getExistingAnonymousId();
+    if (existingAnonymousId != null) {
+      const hiddenIdentifiers =
+        getLocalStorageHiddenCardIds(existingAnonymousId);
+      if (hiddenIdentifiers.size > 0) {
+        dispatch(setAllHiddenCardIdentifiers([...hiddenIdentifiers]));
+      }
     }
     clientSearchService.initialiseWorker();
     pdfRenderService.initialiseWorker();

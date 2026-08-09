@@ -23,6 +23,7 @@ import { RightPaddedIcon } from "@/components/icon";
 import { ChipCard } from "@/features/attributeVoting/ChipCard";
 import { APIReportCard } from "@/store/api";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
+import { hideCard } from "@/store/slices/hiddenCardsSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 
 const REPORT_TEXT_MAX_LENGTH = 280;
@@ -47,6 +48,7 @@ export function ReportCardPanel({ cardDocument }: ReportCardPanelProps) {
   const [showOtherText, setShowOtherText] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [submitted, setSubmitted] = useState<boolean>(false);
+  const [hideForMe, setHideForMe] = useState<boolean>(false);
 
   if (backendURL == null) {
     return null;
@@ -60,8 +62,17 @@ export function ReportCardPanel({ cardDocument }: ReportCardPanelProps) {
         cardDocument.identifier,
         getOrCreateAnonymousId(),
         reason,
-        text
+        text,
+        // `undefined` (not `false`) when unchecked: JSON.stringify drops undefined, so the
+        // wire payload is exactly the old one when the user doesn't opt in to hiding.
+        hideForMe || undefined
       );
+      if (hideForMe) {
+        // issue #714: the modal disappears via Modals.tsx's hidden-identifier gate; the
+        // localStorage mirror (listenerMiddleware) keeps this session in sync, and the
+        // server-side question-feed filter is the durable mechanism.
+        dispatch(hideCard(cardDocument.identifier));
+      }
       setSubmitted(true);
     } catch (error) {
       dispatch(
@@ -128,6 +139,16 @@ export function ReportCardPanel({ cardDocument }: ReportCardPanelProps) {
           </Col>
         ))}
       </Row>
+      <Form.Check
+        type="checkbox"
+        id="report-hide-for-me"
+        className="mt-2"
+        label="Also hide this image for me"
+        checked={hideForMe}
+        onChange={(event) => setHideForMe(event.target.checked)}
+        disabled={submitting}
+        data-testid="report-hide-checkbox"
+      />
       {showOtherText && (
         <>
           <Form.Control

@@ -1652,6 +1652,31 @@ class CardReport(models.Model):
         return f"{self.card.name} -> {self.reason} ({self.anonymous_id})"
 
 
+class HiddenCard(models.Model):
+    """
+    A durable per-anonymous_id record that `card` should be excluded from that identity's own
+    future question-feed items (see docs/features/moderation.md's hidden-card section). Written
+    by `views.post_report_card` when the report carries `hide=True` (`ReportCardRequest.hide`,
+    additive to the existing report payload) - always alongside a `CardReport` row, in the same
+    transaction, never in place of one. Scoped to the client-generated anonymous_id only, same
+    as every other vote/report table here - no account linkage yet (see that doc section for
+    what this deliberately does not do). `get_or_create`d at the write site, so a repeat report
+    with `hide=True` for the same (card, anonymous_id) is a no-op rather than an IntegrityError.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="hidden_by")
+    anonymous_id = models.CharField(max_length=40)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["card", "anonymous_id"], name="hiddencard_unique_hide"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.card.name} hidden for {self.anonymous_id}"
+
+
 class TagSuggestionStatus(models.TextChoices):
     PENDING = "pending", "Pending"
     AUTO_ACCEPTED = "auto_accepted", "Auto-accepted"

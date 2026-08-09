@@ -981,11 +981,12 @@ export async function APIReportCard(
   identifier: string,
   anonymousId: string,
   reason: ReportReason,
-  text?: string
+  text?: string,
+  hide?: boolean
 ): Promise<ReportCardResponse> {
   const rawResponse = await fetch(formatURL(backendURL, "/2/reportCard/"), {
     method: "POST",
-    body: JSON.stringify({ identifier, anonymousId, reason, text }),
+    body: JSON.stringify({ identifier, anonymousId, reason, text, hide }),
     credentials: "include",
     headers: getCSRFHeader(),
   });

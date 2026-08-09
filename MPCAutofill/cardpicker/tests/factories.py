@@ -168,6 +168,14 @@ class CardReportFactory(factory.django.DjangoModelFactory):
     text = ""
 
 
+class HiddenCardFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.HiddenCard
+
+    card = factory.SubFactory(CardFactory)
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
+
+
 class SavedDeckFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = models.SavedDeck

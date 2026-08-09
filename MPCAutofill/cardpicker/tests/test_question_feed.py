@@ -18,6 +18,7 @@ from cardpicker.models import (
     ArtistVoteStatus,
     CardPrintingTag,
     CardScanLog,
+    HiddenCard,
     PrintingTagStatus,
     QuestionFeedServedLog,
     QuestionFeedServedPool,
@@ -244,6 +245,41 @@ class TestGetNextQuestionFeedItem:
         assert item.type.value == "tag"
         assert item.card.identifier == card.identifier
         assert item.tagName == tag_b.name
+
+    def test_a_hidden_card_is_excluded_from_this_voters_feed(self, db):
+        """Issue #714: a card this voter hid for themselves (`HiddenCard`, written by
+        `views.post_report_card` when a report carries `hide=True`) must never come back in
+        their own feed items, whichever tier would otherwise have served it."""
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        HiddenCard.objects.create(card=card, anonymous_id="anon-1")
+
+        item = get_next_question_feed_item("anon-1")
+
+        # the only candidate is hidden for this voter - nothing else exists, so None
+        assert item is None or item.card.identifier != card.identifier
+
+    def test_a_hidden_card_is_still_served_to_other_voters(self, db):
+        """The exclusion is per-anonymous_id, not global: hiding a card for yourself never
+        hides it for anyone else - same scoping as every other vote/report table here."""
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        HiddenCard.objects.create(card=card, anonymous_id="anon-1")
+
+        item = get_next_question_feed_item("anon-2")
+
+        assert item is not None
+        assert item.card.identifier == card.identifier
+
+    def test_a_hidden_card_is_excluded_even_when_it_is_the_only_contested_candidate(self, db):
+        """Tier 2's contested printing half must respect the hidden exclusion too - a card the
+        voter hid must not resurface just because it became the highest-priority contested one."""
+        hidden_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=hidden_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=hidden_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        HiddenCard.objects.create(card=hidden_card, anonymous_id="anon-1")
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is None or item.card.identifier != hidden_card.identifier
 
 
 class TestContestedIdsMemoizedPerRequest:

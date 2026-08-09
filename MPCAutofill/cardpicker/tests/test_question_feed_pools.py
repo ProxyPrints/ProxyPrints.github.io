@@ -256,6 +256,16 @@ class TestDrawResolutionImminentCard:
 
         assert draw_resolution_imminent_card(answered_card_ids=set()) is None
 
+    def test_excludes_a_card_this_voter_hid_for_themselves(self, db):
+        """Issue #714: the draw-time analogue of `_tier_4_fresh`/tier 1's hidden-card
+        exclusion - a hidden card is skipped even though it is still pooled."""
+        card, _ = make_one_vote_from_resolving_card()
+        warm_pool_cache(LANE_RESOLUTION_IMMINENT)
+
+        assert draw_resolution_imminent_card(answered_card_ids=set(), hidden_card_ids={card.pk}) is None
+        # no hidden exclusion = still served, for this voter or any other
+        assert draw_resolution_imminent_card(answered_card_ids=set()) is not None
+
 
 class TestDrawConfirmCard:
     def test_returns_the_pooled_card(self, db):
@@ -269,6 +279,12 @@ class TestDrawConfirmCard:
         card, _ = make_ai_suggested_card()
         warm_pool_cache(LANE_CONFIRM)
         assert draw_confirm_card(answered_card_ids={card.pk}) is None
+
+    def test_excludes_a_card_this_voter_hid_for_themselves(self, db):
+        card, _ = make_ai_suggested_card()
+        warm_pool_cache(LANE_CONFIRM)
+
+        assert draw_confirm_card(answered_card_ids=set(), hidden_card_ids={card.pk}) is None
 
 
 class TestDrawContestedEntry:
@@ -311,6 +327,17 @@ class TestDrawContestedEntry:
         assert drawn is not None
         assert drawn[0] == KIND_TAG
         assert drawn[2] == tag.name
+
+    def test_a_hidden_card_is_excluded_from_the_printing_half(self, db):
+        """Issue #714: the card-level hidden exclusion applies across every contested kind -
+        the printing half is the common case, the artist/tag halves share the same entry-level
+        skip (asserted via the cold lane's equivalent test below)."""
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        warm_pool_cache(LANE_CONTESTED)
+
+        assert draw_contested_entry(set(), set(), {}, set(), hidden_card_ids={card.pk}) is None
 
     def test_returns_none_on_a_cache_miss(self, db):
         assert draw_contested_entry(set(), set(), {}, set()) is None
@@ -357,6 +384,18 @@ class TestDrawColdEntry:
         drawn = draw_cold_entry("anon-2", set(), set(), contested_card_ids=[])
         assert drawn is not None
         assert drawn[1].pk == card.pk
+
+    def test_a_hidden_card_is_excluded(self, db):
+        """Issue #714: the cold lane's card-level hidden exclusion, keyed on the same
+        entry-level skip as the contested lane."""
+        card = CardFactory(
+            printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
+        )
+        warm_pool_cache(LANE_COLD)
+
+        assert draw_cold_entry("anon-1", set(), set(), contested_card_ids=[], hidden_card_ids={card.pk}) is None
+        # no hidden exclusion = still served
+        assert draw_cold_entry("anon-1", set(), set(), contested_card_ids=[]) is not None
 
     def test_returns_none_on_a_cache_miss(self, db):
         assert draw_cold_entry("anon-1", set(), set(), contested_card_ids=[]) is None

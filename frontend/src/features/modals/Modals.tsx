@@ -5,6 +5,7 @@ import { MemoizedCardDetailedView } from "@/features/cardDetailedView/CardDetail
 import { ChangeQueryModal } from "@/features/changeQuery/ChangeQueryModal";
 import { InvalidIdentifiersModal } from "@/features/invalidIdentifiers/InvalidIdentifiersModal";
 import { PDFGeneratorModal } from "@/features/pdf/PDFGeneratorModal";
+import { selectHiddenCardIdentifiersSet } from "@/store/slices/hiddenCardsSlice";
 import {
   hideModal,
   selectModalProps,
@@ -17,6 +18,7 @@ export function Modals() {
   const dispatch = useAppDispatch();
   const modalProps = useAppSelector(selectModalProps);
   const shownModal = useAppSelector(selectShownModal);
+  const hiddenCardIdentifiers = useAppSelector(selectHiddenCardIdentifiersSet);
 
   //# endregion
 
@@ -32,13 +34,16 @@ export function Modals() {
     <>
       {modalProps !== null && (
         <>
-          {"cardDetailedView" in modalProps && (
-            <MemoizedCardDetailedView
-              cardDocument={modalProps.cardDetailedView.card}
-              show={shownModal === "cardDetailedView"}
-              handleClose={handleClose}
-            />
-          )}
+          {"cardDetailedView" in modalProps &&
+            !hiddenCardIdentifiers.has(
+              modalProps.cardDetailedView.card.identifier
+            ) && (
+              <MemoizedCardDetailedView
+                cardDocument={modalProps.cardDetailedView.card}
+                show={shownModal === "cardDetailedView"}
+                handleClose={handleClose}
+              />
+            )}
           {"changeQuery" in modalProps && (
             <ChangeQueryModal
               slots={modalProps.changeQuery.slots}
