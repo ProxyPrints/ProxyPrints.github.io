@@ -1600,14 +1600,8 @@ export function QuestionFeed() {
                   you said no &middot; tap to reconsider
                 </div>
               )}
-              {showArtistCaption && candidate.artist.trim() !== "" && (
-                // The plain-text artist caption on a Scryfall printing render becomes the
-                // same MTGAC ArtistSupportLink applet the illustration clusters use, so
-                // attribution is consistent under every render type.
-                <ArtistSupportLink
-                  artistName={candidate.artist}
-                  className="mt-1"
-                />
+              {showArtistCaption && (
+                <div className="cs">{candidate.artist}</div>
               )}
             </CandidateCaption>
           </CandidateButton>
@@ -1684,6 +1678,12 @@ export function QuestionFeed() {
                       <i />
                       Is it this one?
                     </ConfidencePill>
+                    {item.suggestedPrinting.artist.trim() !== "" && (
+                      <ArtistSupportLink
+                        artistName={item.suggestedPrinting.artist}
+                        className="mt-1"
+                      />
+                    )}
                   </SuggestedMeta>
                 </SuggestedCard>
                 <ActionStack>
