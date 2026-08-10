@@ -1600,8 +1600,14 @@ export function QuestionFeed() {
                   you said no &middot; tap to reconsider
                 </div>
               )}
-              {showArtistCaption && (
-                <div className="cs">{candidate.artist}</div>
+              {showArtistCaption && candidate.artist.trim() !== "" && (
+                // The plain-text artist caption on a Scryfall printing render becomes the
+                // same MTGAC ArtistSupportLink applet the illustration clusters use, so
+                // attribution is consistent under every render type.
+                <ArtistSupportLink
+                  artistName={candidate.artist}
+                  className="mt-1"
+                />
               )}
             </CandidateCaption>
           </CandidateButton>
