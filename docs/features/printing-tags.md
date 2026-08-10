@@ -908,8 +908,9 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     intentionally identical transitions — "an honest skip beats a coerced
     guess"), but NO additionally records the rejected candidate's
     identifier client-side (`rejectedCandidateIds` — never NOT SURE, which
-    is genuine uncertainty, not a rejection) so Level 2 excludes it — see
-    the no-re-presentation rule below. `identify_printing` items (and
+    is genuine uncertainty, not a rejection) so Level 2 retains it as a
+    de-emphasised, re-selectable tile — see the no-re-presentation rule
+    below. `identify_printing` items (and
     `confirm_suggestion` items without a `suggestedPrinting`) skip Level 1
     entirely.
   - **Level 2** — the candidate grid. The attribute-chip ring is now an
@@ -989,23 +990,36 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     `RetractImplicitVoteRequest` types).
   - **No-re-presentation rule** (owner-directed fix, was a real live bug:
     Level 1 "Is it M21 203?" → NO → Level 2 grid containing only M21 203
-    again): within a single question item's flow, a candidate the user
-    has just rejected is never re-presented as a selectable answer at a
-    later level — each level's display set is candidates minus
-    already-rejected-this-item. Level 2's grid is computed from
-    `nonRejectedCandidates` (all candidates minus `rejectedCandidateIds`,
-    filtered _before_ the attribute-chip filter, so "N hidden by your
-    tags" doesn't conflate a rejection with a filter), and the singleton
-    case — rejecting the one and only candidate, or a rejection that
-    happens to empty the remaining set — skips the grid entirely: the
-    prompt swaps to a contextual "Got it — not that one. Is it any
-    official printing at all?" with the rejected candidate shown only as
-    grayed, non-interactive context (never a button), falling straight
-    through to the same classified-exit choice (None of these / custom
-    art / skip) that always rendered below the grid. `rejectedCandidateIds`
-    is per-item state, reset alongside every other per-question field in
-    the same fetch effect (see the module's own comment on why that reset
-    can't be a separate dependency-keyed effect).
+    again): within a single question item's flow, the suggested candidate
+    is asked about exactly once, in its own slot, and is never
+    re-presented as a grid tile while that slot is still asking —
+    `gridCandidates` keeps it out (`candidate.identifier !== suggestedCandidateId`), so the old asked-twice shape cannot recur.
+    A candidate the user has explicitly REJECTED at the suggestion slot
+    is the deliberate exception (issue #748): the slot collapses to a
+    contextual "Got it — not that one. Is it any official printing at
+    all?" plus a "You said: not M21 203" context line, and the rejected
+    candidate STAYS in the grid as a de-emphasised, fully re-selectable
+    tile — `data-rejected="true"` with a "you said no · tap to
+    reconsider" note — the recover path for a mis-tap, where tapping the
+    tile casts it as a real pick. `gridCandidates` is therefore every
+    candidate with `rejectedCandidateIds.has(id) || id !== suggestedCandidateId`: the rejected set is INCLUDED, not subtracted,
+    and the grid still runs through the attribute-chip filter separately
+    (a rejection is a `gridCandidates` decision, chip hiding a
+    `visibleCandidates` one), so "N hidden by your tags" never conflates
+    the two. A rejected candidate never joins an illustration cluster —
+    a cluster renders only one representative tile, which would silently
+    bury the reconsider path — so it always renders standalone as a
+    de-emphasised, ungrouped tile. The "none left" state
+    (`suggestionRejectedWithNoneLeft`) is decided by candidate count, not
+    grid count — no candidate OTHER than the rejected suggestion, since
+    the rejected one is now a grid member: in that state the grid is just
+    the single de-emphasised tile, the question was already resolved by
+    the terminal vote (next paragraph), and the filter panel and bottom
+    action row stay hidden while the reason strip carries the flow.
+    `rejectedCandidateIds` is per-item state, reset alongside every other
+    per-question field in the same fetch effect (see the module's own
+    comment on why that reset can't be a separate dependency-keyed
+    effect).
 
     **Singleton "No" now casts the terminal vote immediately** (owner-
     reported "dedup doesn't work" bug, fixed after this bullet originally
