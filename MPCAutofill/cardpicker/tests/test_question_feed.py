@@ -1,8 +1,6 @@
 import uuid
 from unittest.mock import patch
 
-import pytest
-
 from django.core.cache import caches
 from django.urls import reverse
 
@@ -44,8 +42,10 @@ from cardpicker.question_feed import (
     is_likely_resolve_printing,
 )
 from cardpicker.question_feed_pools import (
+    LANE_COLD,
     LANE_CONFIRM,
     LANE_RESOLUTION_IMMINENT,
+    LANES,
     warm_pool_cache,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
@@ -61,15 +61,16 @@ from cardpicker.tests.factories import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _auto_warm_pools():
-    from cardpicker.question_feed_pools import LANES, warm_pool_cache
-
+def _warm_all_lanes() -> None:
+    """Warms every pool lane fresh from the DB state at the point this is called - the
+    test-suite analogue of a warm cycle having just run right before a request, since pools are
+    the sole serving mechanism (issue #762) and no longer build themselves inline on a cache
+    miss. Must be called AFTER a test's fixtures are arranged (not via an autouse fixture, which
+    would run before the test body and warm an empty pool) and, for a class asserting on
+    `get_contested_card_ids`/`get_contested_artist_card_ids` call counts, before any `patch(...)`
+    of those names - see `TestContestedIdsMemoizedPerRequest` below."""
     for lane in LANES:
-        try:
-            warm_pool_cache(lane)
-        except Exception:
-            pass
+        warm_pool_cache(lane)
 
 
 def make_shared_illustration_group(name: str = "Brainstorm") -> tuple:
@@ -116,6 +117,7 @@ class TestGetNextQuestionFeedItem:
 
     def test_tier_1_returns_confirm_suggestion_with_the_ai_suggested_printing(self, db):
         card, printing = make_ai_suggested_card()
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -167,6 +169,7 @@ class TestGetNextQuestionFeedItem:
 
     def test_a_second_voters_own_exclusion_does_not_affect_a_first_voter(self, db):
         card, _ = make_ai_suggested_card()
+        _warm_all_lanes()
 
         item_for_second_voter = get_next_question_feed_item("anon-2")
 
@@ -180,6 +183,7 @@ class TestGetNextQuestionFeedItem:
         contested_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
         CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -189,6 +193,7 @@ class TestGetNextQuestionFeedItem:
 
     def test_tier_4_fresh_unresolved_printing_when_nothing_higher_priority_exists(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -207,6 +212,7 @@ class TestGetNextQuestionFeedItem:
         printing = CanonicalCardFactory()
         CardPrintingTagFactory(card=almost_resolved, printing=printing, source=VoteSource.DEDUCTION)
         CardPrintingTagFactory(card=almost_resolved, printing=printing, source=VoteSource.USER)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -217,6 +223,7 @@ class TestGetNextQuestionFeedItem:
         card = CardFactory(
             printing_tag_status=PrintingTagStatus.RESOLVED, artist_vote_status=ArtistVoteStatus.UNRESOLVED
         )
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -251,6 +258,7 @@ class TestGetNextQuestionFeedItem:
         assert card.tag_vote_statuses[tag_b.name] == TagVoteStatus.CONTESTED
         # this voter already answered tag_a, but not tag_b
         CardTagVoteFactory(card=card, tag=tag_a, polarity=VotePolarity.APPLY, anonymous_id="anon-1")
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -276,6 +284,7 @@ class TestGetNextQuestionFeedItem:
         hides it for anyone else - same scoping as every other vote/report table here."""
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         HiddenCard.objects.create(card=card, anonymous_id="anon-1")
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-2")
 
@@ -305,6 +314,10 @@ class TestContestedIdsMemoizedPerRequest:
         # through to tier 4, which - before this fix - called get_contested_card_ids() a
         # second time for the same answer within the same request
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        # warmed before the patch context: warming itself calls the real (unpatched, different
+        # module-level reference) get_contested_card_ids internally to build the cold pool, and
+        # must not count toward the mocked call assertions below
+        warm_pool_cache(LANE_COLD)
 
         with (
             patch("cardpicker.question_feed.get_contested_card_ids", wraps=get_contested_card_ids) as mock_contested,
@@ -323,6 +336,7 @@ class TestContestedIdsMemoizedPerRequest:
         # tier 1 (confirm_suggestion) and the likely-resolve pool both resolve before tier 2 is
         # ever reached, so neither contested-ids function should run at all
         make_ai_suggested_card()
+        warm_pool_cache(LANE_CONFIRM)
 
         with patch("cardpicker.question_feed.get_contested_card_ids", wraps=get_contested_card_ids) as mock_contested:
             item = get_next_question_feed_item("anon-1")
@@ -360,6 +374,7 @@ class TestPhaseCNotOfficialArtRouting:
         card = self._artist_candidate()
         tag = TagFactory(name="upscaled")
         CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="crowd-1")
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -371,6 +386,7 @@ class TestPhaseCNotOfficialArtRouting:
         card = self._artist_candidate()
         tag = TagFactory(name="external-ip")
         CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.NOT_APPLICABLE, anonymous_id="crowd-1")
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -383,6 +399,7 @@ class TestPhaseCNotOfficialArtRouting:
         CardTagVoteFactory(
             card=card, tag=tag, polarity=VotePolarity.APPLY, anonymous_id="ai-bot", source=VoteSource.DEDUCTION
         )
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -628,6 +645,7 @@ class TestGetQuestionFeedView:
 
     def test_returns_the_next_item(self, client, django_settings):
         card, _ = make_ai_suggested_card()
+        _warm_all_lanes()
         response = client.get(reverse(views.get_question_feed), {"anonymousId": "anon-1"})
         assert response.status_code == 200
         assert response.json()["item"]["card"]["identifier"] == card.identifier
@@ -690,6 +708,29 @@ def seed_served_log(anonymous_id: str, likely_resolve_count: int, remainder_coun
         )
 
 
+def seed_remainder_log(
+    anonymous_id: str, confirm_count: int = 0, contested_count: int = 0, cold_count: int = 0
+) -> None:
+    """The per-remainder-lane analogue of `seed_served_log` above: writes `pool=REMAINDER` rows
+    carrying each lane's own `origin_reason` prefix (`tier_1_`/`tier_2_`/`tier_4_` -
+    `question_feed._REMAINDER_LANE_ORIGIN_PREFIXES`), so `_remainder_lane_order`'s
+    proportional-fairness ranking sees this session's history as already skewed toward whichever
+    lane(s) this seeds."""
+    counts_and_reasons = (
+        (confirm_count, "tier_1_confirm_suggestion", "confirm_suggestion"),
+        (contested_count, "tier_2_contested_printing", "identify_printing"),
+        (cold_count, "tier_4_fresh_printing", "identify_printing"),
+    )
+    for count, origin_reason, question_type in counts_and_reasons:
+        for _ in range(count):
+            QuestionFeedServedLog.objects.create(
+                anonymous_id=anonymous_id,
+                pool=QuestionFeedServedPool.REMAINDER,
+                question_type=question_type,
+                origin_reason=origin_reason,
+            )
+
+
 class TestIsLikelyResolvePrinting:
     """Serve-time LIKELY-RESOLVE classification (question_feed.is_likely_resolve_printing) -
     matches the real resolver on constructed 1-away/2-away fixtures, per the data brief's
@@ -745,6 +786,7 @@ class TestMixComposition:
 
     def test_fresh_session_tries_likely_resolve_first_when_supply_exists(self, db):
         card, _ = make_one_vote_from_resolving_card()
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -758,6 +800,7 @@ class TestMixComposition:
         seed_served_log("anon-1", likely_resolve_count=20, remainder_count=80)  # ratio = 0.2
         likely_resolve_card, _ = make_one_vote_from_resolving_card()
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)  # remainder-only distractor
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -777,6 +820,7 @@ class TestMixComposition:
         make_one_vote_from_resolving_card()  # likely-resolve supply exists...
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)  # ...so does plain remainder
         seed_served_log("anon-1", likely_resolve_count=60, remainder_count=40)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -788,6 +832,7 @@ class TestMixComposition:
         # ratio under target, but nothing in the catalog qualifies as likely-resolve - must
         # fall straight through to the remainder tiers, not raise or loop
         fresh_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -804,6 +849,7 @@ class TestMixComposition:
         exhausted_card, printing = make_one_vote_from_resolving_card()
         CardPrintingTagFactory(card=exhausted_card, printing=printing, source=VoteSource.USER, anonymous_id="anon-1")
         fresh_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -827,6 +873,7 @@ class TestMixComposition:
     def test_a_second_voters_own_exclusion_does_not_affect_a_first_voter(self, db):
         card, printing = make_one_vote_from_resolving_card()
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER, anonymous_id="anon-1")
+        _warm_all_lanes()
 
         item_for_second_voter = get_next_question_feed_item("anon-2")
 
@@ -837,6 +884,7 @@ class TestMixComposition:
 
     def test_logs_a_row_for_a_remainder_served_item_too(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -854,6 +902,7 @@ class TestMixComposition:
             anonymous_id=JOIN_KEY_ANONYMOUS_ID,
             skip_reason=JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
         )
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
@@ -870,12 +919,66 @@ class TestMixComposition:
         ambiguous_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         CardScanLog.objects.create(card=ambiguous_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="ambiguous")
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         log = QuestionFeedServedLog.objects.get(anonymous_id="anon-1")
         assert log.origin_reason != "tier_4_quick_negative_to_review"
+
+
+class TestRemainderMixRotation:
+    """Remainder mix policy (2026-08-10, see this module's own docstring and
+    `_remainder_lane_order`): which remainder lane (confirm/contested/cold) is tried FIRST
+    rotates toward whichever is furthest below its own target share of this session's history,
+    so contested/cold questions actually reach a voter instead of confirm's much larger real
+    supply crowding them out via the old fixed confirm-first order."""
+
+    def test_a_confirm_heavy_session_is_served_a_contested_question_next(self, db):
+        seed_remainder_log("anon-1", confirm_count=10)  # confirm already well over its target share
+        confirm_card, _ = make_ai_suggested_card()
+        contested_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        # two conflicting machine (OCR) votes, weight 0.5 each: contested (2 distinct printings),
+        # but a hypothetical human vote on the leading side only reaches weight 1.5 - short of
+        # PRINTING_TAG_MIN_VOTES=2 - so this is NOT also likely-resolve, isolating it to tier 2
+        CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.OCR)
+        CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.OCR)
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == contested_card.identifier
+        assert item.card.identifier != confirm_card.identifier
+        log = QuestionFeedServedLog.objects.filter(anonymous_id="anon-1").latest("served_at")
+        assert log.origin_reason.startswith("tier_2_")
+
+    def test_a_confirm_and_contested_saturated_session_is_served_a_cold_question_next(self, db):
+        seed_remainder_log("anon-1", confirm_count=10, contested_count=10)
+        CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        log = QuestionFeedServedLog.objects.filter(anonymous_id="anon-1").latest("served_at")
+        assert log.pool == QuestionFeedServedPool.REMAINDER
+        assert log.origin_reason.startswith("tier_4_")
+
+    def test_a_starved_remainder_lane_falls_through_to_the_next_without_hanging(self, db):
+        # confirm is the most under-served lane for a fresh session and would be tried first,
+        # but has no supply at all (no confirm-eligible data exists anywhere) - the request must
+        # move on to contested rather than stalling on the empty lane
+        contested_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.card.identifier == contested_card.identifier
 
 
 class TestIllustrationVoteAnsweredExclusion:
@@ -903,6 +1006,7 @@ class TestIllustrationVoteAnsweredExclusion:
 
     def test_a_voter_who_answers_an_n_gt_1_illustration_group_is_not_re_served_that_card(self, db):
         card, illustration_id = make_shared_illustration_group()
+        _warm_all_lanes()
 
         first_item = get_next_question_feed_item("voter-1")
         assert first_item is not None
@@ -921,12 +1025,17 @@ class TestIllustrationVoteAnsweredExclusion:
 
 
 class TestGetNextQuestionFeedItemUsesPools:
-    """`get_next_question_feed_item` tries a materialised pool (issue #727) before each of its
-    four live tiers, falling back to the live query unchanged whenever the pool draw returns
-    `None`. Every other test in this file runs with the pool cache cold (never warmed) and
-    still passes - proving the fallback path alone reproduces every pre-#727 behaviour; these
-    tests instead warm a pool first and prove the SERVED item still matches, and that the live
-    tier is skipped once the pool already answered."""
+    """`get_next_question_feed_item` tries a materialised pool (issue #727) for each of its four
+    lanes and pools are the SOLE serving mechanism on this request path (issue #762 correction -
+    an earlier version of this module built a lane's pool INLINE on a cache miss, reintroducing
+    the exact Parallel Seq Scan pooling exists to move off the request path; see
+    `question_feed_pools._get_cached_pool`'s own docstring). A pool draw returning `None` -
+    never warmed, evicted, this voter's exclusion exhausting every entry, or the `"shared"`
+    backend not configured - means that lane has no supply for THIS request; there is no live
+    per-tier fallback to reach for any more. These tests warm a pool first and prove the SERVED
+    item matches it and that the item-level (never full-scan) tier function is called at most
+    once for construction; the cold/exhausted/unconfigured cases below prove the request
+    degrades to "no supply for this lane" rather than paying for an inline build."""
 
     def test_serves_the_same_item_from_a_warmed_resolution_imminent_pool(self, db):
         card, _ = make_one_vote_from_resolving_card()
@@ -953,52 +1062,53 @@ class TestGetNextQuestionFeedItemUsesPools:
         assert item.card.identifier == card.identifier
         mock_live.assert_not_called()
 
-    def test_falls_back_to_the_live_tier_when_the_pool_is_cold(self, db):
-        # no warm_pool_cache call at all - the exact state every other test class in this file
-        # runs under
-        card, _ = make_ai_suggested_card()
+    def test_a_cold_pool_never_builds_inline_and_serves_nothing(self, db):
+        """No `warm_pool_cache` call at all: every lane is a genuine cache miss. Data that would
+        be servable if any lane had ever been warmed must still yield nothing - a cold cache is
+        "no supply", never a signal to build the pool live on this request."""
+        make_ai_suggested_card()  # would be a valid confirm-lane candidate, but nothing warmed it
 
         item = get_next_question_feed_item("anon-1")
 
-        assert item is not None
-        assert item.card.identifier == card.identifier
+        assert item is None
 
-    def test_falls_back_to_the_live_tier_when_this_voters_exclusion_exhausts_the_pool(self, db):
+    def test_exhausting_this_voters_pool_entries_serves_nothing_else(self, db):
         card, printing = make_ai_suggested_card(anonymous_id="ai-bot")
         card.artist_vote_status = ArtistVoteStatus.RESOLVED
         card.save()
         warm_pool_cache(LANE_CONFIRM)
-        # this voter already answered the only pooled candidate - the pool draw must exhaust
-        # and fall through to the live tier, which (with no other data) also finds nothing
+        # this voter already answered the only pooled candidate - the draw must exhaust and,
+        # with no other data anywhere, the request has nothing left to serve
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER, anonymous_id="anon-1")
 
         item = get_next_question_feed_item("anon-1")
 
-        assert item is None or item.card.identifier != card.identifier
+        assert item is None
 
-    def test_a_resolved_card_falls_through_past_a_stale_pool_entry_to_the_live_remainder(self, db):
-        """Staleness: a card served by tier 1 resolves between the pool's warm and this
-        request. The pool draw must reject it (still `UNRESOLVED`-only), and the request must
-        still get served from whatever else genuinely qualifies today."""
+    def test_a_resolved_card_falls_through_past_a_stale_pool_entry_to_a_freshly_warmed_lane(self, db):
+        """Staleness: a card served by the confirm lane resolves between the pool's warm and
+        this request. The pool draw must reject it (still `UNRESOLVED`-only), and the request
+        must still get served from whatever else genuinely qualifies today - which itself must
+        have been warmed, since a stale entry falling through no longer reaches a live scan."""
         stale_card, printing = make_ai_suggested_card(anonymous_id="ai-bot")
         warm_pool_cache(LANE_CONFIRM)
         stale_card.printing_tag_status = PrintingTagStatus.RESOLVED
         stale_card.artist_vote_status = ArtistVoteStatus.RESOLVED
         stale_card.save()
         fresh_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         assert item.card.identifier == fresh_card.identifier
 
-    def test_shared_cache_not_configured_falls_back_to_the_live_tier(self, db):
+    def test_shared_cache_not_configured_serves_nothing_rather_than_scanning_live(self, db):
         from django.test import override_settings
 
-        card, _ = make_ai_suggested_card()
+        make_ai_suggested_card()  # would be a valid confirm-lane candidate under a configured cache
         caches_without_shared = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
         with override_settings(CACHES=caches_without_shared):
             item = get_next_question_feed_item("anon-1")
 
-        assert item is not None
-        assert item.card.identifier == card.identifier
+        assert item is None
