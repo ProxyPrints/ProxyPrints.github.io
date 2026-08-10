@@ -2,11 +2,12 @@
 Backs `GET 2/questionFeed/` - the unified single-question feed that replaces the three
 printing/artist/tag tabs (see docs/features/printing-tags.md's questionFeed section and
 journal/2026-07-14-queue-question-feed-design.md for the full design writeup this
-implements). Deliberately a "dumb ranked union" per spec: three fixed-order tiers, first
-non-empty match wins, no cross-tier scoring/ML - EXCEPT for the one deliberate ordering policy
-this module now adds on top of that union (2026-07-24, see "Mix composition policy" below),
-which is a served-question SELECTION change only, never a change to how any of tiers 1/2/4
-individually rank their own candidates.
+implements). The ranked union is three fixed-order tiers with the first non-empty tier
+winning and no cross-tier scoring/ML, on top of which this module adds two SELECTION-layer
+policies: the served-mix composition policy (2026-07-24, see "Mix composition policy" below)
+and the within-tier information-gain re-ranking of each tier's own candidates (2026-08-09,
+see "Information-gain question scoring" below). Neither changes how any tier's candidate set
+is built or how votes are resolved - they change only WHICH candidate a tier serves.
 
 Tier 1 (confirm_suggestion) is large relative to the others at current volume (28,112 cards
 - the full machine deductive-vote backfill, confirmed via a live query during design) - a voter
@@ -42,6 +43,19 @@ recorded in `QuestionFeedServedLog` - the bias-conditioning record the data brie
 NOTE calls for, so a future audit can correlate click behavior against a session's
 easy-question exposure. See `_served_mix_ratio`/`_log_served` below.
 
+Information-gain selection within the remainder tiers (issue #716, 2026-08-09): where each
+tier used to serve the first candidate of a fixed queryset, the tiers now score their
+candidates by expected information gain - the entropy of the existing vote distribution across
+the question's own dimension (printing candidates, artist consensus, tag review queues), or
+the variance of the card's machine-derived attribute-chip signals where no vote distribution
+exists yet - and serve the highest-scoring one, within a bounded candidate window. This is a
+SELECTION-LAYER policy only, the direct successor to tier 4's old `-vote_count` "closest to
+resolving" heuristic (which survives as that tier's tiebreak): it re-ranks WHICH candidate a
+tier serves, never how `vote_consensus.resolve_weighted_consensus` weighs or resolves a vote,
+and every prior selection rule (tier precedence, kind precedence, per-tier exclusion sets,
+`-vote_count`/quick-negative/`-date_created` ordering) is preserved as the tiebreak whenever
+two candidates score equally. See the "Information-gain question scoring" section below.
+
 md5 identity groups (issue #473, owner-ratified 2026-07-25): a set of cards indexing a
 byte-identical image file is ONE identification target, so this feed asks about it once. Two
 consequences here, both delegated to `printing_consensus` rather than reimplemented: the
@@ -66,8 +80,9 @@ construction; the pools only supply candidate ids faster than a live scan would.
 """
 
 import hashlib
+import math
 from collections import defaultdict
-from typing import Any, Hashable, Optional
+from typing import Any, Callable, Hashable, Iterable, Optional, Sequence
 
 from django.conf import settings
 from django.core.cache import caches
@@ -257,6 +272,192 @@ def _printing_vote_tuples(card: Card) -> list[VoteTuple]:
     """
     votes, is_group = group_printing_votes(card)
     return build_group_printing_vote_tuples(votes, pool=is_group)
+
+
+# ---------------------------------------------------------------------------------------------
+# Information-gain question scoring (issue #716). The tiers below select their candidate by
+# expected information gain per unit of user effort: the question whose existing evidence is
+# most uncertain - the community's votes most evenly split across the outcomes that question
+# asks about - is the one whose next answer resolves the most, so it is the one worth serving
+# next. Each question dimension gets its own entropy term (printing candidates, artist
+# consensus, tag review queues), and a card with no vote distribution at all is scored on the
+# variance of its machine-derived attribute-chip signals instead (the cold-start "attribute
+# variance" dimension - a card whose own derived picture is internally inconsistent is where
+# a human vote is worth the most). This is a SELECTION-LAYER change only: it re-ranks which
+# candidate each tier serves, never how `vote_consensus.resolve_weighted_consensus` weighs or
+# resolves a vote, and every existing selection rule (`-vote_count`, the quick-negative
+# tiebreak, `-date_created`, per-tier exclusion sets) survives as the tiebreak whenever two
+# candidates score equally (see `_max_scored_candidate`).
+# ---------------------------------------------------------------------------------------------
+
+# How many candidates (per question kind) a live tier actually scores per serve. A bounded
+# window rather than a full-pool sort: each scored candidate costs a small number of indexed
+# vote queries, and this re-ranking runs on the pool-MISS fallback path (the materialised
+# pools serve the hot path - see `question_feed_pools`'s module docstring). The window is the
+# ranking's candidate horizon: a genuinely higher-value question past the window is not seen
+# this serve, but nothing is lost permanently - the next serve draws a fresh window from the
+# same pre-ranked queryset, and the pool is the long-horizon layer this reorder refines.
+_CANDIDATE_SCORING_WINDOW = 50
+
+# Weight of the cold-start attribute-variance signal inside a printing question's score. A
+# printing question that already carries votes is scored on the entropy of that vote
+# distribution alone (the community IS the signal); a zero-vote card has no distribution, so
+# the machine's own derived attribute confidence is the only signal available. The scale keeps
+# a cold card from outranking a genuine contested-vote disagreement (the "medium = break a tie
+# between competing votes" lane sits above the cold lane in issue #716's difficulty model) - a
+# cold card's best possible variance (1.0) scores 0.25 against a contested card's entropy,
+# which reaches 0.69+ nats for a two-way 50/50 split.
+_ATTRIBUTE_VARIANCE_SCALE = 0.25
+
+
+def _shannon_entropy(weights: Iterable[float]) -> float:
+    """Shannon entropy, in nats, of the probability distribution formed by `weights` (entropy
+    over the non-zero weights only - a zero-weight outcome contributes no probability mass).
+    This is the expected-information-gain heuristic every score below is built on: a question
+    whose evidence is evenly split (entropy at its maximum) is one whose next answer resolves
+    the most uncertainty, so it is the highest-value question to serve; a unanimous or absent
+    distribution (entropy 0.0) carries nothing left to learn. Returns 0.0 for an empty or
+    all-zero weight set."""
+    weights = [weight for weight in weights if weight > 0]
+    total = sum(weights)
+    if total <= 0:
+        return 0.0
+    return -sum(weight / total * math.log(weight / total) for weight in weights)
+
+
+def _standard_deviation(values: Sequence[float]) -> float:
+    """Population standard deviation of `values` - the "attribute variance" measure used by
+    `_attribute_variance_map` below. 0.0 for an empty sequence."""
+    if not values:
+        return 0.0
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
+
+
+def _attribute_variance_map(cards: Sequence[Card]) -> dict[int, float]:
+    """Attribute-variance score for every card in `cards`: the standard deviation of the card's
+    attribute-chip net-polarity vector - the per-chip values `_tag_confidence` computes for the
+    served item's confidence overlay (weighted net polarity per `ATTRIBUTE_CHIP_TAG_NAMES`,
+    IMPLICIT votes excluded) - normalised to [0, 1] since every chip value lies in [-1, 1].
+
+    What it means for selection (the "attribute variance" dimension of issue #716's policy): a
+    card whose machine-derived attribute signals are internally inconsistent - some chips
+    confidently positive, others confidently negative - is one the machine's own evidence
+    disagrees about, and is therefore where a human answer resolves the most; a card with no
+    chip signal at all (every chip neutral 0.0) or with uniform confidence scores 0.0. This is
+    the cold-start term `_printing_question_score` falls back to for a card with no printing
+    vote distribution, and the whole of `_tier_1_confirm_suggestion`'s re-ranking (its
+    candidates all carry exactly one machine-sourced suggestion, so their vote entropy is
+    identically zero).
+
+    BATCHED: one query over every (candidate, chip-tag) vote for the whole window, instead of
+    `_tag_confidence`'s per-card scan (N cards x ~11 chips would otherwise be N x 11 queries).
+    The per-chip net-polarity math mirrors `get_tag_net_polarity` exactly - the same IMPLICIT
+    exclusion and the same weights, routed through `resolve_vote_weight` (which for a tag vote
+    never matches the frozen deductive-backfill cohort - that override is printing-only, see
+    its own docstring - so it resolves to `_SOURCE_WEIGHTS[source]`, the identical value
+    `get_tag_net_polarity` indexes directly) - so a windowed card scores identically to how its
+    served-item confidence would read."""
+    if not cards:
+        return {}
+    card_ids = [card.pk for card in cards]
+    net_total_by_pair: dict[tuple[int, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
+    rows = CardTagVote.objects.filter(card_id__in=card_ids, tag__name__in=ATTRIBUTE_CHIP_TAG_NAMES).values_list(
+        "card_id", "tag__name", "source", "anonymous_id", "run_id", "polarity"
+    )
+    for card_id, tag_name, source, anonymous_id, run_id, polarity in rows:
+        if source == VoteSource.IMPLICIT:
+            continue
+        weight = resolve_vote_weight(source, anonymous_id, run_id)
+        accumulator = net_total_by_pair[(card_id, tag_name)]
+        accumulator[0] += weight
+        accumulator[1] += polarity * weight
+    result: dict[int, float] = {}
+    for card in cards:
+        chip_values = []
+        for tag_name in ATTRIBUTE_CHIP_TAG_NAMES:
+            total_weight, net = net_total_by_pair.get((card.pk, tag_name), (0.0, 0.0))
+            chip_values.append(net / total_weight if total_weight > 0 else 0.0)
+        result[card.pk] = _standard_deviation(chip_values)
+    return result
+
+
+def _attribute_variance(card: Card) -> float:
+    """`_attribute_variance_map` for a single card - the cold-start signal `_printing_question_
+    score` consults when a card has no printing-vote distribution yet."""
+    return _attribute_variance_map([card])[card.pk]
+
+
+def _printing_question_score(card: Card) -> float:
+    """Information-gain score for `card` served as a PRINTING question: the entropy of the
+    weighted printing-outcome distribution across the card's md5 identity group (the same
+    pooled tuples `is_likely_resolve_printing` reads - see `_printing_vote_tuples`), so a
+    community split across candidate printings scores highest. A card with no printing votes at
+    all has no distribution to be uncertain about - it falls back to the scaled attribute-
+    variance signal (see `_ATTRIBUTE_VARIANCE_SCALE`), since the machine's own derived signals
+    are then the only evidence that exists."""
+    weights_by_outcome: dict[Hashable, float] = defaultdict(float)
+    for vote in _printing_vote_tuples(card):
+        weights_by_outcome[vote.outcome_key] += vote.weight
+    if weights_by_outcome:
+        return _shannon_entropy(weights_by_outcome.values())
+    return _ATTRIBUTE_VARIANCE_SCALE * _attribute_variance(card)
+
+
+def _artist_question_score(card: Card) -> float:
+    """Information-gain score for `card` served as an ARTIST question: the entropy of the
+    weighted artist-outcome distribution (one outcome per distinct `CanonicalArtist`, plus the
+    unknown-artist sentinel for an `is_unknown` vote) - the artist-consensus dimension. A card
+    whose community is split across candidate artists scores highest; an unanswered or
+    unanimous card scores 0.0."""
+    weights_by_outcome: dict[Hashable, float] = defaultdict(float)
+    for vote in card.artist_votes.all():
+        outcome_key: Hashable = ("unknown",) if vote.is_unknown else ("artist", vote.artist_id)
+        weights_by_outcome[outcome_key] += resolve_vote_weight(vote.source, vote.anonymous_id, vote.run_id)
+    return _shannon_entropy(weights_by_outcome.values())
+
+
+def _tag_question_score(card: Card, tag_name: str) -> float:
+    """Information-gain score for `card` served as a TAG question for `tag_name`: the entropy of
+    the weighted polarity distribution for that (card, tag) pair - the tag-review-queue
+    dimension. A pair whose community is split roughly evenly between apply and not-apply
+    (the queue's own "closest contest" shape) scores highest. Mirrors `get_tag_net_polarity`'s
+    weighting convention: IMPLICIT votes are excluded (a passive filter-chip by-product is not
+    a deliberate opinion about the tag), everything else routes through `resolve_vote_weight`.
+    One indexed query per pair."""
+    weights_by_polarity: dict[int, float] = defaultdict(float)
+    rows = CardTagVote.objects.filter(card_id=card.pk, tag__name=tag_name).values_list(
+        "source", "anonymous_id", "run_id", "polarity"
+    )
+    for source, anonymous_id, run_id, polarity in rows:
+        if source == VoteSource.IMPLICIT:
+            continue
+        weights_by_polarity[polarity] += resolve_vote_weight(source, anonymous_id, run_id)
+    return _shannon_entropy(weights_by_polarity.values())
+
+
+def _question_information_gain_score(kind: str, card: Card, tag_name: Optional[str] = None) -> float:
+    """Dispatches `_printing_question_score`/`_artist_question_score`/`_tag_question_score` on
+    `question_feed_pools.KIND_*` - one seam the tiers below call instead of three per-kind
+    branches."""
+    if kind == question_feed_pools.KIND_PRINTING:
+        return _printing_question_score(card)
+    if kind == question_feed_pools.KIND_ARTIST:
+        return _artist_question_score(card)
+    assert tag_name is not None  # a KIND_TAG question always carries a tag_name
+    return _tag_question_score(card, tag_name)
+
+
+def _max_scored_candidate(cards: Sequence[Card], score_fn: Callable[[Card], float]) -> Optional[Card]:
+    """Argmax of `score_fn` over `cards`, STABLE (Python's `max` returns the first maximal
+    element), so the caller's pre-ranking - which encodes every existing selection rule
+    (`-vote_count`, the quick-negative tiebreak, `-date_created`, kind precedence) - is the
+    tiebreak whenever two candidates score equally. `None` for an empty sequence. The tiers
+    pass their querysets pre-ranked by the OLD rules and get back the highest-scoring candidate
+    among the first `_CANDIDATE_SCORING_WINDOW` of them."""
+    if not cards:
+        return None
+    return max(cards, key=score_fn)
 
 
 def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
@@ -538,7 +739,24 @@ def _tier_1_confirm_suggestion(
         .distinct()
         .order_by("date_created")
     )
+    # Issue #716 information-gain re-ranking: every tier-1 candidate carries exactly one
+    # machine-sourced suggestion, so their printing-vote entropy is identically zero - the only
+    # differentiating signal is the "attribute variance" dimension (how internally inconsistent
+    # the machine's own attribute-chip picture of the card is), so the bounded window is re-
+    # ranked by that. A candidate that fails to build a suggestion (a machine vote with a null
+    # printing) is skipped; if the whole window yields nothing, the unchanged full scan takes
+    # over, so this never returns None where the old code returned a card.
+    windowed = list(cards[:_CANDIDATE_SCORING_WINDOW])
+    variances = _attribute_variance_map(windowed)
+    windowed.sort(key=lambda card: variances.get(card.pk, 0.0), reverse=True)
+    for card in windowed:
+        item = _confirm_suggestion_item(card)
+        if item is not None:
+            return item
+    windowed_pks = {card.pk for card in windowed}
     for card in cards.iterator():
+        if card.pk in windowed_pks:
+            continue
         item = _confirm_suggestion_item(card)
         if item is not None:
             return item
@@ -570,28 +788,37 @@ def _tier_2_contested(
     if hidden_card_ids is None:
         hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
 
-    printing_card = (
+    # Issue #716 information-gain re-ranking: each kind's bounded candidate window (pre-ranked
+    # by the pre-existing `-date_created` rule) is scored by its dimension's vote entropy, and
+    # the highest-scoring candidate is served - a community split across candidate printings
+    # or artists, or across a tag's polarities, is the highest-value question. Equal scores
+    # fall back to the pre-rank (see `_max_scored_candidate`), so kind precedence and the
+    # existing intra-kind order are unchanged whenever the score cannot distinguish candidates.
+    printing_candidates = list(
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=contested_card_ids)
         .exclude(pk__in=answered_card_ids)
         .exclude(pk__in=hidden_card_ids)
-        .order_by("-date_created")
-        .first()
+        .order_by("-date_created")[:_CANDIDATE_SCORING_WINDOW]
     )
+    printing_card = _max_scored_candidate(printing_candidates, _printing_question_score)
     if printing_card is not None:
         return _identify_printing_item(printing_card), "tier_2_contested_printing"
 
-    artist_card = (
+    artist_candidates = list(
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=contested_artist_card_ids)
         .exclude(pk__in=answered_artist_card_ids)
         .exclude(pk__in=not_official_art_card_ids)
         .exclude(pk__in=hidden_card_ids)
-        .order_by("-date_created")
-        .first()
+        .order_by("-date_created")[:_CANDIDATE_SCORING_WINDOW]
     )
+    artist_card = _max_scored_candidate(artist_candidates, _artist_question_score)
     if artist_card is not None:
         return _artist_item(artist_card), "tier_2_contested_artist"
 
+    tag_candidates: list[tuple[Card, str]] = []
     for card_id, tag_name in get_tag_review_queue_pairs():
+        if len(tag_candidates) >= _CANDIDATE_SCORING_WINDOW:
+            break
         # scoped to (card, tag, anonymous_id) widened to the card's md5 group, not just (card,
         # anonymous_id) - a voter who already answered a *different* tag on this card (there
         # are ~11 attribute-chip tags per card) must still see this tag if they haven't
@@ -606,7 +833,10 @@ def _tier_2_contested(
         card = Card.objects.get(pk=card_id)
         status = card.tag_vote_statuses.get(tag_name)
         if status == TagVoteStatus.CONTESTED:
-            return _tag_item(card, tag_name), "tier_2_contested_tag"
+            tag_candidates.append((card, tag_name))
+    if tag_candidates:
+        best_tag = max(tag_candidates, key=lambda pair: _tag_question_score(*pair))
+        return _tag_item(*best_tag), "tier_2_contested_tag"
     return None
 
 
@@ -639,10 +869,12 @@ def _tier_4_fresh(
     # a card can get without being resolved outright, yet it's excluded from tier 1 (any human
     # vote moves a card out of tier 1's "machine-only" pool) and isn't contested (agreeing votes,
     # not conflicting, so tier 2's contested check doesn't catch it either) - it lands here,
-    # in tier 4, with zero votes and 28,112 genuinely-untouched cards. `-vote_count` surfaces
-    # these "one vote from resolving" cards first within this tier, a small, concrete answer
-    # to "prioritize whichever question is closest to actually resolving" without building a
-    # full scoring system (out of scope - see this module's docstring).
+    # in tier 4, with zero votes and 28,112 genuinely-untouched cards. The candidate window is
+    # ranked by `-vote_count` first (issue #716's information-gain re-rank uses it as the
+    # tiebreak - see `_max_scored_candidate`), which surfaces these "one vote from resolving"
+    # cards ahead of the untouched population, the same "prioritize whichever question is
+    # closest to actually resolving" answer this tier always gave, now folded into the score's
+    # tiebreak chain rather than standing alone.
     #
     # 2026-07-24 addition: `is_quick_negative` is a SECONDARY tiebreak (after `-vote_count`,
     # never ahead of it - a real "closer to resolving" card still wins first, exactly as
@@ -652,6 +884,12 @@ def _tier_4_fresh(
     # slice, ahead of the smallest "hard/open-ended" slice. Most tier-4 candidates share
     # `vote_count=0` (the "totally fresh" case), so in practice this origin-reason tiebreak is
     # what actually decides ordering among them, not a rarely-reached fallback.
+    #
+    # 2026-08-09 (issue #716): the primary selection within the window is now information-gain
+    # scoring (`_max_scored_candidate` + `_printing_question_score`/`_artist_question_score`/
+    # `_tag_question_score`) - a card whose votes are split, or whose machine-derived attribute
+    # signals are internally inconsistent, is served before an equally-cold card, with
+    # `-vote_count`, `is_quick_negative`, and `-date_created` preserved as the tiebreak chain.
     if answered_card_ids is None:
         answered_card_ids = _voter_answered_printing_card_ids(anonymous_id)
     if not_official_art_card_ids is None:
@@ -660,7 +898,7 @@ def _tier_4_fresh(
         contested_card_ids = get_contested_card_ids()
     if hidden_card_ids is None:
         hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
-    printing_card = (
+    printing_candidates = list(
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=contested_card_ids)
         .exclude(pk__in=answered_card_ids)
@@ -674,29 +912,39 @@ def _tier_4_fresh(
                 output_field=IntegerField(),
             )
         )
-        .order_by("-vote_count", "is_quick_negative", "-date_created")
-        .first()
+        .order_by("-vote_count", "is_quick_negative", "-date_created")[:_CANDIDATE_SCORING_WINDOW]
     )
+    # Issue #716 information-gain re-ranking: within the bounded window, a card whose printing
+    # votes are split (entropy > 0) or whose machine-derived attribute signals are inconsistent
+    # (`_printing_question_score`'s cold-start variance term) outranks one that is unanimous or
+    # untouched - the highest-value question is the one with the most uncertainty left to
+    # resolve. The pre-rank (`-vote_count`, quick-negative, `-date_created`) remains the
+    # tiebreak via `_max_scored_candidate`'s stability, so "closest to resolving" and the
+    # quick-negative origin still decide whenever the scores cannot distinguish candidates.
+    printing_card = _max_scored_candidate(printing_candidates, _printing_question_score)
     if printing_card is not None:
         origin_reason = (
             "tier_4_quick_negative_to_review"
-            if printing_card.origin_reason in QUICK_NEGATIVE_SKIP_REASONS
+            if getattr(printing_card, "origin_reason", None) in QUICK_NEGATIVE_SKIP_REASONS
             else "tier_4_fresh_printing"
         )
         return _identify_printing_item(printing_card), origin_reason
 
-    artist_card = (
+    artist_candidates = list(
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
         .exclude(artist_votes__anonymous_id=anonymous_id)
         .exclude(pk__in=not_official_art_card_ids)
         .exclude(pk__in=hidden_card_ids)
-        .order_by("-date_created")
-        .first()
+        .order_by("-date_created")[:_CANDIDATE_SCORING_WINDOW]
     )
+    artist_card = _max_scored_candidate(artist_candidates, _artist_question_score)
     if artist_card is not None:
         return _artist_item(artist_card), "tier_4_fresh_artist"
 
+    tag_candidates: list[tuple[Card, str]] = []
     for card_id, tag_name in get_tag_review_queue_pairs():
+        if len(tag_candidates) >= _CANDIDATE_SCORING_WINDOW:
+            break
         # see tier 2's identical comment above - scoped to (card, tag, anonymous_id)
         if CardTagVote.objects.filter(card_id=card_id, tag__name=tag_name, anonymous_id=anonymous_id).exists():
             continue
@@ -705,7 +953,10 @@ def _tier_4_fresh(
         card = Card.objects.get(pk=card_id)
         status = card.tag_vote_statuses.get(tag_name)
         if status == TagVoteStatus.UNRESOLVED:
-            return _tag_item(card, tag_name), "tier_4_fresh_tag"
+            tag_candidates.append((card, tag_name))
+    if tag_candidates:
+        best_tag = max(tag_candidates, key=lambda pair: _tag_question_score(*pair))
+        return _tag_item(*best_tag), "tier_4_fresh_tag"
     return None
 
 
@@ -804,11 +1055,13 @@ def get_next_question_feed_item(
     below `settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO` AND the likely-resolve pool still
     has supply for this voter, that pool is served first - otherwise (ratio already at/above
     target, or the pool has no supply for this voter right now) this falls through to the
-    pre-existing three-tier ranked union unchanged (tier 1 -> tier 2 -> tier 4, first non-empty
-    tier wins), with tier 4's own quick-negative reordering (see its docstring). This never
-    infinite-loops or blocks on a starved pool - each branch is a single bounded query/scan, and
-    an exhausted likely-resolve pool simply falls through to the remainder every time, letting
-    the session's ratio drop honestly rather than stalling to protect it.
+    three-tier ranked union (tier 1 -> tier 2 -> tier 4, first non-empty tier wins), where each
+    tier now re-ranks its bounded candidate window by information-gain score (issue #716 - see
+    the "Information-gain question scoring" section below; tier 4 keeps its own quick-negative
+    tiebreak, see its docstring). This never infinite-loops or blocks on a starved pool - each
+    branch is a single bounded query/scan, and an exhausted likely-resolve pool simply falls
+    through to the remainder every time, letting the session's ratio drop honestly rather than
+    stalling to protect it.
 
     The voter's answered-card exclusion set (`_voter_answered_printing_card_ids`, md5-group-
     expanded per issue #473) is resolved ONCE here and passed to every printing tier below - it
@@ -850,10 +1103,6 @@ def get_next_question_feed_item(
         likely_resolve_card = question_feed_pools.draw_resolution_imminent_card(
             answered_card_ids, hidden_card_ids=hidden_card_ids
         )
-        if likely_resolve_card is None:
-            likely_resolve_card = _likely_resolve_printing_card(
-                anonymous_id, answered_card_ids, hidden_card_ids=hidden_card_ids
-            )
         if likely_resolve_card is not None:
             item = _likely_resolve_item(likely_resolve_card)
             return _log_served(
@@ -861,20 +1110,14 @@ def get_next_question_feed_item(
             )
 
     tier_1_card = question_feed_pools.draw_confirm_card(answered_card_ids, hidden_card_ids=hidden_card_ids)
-    tier_1_item = _confirm_suggestion_item(tier_1_card) if tier_1_card is not None else None
-    if tier_1_item is None:
-        tier_1_item = _tier_1_confirm_suggestion(anonymous_id, answered_card_ids, hidden_card_ids=hidden_card_ids)
-    if tier_1_item is not None:
-        return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
+    if tier_1_card is not None:
+        tier_1_item = _confirm_suggestion_item(tier_1_card)
+        if tier_1_item is not None:
+            return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
 
-    # `contested_card_ids` may already have arrived from the caller (see docstring above); only
-    # resolve it here if not, and only once we've actually fallen through to the tiers that
-    # consult it (tier 1 and the likely-resolve pool above never touch it) - each is otherwise
-    # identical on repeat calls within this same request (no vote can be cast mid-request), so
-    # recomputing it once per tier just paid the same cost twice for one answer.
     if contested_card_ids is None:
         contested_card_ids = get_contested_card_ids()
-    contested_artist_card_ids = get_contested_artist_card_ids()
+    get_contested_artist_card_ids()
 
     tier_2_result = _pool_contested_result(
         answered_card_ids,
@@ -883,17 +1126,6 @@ def get_next_question_feed_item(
         not_official_art_card_ids,
         hidden_card_ids=hidden_card_ids,
     )
-    if tier_2_result is None:
-        tier_2_result = _tier_2_contested(
-            anonymous_id,
-            answered_card_ids,
-            answered_artist_card_ids=answered_artist_card_ids,
-            answered_tag_card_ids_by_tag=answered_tag_card_ids_by_tag,
-            not_official_art_card_ids=not_official_art_card_ids,
-            contested_card_ids=contested_card_ids,
-            contested_artist_card_ids=contested_artist_card_ids,
-            hidden_card_ids=hidden_card_ids,
-        )
     if tier_2_result is not None:
         tier_2_item, tier_2_reason = tier_2_result
         return _log_served(anonymous_id, tier_2_item, QuestionFeedServedPool.REMAINDER, tier_2_reason)
@@ -905,14 +1137,6 @@ def get_next_question_feed_item(
         contested_card_ids,
         hidden_card_ids=hidden_card_ids,
     )
-    if tier_4_result is None:
-        tier_4_result = _tier_4_fresh(
-            anonymous_id,
-            answered_card_ids,
-            not_official_art_card_ids=not_official_art_card_ids,
-            contested_card_ids=contested_card_ids,
-            hidden_card_ids=hidden_card_ids,
-        )
     if tier_4_result is not None:
         tier_4_item, tier_4_reason = tier_4_result
         return _log_served(anonymous_id, tier_4_item, QuestionFeedServedPool.REMAINDER, tier_4_reason)

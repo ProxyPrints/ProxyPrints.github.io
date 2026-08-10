@@ -659,8 +659,10 @@ printings, artists, tags, and moderation from one screen.
 - **Unified question feed**: `GET 2/questionFeed/` replaces the old
   printing/artist/tag/moderation tab switcher with one typed, prioritized
   stream (`confirm_suggestion` → contested pairs → `moderation` → fresh
-  unresolved; "dumb ranked union," no cross-tier scoring, with one
-  deliberate exception — the mix-composition policy immediately below).
+  unresolved; "dumb ranked union," no cross-tier scoring, with two
+  deliberate selection-layer policies on top: the mix-composition policy
+  below and the information-gain question-scoring policy immediately after
+  it).
   Full rationale in `journal/2026-07-14-queue-question-feed-design.md`
   (gitignored, local-only). **Known v1 property, not a bug**: at current
   volume a voter only sees tier-1 (`confirm_suggestion`) questions until
@@ -727,6 +729,66 @@ printings, artists, tags, and moderation from one screen.
   `question_feed._served_mix_ratio` reads it back as two cheap indexed
   `COUNT`s, never a per-row scan. Append-only, same convention as
   `CardScanLog` — never read by any consensus computation.
+- **Information-gain question scoring** (2026-08-09, issue #716,
+  `cardpicker/question_feed.py`, the same file as the mix-composition
+  policy above): where each remainder tier used to serve the first
+  candidate of a fixed queryset, the tiers now score their candidates by
+  expected information gain and serve the highest-scoring one within a
+  bounded window. **What is scored**: the entropy of the existing vote
+  distribution across the question's own dimension, per kind.
+  `_printing_question_score` runs `_shannon_entropy` over the weighted
+  printing-outcome distribution across the card's md5 identity group (the
+  same pooled tuples `is_likely_resolve_printing` reads; see
+  `_printing_vote_tuples`). `_artist_question_score` runs it over the
+  weighted artist-outcome distribution (one outcome per distinct
+  `CanonicalArtist`, plus the unknown-artist sentinel for an `is_unknown`
+  vote). `_tag_question_score(card, tag_name)` runs it over the weighted
+  polarity distribution for that `(card, tag)` pair, IMPLICIT votes
+  excluded, mirroring `get_tag_net_polarity`'s weighting convention. A
+  question whose evidence is evenly split (entropy at its maximum) is the
+  highest-value question to serve next; a unanimous or absent distribution
+  (entropy 0.0) carries nothing left to learn. **Cold start**: a printing
+  question with no votes yet has no distribution to be uncertain about, so
+  `_printing_question_score` falls back to `_ATTRIBUTE_VARIANCE_SCALE`
+  (0.25) times `_attribute_variance` (the standard deviation of the card's
+  machine-derived attribute-chip net-polarity vector,
+  `ATTRIBUTE_CHIP_TAG_NAMES`, IMPLICIT excluded, the same per-chip values
+  `_tag_confidence` computes for the served item's confidence overlay): a
+  card whose own derived picture is internally inconsistent is where a
+  human vote resolves the most. Tier 1 (`confirm_suggestion`) re-ranks on
+  this attribute-variance dimension alone, since every tier-1 candidate
+  carries exactly one machine-sourced suggestion and its printing-vote
+  entropy is identically zero. **Bounded window**:
+  `_CANDIDATE_SCORING_WINDOW` (50) caps how many candidates a live tier
+  scores per serve, per kind: each tier slices its pre-ranked queryset to
+  the first 50 and scores only those via `_max_scored_candidate`, and the
+  tag lanes collect `(card, tag)` pairs from
+  `get_tag_review_queue_pairs()` up to the same bound. The window is a
+  candidate horizon, not a loss: the next serve draws a fresh window from
+  the same pre-ranked queryset, and the materialised pools (issue #727)
+  remain the long-horizon layer this re-rank refines on the pool-miss
+  fallback path. **Priority over the static waterfall**: the highest-
+  scoring candidate in the window is served first within its tier;
+  `_max_scored_candidate` is a STABLE argmax (Python's `max` returns the
+  first maximal element), so the tier's pre-ranking, which encodes every
+  existing selection rule (`-vote_count` "closest to resolving" in tier 4,
+  the quick-negative secondary tiebreak, `-date_created`, kind
+  precedence), is the tiebreak whenever two candidates score equally.
+  Tier 4's `-vote_count` heuristic survives folded into that tiebreak
+  chain rather than standing alone. Tier 1's windowed scan still skips
+  candidates that fail to build a suggestion and falls through to the
+  unchanged full scan, so it never returns `None` where the old code
+  returned a card. **Soundness**: this is a SELECTION-LAYER policy only,
+  the direct successor to tier 4's old `-vote_count` heuristic. It
+  re-ranks WHICH candidate a tier serves and changes nothing else: every
+  request-scoped exclusion set (answered/hidden/`not_official_art` per
+  tier, widened to md5 identity groups per issue #473) still applies
+  unchanged, the `_served_mix_ratio` mix-composition path above is
+  untouched (this policy re-ranks only the remainder tiers, never the
+  LIKELY-RESOLVE pool), no tier's candidate set is built differently, and
+  `vote_consensus.resolve_weighted_consensus` still weighs and resolves
+  every vote exactly as before, the same boundary the mix-composition
+  policy states for itself.
 - **"Not sure" abstention** (issue #712): Level 1's "Yes"/"No, different
   printing" both cast a real vote (see `selectCandidate`/`rejectSuggestion`
   in `QuestionFeed.tsx`); "Not sure" and "Skip" used to be indistinguishable
