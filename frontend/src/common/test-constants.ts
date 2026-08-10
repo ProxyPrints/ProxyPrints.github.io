@@ -777,6 +777,28 @@ export const printingCandidate2: PrintingCandidate = {
   releasedAt: "2010-06-15",
 };
 
+// A Showcase card whose border color falls outside the Black/White/Silver taxonomy - unlike
+// printingCandidate2 (Full Art/Borderless), Showcase doesn't disqualify the Border Color
+// question, so this is the fixture Level 3's border-color-only coverage exercises instead.
+export const printingCandidate3: PrintingCandidate = {
+  identifier: "printing-candidate-3",
+  canonicalId: "canonical-1",
+  expansionCode: "def",
+  expansionName: "A Showcase Cardset",
+  collectorNumber: "7",
+  artist: "Some Artist",
+  smallThumbnailUrl: "https://example.com/small3.png",
+  mediumThumbnailUrl: "https://example.com/medium3.png",
+  fullArt: false,
+  isBorderless: false,
+  frame: "2003",
+  borderColor: "gold",
+  isShowcase: true,
+  isExtendedArt: false,
+  isEtched: false,
+  releasedAt: "2019-03-01",
+};
+
 export const canonicalArtist1: CanonicalArtist = { name: "Some Artist" };
 export const canonicalArtist2: CanonicalArtist = { name: "Another Artist" };
 

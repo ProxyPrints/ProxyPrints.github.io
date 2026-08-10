@@ -7,6 +7,7 @@ import {
   cardDocument9,
   printingCandidate1,
   printingCandidate2,
+  printingCandidate3,
 } from "@/common/test-constants";
 import {
   artistCandidatesTwoResults,
@@ -23,12 +24,14 @@ import {
   questionFeedConfirmSuggestionSingleton,
   questionFeedIdentifyPrinting,
   questionFeedIdentifyPrintingGroupedByIllustration,
+  questionFeedIdentifyPrintingOpenBorderColor,
   questionFeedTag,
   submitArtistVoteResolvesToCanonicalArtist1,
   submitIllustrationVoteCastsPrintingAndArtist,
   submitPrintingTagNoMatch,
   submitPrintingTagResolvesToPrintingCandidate1,
   submitPrintingTagResolvesToPrintingCandidate2,
+  submitPrintingTagResolvesToPrintingCandidate3,
   submitQuestionAbstentionRecorded,
   submitTagVoteResolvesToApply,
 } from "@/mocks/handlers";
@@ -98,6 +101,54 @@ test.describe("question feed - Level 2 (candidate grid)", () => {
     ).toBeVisible();
   });
 
+  test("frame treatment axis: Borderless/Full Art hide the Border Color axis and their own siblings; Extended/Showcase leave it visible", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrinting,
+      submitTagVoteResolvesToApply,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await expect(page.getByTestId("attribute-chip-Black Border")).toBeVisible();
+
+    await page.getByTestId("attribute-chip-Full Art-yes").click();
+    await expect(page.getByTestId("attribute-chip-Full Art")).toHaveAttribute(
+      "data-chip-state",
+      "positive"
+    );
+    await expect(page.getByTestId("attribute-chip-Borderless")).toHaveCount(0);
+    await expect(page.getByTestId("attribute-chip-Showcase")).toHaveCount(0);
+    await expect(page.getByTestId("attribute-chip-Extended")).toHaveCount(0);
+    await expect(page.getByTestId("attribute-chip-Black Border")).toHaveCount(
+      0
+    );
+    await expect(page.getByTestId("attribute-chip-White Border")).toHaveCount(
+      0
+    );
+    await expect(page.getByTestId("attribute-chip-Silver Border")).toHaveCount(
+      0
+    );
+
+    // retracting Full Art restores everything
+    await page.getByTestId("attribute-chip-Full Art-yes").click();
+    await expect(page.getByTestId("attribute-chip-Black Border")).toBeVisible();
+
+    // Extended Art still has a border colour - the axis stays visible for it
+    await page.getByTestId("attribute-chip-Extended-yes").click();
+    await expect(page.getByTestId("attribute-chip-Extended")).toHaveAttribute(
+      "data-chip-state",
+      "positive"
+    );
+    await expect(page.getByTestId("attribute-chip-Black Border")).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-White Border")).toBeVisible();
+    await expect(
+      page.getByTestId("attribute-chip-Silver Border")
+    ).toBeVisible();
+  });
+
   test('"Art matches, not an official printing" casts a no-match printing vote plus a positive custom-art tag vote, then advances', async ({
     page,
     network,
@@ -138,24 +189,24 @@ test.describe("question feed - Level 3 (conditional open-attribute confirm)", ()
     network,
   }) => {
     network.use(
-      questionFeedIdentifyPrinting,
-      submitPrintingTagResolvesToPrintingCandidate2,
+      questionFeedIdentifyPrintingOpenBorderColor,
+      submitPrintingTagResolvesToPrintingCandidate3,
       submitTagVoteResolvesToApply,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     await page
-      .locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
+      .locator(`[data-card-identifier="${printingCandidate3.identifier}"]`)
       .click();
 
     await expect(page.getByTestId("question-feed-level3")).toBeVisible();
     await expect(
       page.getByTestId("question-feed-level3-chip-Black Border")
     ).toBeVisible();
-    // Frame ("2003" -> Modern Border) already matched, so it's not asked about again here.
+    // Frame Treatment (Showcase) already matched, so it's not asked about again here.
     await expect(
-      page.getByTestId("question-feed-level3-chip-Full Art")
+      page.getByTestId("question-feed-level3-chip-Showcase")
     ).toHaveCount(0);
   });
 
@@ -165,8 +216,8 @@ test.describe("question feed - Level 3 (conditional open-attribute confirm)", ()
   }) => {
     const submittedTagNames: string[] = [];
     network.use(
-      questionFeedIdentifyPrinting,
-      submitPrintingTagResolvesToPrintingCandidate2,
+      questionFeedIdentifyPrintingOpenBorderColor,
+      submitPrintingTagResolvesToPrintingCandidate3,
       submitTagVoteResolvesToApply,
       ...defaultHandlers
     );
@@ -179,7 +230,7 @@ test.describe("question feed - Level 3 (conditional open-attribute confirm)", ()
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     await page
-      .locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
+      .locator(`[data-card-identifier="${printingCandidate3.identifier}"]`)
       .click();
     await expect(page.getByTestId("question-feed-level3")).toBeVisible();
 
@@ -197,8 +248,8 @@ test.describe("question feed - Level 3 (conditional open-attribute confirm)", ()
   }) => {
     let tagVoteSubmitted = false;
     network.use(
-      questionFeedIdentifyPrinting,
-      submitPrintingTagResolvesToPrintingCandidate2,
+      questionFeedIdentifyPrintingOpenBorderColor,
+      submitPrintingTagResolvesToPrintingCandidate3,
       submitTagVoteResolvesToApply,
       ...defaultHandlers
     );
@@ -210,7 +261,7 @@ test.describe("question feed - Level 3 (conditional open-attribute confirm)", ()
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     await page
-      .locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
+      .locator(`[data-card-identifier="${printingCandidate3.identifier}"]`)
       .click();
     await expect(page.getByTestId("question-feed-level3")).toBeVisible();
     tagVoteSubmitted = false; // ignore the auto-tag votes cast on selection itself

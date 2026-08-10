@@ -8,13 +8,15 @@ import {
   localBackendURL,
   printingCandidate1,
   printingCandidate2,
+  printingCandidate3,
 } from "@/common/test-constants";
 import {
   defaultHandlers,
   questionFeedConfirmSuggestion,
   questionFeedIdentifyPrinting,
+  questionFeedIdentifyPrintingOpenBorderColor,
   submitPrintingTagNoMatch,
-  submitPrintingTagResolvesToPrintingCandidate2,
+  submitPrintingTagResolvesToPrintingCandidate3,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -515,14 +517,14 @@ test.describe("question feed - mystery-card glyph (WTC rebuild, retires the what
     network,
   }) => {
     network.use(
-      questionFeedIdentifyPrinting,
-      submitPrintingTagResolvesToPrintingCandidate2,
+      questionFeedIdentifyPrintingOpenBorderColor,
+      submitPrintingTagResolvesToPrintingCandidate3,
       ...defaultHandlers
     );
     await page.setViewportSize({ width: 1280, height: 900 });
     await loadPageWithDefaultBackend(page, "whatsthat");
     await page
-      .locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
+      .locator(`[data-card-identifier="${printingCandidate3.identifier}"]`)
       .click();
     await page.getByTestId("question-feed-level3").waitFor();
 

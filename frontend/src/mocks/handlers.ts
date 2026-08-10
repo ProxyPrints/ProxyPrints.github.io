@@ -34,6 +34,7 @@ import {
   localBackend,
   printingCandidate1,
   printingCandidate2,
+  printingCandidate3,
   sourceDocument1,
   sourceDocument2,
   sourceDocument3,
@@ -1463,6 +1464,23 @@ export const submitPrintingTagResolvesToPrintingCandidate2 = http.post(
     )
 );
 
+// printingCandidate3 is Showcase (not Full Art/Borderless), so unlike candidate2 it doesn't
+// disqualify the Border Color question - used by the Level 3 open-border-color coverage.
+export const submitPrintingTagResolvesToPrintingCandidate3 = http.post(
+  buildRoute("2/submitPrintingTag/"),
+  () =>
+    HttpResponse.json(
+      {
+        resolvedPrinting: printingCandidate3,
+        isNoMatch: false,
+        voteTally: [
+          { printing: printingCandidate3, isNoMatch: false, count: 1 },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
 export const submitQuestionAbstentionRecorded = http.post(
   buildRoute("2/submitQuestionAbstention/"),
   () => HttpResponse.json({ recorded: true }, { status: 200 })
@@ -1607,6 +1625,26 @@ export const questionFeedIdentifyPrinting = http.get(
           type: "identify_printing",
           card: cardDocument1,
           candidates: [printingCandidate1, printingCandidate2],
+          tagConfidence: { "Full Art": 0, Borderless: 0.6 },
+        },
+        remainingEstimate: questionFeedCounts({ total: 3, fresh: 3 }),
+      },
+      { status: 200 }
+    )
+);
+
+// Level 3 border-color coverage needs a candidate whose Frame Treatment resolves (Showcase)
+// while its Border Color genuinely stays open (borderColor outside the taxonomy) - candidate2
+// can't serve this any more since Full Art/Borderless now disqualify Border Color outright.
+export const questionFeedIdentifyPrintingOpenBorderColor = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "identify_printing",
+          card: cardDocument1,
+          candidates: [printingCandidate1, printingCandidate3],
           tagConfidence: { "Full Art": 0, Borderless: 0.6 },
         },
         remainingEstimate: questionFeedCounts({ total: 3, fresh: 3 }),
