@@ -33,9 +33,15 @@ SAME card being shown to several voters (`PRINTING_TAG_MIN_VOTES`/`MIN_SHARE`,
 resolution, which happens at consensus time and is picked up at the next warm (or, for a card that
 resolved mid-warm-cycle, filtered out by the read-time staleness check below).
 
-SERVE FROM A RANDOM OFFSET, NOT THE HEAD (`_iter_from_random_offset`) - a fixed ordered pool read
-from the front on every request just relocates the same "every voter sees the same card" problem
-the live `date_created` ordering already has.
+SERVE FROM A RANDOM OFFSET, NOT THE HEAD (`_iter_windowed_from_random_offset`) - a fixed ordered
+pool read from the front on every request just relocates the same "every voter sees the same
+card" problem the live `date_created` ordering already has. The information-gain re-ranking
+(issue #716) that reorders each serve's window by expected information gain is layered ON TOP of
+that random start, not instead of it: only a BOUNDED window taken from the random offset
+(`question_feed._CANDIDATE_SCORING_WINDOW` - the same bound the live tiers' own bounded
+re-ranking already uses, not a second one invented here) is scored, since each scored candidate
+costs several vote queries and a pool holds hundreds to thousands of entries
+(`settings.QUESTION_FEED_POOL_SIZE`). See `_iter_windowed_from_random_offset`'s own docstring.
 
 PER-LANE REFRESH CADENCE, NOT ONE GLOBAL INTERVAL. Lane 1 churns with every vote cast and wants
 minutes; lane 4 changes only as the pipeline extracts new evidence and tolerates hours. Each
@@ -58,24 +64,32 @@ vote from resolving; nothing here prevents it appearing in more than one lane's 
 live tier functions never prevented it either (get_contested_card_ids() and
 _likely_resolve_printing_card's own filter were never mutually exclusive - see question_feed.py's
 docstring). What has always prevented DOUBLE-SERVING (and still does, unchanged, in
-get_next_question_feed_item) is that both the pool draws AND their live-fallback tiers are
-consulted as a strict, first-hit-wins WATERFALL in the same fixed order the original code already
-used (likely-resolve -> tier 1 -> tier 2 -> tier 4): whichever lane is tried FIRST that has a
-valid (unexcluded, unstale) entry for THIS voter wins the request, and every lane after it is
-never even reached. A card sitting in two lanes' pools is drawable from whichever one the
-waterfall reaches first for a given voter/request - identical precedence to the pre-pool code,
-just resolved via a bounded pool scan instead of a live query.
+get_next_question_feed_item) is that the four lane draws are consulted as a strict, first-hit-wins
+WATERFALL (likely-resolve first, then the three remainder lanes in the order
+`question_feed._remainder_lane_order` picks for this request - see that function's own docstring
+for the mix policy that decides it): whichever lane is tried FIRST that has a valid (unexcluded,
+unstale) entry for THIS voter wins the request, and every lane after it is never even reached. A
+card sitting in two lanes' pools is drawable from whichever one the waterfall reaches first for a
+given voter/request.
 
-FAST PATH, NOT A CORRECTNESS BOUNDARY. Every `draw_*` function returns `None` on a cache miss
-(pool never warmed, or the configured `"shared"` cache backend is unavailable) OR when this
-voter's exclusion exhausts every entry in the pool (a full lap with nothing servable) - the caller
-(`question_feed.get_next_question_feed_item`) always falls through to the corresponding live tier
-function in that case, so a heavy voter, a cold cache, or a not-yet-scheduled environment degrades
-to exactly today's behaviour rather than under-serving.
+POOLS ARE THE SOLE SERVING MECHANISM ON THE REQUEST PATH - NOT A FAST PATH WITH A LIVE FALLBACK
+(issue #762 correction; an earlier version of this module built a lane's pool INLINE, in
+`_get_cached_pool`, on a cache miss - the exact Parallel Seq Scan this module's own opening
+paragraph exists to move off the request path, reintroduced on every cold start, eviction, or
+worker restart). Every `draw_*` function returns `None` on a cache miss (pool never warmed,
+evicted, or the configured `"shared"` cache backend is unavailable) OR when this voter's exclusion
+exhausts every entry in the pool (a full lap with nothing servable) - in EITHER case that lane
+simply has no supply for this request, and the caller
+(`question_feed.get_next_question_feed_item`) moves on to the next lane in its waterfall, honestly
+returning `None` overall if none of the four has supply. This never blocks or loops: warmers
+(`warm_pool_cache`, scheduled per-lane - see the cadence section above) are the only path that
+ever builds a pool; a heavy voter, a cold cache, or a not-yet-scheduled environment degrades to
+"caught up" rather than paying for a live build.
 """
 
 from __future__ import annotations
 
+import random
 from typing import Any, Iterator, NamedTuple, Optional
 
 from django.conf import settings
@@ -161,34 +175,93 @@ def _shared_cache_for_write() -> Any:
 
 
 def _get_cached_pool(lane: str) -> Optional[list[PoolEntry]]:
-    """Reads `lane`'s candidate pool from cache, falling back to building it on the fly
-    on cache miss or missing shared backend (supporting unit tests and cold starts while
-    keeping pools as the sole serving mechanism)."""
+    """Reads `lane`'s candidate pool from cache. `None` on a cache miss (never warmed, evicted,
+    or the `"shared"` backend isn't configured) - callers treat that as "no supply for this
+    request", never a signal to build the pool inline: an inline build is precisely the
+    unindexed Parallel Seq Scan (2.4-4.7s typical, up to 47.8s observed - issue #726/#727) this
+    module exists to move off the request path. `warm_pool_cache` (via `_POOL_BUILDERS`,
+    scheduled per-lane) is the ONLY path that ever builds a pool - see this module's own
+    "POOLS ARE THE SOLE SERVING MECHANISM" docstring section."""
     shared_cache = _shared_cache_for_read()
-    if shared_cache is not None:
-        entries = shared_cache.get(_cache_key(lane))
-        if entries is not None:
-            return entries
-    if lane in _POOL_BUILDERS:
-        return _POOL_BUILDERS[lane]()
-    return None
+    if shared_cache is None:
+        return None
+    return shared_cache.get(_cache_key(lane))
 
 
-def _iter_from_random_offset(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
-    """Yields every entry in `entries` ordered by expected information gain (issue #716),
-    so higher-value questions are served first on every serve."""
+def _iter_windowed_from_random_offset(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
+    """Yields every entry in `entries`, ranked candidates first: a BOUNDED window of
+    `question_feed._CANDIDATE_SCORING_WINDOW` entries taken from a RANDOM offset into the pool is
+    scored by expected information gain (issue #716) and yielded best-first, then every
+    remaining entry (the rest of the pool, continuing from where the window left off) is yielded
+    unscored, in that same rotated order - so a draw that exhausts the ranked window (every
+    candidate in it excluded or stale for this voter) still walks the rest of the pool exactly as
+    before, never truncating a voter's effective supply to just the window.
+
+    BOUNDED, not full-pool: scoring costs several vote queries per candidate
+    (`_question_information_gain_score`'s own dispatch), and a pool holds hundreds to thousands
+    of entries (`settings.QUESTION_FEED_POOL_SIZE`) - scoring every entry on every serve
+    reintroduces per-request cost this module's pooling exists to avoid paying (see its own module
+    docstring). The window size is `question_feed._CANDIDATE_SCORING_WINDOW` - the SAME bound the
+    live tiers' own bounded re-ranking already uses (`question_feed._max_scored_candidate`), one
+    shared knob rather than a second one invented here.
+
+    RANDOM OFFSET, restored: a fixed head-to-tail scan (scored or not) means every voter reading
+    the same warm pool converges on the same handful of cards nearest the front - the exact
+    problem this module's own "SERVE FROM A RANDOM OFFSET" section exists to prevent. Drawing the
+    scored window from a randomised start (rather than always the head) keeps that anti-
+    convergence property even though the window itself is now reordered by score.
+
+    TIE-BREAK ANCHORED TO THE POOL'S OWN ORIGINAL ORDER, NOT THE RANDOMISED ONE: two candidates
+    that score equally (the common case for the cold lane's `-vote_count`/quick-negative/
+    `-date_created`-ordered printing sub-list, where most candidates carry `vote_count=0` and tie
+    on score) fall back to whichever came first in `entries` as WARMED - the SQL ordering
+    `_build_pool_cold`/`_build_pool_contested` already applied - never to wherever the random
+    rotation happened to place them for THIS particular draw. Sorting the window by `(-score,
+    original_index)` rather than relying on a plain stable sort over the rotated list is what
+    keeps that guarantee - a plain stable sort over the rotated list would let the same tie
+    resolve differently request to request, silently breaking the tier's own tiebreak chain
+    (see `_tier_4_fresh`'s own docstring, and this module's own "NOT DISJOINT" section)."""
     if not entries:
         return
-    from cardpicker.question_feed import _question_information_gain_score
+    from cardpicker.question_feed import (
+        _CANDIDATE_SCORING_WINDOW,
+        _question_information_gain_score,
+    )
+
+    offset = random.randrange(len(entries))
+    rotated_indices = [(offset + step) % len(entries) for step in range(len(entries))]
+    window_indices, rest_indices = (
+        rotated_indices[:_CANDIDATE_SCORING_WINDOW],
+        rotated_indices[_CANDIDATE_SCORING_WINDOW:],
+    )
 
     scored = []
-    for entry in entries:
+    for index in window_indices:
+        entry = entries[index]
         card = Card.objects.filter(pk=entry.card_id).first()
         score = _question_information_gain_score(entry.kind, card, entry.tag_name) if card is not None else 0.0
-        scored.append((score, entry))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    for _, entry in scored:
+        scored.append((score, index, entry))
+    scored.sort(key=lambda triple: (-triple[0], triple[1]))
+
+    for _, _, entry in scored:
         yield entry
+    for index in rest_indices:
+        yield entries[index]
+
+
+def _iter_by_kind_precedence(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
+    """Yields every entry in `entries`, KIND-GROUPED first (printing, then artist, then tag - the
+    same structural precedence `_tier_2_contested`/`_tier_4_fresh` encode by trying their printing
+    candidates entirely before their artist candidates, and those entirely before their tag
+    candidates - an unconditional order, never a tiebreak), with
+    `_iter_windowed_from_random_offset`'s own bounded/randomised/scored ordering applied WITHIN
+    each kind group. A single mixed-kind random-offset scan would let a tied score (e.g. two
+    zero-vote, zero-signal candidates of different kinds) resolve to whichever kind the random
+    rotation happened to place first, silently breaking that precedence on some requests and not
+    others - grouping by kind before windowing keeps it structural instead, matching the
+    contested/cold lanes' own live-tier counterparts exactly."""
+    for kind in (KIND_PRINTING, KIND_ARTIST, KIND_TAG):
+        yield from _iter_windowed_from_random_offset([entry for entry in entries if entry.kind == kind])
 
 
 # ---------------------------------------------------------------------------------------------
@@ -377,7 +450,7 @@ def draw_resolution_imminent_card(
     if not entries:
         return None
     hidden_card_ids = hidden_card_ids or set()
-    for entry in _iter_from_random_offset(entries):
+    for entry in _iter_windowed_from_random_offset(entries):
         if entry.card_id in answered_card_ids:
             continue
         if entry.card_id in hidden_card_ids:
@@ -393,7 +466,7 @@ def draw_confirm_card(answered_card_ids: set[int], hidden_card_ids: Optional[set
     if not entries:
         return None
     hidden_card_ids = hidden_card_ids or set()
-    for entry in _iter_from_random_offset(entries):
+    for entry in _iter_windowed_from_random_offset(entries):
         if entry.card_id in answered_card_ids:
             continue
         if entry.card_id in hidden_card_ids:
@@ -411,8 +484,9 @@ def draw_contested_entry(
     not_official_art_card_ids: set[int],
     hidden_card_ids: Optional[set[int]] = None,
 ) -> Optional[tuple[str, Card, Optional[str], Optional[str]]]:
-    """Returns `(kind, card, tag_name, reason)` for the first unexcluded, unstale entry found
-    from a random offset, or `None`. Exclusion sets match `_tier_2_contested`'s own exactly - all
+    """Returns `(kind, card, tag_name, reason)` for the first unexcluded, unstale entry found via
+    `_iter_by_kind_precedence` (printing entries entirely before artist, before tag - see that
+    function's own docstring), or `None`. Exclusion sets match `_tier_2_contested`'s own exactly - all
     three (`answered_card_ids`/`answered_artist_card_ids`/`answered_tag_card_ids_by_tag`) are
     already the md5-widened, per-request-memoised sets `get_next_question_feed_item` computes
     once and threads through, same as the live tier. `hidden_card_ids` (this voter's
@@ -424,7 +498,7 @@ def draw_contested_entry(
     if not entries:
         return None
     hidden_card_ids = hidden_card_ids or set()
-    for entry in _iter_from_random_offset(entries):
+    for entry in _iter_by_kind_precedence(entries):
         if entry.card_id in hidden_card_ids:
             continue
         if entry.kind == KIND_PRINTING:
@@ -474,7 +548,7 @@ def draw_cold_entry(
         return None
     hidden_card_ids = hidden_card_ids or set()
     contested_card_id_set = set(contested_card_ids)
-    for entry in _iter_from_random_offset(entries):
+    for entry in _iter_by_kind_precedence(entries):
         if entry.card_id in hidden_card_ids:
             continue
         if entry.kind == KIND_PRINTING:
