@@ -2274,17 +2274,11 @@ what the engine actually found.
 **Instrumentation for a future ranked-vote decision** (code-only, no new
 fetches, no ranked-vote schema built here - `docs/theory.md`'s
 Dawid-Skene addendum is the eventual consumer): `CardScanLog` gained two
-additive fields, `evidence_types_used` and `survivor_pks`, populated for
-fallback's own `"no-evidence"`/`"ambiguous"` rows (never for an OCR/phash
-row, which have no sub-check concept of their own).
+additive fields, `evidence_types_used` and `survivor_pks` (never for an
+OCR/phash row, which have no sub-check concept of their own).
 `evidence_types_used` is always available (already threaded through as
 `CardOutcome.fallback_evidence_types`, just never persisted before this
-change). `survivor_pks` is populated only where knowable WITHOUT
-re-deriving `local_fallback.py`'s own border/artist/symbol sub-checks a
-second time in the caller: trivially the card's full (post
-`expansion_hint`-narrowing) candidate set for `"no-evidence"` (nothing
-filtered anything) - left `null` for `"ambiguous"`, see the open item
-below. phash's own `"no-clear-winner"` skip_reason is similarly split
+change). phash's own `"no-clear-winner"` skip_reason is similarly split
 into two distinct sub-cases, `"no-clear-winner-distance"` (best distance
 over threshold) and `"no-clear-winner-margin"` (runner-up too close
 behind it) - re-derived in the caller via a pure Hamming-distance
@@ -2293,20 +2287,35 @@ itself used (verified empirically to match `imagehash.ImageHash`'s own
 subtraction before use), never by editing that function's own decision
 logic.
 
-**PROTECTED CORE boundary honored, not routed around**
-(`docs/upstreaming/license-provenance.md` §2): `local_phash.py` and
-`local_fallback.py` were not edited. The phash no-clear-winner split is
-pure arithmetic re-derivation from inputs the caller already held (safe
-to duplicate - no tunable decision logic of its own). Fallback's
-survivor set for `"ambiguous"` is a different case: recovering it would
-mean either reimplementing `local_fallback.py`'s border/artist/symbol
-sub-checks (three algorithms with real tunable thresholds/margins/fuzzy
-ratios) a second time in the caller, or having `FallbackOutcome` expose
-the already-computed `survivors` set directly - the latter touches
-protected core. **Open item, not built**: exposing `survivors` on
-`FallbackOutcome` is the clean fix, needs owner sign-off per the
-absorption-adjacent protected-core review convention; `survivor_pks`
-stays `null` for `"ambiguous"` rows until that lands.
+**Two distinct fallback mechanisms, not one** - easy to conflate since
+both port the same evidence-combination model: `local_fallback.py`'s
+`run_fallback_for_card`/`FallbackOutcome` is the LIVE PILOT engine
+(PROTECTED CORE, runs against a fresh per-invocation image fetch);
+`local_calculate_verdicts.calculate_fallback_verdict` is Stage D's own
+independent port, operating entirely off already-persisted
+`ImageEvidence` fields. The latter calls `local_fallback.py`'s
+`filter_by_border_color`/`match_artist` directly (PROTECTED CORE
+functions, called not reimplemented) and reimplements only the symbol
+sub-check's pure Hamming-distance arithmetic - never `FallbackOutcome`
+itself, so its own `survivors` set was never gated on that class
+exposing anything.
+
+**`survivor_pks` now populated for Stage D's own fallback rows** (issue
+#433): `calculate_fallback_verdict` already builds `survivors` to pick
+its own skip_reason in the first place - the "no protected-core
+reimplementation" analysis above applies unchanged, since this only
+persists a set that calculator already held via functions it was already
+calling. Populated for all three skip reasons that calculator returns:
+the full candidate set for `"no-sub-check-evidence"` (nothing filtered
+anything), `[]` for `"eliminated"`, the actual shortlist for
+`"ambiguous"`. **Still `null`** for the LIVE PILOT engine's own fallback
+rows - recovering ITS survivor set still means either reimplementing
+`local_fallback.py`'s sub-checks a second time in that caller or having
+`FallbackOutcome` expose `survivors` directly, and the latter still
+touches protected core. **Open item, not built**: exposing `survivors`
+on `FallbackOutcome` remains the clean fix for the live pilot engine's
+own rows, needs owner sign-off per the absorption-adjacent
+protected-core review convention.
 
 **Known gap, not built**: `is_no_match` votes do not propagate to
 cluster (identical-image) members the way positive votes do via
