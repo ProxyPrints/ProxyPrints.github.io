@@ -419,12 +419,14 @@ const IllustrationCredit = styled(ArtistCredit)`
 // card slot (see plainCardPanel's own comment). Framed like the page's other secondary
 // panels (SuggestedCard/NegWrap/OpenWrap) rather than left bare, so it reads as a distinct,
 // dismissible section of QPanel instead of loose content between the prompt and the grid.
+// Compact (2026-08-10): the chips inside are a tight flowing multi-line list, so this wrapper
+// stays visually quiet.
 const FilterPanelWrap = styled.div`
   background: var(--conf);
   border: 1px solid var(--divider);
   border-radius: var(--r-card);
-  padding: 10px 12px;
-  margin: 10px 0;
+  padding: 8px 10px;
+  margin: 8px 0;
 `;
 
 // The spec's `.btn` base + variants (section 1c) - min 44px thumb targets (mobile funnel
@@ -872,6 +874,9 @@ export function QuestionFeed() {
         // A new item has landed (or the feed is empty) - release any advance-only in-flight
         // ref (skip / Not sure) so the next question's controls are live immediately.
         voteInFlightRef.current = false;
+        // A synchronous throw inside a vote handler strands submitting true; a landed
+        // question must always start with both flags live so no button is silently disabled.
+        setSubmitting(false);
         // A genuinely empty configured URL (this test suite's own fixture convention - real
         // cards always carry a real CDN URL) has nothing to load at all, so it's settled right
         // here rather than waiting on any image event.
@@ -901,6 +906,7 @@ export function QuestionFeed() {
       })
       .catch(() => {
         voteInFlightRef.current = false;
+        setSubmitting(false);
         setItem(null);
         setFetchError(true);
       })
@@ -1672,6 +1678,12 @@ export function QuestionFeed() {
                       <i />
                       Is it this one?
                     </ConfidencePill>
+                    {item.suggestedPrinting.artist.trim() !== "" && (
+                      <ArtistSupportLink
+                        artistName={item.suggestedPrinting.artist}
+                        className="mt-1"
+                      />
+                    )}
                   </SuggestedMeta>
                 </SuggestedCard>
                 <ActionStack>

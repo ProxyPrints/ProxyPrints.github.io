@@ -71,8 +71,12 @@ const ChipRing = styled.div`
   }
 `;
 
-const TopArea = styled(ChipRow)`
+// `$flat` mirrors the caller's cardSlot == null / != null split (`isFlat` below) - a prop, not
+// a `${Component}` selector, since this project has no @emotion/babel-plugin or SWC emotion
+// transform configured and that interpolation throws at runtime without one.
+const TopArea = styled(ChipRow)<{ $flat?: boolean }>`
   grid-area: top;
+  ${(props) => props.$flat && "justify-content: flex-start;"}
 `;
 
 // Issue #743: BORDER_COLOR_GROUP and FRAME_STYLE_GROUP are independent axes (a card's border
@@ -80,7 +84,7 @@ const TopArea = styled(ChipRow)`
 // `ExclusionGroup.label` - the two groups' chip rows ran together as one unlabelled list, so a
 // user reasonably read a correct half-collapse (one group's siblings dimming, the other
 // untouched) as a bug. Renders the label that already existed as data.
-const GroupHeading = styled.p`
+const GroupHeading = styled.p<{ $flat?: boolean }>`
   margin: 0 0 0.3rem;
   font-size: 0.75rem;
   font-weight: 600;
@@ -88,6 +92,7 @@ const GroupHeading = styled.p`
   text-transform: uppercase;
   color: rgba(0, 0, 0, 0.55);
   text-align: center;
+  ${(props) => props.$flat && "text-align: left;"}
 `;
 
 // A divider between the two exclusion groups (flat-stack layout only, see the `cardSlot == null`
@@ -100,13 +105,15 @@ const GroupDivider = styled.hr`
   border-top: 1px solid rgba(0, 0, 0, 0.12);
 `;
 
-// Row+wrap below `sm` (matching TopArea, since the ring hasn't formed yet and there's no
-// flanking column to stack vertically inside) - becomes a genuine vertical column only once
-// the ring itself forms at `sm` and up.
-const ExclusionChipRow = styled(ChipRow)`
-  @media (min-width: 576px) {
-    flex-direction: column;
-  }
+// The ring layout (`$flat` false, LeftArea/RightArea) flips its flanking chip rows into
+// vertical columns once it forms at `sm` and up; the flat stack (`$flat` true, the question
+// feed's cardSlot == null path) keeps its chips flowing as a compact multi-line list instead,
+// and never stacks into tall columns regardless of width.
+const ExclusionChipRow = styled(ChipRow)<{ $flat?: boolean }>`
+  ${(props) =>
+    props.$flat
+      ? "justify-content: flex-start;"
+      : "@media (min-width: 576px) { flex-direction: column; }"}
 `;
 
 // Wraps a heading plus its `ExclusionChipRow` as one unit, so `ChipRing`'s grid can still
@@ -132,10 +139,13 @@ const CardArea = styled.div`
 // A caller with no card to center (QuestionFeed.tsx's Level 2, since the reference card lives
 // in its own pinned Subject column now - issue #707) gets a plain vertical stack of the same
 // three ChipRow groups instead of the ring - there's no card slot for a ring to form around.
+// Compact flowing form: every group's chips flow left-to-right and wrap as a tight multi-line
+// chip list, never centering or stacking into columns - see TopArea/ExclusionChipRow/
+// GroupHeading's own `$flat` prop above for how each child achieves that here.
 const FlatChipStack = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.5rem;
 `;
 
 interface AttributeChipPanelProps {
@@ -207,6 +217,7 @@ export function AttributeChipPanel({
   // EXCLUSION_GROUPS[0] (Border Color) renders left, [1] (Frame Style) renders right - an
   // arbitrary but fixed assignment, not a semantic left/right meaning for either group.
   const [leftGroup, rightGroup] = EXCLUSION_GROUPS;
+  const isFlat = cardSlot == null;
 
   const legend = hasAttributeLean(confidence) && (
     <p
@@ -218,7 +229,7 @@ export function AttributeChipPanel({
     </p>
   );
   const topArea = (
-    <TopArea>
+    <TopArea $flat={isFlat}>
       {visibleChips(STANDALONE_CHIPS).map((chip) =>
         renderAttributeChip(chipArgs, chip.tagName, chip.label)
       )}
@@ -226,8 +237,8 @@ export function AttributeChipPanel({
   );
   const leftArea = leftGroup != null && (
     <LeftArea>
-      <GroupHeading>{leftGroup.label}</GroupHeading>
-      <ExclusionChipRow>
+      <GroupHeading $flat={isFlat}>{leftGroup.label}</GroupHeading>
+      <ExclusionChipRow $flat={isFlat}>
         {visibleChips(leftGroup.chips).map((chip) =>
           renderAttributeChip(chipArgs, chip.tagName, chip.label)
         )}
@@ -236,8 +247,8 @@ export function AttributeChipPanel({
   );
   const rightArea = rightGroup != null && (
     <RightArea>
-      <GroupHeading>{rightGroup.label}</GroupHeading>
-      <ExclusionChipRow>
+      <GroupHeading $flat={isFlat}>{rightGroup.label}</GroupHeading>
+      <ExclusionChipRow $flat={isFlat}>
         {visibleChips(rightGroup.chips).map((chip) =>
           renderAttributeChip(chipArgs, chip.tagName, chip.label)
         )}
