@@ -32,6 +32,7 @@ from cardpicker.collector_line_artist import build_artist_lexicon, load_artist_l
 from cardpicker.local_calculate_verdicts import (
     COPYRIGHT_YEAR_MISMATCH_THRESHOLD_YEARS,
     EXCLUDED_RESOLVED_TAGS,
+    FALLBACK_AMBIGUOUS_SKIP_REASON,
     FALLBACK_NO_EVIDENCE_SKIP_REASON,
     FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
     FALLBACK_RESCANNABLE_SKIP_REASONS,
@@ -2207,6 +2208,7 @@ class TestCalculateFallbackVerdict:
         assert verdict.evidence_types_used == ("border",)
         assert verdict.confidence == FALLBACK_CONFIDENCE_SINGLE_EVIDENCE
         assert verdict.skip_reason == ""
+        assert verdict.survivor_pks is None
 
     def test_symbol_alone_narrows_to_one_and_casts_a_vote(self, db):
         printing_a = CanonicalCardFactory(name="Test Card", expansion__code="mir", collector_number="1")
@@ -2270,6 +2272,7 @@ class TestCalculateFallbackVerdict:
 
         assert verdict.printing_pk is None
         assert verdict.skip_reason == "eliminated"
+        assert verdict.survivor_pks == ()
 
     def test_ambiguous_when_the_only_reading_matches_more_than_one_candidate(self, db):
         printing_a = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
@@ -2287,6 +2290,7 @@ class TestCalculateFallbackVerdict:
 
         assert verdict.printing_pk is None
         assert verdict.skip_reason == "ambiguous"
+        assert set(verdict.survivor_pks) == {printing_a.pk, printing_b.pk}
 
     def test_no_sub_check_produced_a_reading_abstains_even_with_a_single_candidate(self, db):
         """A single remaining candidate is NOT itself evidence - local_fallback.py's own rule
@@ -2302,6 +2306,7 @@ class TestCalculateFallbackVerdict:
 
         assert verdict.printing_pk is None
         assert verdict.skip_reason == FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON
+        assert verdict.survivor_pks == (printing.pk,)
 
 
 class TestRunFallbackCalculator:
@@ -2360,6 +2365,7 @@ class TestRunFallbackCalculator:
         assert CardPrintingTag.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 0
 
     def test_skip_writes_a_scan_log_row(self, db):
+        printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
         card, _ = self._no_hit_card()  # no layout_class/artist_ocr_name/symbol_phash at all
 
         result = run_fallback_calculator(dry_run=False)
@@ -2368,6 +2374,39 @@ class TestRunFallbackCalculator:
         assert CardPrintingTag.objects.filter(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 0
         log = CardScanLog.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
         assert log.skip_reason == FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON
+        assert log.evidence_types_used == []
+        # no-sub-check-evidence: nothing filtered anything, so the full (single-candidate) set
+        # this run resolved for the card's name is what got persisted.
+        assert log.survivor_pks == [printing.pk]
+
+    def test_ambiguous_skip_persists_the_shortlist_survivor_pks(self, db):
+        printing_a = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_a, border_color="black")
+        printing_b = CanonicalCardFactory(name="Some Card", expansion__code="vow", collector_number="200")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_b, border_color="black")
+        card, _ = self._no_hit_card(layout_class="black")
+
+        result = run_fallback_calculator(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.skip_counts.get(FALLBACK_AMBIGUOUS_SKIP_REASON) == 1
+        log = CardScanLog.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log.skip_reason == FALLBACK_AMBIGUOUS_SKIP_REASON
+        assert log.evidence_types_used == ["border"]
+        assert set(log.survivor_pks) == {printing_a.pk, printing_b.pk}
+
+    def test_card_without_evidence_persists_no_survivor_pks(self, db):
+        """The pre-`calculate_fallback_verdict` no-evidence skip (evidence row missing entirely)
+        never resolves `candidates`, so `survivor_pks` stays `null` - there is nothing computed to
+        persist, unlike the three skip reasons `calculate_fallback_verdict` itself returns."""
+        card = CardFactory(name="Some Card", content_phash=42)
+        CardScanLog.objects.create(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+
+        run_fallback_calculator(dry_run=False)
+
+        log = CardScanLog.objects.get(anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log.skip_reason == FALLBACK_NO_EVIDENCE_SKIP_REASON
+        assert log.survivor_pks is None
 
     def test_idempotent_against_its_own_anonymous_id(self, db):
         printing = CanonicalCardFactory(name="Some Card", expansion__code="mom", collector_number="158")
