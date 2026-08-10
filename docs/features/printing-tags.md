@@ -659,16 +659,40 @@ printings, artists, tags, and moderation from one screen.
 - **Unified question feed**: `GET 2/questionFeed/` replaces the old
   printing/artist/tag/moderation tab switcher with one typed, prioritized
   stream (`confirm_suggestion` → contested pairs → `moderation` → fresh
-  unresolved; "dumb ranked union," no cross-tier scoring, with two
+  unresolved; "dumb ranked union," no cross-tier scoring, with three
   deliberate selection-layer policies on top: the mix-composition policy
-  below and the information-gain question-scoring policy immediately after
-  it).
+  below, the remainder mix policy immediately after it, and the
+  information-gain question-scoring policy after that).
   Full rationale in `journal/2026-07-14-queue-question-feed-design.md`
-  (gitignored, local-only). **Known v1 property, not a bug**: at current
-  volume a voter only sees tier-1 (`confirm_suggestion`) questions until
-  all ~28k are exhausted — an interleaved/weighted union is the likely v2
-  fix, out of scope for v1. Every tier excludes `(card, tag)` pairs the
-  requesting `anonymous_id` already voted on.
+  (gitignored, local-only). At current volume tier 1 (`confirm_suggestion`,
+  ~28k cards) dwarfs the contested/cold pools (500-entry cap each) — a
+  voter working only this feed used to not reach the other question kinds
+  until tier 1 was personally exhausted, originally flagged as a known v1
+  property with an interleaved/weighted union as the planned v2 fix; that
+  fix is now the remainder mix policy below (2026-08-10), not deferred any
+  further. Every tier excludes `(card, tag)` pairs the requesting
+  `anonymous_id` already voted on.
+- **Materialised candidate pools** (issue #727, `cardpicker/question_feed_pools.py`):
+  the request path never scans the four tiers' own live queries - a
+  scheduled warm (per-lane cadence, `settings.QUESTION_FEED_POOL_WARM_MINUTES_*`)
+  materialises up to `settings.QUESTION_FEED_POOL_SIZE` (500) candidates per
+  lane onto the shared cache, and `get_next_question_feed_item` only ever
+  reads from that cache. A cache miss (never warmed, evicted, or the
+  `"shared"` backend unavailable) means that lane has no supply for this
+  request - it is never a trigger to build the pool live, which would
+  reintroduce the unindexed `date_created`-sorted Parallel Seq Scan this
+  mechanism exists to move off the request path (2.4-4.7s typical, up to
+  47.8s observed on a single-gunicorn deployment). Each draw scores at most
+  `question_feed._CANDIDATE_SCORING_WINDOW` (50) candidates, taken from a
+  random offset into the pool so different voters spread across a large
+  pool's full breadth rather than converging on the cards nearest the
+  front - see "Information-gain question scoring" below for what the score
+  is. Within that bounded window, printing candidates are tried entirely
+  before artist, before tag (the same structural precedence the live tiers
+  encode), and a tied score falls back to the pool's own warm-time SQL
+  ordering rather than the random draw's rotation, so the `-vote_count`/
+  quick-negative/`-date_created` tiebreak chain stays deterministic across
+  requests even though which window gets scored is not.
 - **Mix-composition policy** (2026-07-24, `cardpicker/question_feed.py`,
   owner-ratified per the WTC vote-queue data brief's OWNER ADDENDUM —
   that brief was a read-only diagnostic session with no committed doc of
@@ -729,6 +753,33 @@ printings, artists, tags, and moderation from one screen.
   `question_feed._served_mix_ratio` reads it back as two cheap indexed
   `COUNT`s, never a per-row scan. Append-only, same convention as
   `CardScanLog` — never read by any consensus computation.
+- **Remainder mix policy** (2026-08-10, `cardpicker/question_feed.py`,
+  `_remainder_lane_order`): within the remainder (confirm/contested/cold —
+  the three-tier ranked union the mix-composition policy above falls
+  through to), which lane is tried FIRST is no longer a fixed
+  confirm → contested → cold order. It rotates per request toward
+  whichever lane is currently furthest below its own target share of
+  `settings.QUESTION_FEED_CONFIRM_MIX_WEIGHT`/`_CONTESTED_MIX_WEIGHT`/
+  `_COLD_MIX_WEIGHT` (relative weights, default `3`/`2`/`1` — roughly
+  50%/33%/17%, chosen defaults rather than derived from any existing
+  measurement, not required to sum to any particular total). **Why**: the
+  fixed order, against the pools' very different per-lane supply (tier 1's
+  ~28k machine-suggested cards vs. the 500-entry-capped contested/cold
+  pools), meant a voter would have to personally exhaust the entire confirm
+  pool via their own exclusion set before a contested or cold question
+  could ever reach them — the "Unified question feed" bullet's starvation
+  note above, made total rather than merely likely once the materialised
+  pools replaced the live per-tier queries. **Mechanism**: each lane's own
+  share of this session's `pool=REMAINDER` `QuestionFeedServedLog` history
+  is read back from `origin_reason`'s existing `tier_1_`/`tier_2_`/`tier_4_`
+  prefix convention (no schema change), and the lane furthest below its
+  target share is tried first; if it has no supply for this voter, the
+  request honestly moves to the next-most-under-served lane, never
+  stalling. **Soundness**: SELECTION-LAYER only, the same boundary the
+  mix-composition and information-gain policies state for themselves — it
+  decides WHICH remainder lane is consulted first for a given request,
+  never what any lane's own candidate set is, how a vote resolves, or the
+  LIKELY-RESOLVE pool's own precedence above it.
 - **Information-gain question scoring** (2026-08-09, issue #716,
   `cardpicker/question_feed.py`, the same file as the mix-composition
   policy above): where each remainder tier used to serve the first
