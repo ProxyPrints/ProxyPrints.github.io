@@ -45,6 +45,20 @@ Past iterations suffered from patchwork scaling, horizontal bloat, and mismatche
 
 - The MTGAC artist disclosure link (`ArtistSupportLink`) must render consistently and cleanly under **both** illustration renders and Scryfall card renders.
 
+### Rule 7: Frame Treatment Is One Axis, and It Gates Border Color
+
+- Borderless, Full Art, Extended Art, and Showcase are mutually exclusive - a card is exactly
+  one of them (or none). They are asked as a single exclusion-group axis (Frame Treatment),
+  the same shape as Border Color and Frame Style, not as four independent toggles.
+- Selecting Borderless or Full Art disqualifies Border Color entirely: that card has no border
+  colour to ask about, so the axis disappears rather than staying present with a moot answer.
+- Selecting Extended Art or Showcase leaves Border Color present - both treatments still have
+  an ordinary border colour.
+- This is Rule 5 (context-dependent disqualification) applied across two different axes rather
+  than within one: the deciding vote lives on a different chip group than the one it hides.
+- Presentation only - the underlying vote/tag data model is unchanged. No new vote types, no
+  new consensus logic; this only changes which questions are asked and when.
+
 ---
 
 ## 3. Implementation Roadmap
