@@ -419,12 +419,14 @@ const IllustrationCredit = styled(ArtistCredit)`
 // card slot (see plainCardPanel's own comment). Framed like the page's other secondary
 // panels (SuggestedCard/NegWrap/OpenWrap) rather than left bare, so it reads as a distinct,
 // dismissible section of QPanel instead of loose content between the prompt and the grid.
+// Compact (2026-08-10): the chips inside are a tight flowing multi-line list, so this wrapper
+// stays visually quiet.
 const FilterPanelWrap = styled.div`
   background: var(--conf);
   border: 1px solid var(--divider);
   border-radius: var(--r-card);
-  padding: 10px 12px;
-  margin: 10px 0;
+  padding: 8px 10px;
+  margin: 8px 0;
 `;
 
 // The spec's `.btn` base + variants (section 1c) - min 44px thumb targets (mobile funnel

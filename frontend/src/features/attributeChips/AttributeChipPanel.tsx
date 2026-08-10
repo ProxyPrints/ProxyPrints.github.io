@@ -100,23 +100,32 @@ const GroupDivider = styled.hr`
   border-top: 1px solid rgba(0, 0, 0, 0.12);
 `;
 
-// Row+wrap below `sm` (matching TopArea, since the ring hasn't formed yet and there's no
-// flanking column to stack vertically inside) - becomes a genuine vertical column only once
-// the ring itself forms at `sm` and up.
-const ExclusionChipRow = styled(ChipRow)`
-  @media (min-width: 576px) {
-    flex-direction: column;
-  }
-`;
+// Always a wrapping row. The ring layout flips its flanking chip rows into vertical columns
+// once it forms at `sm` and up - but that flip lives in LeftArea/RightArea (ring-only), NOT in
+// this shared row primitive, so the flat stack (the question feed's cardSlot == null path)
+// keeps its chips flowing as a compact multi-line list instead of stacking into tall columns.
+const ExclusionChipRow = styled(ChipRow)``;
 
 // Wraps a heading plus its `ExclusionChipRow` as one unit, so `ChipRing`'s grid can still
 // position the whole group (heading + chips together) as a single "left"/"right" cell.
 const LeftArea = styled.div`
   grid-area: left;
+
+  @media (min-width: 576px) {
+    ${ExclusionChipRow} {
+      flex-direction: column;
+    }
+  }
 `;
 
 const RightArea = styled.div`
   grid-area: right;
+
+  @media (min-width: 576px) {
+    ${ExclusionChipRow} {
+      flex-direction: column;
+    }
+  }
 `;
 
 // position: relative so an absolutely-positioned burst rendered as part of `cardSlot` (see
@@ -132,10 +141,20 @@ const CardArea = styled.div`
 // A caller with no card to center (QuestionFeed.tsx's Level 2, since the reference card lives
 // in its own pinned Subject column now - issue #707) gets a plain vertical stack of the same
 // three ChipRow groups instead of the ring - there's no card slot for a ring to form around.
+// Compact flowing form: every group's chips flow left-to-right and wrap as a tight multi-line
+// chip list, never centering or stacking into columns.
 const FlatChipStack = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.5rem;
+
+  ${ChipRow} {
+    justify-content: flex-start;
+  }
+
+  ${GroupHeading} {
+    text-align: left;
+  }
 `;
 
 interface AttributeChipPanelProps {
