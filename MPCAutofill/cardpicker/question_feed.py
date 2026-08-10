@@ -1103,10 +1103,6 @@ def get_next_question_feed_item(
         likely_resolve_card = question_feed_pools.draw_resolution_imminent_card(
             answered_card_ids, hidden_card_ids=hidden_card_ids
         )
-        if likely_resolve_card is None:
-            likely_resolve_card = _likely_resolve_printing_card(
-                anonymous_id, answered_card_ids, hidden_card_ids=hidden_card_ids
-            )
         if likely_resolve_card is not None:
             item = _likely_resolve_item(likely_resolve_card)
             return _log_served(
@@ -1114,20 +1110,14 @@ def get_next_question_feed_item(
             )
 
     tier_1_card = question_feed_pools.draw_confirm_card(answered_card_ids, hidden_card_ids=hidden_card_ids)
-    tier_1_item = _confirm_suggestion_item(tier_1_card) if tier_1_card is not None else None
-    if tier_1_item is None:
-        tier_1_item = _tier_1_confirm_suggestion(anonymous_id, answered_card_ids, hidden_card_ids=hidden_card_ids)
-    if tier_1_item is not None:
-        return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
+    if tier_1_card is not None:
+        tier_1_item = _confirm_suggestion_item(tier_1_card)
+        if tier_1_item is not None:
+            return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
 
-    # `contested_card_ids` may already have arrived from the caller (see docstring above); only
-    # resolve it here if not, and only once we've actually fallen through to the tiers that
-    # consult it (tier 1 and the likely-resolve pool above never touch it) - each is otherwise
-    # identical on repeat calls within this same request (no vote can be cast mid-request), so
-    # recomputing it once per tier just paid the same cost twice for one answer.
     if contested_card_ids is None:
         contested_card_ids = get_contested_card_ids()
-    contested_artist_card_ids = get_contested_artist_card_ids()
+    get_contested_artist_card_ids()
 
     tier_2_result = _pool_contested_result(
         answered_card_ids,
@@ -1136,17 +1126,6 @@ def get_next_question_feed_item(
         not_official_art_card_ids,
         hidden_card_ids=hidden_card_ids,
     )
-    if tier_2_result is None:
-        tier_2_result = _tier_2_contested(
-            anonymous_id,
-            answered_card_ids,
-            answered_artist_card_ids=answered_artist_card_ids,
-            answered_tag_card_ids_by_tag=answered_tag_card_ids_by_tag,
-            not_official_art_card_ids=not_official_art_card_ids,
-            contested_card_ids=contested_card_ids,
-            contested_artist_card_ids=contested_artist_card_ids,
-            hidden_card_ids=hidden_card_ids,
-        )
     if tier_2_result is not None:
         tier_2_item, tier_2_reason = tier_2_result
         return _log_served(anonymous_id, tier_2_item, QuestionFeedServedPool.REMAINDER, tier_2_reason)
@@ -1158,14 +1137,6 @@ def get_next_question_feed_item(
         contested_card_ids,
         hidden_card_ids=hidden_card_ids,
     )
-    if tier_4_result is None:
-        tier_4_result = _tier_4_fresh(
-            anonymous_id,
-            answered_card_ids,
-            not_official_art_card_ids=not_official_art_card_ids,
-            contested_card_ids=contested_card_ids,
-            hidden_card_ids=hidden_card_ids,
-        )
     if tier_4_result is not None:
         tier_4_item, tier_4_reason = tier_4_result
         return _log_served(anonymous_id, tier_4_item, QuestionFeedServedPool.REMAINDER, tier_4_reason)

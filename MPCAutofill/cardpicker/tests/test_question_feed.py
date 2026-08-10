@@ -1,6 +1,8 @@
 import uuid
 from unittest.mock import patch
 
+import pytest
+
 from django.core.cache import caches
 from django.urls import reverse
 
@@ -57,6 +59,17 @@ from cardpicker.tests.factories import (
     CardTagVoteFactory,
     TagFactory,
 )
+
+
+@pytest.fixture(autouse=True)
+def _auto_warm_pools():
+    from cardpicker.question_feed_pools import LANES, warm_pool_cache
+
+    for lane in LANES:
+        try:
+            warm_pool_cache(lane)
+        except Exception:
+            pass
 
 
 def make_shared_illustration_group(name: str = "Brainstorm") -> tuple:

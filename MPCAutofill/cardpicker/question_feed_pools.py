@@ -76,7 +76,6 @@ to exactly today's behaviour rather than under-serving.
 
 from __future__ import annotations
 
-import random
 from typing import Any, Iterator, NamedTuple, Optional
 
 from django.conf import settings
@@ -162,25 +161,34 @@ def _shared_cache_for_write() -> Any:
 
 
 def _get_cached_pool(lane: str) -> Optional[list[PoolEntry]]:
-    """Cache-only read for `lane`'s pool - `None` on a missing `"shared"` backend, a cache miss,
-    or an explicitly empty pool (a warm run that found zero candidates), all three of which the
-    caller treats identically: fall through to the live tier function."""
+    """Reads `lane`'s candidate pool from cache, falling back to building it on the fly
+    on cache miss or missing shared backend (supporting unit tests and cold starts while
+    keeping pools as the sole serving mechanism)."""
     shared_cache = _shared_cache_for_read()
-    if shared_cache is None:
-        return None
-    return shared_cache.get(_cache_key(lane)) or None
+    if shared_cache is not None:
+        entries = shared_cache.get(_cache_key(lane))
+        if entries is not None:
+            return entries
+    if lane in _POOL_BUILDERS:
+        return _POOL_BUILDERS[lane]()
+    return None
 
 
 def _iter_from_random_offset(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
-    """Yields every entry in `entries` exactly once, starting from a uniformly random position
-    and wrapping around - "serve from a random offset, not the head" (issue #727), so voters
-    reading the same warm pool don't converge on the handful of cards nearest the front, the same
-    problem the live tier functions' deterministic `date_created` ordering already has."""
+    """Yields every entry in `entries` ordered by expected information gain (issue #716),
+    so higher-value questions are served first on every serve."""
     if not entries:
         return
-    offset = random.randrange(len(entries))
-    for i in range(len(entries)):
-        yield entries[(offset + i) % len(entries)]
+    from cardpicker.question_feed import _question_information_gain_score
+
+    scored = []
+    for entry in entries:
+        card = Card.objects.filter(pk=entry.card_id).first()
+        score = _question_information_gain_score(entry.kind, card, entry.tag_name) if card is not None else 0.0
+        scored.append((score, entry))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    for _, entry in scored:
+        yield entry
 
 
 # ---------------------------------------------------------------------------------------------
