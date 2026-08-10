@@ -6,13 +6,13 @@
  * applicable, or skip. Submits via the same APISubmitTagVote used by TagVotePicker.
  */
 
-import React, { useState } from "react";
-import Button from "react-bootstrap/Button";
+import React, { useRef, useState } from "react";
 
 import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
+import { ActionButton } from "@/features/attributeVoting/ActionButton";
 import { APISubmitTagVote } from "@/store/api";
 import { setNotification } from "@/store/slices/toastsSlice";
 
@@ -48,8 +48,17 @@ export function QueueTagQuestion({
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
   const [submitting, setSubmitting] = useState<boolean>(false);
+  // Issue #715 - `disabled={submitting}` only applies on the re-render React batches AFTER the
+  // current handler returns, so a fast double-tap could cast the vote twice; this ref is set
+  // synchronously at handler entry and drops the second entry (Skip included - a double-tap on
+  // Skip must not advance two cards).
+  const inFlightRef = useRef<boolean>(false);
 
   const submit = (polarity: number) => {
+    if (inFlightRef.current) {
+      return;
+    }
+    inFlightRef.current = true;
     setSubmitting(true);
     APISubmitTagVote(
       backendURL,
@@ -77,7 +86,10 @@ export function QueueTagQuestion({
           ])
         );
       })
-      .finally(() => setSubmitting(false));
+      .finally(() => {
+        inFlightRef.current = false;
+        setSubmitting(false);
+      });
   };
 
   return (
@@ -86,27 +98,33 @@ export function QueueTagQuestion({
         Does <strong>{getTagDisplayName(tagName)}</strong> apply?
       </h6>
       <div className="d-flex gap-2 mt-2">
-        <Button
-          variant="success"
+        <ActionButton
+          className="primary"
           disabled={submitting}
           onClick={() => submit(APPLY)}
         >
           Apply
-        </Button>
-        <Button
-          variant="dark"
+        </ActionButton>
+        <ActionButton
+          className="secondary"
           disabled={submitting}
           onClick={() => submit(NOT_APPLICABLE)}
         >
           Not applicable
-        </Button>
-        <Button
-          variant="outline-secondary"
+        </ActionButton>
+        <ActionButton
+          className="ghost"
           disabled={submitting}
-          onClick={onAnswered}
+          onClick={() => {
+            if (inFlightRef.current) {
+              return;
+            }
+            inFlightRef.current = true;
+            onAnswered();
+          }}
         >
           Skip
-        </Button>
+        </ActionButton>
       </div>
     </div>
   );

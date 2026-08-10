@@ -301,6 +301,22 @@ export const CandidateButton = styled.button`
     outline-offset: -1px;
     border-color: var(--accent, #bb9af7);
   }
+
+  /* Issue #748 - a Level 1 suggestion the user rejected stays reachable in the Level 2 grid
+     as a de-emphasised tile (dimmed, dashed outline) instead of vanishing; hovering restores
+     full opacity so it still reads as selectable - tapping it re-casts the candidate as a
+     legitimate pick, the reconsider path. QuestionFeed.tsx adds 'data-rejected' on the same
+     tiles; this class is the visual half of that same marker. */
+  &.rejected {
+    opacity: 0.55;
+    outline: 1px dashed var(--muted, #8c94bf);
+    outline-offset: -1px;
+
+    &:hover {
+      opacity: 1;
+      outline: 1px solid var(--divider, #16161e);
+    }
+  }
 `;
 
 // The spec's ".ccap" candidate caption (SPEC-wtc-rebuild.md section 1c "candidate caption"
@@ -322,6 +338,17 @@ export const CandidateCaption = styled.div`
     color: var(--muted);
     font-family: "Courier New", monospace;
     font-size: 10px;
+  }
+
+  /* Issue #748 - the "you said no · tap to reconsider" note on a rejected Level 1 suggestion
+     that stays in the grid as a de-emphasised, re-selectable tile (QuestionFeed.tsx renders
+     it as a .rej caption div with its own testid). Muted italic, one step quieter than the
+     set/collector line above it, so the tile still reads as a candidate first and a
+     reconsideration affordance second. */
+  .rej {
+    color: var(--muted);
+    font-size: 10px;
+    font-style: italic;
   }
 `;
 

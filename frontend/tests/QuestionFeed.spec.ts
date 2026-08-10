@@ -632,13 +632,16 @@ test.describe("question feed - confirm_suggestion question type", () => {
     expect(abstentionBody.questionType).toBe("confirm_suggestion");
   });
 
-  test("NO on the suggestion collapses its slot (never a selectable tile again) and keeps the remaining candidates selectable on the same page, without casting a vote", async ({
+  test("NO on the suggestion collapses its slot (rejected candidate stays in the grid as a de-emphasised, re-selectable tile) and keeps the remaining candidates selectable on the same page, without casting a vote", async ({
     page,
     network,
   }) => {
-    // Issue #728 - the rejected suggestion is never re-presented as a selectable tile; the
-    // remaining candidate (printingCandidate2) stays selectable on the SAME page (no stage
-    // transition). See rejectSuggestion/rejectedCandidateIds in QuestionFeed.tsx.
+    // Issue #728 - the suggestion slot is judged once and collapses on NO (no stage
+    // transition); issue #748 - the rejected suggestion does NOT vanish: it joins the grid
+    // as a de-emphasised (`data-rejected="true"`) tile that stays fully selectable (the
+    // reconsider path), while the remaining candidate (printingCandidate2) stays selectable
+    // on the SAME page. NO itself still casts no vote in the general (non-singleton) case.
+    // See rejectSuggestion/rejectedCandidateIds in QuestionFeed.tsx.
     let printingTagSubmitted = false;
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     page.on("request", (request) => {
@@ -650,9 +653,15 @@ test.describe("question feed - confirm_suggestion question type", () => {
 
     await page.getByTestId("question-feed-suggestion-no").click();
 
+    // #748 - the rejected suggestion is present, but only as the de-emphasised tile.
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
-    ).toHaveCount(0);
+    ).toHaveCount(1);
+    await expect(
+      page.locator(
+        `[data-card-identifier="${printingCandidate1.identifier}"][data-rejected="true"]`
+      )
+    ).toBeVisible();
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
     ).toBeVisible();
@@ -663,7 +672,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
     expect(printingTagSubmitted).toBe(false);
   });
 
-  test("NO on a singleton suggestion (no other candidates) skips the grid entirely and immediately casts the terminal no-match vote", async ({
+  test("NO on a singleton suggestion (no other candidates) casts the terminal no-match vote immediately, keeping the rejected candidate as a de-emphasised grid tile", async ({
     page,
     network,
   }) => {
@@ -696,10 +705,16 @@ test.describe("question feed - confirm_suggestion question type", () => {
 
     await page.getByTestId("question-feed-suggestion-no").click();
 
-    // the rejected candidate is never a selectable tile again
+    // #748 - the rejected singleton stays reachable in the grid as the single de-emphasised,
+    // re-selectable tile; the "none left" state is decided by candidate count, not grid count.
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
-    ).toHaveCount(0);
+    ).toHaveCount(1);
+    await expect(
+      page.locator(
+        `[data-card-identifier="${printingCandidate1.identifier}"][data-rejected="true"]`
+      )
+    ).toBeVisible();
     // contextual copy replaces the generic "Which of these is it?" grid prompt
     await expect(
       page.getByTestId("question-feed-suggestion-prompt")
