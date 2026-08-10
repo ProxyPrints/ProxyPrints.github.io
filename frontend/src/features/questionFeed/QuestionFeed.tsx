@@ -31,12 +31,17 @@
  *   - Preserved verbatim: the candidate question's interaction contract (issue #728 removed
  *     the level1 -> level2 funnel, not the answers - see the de-laddering notes at
  *     `initialStage`'s old site, `rejectSuggestion`, and `candidateQuestionBody`),
- *     `getAutoTagChips` auto-tagging on candidate pick, no-re-presentation
- *     (`rejectedCandidateIds`), the singleton-NO terminal vote, per-item
- *     state reset inside the fetch `.then()` (not a keyed `useEffect` - the stale-filter fix),
- *     the rate-limit banner, `data-card-*` attributes + the `mpc:card-selected` event (via
- *     `getPrintingCandidateDataAttributes`, unchanged), every `data-testid` this file's own
- *     Playwright/jest coverage keys off of.
+ *     `getAutoTagChips` auto-tagging on candidate pick, the singleton-NO terminal vote,
+ *     per-item state reset inside the fetch `.then()` (not a keyed `useEffect` - the
+ *     stale-filter fix), the rate-limit banner, `data-card-*` attributes + the
+ *     `mpc:card-selected` event (via `getPrintingCandidateDataAttributes`, unchanged), every
+ *     `data-testid` this file's own Playwright/jest coverage keys off of.
+ *   - Added (UX repass, 2026-08-09): #748 - a rejected Level 1 suggestion stays reachable in
+ *     the Level 2 grid as a de-emphasised (`data-rejected`) re-selectable tile instead of
+ *     vanishing (see gridCandidates / renderCandidateTile); #745 - illustration groups flow
+ *     side-by-side via IllustrationGroupFlow; #744 - a viewport-relative min-height on WtcHero
+ *     gives Subject's container-scoped sticky real scroll slack even on a short Level 1
+ *     question.
  */
 
 import styled from "@emotion/styled";
@@ -177,6 +182,15 @@ const WtcHero = styled.div`
   flex-wrap: wrap;
   gap: clamp(12px, 2.2cqi, 22px);
   align-items: start;
+  /* Issue #744 - scroll slack for Subject's 'position: sticky'. Sticky can only visibly pin
+     while its containing block (this hero) has vertical travel room beyond the subject's own
+     height; a Level 1 question with a short QPanel column (a singleton suggestion, or few
+     candidates) used to collapse the hero to ~the subject's own height, leaving ~12px of
+     slack, so the pinned reference card scrolled off 1:1 with the page. A viewport-relative
+     min-height (SIZING, not positioning - A2's container-scoped sticky policy is untouched)
+     guarantees the hero spans roughly the first fold of the scroll container even when the
+     question is short, which is exactly the travel room sticky needs. */
+  min-height: calc(100dvh - 132px);
 `;
 
 // Reference-card visibility (issue #710, A2 amendment) - pinned WITHIN the hero container via
@@ -347,17 +361,32 @@ const QHint = styled.p`
   margin: -6px 0 12px;
 `;
 
+// Issue #745 - the wrapper that makes multiple illustration groups flow side-by-side (the way
+// `CandidateGrid`'s own tiles do) instead of each group stacking as its own block row down the
+// page. Each group (representative tile + label + credit) is one grid item; auto-fill keeps
+// every group in a single column on a narrow container and lets several sit alongside each
+// other when the question panel has the width. `align-items: start` so a taller group never
+// stretches its shorter neighbours.
+const IllustrationGroupFlow = styled.div`
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(clamp(150px, 26cqi, 240px), 1fr)
+  );
+  gap: clamp(12px, 2.4cqi, 20px);
+  align-items: start;
+  margin-bottom: 6px;
+`;
+
 // Issue #503 (WTC phase C1) - a small labelled cluster around one `CandidateGrid` (imported,
 // unmodified) per shared Scryfall illustration, so candidates that are visually near-identical
 // group together instead of forcing a guess across a flat grid. Deliberately reuses
 // `CandidateGrid`'s own grid/gap/columns rather than a new grid primitive - this is a
-// regrouping of the same tiles, not a new component family.
+// regrouping of the same tiles, not a new component family. Inside IllustrationGroupFlow the
+// group is purely its own box (label + credit + the representative tile) - spacing between
+// groups comes from the wrapper's grid gap, so this carries no margin of its own.
 const IllustrationGroup = styled.div`
-  margin-bottom: 10px;
-
-  &:last-child {
-    margin-bottom: 0;
-  }
+  min-width: 0;
 `;
 
 const IllustrationGroupLabel = styled.p`
@@ -1091,6 +1120,11 @@ export function QuestionFeed() {
   // resets any other member of the same group back to untouched, unlike the funnel's usual
   // independent tri-state cycling that Level 2's optional filter panel keeps.
   const tapLevel3Chip = (group: ExclusionGroup, tagName: string) => {
+    // Issue #715 - chips stay inert while a Level 3 submission is in flight; the visual
+    // `disabled={submitting}` only applies on the post-render, so the ref closes the window.
+    if (voteInFlightRef.current) {
+      return;
+    }
     setLevel3ChipStates((previous) => {
       const next = { ...previous };
       group.chips.forEach((chip) => {
@@ -1188,7 +1222,10 @@ export function QuestionFeed() {
   // singleton case and immediately calling the same isNoMatch vote "None of these" casts closes
   // that gap: the vote persists at the moment "No" is tapped, with or without any further tap.
   const rejectSuggestion = () => {
-    if (item?.suggestedPrinting == null) {
+    // Issue #715 - same in-flight guard as every other handler: a double-tap here must not
+    // re-enter (in the singleton case rejectSuggestion casts the terminal vote itself, so an
+    // unguarded second entry would double-cast it).
+    if (item?.suggestedPrinting == null || voteInFlightRef.current) {
       return;
     }
     const rejectedIdentifier = item.suggestedPrinting.identifier;
@@ -1249,19 +1286,21 @@ export function QuestionFeed() {
   const isCandidateType =
     item.type === "confirm_suggestion" || item.type === "identify_printing";
   const allCandidates = item.candidates ?? [];
-  // Issue #728 - the suggested candidate is judged exactly ONCE, in its own slot above, and is
-  // never re-offered as a grid tile (the old Level 2 re-presented it "highlighted" - the same
-  // candidate asked about twice). The grid is the REST of the candidates; the rejected set
-  // (which only ever holds the suggested id, see rejectSuggestion) is belt-and-braces for that
-  // same exclusion and drives the "you said not this one" context above.
+  // Issue #728 - the suggested candidate is judged exactly ONCE in its own slot above and is
+  // never re-offered as a grid tile while that slot is still asking (the old Level 2
+  // re-presented it "highlighted" - the same candidate asked about twice). The grid is the
+  // REST of the candidates, plus - since #748 - any the user has explicitly rejected at the
+  // suggestion slot, which stay accessible as de-emphasised, re-selectable tiles rather than
+  // vanishing (the rejected set drives both that grid inclusion below and the "you said not
+  // this one" context further down).
   const suggestedCandidateId =
     item.type === "confirm_suggestion"
       ? item.suggestedPrinting?.identifier ?? null
       : null;
   const gridCandidates = allCandidates.filter(
     (candidate) =>
-      candidate.identifier !== suggestedCandidateId &&
-      !rejectedCandidateIds.has(candidate.identifier)
+      rejectedCandidateIds.has(candidate.identifier) ||
+      candidate.identifier !== suggestedCandidateId
   );
   const visibleCandidates = filterCandidatesByChipStates(
     gridCandidates,
@@ -1283,7 +1322,14 @@ export function QuestionFeed() {
   // /2/submitPrintingTag/ path.
   const illustrationGroupsById = new Map<string, PrintingCandidate[]>();
   visibleCandidates.forEach((candidate) => {
-    if (!candidate.illustrationId) {
+    // Issue #748 - a rejected candidate never joins an illustration cluster: clusters render
+    // only one representative tile, so burying the rejected suggestion inside one would
+    // silently drop it again. It always renders as a standalone (de-emphasised) ungrouped tile
+    // instead, guaranteeing the reconsider path stays visible.
+    if (
+      !candidate.illustrationId ||
+      rejectedCandidateIds.has(candidate.identifier)
+    ) {
       return;
     }
     const existingGroup = illustrationGroupsById.get(candidate.illustrationId);
@@ -1315,8 +1361,16 @@ export function QuestionFeed() {
   // Singleton rejection (owner-reported dedup bug, docs/features/printing-tags.md): when the
   // suggested printing was the card's ONLY candidate, rejecting it empties the grid and
   // rejectSuggestion already cast the "None of these" vote - this only gates presentation.
+  // Issue #748 - "none left" means no candidate OTHER than the rejected suggestion itself (the
+  // rejected one is now a grid member, so gridCandidates.length can no longer decide this). In
+  // that state the whole grid is one de-emphasised tile and the question was already resolved
+  // by the terminal vote, so the filter panel and bottom action row stay hidden and the reason
+  // strip carries the flow - same as the pre-#748 singleton behavior.
   const suggestionRejectedWithNoneLeft =
-    suggestionRejected && gridCandidates.length === 0;
+    suggestionRejected &&
+    allCandidates.filter(
+      (candidate) => candidate.identifier !== suggestedCandidateId
+    ).length === 0;
 
   // Shape (d) - open-ended (ANNEX B): an `identify_printing` item with no shortlist at all
   // (the smallest slice - cold-start/no-evidence). Framed as the "tricky one" (WD7) instead of
@@ -1426,6 +1480,7 @@ export function QuestionFeed() {
                     <TriStateChip
                       key={chip.tagName}
                       className={state === "positive" ? "pos" : ""}
+                      disabled={submitting}
                       onClick={() => tapLevel3Chip(group, chip.tagName)}
                       data-testid={`question-feed-level3-chip-${chip.tagName}`}
                     >
@@ -1449,7 +1504,9 @@ export function QuestionFeed() {
             <Btn
               className="ghost"
               disabled={submitting}
-              onClick={() => advance()}
+              // Issue #715 - route through the guarded skip() rather than a raw advance():
+              // a double-tap on this button must not skip two cards.
+              onClick={skip}
               data-testid="question-feed-level3-skip"
             >
               Skip this question
@@ -1493,39 +1550,57 @@ export function QuestionFeed() {
         // pass IllustrationArtPlaceholder instead of the card-ratio ArtPlaceholder every
         // ungrouped (full-scan) tile keeps by default.
         Frame: typeof ArtPlaceholder = ArtPlaceholder
-      ) => (
-        <CandidateButton
-          key={candidate.identifier}
-          disabled={submitting}
-          onClick={onSelect}
-          {...getPrintingCandidateDataAttributes(item.card.name, candidate)}
-        >
-          <Frame data-testid="question-feed-candidate-art-frame">
-            <MysteryCard />
-            <ZoomableThumbnail>
-              <img
-                src={imageUrl}
-                alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-              />
-            </ZoomableThumbnail>
-            {submitting && selectedCandidateId === candidate.identifier && (
-              <div
-                data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
-              >
-                <Spinner size={1.5} zIndex={2} positionAbsolute />
+      ) => {
+        // Issue #748 - a rejected Level 1 suggestion stays in the grid as a de-emphasised tile
+        // that is still fully selectable: tap it to reconsider and cast it as a real pick (the
+        // recover path for a mis-tapped "No, different printing").
+        const isRejected = rejectedCandidateIds.has(candidate.identifier);
+        return (
+          <CandidateButton
+            key={candidate.identifier}
+            className={isRejected ? "rejected" : undefined}
+            data-rejected={isRejected ? "true" : undefined}
+            disabled={submitting}
+            onClick={onSelect}
+            {...getPrintingCandidateDataAttributes(item.card.name, candidate)}
+          >
+            <Frame data-testid="question-feed-candidate-art-frame">
+              <MysteryCard />
+              <ZoomableThumbnail>
+                <img
+                  src={imageUrl}
+                  alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                />
+              </ZoomableThumbnail>
+              {submitting && selectedCandidateId === candidate.identifier && (
+                <div
+                  data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
+                >
+                  <Spinner size={1.5} zIndex={2} positionAbsolute />
+                </div>
+              )}
+            </Frame>
+            <CandidateCaption>
+              <div className="cn">
+                <SetIcon expansionCode={candidate.expansionCode} />{" "}
+                {candidate.expansionCode.toUpperCase()}{" "}
+                {candidate.collectorNumber}
               </div>
-            )}
-          </Frame>
-          <CandidateCaption>
-            <div className="cn">
-              <SetIcon expansionCode={candidate.expansionCode} />{" "}
-              {candidate.expansionCode.toUpperCase()}{" "}
-              {candidate.collectorNumber}
-            </div>
-            {showArtistCaption && <div className="cs">{candidate.artist}</div>}
-          </CandidateCaption>
-        </CandidateButton>
-      );
+              {isRejected && (
+                <div
+                  className="rej"
+                  data-testid="question-feed-rejected-tile-note"
+                >
+                  you said no &middot; tap to reconsider
+                </div>
+              )}
+              {showArtistCaption && (
+                <div className="cs">{candidate.artist}</div>
+              )}
+            </CandidateCaption>
+          </CandidateButton>
+        );
+      };
       // Problem 2 (owner report, 2026-08-04): a not-official-printing reason (the artwork is
       // genuine, this scan just isn't one of the listed printings) means the remaining
       // question - which printing - is still answerable from this same item's own candidate
@@ -1721,61 +1796,65 @@ export function QuestionFeed() {
               </Btn>
             </div>
           )}
-          {illustrationGroups.map((group) => {
-            // Every member of `group` shares one illustrationId, i.e. one artwork - artist
-            // should be identical across them too, but source data can disagree, so take the
-            // first non-blank rather than assuming group[0] is always populated.
-            const illustrationArtist = group
-              .map((candidate) => candidate.artist)
-              .find((artist) => artist.trim() !== "");
-            // selectIllustrationGroup already submits one illustrationId for the whole
-            // cluster (see that function's own comment), so one tile fully represents what
-            // is being voted on - showing every member here just repeats the same artwork
-            // up to N times. Prefer a member with an art crop, the same signal a tile's own
-            // image already prefers (renderCandidateTile's imageUrl default below), and fall
-            // back to the first member so the same data always picks the same tile.
-            const representative =
-              group.find((candidate) => candidate.artCropUrl) ?? group[0];
-            return (
-              <IllustrationGroup
-                key={group[0].illustrationId}
-                data-testid="question-feed-illustration-group"
-                data-illustration-id={group[0].illustrationId}
-              >
-                <IllustrationGroupLabel>
-                  Same illustration - {group.length} printings
-                </IllustrationGroupLabel>
-                {illustrationArtist != null && (
-                  <IllustrationCredit data-testid="question-feed-illustration-credit">
-                    <ArtistSupportLink artistName={illustrationArtist} />
-                  </IllustrationCredit>
-                )}
-                <CandidateGrid>
-                  {renderCandidateTile(
-                    representative,
-                    () =>
-                      // every member of `group` shares this non-null illustrationId - see
-                      // the grouping logic above, which only clusters candidates that have
-                      // one - so submitting the representative's illustrationId is
-                      // identical to submitting any other member's.
-                      selectIllustrationGroup(
-                        representative.illustrationId as string,
-                        representative
-                      ),
-                    false,
-                    representative.artCropUrl ||
-                      representative.mediumThumbnailUrl,
-                    // Only the illustration-crop image is landscape-shaped - the
-                    // mediumThumbnailUrl fallback above is still a full card scan, so it
-                    // keeps the card-ratio frame.
-                    representative.artCropUrl
-                      ? IllustrationArtPlaceholder
-                      : ArtPlaceholder
-                  )}
-                </CandidateGrid>
-              </IllustrationGroup>
-            );
-          })}
+          {illustrationGroups.length > 0 && (
+            <IllustrationGroupFlow data-testid="question-feed-illustration-groups">
+              {illustrationGroups.map((group) => {
+                // Every member of `group` shares one illustrationId, i.e. one artwork - artist
+                // should be identical across them too, but source data can disagree, so take the
+                // first non-blank rather than assuming group[0] is always populated.
+                const illustrationArtist = group
+                  .map((candidate) => candidate.artist)
+                  .find((artist) => artist.trim() !== "");
+                // selectIllustrationGroup already submits one illustrationId for the whole
+                // cluster (see that function's own comment), so one tile fully represents what
+                // is being voted on - showing every member here just repeats the same artwork
+                // up to N times. Prefer a member with an art crop, the same signal a tile's own
+                // image already prefers (renderCandidateTile's imageUrl default below), and fall
+                // back to the first member so the same data always picks the same tile.
+                const representative =
+                  group.find((candidate) => candidate.artCropUrl) ?? group[0];
+                return (
+                  <IllustrationGroup
+                    key={group[0].illustrationId}
+                    data-testid="question-feed-illustration-group"
+                    data-illustration-id={group[0].illustrationId}
+                  >
+                    <IllustrationGroupLabel>
+                      Same illustration - {group.length} printings
+                    </IllustrationGroupLabel>
+                    {illustrationArtist != null && (
+                      <IllustrationCredit data-testid="question-feed-illustration-credit">
+                        <ArtistSupportLink artistName={illustrationArtist} />
+                      </IllustrationCredit>
+                    )}
+                    <CandidateGrid>
+                      {renderCandidateTile(
+                        representative,
+                        () =>
+                          // every member of `group` shares this non-null illustrationId - see
+                          // the grouping logic above, which only clusters candidates that have
+                          // one - so submitting the representative's illustrationId is
+                          // identical to submitting any other member's.
+                          selectIllustrationGroup(
+                            representative.illustrationId as string,
+                            representative
+                          ),
+                        false,
+                        representative.artCropUrl ||
+                          representative.mediumThumbnailUrl,
+                        // Only the illustration-crop image is landscape-shaped - the
+                        // mediumThumbnailUrl fallback above is still a full card scan, so it
+                        // keeps the card-ratio frame.
+                        representative.artCropUrl
+                          ? IllustrationArtPlaceholder
+                          : ArtPlaceholder
+                      )}
+                    </CandidateGrid>
+                  </IllustrationGroup>
+                );
+              })}
+            </IllustrationGroupFlow>
+          )}
           {ungroupedCandidates.length > 0 && (
             <CandidateGrid data-testid="question-feed-candidate-grid-ungrouped">
               {ungroupedCandidates.map((candidate) =>

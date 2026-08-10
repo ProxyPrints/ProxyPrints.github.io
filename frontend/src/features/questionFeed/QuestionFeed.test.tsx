@@ -940,6 +940,7 @@ describe("QuestionFeed", () => {
           );
         })
       );
+      server.use(submitTagVoteResolvesToApply);
       renderFeed();
       await revealCard();
 
