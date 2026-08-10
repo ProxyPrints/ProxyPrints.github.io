@@ -872,6 +872,9 @@ export function QuestionFeed() {
         // A new item has landed (or the feed is empty) - release any advance-only in-flight
         // ref (skip / Not sure) so the next question's controls are live immediately.
         voteInFlightRef.current = false;
+        // A synchronous throw inside a vote handler strands submitting true; a landed
+        // question must always start with both flags live so no button is silently disabled.
+        setSubmitting(false);
         // A genuinely empty configured URL (this test suite's own fixture convention - real
         // cards always carry a real CDN URL) has nothing to load at all, so it's settled right
         // here rather than waiting on any image event.
@@ -901,6 +904,7 @@ export function QuestionFeed() {
       })
       .catch(() => {
         voteInFlightRef.current = false;
+        setSubmitting(false);
         setItem(null);
         setFetchError(true);
       })
