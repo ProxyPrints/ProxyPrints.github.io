@@ -2213,18 +2213,25 @@ class CardScanLog(models.Model):
     # Instrumentation for a future ranked-vote decision (issue #207, docs/theory.md's
     # Dawid-Skene addendum) - code-only, no schema for that future decision built here. Always
     # `[]` for a non-fallback row (OCR/phash have no sub-check concept of their own) and for
-    # fallback's own "no-evidence" row (by definition, nothing fired) - populated with whichever
-    # of "border"/"artist"/"symbol" produced a reading for fallback's "ambiguous" row.
+    # local_calculate_verdicts.calculate_fallback_verdict's own "no-sub-check-evidence" row (by
+    # definition, nothing fired) - populated (issue #433) with whichever of "border"/"artist"/
+    # "symbol" produced a reading for that same calculator's "eliminated" and "ambiguous" rows.
     evidence_types_used = models.JSONField(default=list, blank=True)
-    # The candidate pks fallback's evidence intersection left standing, where knowable WITHOUT
-    # re-deriving local_fallback's own protected-core decision logic a second time in the caller
-    # (docs/upstreaming/license-provenance.md §2): trivially the card's full (post
-    # expansion_hint-narrowing) candidate set for "no-evidence" (nothing filtered anything).
-    # Deliberately left `null` for "ambiguous" (more than one candidate survived, but which ones
-    # can't be recovered from what run_fallback_for_card returns today without either
-    # reimplementing its border/artist/symbol sub-checks a second time here, or having
-    # `FallbackOutcome` expose the survivor set itself - the latter touches protected core and is
-    # an open item, not built in this change). Never populated for an OCR/phash row.
+    # The candidate pks fallback's evidence intersection left standing (issue #433) - populated
+    # for every skip local_calculate_verdicts.calculate_fallback_verdict itself returns: the
+    # card's full candidate set for "no-sub-check-evidence" (nothing filtered anything), `[]` for
+    # "eliminated", the actual shortlist for "ambiguous". That calculator computes this set to
+    # pick its own skip_reason in the first place (`survivors` in calculate_fallback_verdict) -
+    # this field just carries it out to the row instead of discarding it, no protected-core
+    # reimplementation involved (docs/upstreaming/license-provenance.md §2: `filter_by_border_
+    # color`/`match_artist` are called, not reimplemented; the symbol sub-check's own arithmetic
+    # reimplementation predates this field). Still deliberately `null` for the LIVE PILOT engine's
+    # own fallback rows (`local_fallback.run_fallback_for_card` / `FallbackOutcome`, a different
+    # caller from the one above) - recovering its survivor set would mean either reimplementing
+    # its border/artist/symbol sub-checks a second time here or having `FallbackOutcome` expose
+    # the survivor set itself, and the latter touches protected core - still an open item, not
+    # built by issue #433. Never populated for an OCR/phash row, or for a missing-`ImageEvidence`
+    # skip (`calculate_fallback_verdict` is never reached, so no candidate set was ever resolved).
     survivor_pks = models.JSONField(null=True, blank=True)
 
     class Meta:
