@@ -416,17 +416,17 @@ const IllustrationCredit = styled(ArtistCredit)`
 `;
 
 // Issue #707 - the attribute-chip panel's home now that it no longer replaces the subject
-// card slot (see plainCardPanel's own comment). Framed like the page's other secondary
-// panels (SuggestedCard/NegWrap/OpenWrap) rather than left bare, so it reads as a distinct,
-// dismissible section of QPanel instead of loose content between the prompt and the grid.
+// card slot (see plainCardPanel's own comment). Nests inside CandidateWorkspace alongside the
+// suggested pick and the candidate grid it narrows - `--raised` (rather than the workspace's
+// own `--conf`) keeps it visually distinct instead of flattening into an unbroken background.
 // Compact (2026-08-10): the chips inside are a tight flowing multi-line list, so this wrapper
 // stays visually quiet.
 const FilterPanelWrap = styled.div`
-  background: var(--conf);
+  background: var(--raised);
   border: 1px solid var(--divider);
   border-radius: var(--r-card);
   padding: 8px 10px;
-  margin: 8px 0;
+  margin: 0;
 `;
 
 // The spec's `.btn` base + variants (section 1c) - min 44px thumb targets (mobile funnel
@@ -534,15 +534,30 @@ const ActionRow = styled.div`
   margin-top: 10px;
 `;
 
-// Shape (a) - the 1-click confirm hero.
+// DESIGN-REPASS §1's governing intent ("naturally centering the user's vision on the
+// immediate comparison") plus the owner's direct ask this session ("the suggested printing,
+// other illustrations, and other printing section can likely all reside in the same area") -
+// one shared panel now houses every way of resolving which candidate is correct: the
+// suggested pick, the filters that narrow it, illustration clusters, and the remaining
+// candidate grid. Previously these rendered as three visually distinct treatments (a boxed
+// suggestion card, then bare unframed grids) that read as separate sections competing with
+// the subject and the question for attention - one frame reads as one workspace instead.
+const CandidateWorkspace = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  background: var(--conf);
+  border: 1px solid var(--divider);
+  border-radius: var(--r-card);
+  padding: 13px;
+`;
+
+// Shape (a) - the 1-click confirm hero. No longer its own boxed panel - CandidateWorkspace
+// (above) supplies the frame now that this nests inside it; a plain content row.
 const SuggestedCard = styled.div`
   display: flex;
   gap: 13px;
   align-items: stretch;
-  background: var(--conf);
-  border: 1px solid var(--divider);
-  border-radius: var(--r-card);
-  padding: 11px;
 `;
 
 const SuggestedThumb = styled.div`
@@ -1651,81 +1666,6 @@ export function QuestionFeed() {
           </QHead>
           {item.type === "confirm_suggestion" &&
             item.suggestedPrinting != null &&
-            !suggestionRejected && (
-              <>
-                <SuggestedCard>
-                  <SuggestedThumb data-testid="question-feed-suggestion-reference-image">
-                    <ArtPlaceholder>
-                      <MysteryCard />
-                      <ZoomableThumbnail>
-                        <img
-                          src={item.suggestedPrinting.mediumThumbnailUrl}
-                          alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
-                        />
-                      </ZoomableThumbnail>
-                    </ArtPlaceholder>
-                  </SuggestedThumb>
-                  <SuggestedMeta>
-                    <SuggestedName>{item.card.name}</SuggestedName>
-                    <SuggestedSet>
-                      <SetIcon
-                        expansionCode={item.suggestedPrinting.expansionCode}
-                      />{" "}
-                      {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                      {item.suggestedPrinting.collectorNumber}
-                    </SuggestedSet>
-                    <ConfidencePill data-testid="question-feed-suggestion-prompt">
-                      <i />
-                      Is it this one?
-                    </ConfidencePill>
-                    {item.suggestedPrinting.artist.trim() !== "" && (
-                      <ArtistSupportLink
-                        artistName={item.suggestedPrinting.artist}
-                        className="mt-1"
-                      />
-                    )}
-                  </SuggestedMeta>
-                </SuggestedCard>
-                <ActionStack>
-                  <Btn
-                    className="primary"
-                    disabled={submitting}
-                    onClick={() =>
-                      item.suggestedPrinting != null &&
-                      selectCandidate(item.suggestedPrinting, false)
-                    }
-                    data-testid="question-feed-suggestion-yes"
-                  >
-                    {submitting ? <Spinner size={1} /> : "Yes — that's the one"}
-                  </Btn>
-                  <ActionGrid>
-                    <Btn
-                      className="secondary"
-                      disabled={submitting}
-                      onClick={submitNotSure}
-                      data-testid="question-feed-suggestion-not-sure"
-                    >
-                      Not sure
-                    </Btn>
-                    <Btn
-                      className="secondary"
-                      disabled={submitting}
-                      onClick={rejectSuggestion}
-                      data-testid="question-feed-suggestion-no"
-                    >
-                      No, different printing
-                    </Btn>
-                  </ActionGrid>
-                </ActionStack>
-                {landed && (
-                  <LandedFeedback data-testid="question-feed-landed">
-                    ✓ Tagged — nice. Next card loading…
-                  </LandedFeedback>
-                )}
-              </>
-            )}
-          {item.type === "confirm_suggestion" &&
-            item.suggestedPrinting != null &&
             suggestionRejected && (
               <>
                 <Prompt data-testid="question-feed-suggestion-prompt">
@@ -1766,114 +1706,199 @@ export function QuestionFeed() {
               your time.
             </QHint>
           )}
-          {filterExpanded && (
-            <FilterPanelWrap data-testid="question-feed-filter-panel">
-              <AttributeChipPanel
-                backendURL={backendURL}
-                cardIdentifier={item.card.identifier}
-                tagConfidence={item.tagConfidence ?? {}}
-                chipStates={chipStates}
-                onChipStatesChange={setChipStates}
-                onRateLimited={() => setRateLimited(true)}
-                pruneContradicted
-              />
-            </FilterPanelWrap>
-          )}
-          {hiddenCount > 0 && (
-            <p
-              className="text-muted small"
-              data-testid="question-feed-hidden-count"
-            >
-              {hiddenCount} hidden by your tags -{" "}
-              <a
-                href="#"
-                data-testid="question-feed-clear-filters"
-                onClick={(event) => {
-                  event.preventDefault();
-                  setChipStates(initialChipStates());
-                }}
-              >
-                clear
-              </a>
-            </p>
-          )}
-          {!suggestionRejectedWithNoneLeft && (
-            <div className="mb-2">
-              <Btn
-                className="ghost"
-                onClick={() => setFilterExpanded((previous) => !previous)}
-                data-testid="question-feed-filter-toggle"
-              >
-                {filterExpanded ? "Hide filters" : "Filter by attribute"}
-              </Btn>
-            </div>
-          )}
-          {illustrationGroups.length > 0 && (
-            <IllustrationGroupFlow data-testid="question-feed-illustration-groups">
-              {illustrationGroups.map((group) => {
-                // Every member of `group` shares one illustrationId, i.e. one artwork - artist
-                // should be identical across them too, but source data can disagree, so take the
-                // first non-blank rather than assuming group[0] is always populated.
-                const illustrationArtist = group
-                  .map((candidate) => candidate.artist)
-                  .find((artist) => artist.trim() !== "");
-                // selectIllustrationGroup already submits one illustrationId for the whole
-                // cluster (see that function's own comment), so one tile fully represents what
-                // is being voted on - showing every member here just repeats the same artwork
-                // up to N times. Prefer a member with an art crop, the same signal a tile's own
-                // image already prefers (renderCandidateTile's imageUrl default below), and fall
-                // back to the first member so the same data always picks the same tile.
-                const representative =
-                  group.find((candidate) => candidate.artCropUrl) ?? group[0];
-                return (
-                  <IllustrationGroup
-                    key={group[0].illustrationId}
-                    data-testid="question-feed-illustration-group"
-                    data-illustration-id={group[0].illustrationId}
-                  >
-                    <IllustrationGroupLabel>
-                      Same illustration - {group.length} printings
-                    </IllustrationGroupLabel>
-                    {illustrationArtist != null && (
-                      <IllustrationCredit data-testid="question-feed-illustration-credit">
-                        <ArtistSupportLink artistName={illustrationArtist} />
-                      </IllustrationCredit>
-                    )}
-                    <CandidateGrid>
-                      {renderCandidateTile(
-                        representative,
-                        () =>
-                          // every member of `group` shares this non-null illustrationId - see
-                          // the grouping logic above, which only clusters candidates that have
-                          // one - so submitting the representative's illustrationId is
-                          // identical to submitting any other member's.
-                          selectIllustrationGroup(
-                            representative.illustrationId as string,
-                            representative
-                          ),
-                        false,
-                        representative.artCropUrl ||
-                          representative.mediumThumbnailUrl,
-                        // Only the illustration-crop image is landscape-shaped - the
-                        // mediumThumbnailUrl fallback above is still a full card scan, so it
-                        // keeps the card-ratio frame.
-                        representative.artCropUrl
-                          ? IllustrationArtPlaceholder
-                          : ArtPlaceholder
+          {/* DESIGN-REPASS §1 + the owner's direct ask this session: one shared workspace for
+              every way of resolving which candidate is correct - the suggested pick, the
+              filters that narrow it, illustration clusters, and the remaining candidates -
+              instead of three separately framed panels competing for attention. */}
+          <CandidateWorkspace data-testid="question-feed-candidate-workspace">
+            {item.type === "confirm_suggestion" &&
+              item.suggestedPrinting != null &&
+              !suggestionRejected && (
+                <>
+                  <SuggestedCard>
+                    <SuggestedThumb data-testid="question-feed-suggestion-reference-image">
+                      <ArtPlaceholder>
+                        <MysteryCard />
+                        <ZoomableThumbnail>
+                          <img
+                            src={item.suggestedPrinting.mediumThumbnailUrl}
+                            alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
+                          />
+                        </ZoomableThumbnail>
+                      </ArtPlaceholder>
+                    </SuggestedThumb>
+                    <SuggestedMeta>
+                      <SuggestedName>{item.card.name}</SuggestedName>
+                      <SuggestedSet>
+                        <SetIcon
+                          expansionCode={item.suggestedPrinting.expansionCode}
+                        />{" "}
+                        {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                        {item.suggestedPrinting.collectorNumber}
+                      </SuggestedSet>
+                      <ConfidencePill data-testid="question-feed-suggestion-prompt">
+                        <i />
+                        Is it this one?
+                      </ConfidencePill>
+                      {item.suggestedPrinting.artist.trim() !== "" && (
+                        <ArtistSupportLink
+                          artistName={item.suggestedPrinting.artist}
+                          className="mt-1"
+                        />
                       )}
-                    </CandidateGrid>
-                  </IllustrationGroup>
-                );
-              })}
-            </IllustrationGroupFlow>
-          )}
-          {ungroupedCandidates.length > 0 && (
-            <CandidateGrid data-testid="question-feed-candidate-grid-ungrouped">
-              {ungroupedCandidates.map((candidate) =>
-                renderCandidateTile(candidate)
+                    </SuggestedMeta>
+                  </SuggestedCard>
+                  <ActionStack>
+                    <Btn
+                      className="primary"
+                      disabled={submitting}
+                      onClick={() =>
+                        item.suggestedPrinting != null &&
+                        selectCandidate(item.suggestedPrinting, false)
+                      }
+                      data-testid="question-feed-suggestion-yes"
+                    >
+                      {submitting ? (
+                        <Spinner size={1} />
+                      ) : (
+                        "Yes — that's the one"
+                      )}
+                    </Btn>
+                    <ActionGrid>
+                      <Btn
+                        className="secondary"
+                        disabled={submitting}
+                        onClick={submitNotSure}
+                        data-testid="question-feed-suggestion-not-sure"
+                      >
+                        Not sure
+                      </Btn>
+                      <Btn
+                        className="secondary"
+                        disabled={submitting}
+                        onClick={rejectSuggestion}
+                        data-testid="question-feed-suggestion-no"
+                      >
+                        No, different printing
+                      </Btn>
+                    </ActionGrid>
+                  </ActionStack>
+                  {landed && (
+                    <LandedFeedback data-testid="question-feed-landed">
+                      ✓ Tagged — nice. Next card loading…
+                    </LandedFeedback>
+                  )}
+                </>
               )}
-            </CandidateGrid>
-          )}
+            {filterExpanded && (
+              <FilterPanelWrap data-testid="question-feed-filter-panel">
+                <AttributeChipPanel
+                  backendURL={backendURL}
+                  cardIdentifier={item.card.identifier}
+                  tagConfidence={item.tagConfidence ?? {}}
+                  chipStates={chipStates}
+                  onChipStatesChange={setChipStates}
+                  onRateLimited={() => setRateLimited(true)}
+                  pruneContradicted
+                />
+              </FilterPanelWrap>
+            )}
+            {hiddenCount > 0 && (
+              <p
+                className="text-muted small"
+                data-testid="question-feed-hidden-count"
+              >
+                {hiddenCount} hidden by your tags -{" "}
+                <a
+                  href="#"
+                  data-testid="question-feed-clear-filters"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    setChipStates(initialChipStates());
+                  }}
+                >
+                  clear
+                </a>
+              </p>
+            )}
+            {!suggestionRejectedWithNoneLeft && (
+              <div className="mb-2">
+                <Btn
+                  className="ghost"
+                  onClick={() => setFilterExpanded((previous) => !previous)}
+                  data-testid="question-feed-filter-toggle"
+                >
+                  {filterExpanded ? "Hide filters" : "Filter by attribute"}
+                </Btn>
+              </div>
+            )}
+            {illustrationGroups.length > 0 && (
+              <IllustrationGroupFlow data-testid="question-feed-illustration-groups">
+                {illustrationGroups.map((group) => {
+                  // Every member of `group` shares one illustrationId, i.e. one artwork - artist
+                  // should be identical across them too, but source data can disagree, so take the
+                  // first non-blank rather than assuming group[0] is always populated.
+                  const illustrationArtist = group
+                    .map((candidate) => candidate.artist)
+                    .find((artist) => artist.trim() !== "");
+                  // selectIllustrationGroup already submits one illustrationId for the whole
+                  // cluster (see that function's own comment), so one tile fully represents what
+                  // is being voted on - showing every member here just repeats the same artwork
+                  // up to N times. Prefer a member with an art crop, the same signal a tile's own
+                  // image already prefers (renderCandidateTile's imageUrl default below), and fall
+                  // back to the first member so the same data always picks the same tile.
+                  const representative =
+                    group.find((candidate) => candidate.artCropUrl) ?? group[0];
+                  return (
+                    <IllustrationGroup
+                      key={group[0].illustrationId}
+                      data-testid="question-feed-illustration-group"
+                      data-illustration-id={group[0].illustrationId}
+                    >
+                      <IllustrationGroupLabel>
+                        Same illustration - {group.length} printings
+                      </IllustrationGroupLabel>
+                      {illustrationArtist != null && (
+                        <IllustrationCredit data-testid="question-feed-illustration-credit">
+                          <ArtistSupportLink artistName={illustrationArtist} />
+                        </IllustrationCredit>
+                      )}
+                      <CandidateGrid>
+                        {renderCandidateTile(
+                          representative,
+                          () =>
+                            // every member of `group` shares this non-null illustrationId - see
+                            // the grouping logic above, which only clusters candidates that have
+                            // one - so submitting the representative's illustrationId is
+                            // identical to submitting any other member's.
+                            selectIllustrationGroup(
+                              representative.illustrationId as string,
+                              representative
+                            ),
+                          false,
+                          representative.artCropUrl ||
+                            representative.mediumThumbnailUrl,
+                          // Only the illustration-crop image is landscape-shaped - the
+                          // mediumThumbnailUrl fallback above is still a full card scan, so it
+                          // keeps the card-ratio frame.
+                          representative.artCropUrl
+                            ? IllustrationArtPlaceholder
+                            : ArtPlaceholder
+                        )}
+                      </CandidateGrid>
+                    </IllustrationGroup>
+                  );
+                })}
+              </IllustrationGroupFlow>
+            )}
+            {ungroupedCandidates.length > 0 && (
+              <CandidateGrid data-testid="question-feed-candidate-grid-ungrouped">
+                {ungroupedCandidates.map((candidate) =>
+                  renderCandidateTile(candidate)
+                )}
+              </CandidateGrid>
+            )}
+          </CandidateWorkspace>
           {followUp === "no-match-reason" && (
             // Shape (c) - quick-negative (SPEC-wtc-rebuild.md's "negative wrapper"/"negative
             // header" rows) - danger-framed (WD7: visibly not a confirm), wrapping the
