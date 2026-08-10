@@ -9,6 +9,7 @@ import {
   findExclusionGroup,
   getAutoTagChips,
   getOpenExclusionGroups,
+  isBorderColorGroupDisqualified,
   isChipContradicted,
   nextChipState,
 } from "./attributeChips";
@@ -31,7 +32,14 @@ describe("findExclusionGroup", () => {
   });
 
   it("returns undefined for a standalone chip", () => {
-    expect(findExclusionGroup("Full Art")).toBeUndefined();
+    expect(findExclusionGroup("Etched")).toBeUndefined();
+  });
+
+  it("finds the frame-treatment group a frame-treatment chip belongs to", () => {
+    expect(findExclusionGroup("Full Art")?.id).toBe("frameTreatment");
+    expect(findExclusionGroup("Borderless")?.id).toBe("frameTreatment");
+    expect(findExclusionGroup("Showcase")?.id).toBe("frameTreatment");
+    expect(findExclusionGroup("Extended")?.id).toBe("frameTreatment");
   });
 });
 
@@ -122,9 +130,29 @@ describe("getOpenExclusionGroups", () => {
     expect(getOpenExclusionGroups(printingCandidate1)).toEqual([]);
   });
 
-  it("flags Border Color as open for a candidate outside black/white/silver", () => {
-    const openGroups = getOpenExclusionGroups(printingCandidate2);
+  // printingCandidate2 is fullArt=true/isBorderless=true with borderColor="borderless" (outside
+  // the Black/White/Silver taxonomy) - Border Color would read "open" by field value alone, but
+  // it's disqualified outright here: a Borderless/Full Art card has no border colour to be
+  // unknown about, so nothing is left open for this candidate at all.
+  it("is empty for a candidate whose border color falls outside the taxonomy but is disqualified by a frame treatment", () => {
+    expect(getOpenExclusionGroups(printingCandidate2)).toEqual([]);
+  });
+
+  it("flags Border Color as open for a candidate with no disqualifying frame treatment", () => {
+    const openGroups = getOpenExclusionGroups({
+      ...printingCandidate1,
+      borderColor: "gold",
+      isShowcase: true,
+    });
     expect(openGroups.map((group) => group.id)).toEqual(["borderColor"]);
+  });
+
+  it("never flags Frame Treatment as open - an ordinary card's four false booleans are a complete answer", () => {
+    const openGroups = getOpenExclusionGroups({
+      ...printingCandidate1,
+      borderColor: "gold",
+    });
+    expect(openGroups.map((group) => group.id)).not.toContain("frameTreatment");
   });
 });
 
@@ -161,9 +189,66 @@ describe("isChipContradicted", () => {
   });
 
   it("is false for standalone chips, which have no exclusion group", () => {
-    expect(isChipContradicted("Full Art", { "Full Art": "positive" })).toBe(
+    expect(isChipContradicted("Etched", { Etched: "positive" })).toBe(false);
+    expect(isChipContradicted("Etched", {})).toBe(false);
+  });
+});
+
+describe("isBorderColorGroupDisqualified", () => {
+  it("is true once Borderless is explicitly positive", () => {
+    expect(isBorderColorGroupDisqualified({ Borderless: "positive" })).toBe(
+      true
+    );
+  });
+
+  it("is true once Full Art is explicitly positive", () => {
+    expect(isBorderColorGroupDisqualified({ "Full Art": "positive" })).toBe(
+      true
+    );
+  });
+
+  it("is false for Extended Art or Showcase - both still have a border colour", () => {
+    expect(isBorderColorGroupDisqualified({ Extended: "positive" })).toBe(
       false
     );
-    expect(isChipContradicted("Full Art", {})).toBe(false);
+    expect(isBorderColorGroupDisqualified({ Showcase: "positive" })).toBe(
+      false
+    );
+  });
+
+  it("is false with nothing voted", () => {
+    expect(isBorderColorGroupDisqualified({})).toBe(false);
+  });
+});
+
+describe("isChipContradicted - Border Color gated by Frame Treatment", () => {
+  it("hides an untouched Border Color chip once Borderless is explicitly positive", () => {
+    expect(isChipContradicted("Black Border", { Borderless: "positive" })).toBe(
+      true
+    );
+  });
+
+  it("hides an untouched Border Color chip once Full Art is explicitly positive", () => {
+    expect(isChipContradicted("Black Border", { "Full Art": "positive" })).toBe(
+      true
+    );
+  });
+
+  it("leaves Border Color visible when Extended Art is explicitly positive", () => {
+    expect(isChipContradicted("Black Border", { Extended: "positive" })).toBe(
+      false
+    );
+  });
+
+  it("leaves Border Color visible when Showcase is explicitly positive", () => {
+    expect(isChipContradicted("Black Border", { Showcase: "positive" })).toBe(
+      false
+    );
+  });
+
+  it("still hides Full Art's own untouched Frame Treatment siblings, unaffected by the cross-group gate", () => {
+    expect(isChipContradicted("Borderless", { "Full Art": "positive" })).toBe(
+      true
+    );
   });
 });
