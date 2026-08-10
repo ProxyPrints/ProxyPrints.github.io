@@ -55,7 +55,8 @@ const ChipRing = styled.div`
     "top"
     "card"
     "left"
-    "right";
+    "right"
+    "bottom";
   grid-template-columns: minmax(0, 1fr);
   gap: 0.6rem;
   align-items: center;
@@ -65,7 +66,7 @@ const ChipRing = styled.div`
     grid-template-areas:
       ".    top   ."
       "left card  right"
-      ".    .     .";
+      ".    bottom .";
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-rows: auto auto auto;
   }
@@ -124,6 +125,10 @@ const LeftArea = styled.div`
 
 const RightArea = styled.div`
   grid-area: right;
+`;
+
+const BottomArea = styled.div`
+  grid-area: bottom;
 `;
 
 // position: relative so an absolutely-positioned burst rendered as part of `cardSlot` (see
@@ -216,7 +221,9 @@ export function AttributeChipPanel({
 
   // EXCLUSION_GROUPS[0] (Border Color) renders left, [1] (Frame Style) renders right - an
   // arbitrary but fixed assignment, not a semantic left/right meaning for either group.
-  const [leftGroup, rightGroup] = EXCLUSION_GROUPS;
+  // [2] (Frame Treatment) renders bottom, full width - it gates Border Color's own
+  // visibility (isChipContradicted), so it can't share a flanking column with it.
+  const [leftGroup, rightGroup, bottomGroup] = EXCLUSION_GROUPS;
   const isFlat = cardSlot == null;
 
   const legend = hasAttributeLean(confidence) && (
@@ -255,6 +262,16 @@ export function AttributeChipPanel({
       </ExclusionChipRow>
     </RightArea>
   );
+  const bottomArea = bottomGroup != null && (
+    <BottomArea>
+      <GroupHeading $flat={isFlat}>{bottomGroup.label}</GroupHeading>
+      <ExclusionChipRow $flat={isFlat}>
+        {visibleChips(bottomGroup.chips).map((chip) =>
+          renderAttributeChip(chipArgs, chip.tagName, chip.label)
+        )}
+      </ExclusionChipRow>
+    </BottomArea>
+  );
 
   if (cardSlot == null) {
     return (
@@ -265,6 +282,10 @@ export function AttributeChipPanel({
           {leftArea}
           {leftArea != null && rightArea != null && <GroupDivider />}
           {rightArea}
+          {(leftArea != null || rightArea != null) && bottomArea != null && (
+            <GroupDivider />
+          )}
+          {bottomArea}
         </FlatChipStack>
       </>
     );
@@ -278,6 +299,7 @@ export function AttributeChipPanel({
         {leftArea}
         <CardArea data-testid="attribute-chip-card-area">{cardSlot}</CardArea>
         {rightArea}
+        {bottomArea}
       </ChipRing>
     </>
   );

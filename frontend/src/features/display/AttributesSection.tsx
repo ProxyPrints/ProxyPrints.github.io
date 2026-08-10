@@ -139,7 +139,8 @@ export function AttributesSection({
     tap,
     getTagDisplayName,
   };
-  const [borderColorGroup, frameStyleGroup] = EXCLUSION_GROUPS;
+  const [borderColorGroup, frameStyleGroup, frameTreatmentGroup] =
+    EXCLUSION_GROUPS;
 
   return (
     <div data-testid="display-attributes-section">
@@ -167,8 +168,18 @@ export function AttributesSection({
       {frameStyleGroup != null && (
         <>
           <div className="text-muted small">{frameStyleGroup.label}</div>
-          <ChipRow>
+          <ChipRow className="mb-2">
             {frameStyleGroup.chips.map((chip) =>
+              renderAttributeChip(chipArgs, chip.tagName, chip.label)
+            )}
+          </ChipRow>
+        </>
+      )}
+      {frameTreatmentGroup != null && (
+        <>
+          <div className="text-muted small">{frameTreatmentGroup.label}</div>
+          <ChipRow>
+            {frameTreatmentGroup.chips.map((chip) =>
               renderAttributeChip(chipArgs, chip.tagName, chip.label)
             )}
           </ChipRow>
