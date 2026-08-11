@@ -43,6 +43,24 @@ re-ranking already uses, not a second one invented here) is scored, since each s
 costs several vote queries and a pool holds hundreds to thousands of entries
 (`settings.QUESTION_FEED_POOL_SIZE`). See `_iter_windowed_from_random_offset`'s own docstring.
 
+SAMPLE THE POPULATION, NOT THE HEAD (`_sample_across_pk_strata`) - the build side's own half of
+the same anti-convergence property the random-offset serve above exists for. A builder whose
+underlying query is `.order_by(<field>)[:limit]` (or an unbounded walk stopped at `limit`
+matches) reads the query's own HEAD - and cards imported in one batch share close pk values and
+`date_created` timestamps, so the head of any such ordering is one import batch, not a sample of
+the catalogue. Every builder below instead visits the WHOLE `Card` table's pk range in a handful
+of randomly-shuffled windows (`_shuffled_pk_strata`) and pulls a bounded chunk from each
+(`_sample_across_pk_strata`), so a warm draws from across every batch the lane's filter/exclude
+clauses admit, not just whichever batch happens to sort first. BOUNDED, not full-scan: cost is
+`_POOL_SAMPLE_STRATA * chunk_size` (a fixed, small multiple of `limit`) regardless of how many
+rows qualify - the review queue is 137k+ rows and growing, and a warm that scaled with it would
+reintroduce the exact request-path cost this module's own opening paragraph exists to avoid,
+just moved to a background job instead of a page view. The SQL ordering each builder cared about
+before (`-date_created` for the contested/cold lanes' tie-break, `-vote_count`/quick-negative for
+the cold lane's own printing ranking) is now applied to the SAMPLED rows only, after collection -
+the tie-break structure `_iter_windowed_from_random_offset` depends on still holds, only WHICH
+rows land in the pool changed, never their relative order once there.
+
 PER-LANE REFRESH CADENCE, NOT ONE GLOBAL INTERVAL. Lane 1 churns with every vote cast and wants
 minutes; lane 4 changes only as the pipeline extracts new evidence and tolerates hours. Each
 lane's warm cadence is its own settings-driven knob
@@ -94,7 +112,7 @@ from typing import Any, Iterator, NamedTuple, Optional
 
 from django.conf import settings
 from django.core.cache import InvalidCacheBackendError, caches
-from django.db.models import Case, Count, IntegerField, Value, When
+from django.db.models import Case, Count, IntegerField, Max, Min, Value, When
 
 from cardpicker.artist_consensus import get_contested_artist_card_ids
 from cardpicker.models import (
@@ -264,11 +282,90 @@ def _iter_by_kind_precedence(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
         yield from _iter_windowed_from_random_offset([entry for entry in entries if entry.kind == kind])
 
 
+# Number of contiguous windows the WHOLE `Card` table's pk range is partitioned into when a
+# pool builder needs to sample its qualifying population instead of taking its own head - see
+# "SAMPLE THE POPULATION, NOT THE HEAD" in the module docstring above. A fixed, small constant:
+# cost stays `_POOL_SAMPLE_STRATA * chunk_size` regardless of how many rows exist in the
+# catalogue.
+_POOL_SAMPLE_STRATA = 10
+
+
+def _pk_bounds() -> Optional[tuple[int, int]]:
+    """The whole `Card` table's pk range - two index-scan aggregates, O(1) regardless of
+    catalogue size. Used only to choose random windows to sample WITHIN below; each lane's own
+    filter/exclude clauses still apply inside every window, so a window with few or no
+    qualifying rows just yields fewer entries, never a wrong one. `None` when the table is
+    empty."""
+    bounds = Card.objects.aggregate(lo=Min("pk"), hi=Max("pk"))
+    if bounds["lo"] is None:
+        return None
+    return bounds["lo"], bounds["hi"]
+
+
+def _shuffled_pk_strata(pk_min: int, pk_max: int, strata: int = _POOL_SAMPLE_STRATA) -> list[tuple[int, int]]:
+    """`strata` contiguous, non-overlapping `[lo, hi)` windows spanning the whole `[pk_min,
+    pk_max]` range, freshly shuffled into random order on every call - so successive warms (and
+    the different builders within one warm) draw from a different sequence of windows rather
+    than the same fixed partition every time. Clamped to at most one window per pk when the
+    range is smaller than `strata`, so a tiny catalogue (as in tests) still gets full coverage
+    rather than empty windows."""
+    total = pk_max - pk_min + 1
+    strata = max(1, min(strata, total))
+    base_width, remainder = divmod(total, strata)
+    windows: list[tuple[int, int]] = []
+    lo = pk_min
+    for i in range(strata):
+        # First `remainder` windows absorb the one extra pk each, rather than a single
+        # oversized/undersized final window - so window count is exactly `strata`, never fewer
+        # from a plain ceil-division width silently under-covering the range (e.g. a width of
+        # `ceil(15 / 10) = 2` only spans 8 windows over a 15-pk range, not the target 10).
+        width = base_width + (1 if i < remainder else 0)
+        hi = lo + width
+        windows.append((lo, hi))
+        lo = hi
+    random.shuffle(windows)
+    return windows
+
+
+def _pool_sample_chunk_size(limit: int, strata: int = _POOL_SAMPLE_STRATA) -> int:
+    """Per-window row budget for `_sample_across_pk_strata`, sized to roughly double the even
+    split of `limit` across `strata` windows - so no single randomly-chosen window can satisfy a
+    whole pool on its own. Without this cap, one oversized import batch confined to a single
+    window could fill the entire pool before any other window is even visited, silently
+    defeating the "sample across batches" property this module exists to restore. At least
+    `strata // 2` distinct windows must contribute before `limit` is reached, even in that
+    adversarial case."""
+    return max(1, -(-limit // strata) * 2)
+
+
+def _sample_across_pk_strata(queryset: Any, chunk_size: int, strata: int = _POOL_SAMPLE_STRATA) -> Iterator[Any]:
+    """Bounded-cost replacement for consuming `queryset`'s own head (`.order_by(<field>)[:limit]`
+    or an unbounded walk stopped at the first `limit` matches) - both cluster on whichever import
+    batch happens to sort first, which is the defect this function exists to fix (see "SAMPLE THE
+    POPULATION, NOT THE HEAD" in the module docstring). Visits the whole `Card` table's pk range
+    in `strata` windows, shuffled into random order by `_shuffled_pk_strata`, and yields up to
+    `chunk_size` of `queryset`'s own rows (whatever `.values_list()`/model shape `queryset` was
+    already built with) from each window in turn, ordered by pk within the window.
+
+    Total rows touched is bounded by `strata * chunk_size` - proportional to the caller's own
+    chunk budget, never to the size of `queryset`'s underlying qualifying population; a caller
+    that stops consuming early (e.g. once it has collected its pool's `limit`) pays even less,
+    since unvisited windows are simply never queried. `queryset`'s own filter/exclude clauses are
+    untouched - only its windowing changes, never which rows qualify."""
+    bounds = _pk_bounds()
+    if bounds is None:
+        return
+    pk_min, pk_max = bounds
+    for lo, hi in _shuffled_pk_strata(pk_min, pk_max, strata):
+        yield from queryset.filter(pk__gte=lo, pk__lt=hi).order_by("pk")[:chunk_size]
+
+
 # ---------------------------------------------------------------------------------------------
-# Pool builders (warm-time only). Each mirrors its live tier function's own filter/exclude/order
+# Pool builders (warm-time only). Each mirrors its live tier function's own filter/exclude
 # clauses from `question_feed.py` - collecting up to `settings.QUESTION_FEED_POOL_SIZE` matches
-# per sub-kind instead of stopping at the first one, since this now runs once per warm cycle
-# instead of once per page view. Never applies per-voter exclusion (`answered_card_ids` and
+# per sub-kind, sampled across the qualifying population via `_sample_across_pk_strata` rather
+# than taken from the query's own head (see module docstring), since this now runs once per warm
+# cycle instead of once per page view. Never applies per-voter exclusion (`answered_card_ids` and
 # friends) - pools are shared, that's a read-time-only concern (see module docstring).
 # ---------------------------------------------------------------------------------------------
 
@@ -281,25 +378,23 @@ def _build_pool_resolution_imminent() -> list[PoolEntry]:
     from cardpicker.question_feed import is_likely_resolve_printing
 
     limit = settings.QUESTION_FEED_POOL_SIZE
-    entries: list[PoolEntry] = []
-    candidates = (
-        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, printing_tags__isnull=False)
-        .distinct()
-        .order_by("date_created")
-    )
-    for card in candidates.iterator():
+    candidates = Card.objects.filter(
+        printing_tag_status=PrintingTagStatus.UNRESOLVED, printing_tags__isnull=False
+    ).distinct()
+    matches: list[Card] = []
+    for card in _sample_across_pk_strata(candidates, chunk_size=_pool_sample_chunk_size(limit)):
         if is_likely_resolve_printing(card):
-            entries.append(PoolEntry(kind=KIND_PRINTING, card_id=card.pk))
-            if len(entries) >= limit:
+            matches.append(card)
+            if len(matches) >= limit:
                 break
-    return entries
+    matches.sort(key=lambda card: card.date_created)
+    return [PoolEntry(kind=KIND_PRINTING, card_id=card.pk) for card in matches]
 
 
 def _build_pool_confirm() -> list[PoolEntry]:
     from cardpicker.question_feed import _confirm_suggestion_item
 
     limit = settings.QUESTION_FEED_POOL_SIZE
-    entries: list[PoolEntry] = []
     candidates = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
@@ -307,14 +402,15 @@ def _build_pool_confirm() -> list[PoolEntry]:
         )
         .exclude(printing_tags__source__in=[VoteSource.USER, VoteSource.ADMIN, VoteSource.FEDERATED])
         .distinct()
-        .order_by("date_created")
     )
-    for card in candidates.iterator():
+    matches: list[Card] = []
+    for card in _sample_across_pk_strata(candidates, chunk_size=_pool_sample_chunk_size(limit)):
         if _confirm_suggestion_item(card) is not None:
-            entries.append(PoolEntry(kind=KIND_PRINTING, card_id=card.pk))
-            if len(entries) >= limit:
+            matches.append(card)
+            if len(matches) >= limit:
                 break
-    return entries
+    matches.sort(key=lambda card: card.date_created)
+    return [PoolEntry(kind=KIND_PRINTING, card_id=card.pk) for card in matches]
 
 
 def _build_pool_contested() -> list[PoolEntry]:
@@ -322,19 +418,27 @@ def _build_pool_contested() -> list[PoolEntry]:
     contested_card_ids = get_contested_card_ids()
     contested_artist_card_ids = get_contested_artist_card_ids()
 
-    printing_ids = (
-        Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=contested_card_ids)
-        .order_by("-date_created")
-        .values_list("pk", flat=True)[:limit]
-    )
-    entries: list[PoolEntry] = [PoolEntry(kind=KIND_PRINTING, card_id=card_id) for card_id in printing_ids]
+    printing_candidates = Card.objects.filter(
+        printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=contested_card_ids
+    ).values_list("pk", "date_created")
+    printing_rows: list[tuple[int, Any]] = []
+    for pk, date_created in _sample_across_pk_strata(printing_candidates, chunk_size=_pool_sample_chunk_size(limit)):
+        printing_rows.append((pk, date_created))
+        if len(printing_rows) >= limit:
+            break
+    printing_rows.sort(key=lambda row: row[1], reverse=True)
+    entries: list[PoolEntry] = [PoolEntry(kind=KIND_PRINTING, card_id=pk) for pk, _ in printing_rows]
 
-    artist_ids = (
-        Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=contested_artist_card_ids)
-        .order_by("-date_created")
-        .values_list("pk", flat=True)[:limit]
-    )
-    entries.extend(PoolEntry(kind=KIND_ARTIST, card_id=card_id) for card_id in artist_ids)
+    artist_candidates = Card.objects.filter(
+        artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=contested_artist_card_ids
+    ).values_list("pk", "date_created")
+    artist_rows: list[tuple[int, Any]] = []
+    for pk, date_created in _sample_across_pk_strata(artist_candidates, chunk_size=_pool_sample_chunk_size(limit)):
+        artist_rows.append((pk, date_created))
+        if len(artist_rows) >= limit:
+            break
+    artist_rows.sort(key=lambda row: row[1], reverse=True)
+    entries.extend(PoolEntry(kind=KIND_ARTIST, card_id=pk) for pk, _ in artist_rows)
 
     tag_count = 0
     for card_id, tag_name in get_tag_review_queue_pairs():
@@ -358,7 +462,7 @@ def _build_pool_cold() -> list[PoolEntry]:
     limit = settings.QUESTION_FEED_POOL_SIZE
     contested_card_ids = get_contested_card_ids()
 
-    printing_rows = (
+    printing_candidates = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=contested_card_ids)
         .annotate(vote_count=Count("printing_tags", distinct=True))
@@ -370,28 +474,42 @@ def _build_pool_cold() -> list[PoolEntry]:
                 output_field=IntegerField(),
             )
         )
-        .order_by("-vote_count", "is_quick_negative", "-date_created")
-        .values_list("pk", "origin_reason")[:limit]
+        .values_list("pk", "origin_reason", "vote_count", "is_quick_negative", "date_created")
     )
+    printing_rows: list[tuple[int, Any, int, int, Any]] = []
+    for row in _sample_across_pk_strata(printing_candidates, chunk_size=_pool_sample_chunk_size(limit)):
+        printing_rows.append(row)
+        if len(printing_rows) >= limit:
+            break
+    # Stable multi-pass sort reproduces `order_by("-vote_count", "is_quick_negative",
+    # "-date_created")` on the sampled rows: least significant key sorted first, most
+    # significant sorted last, relying on Python's sort stability to compose them.
+    printing_rows.sort(key=lambda row: row[4], reverse=True)
+    printing_rows.sort(key=lambda row: row[3])
+    printing_rows.sort(key=lambda row: row[2], reverse=True)
     entries: list[PoolEntry] = [
         PoolEntry(
             kind=KIND_PRINTING,
-            card_id=card_id,
+            card_id=pk,
             reason=(
                 "tier_4_quick_negative_to_review"
                 if origin_reason in QUICK_NEGATIVE_SKIP_REASONS
                 else "tier_4_fresh_printing"
             ),
         )
-        for card_id, origin_reason in printing_rows
+        for pk, origin_reason, _vote_count, _is_quick_negative, _date_created in printing_rows
     ]
 
-    artist_ids = (
-        Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
-        .order_by("-date_created")
-        .values_list("pk", flat=True)[:limit]
+    artist_candidates = Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED).values_list(
+        "pk", "date_created"
     )
-    entries.extend(PoolEntry(kind=KIND_ARTIST, card_id=card_id) for card_id in artist_ids)
+    artist_rows: list[tuple[int, Any]] = []
+    for pk, date_created in _sample_across_pk_strata(artist_candidates, chunk_size=_pool_sample_chunk_size(limit)):
+        artist_rows.append((pk, date_created))
+        if len(artist_rows) >= limit:
+            break
+    artist_rows.sort(key=lambda row: row[1], reverse=True)
+    entries.extend(PoolEntry(kind=KIND_ARTIST, card_id=pk) for pk, _ in artist_rows)
 
     tag_count = 0
     for card_id, tag_name in get_tag_review_queue_pairs():
