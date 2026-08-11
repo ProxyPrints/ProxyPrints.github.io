@@ -85,6 +85,7 @@ import {
   getAutoTagChips,
   getOpenExclusionGroups,
 } from "@/features/attributeChips/attributeChips";
+import { BorderColorQuestion } from "@/features/attributeChips/BorderColorQuestion";
 import { ArtistVotePicker } from "@/features/attributeVoting/ArtistVotePicker";
 import {
   NO_MATCH_REASON_TAG_GROUPS,
@@ -2142,6 +2143,27 @@ export function QuestionFeed() {
               }}
               onRateLimited={() => setRateLimited(true)}
             />
+          </>
+        )}
+        {item.type === "border" && (
+          <>
+            <QHead>
+              <ShapePill className="pick">border</ShapePill>
+              <Prompt>Which border colour is this?</Prompt>
+            </QHead>
+            <BorderColorQuestion
+              backendURL={backendURL}
+              cardIdentifier={item.card.identifier}
+              tagConfidence={item.tagConfidence ?? {}}
+              chipStates={chipStates}
+              onChipStatesChange={setChipStates}
+              onRateLimited={() => setRateLimited(true)}
+            />
+            <ActionRow>
+              <Btn className="ghost" onClick={abstainAndAdvance}>
+                Skip
+              </Btn>
+            </ActionRow>
           </>
         )}
       </>

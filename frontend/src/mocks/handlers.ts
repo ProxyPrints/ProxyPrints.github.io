@@ -1816,6 +1816,29 @@ export const questionFeedTag = http.get(buildRoute("2/questionFeed/"), () =>
   )
 );
 
+// The border question type's answer surface is the BORDER_COLOR_GROUP chips (see
+// BorderColorQuestion.tsx) - the mock seeds tagConfidence for exactly those four tags the
+// way the backend _border_item builder does (question_feed.py), so the chips render with a
+// realistic lean the moment the question lands.
+export const questionFeedBorder = http.get(buildRoute("2/questionFeed/"), () =>
+  HttpResponse.json(
+    {
+      item: {
+        type: "border",
+        card: cardDocument9,
+        tagConfidence: {
+          "Black Border": 0.8,
+          "White Border": 0,
+          "Silver Border": 0,
+          Borderless: 0,
+        },
+      },
+      remainingEstimate: questionFeedCounts({ total: 1, fresh: 1 }),
+    },
+    { status: 200 }
+  )
+);
+
 export const questionFeedCaughtUp = http.get(
   buildRoute("2/questionFeed/"),
   () =>
