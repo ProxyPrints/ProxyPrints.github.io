@@ -1801,6 +1801,15 @@ class FallbackVerdict:
     detail: str = ""
     skip_reason: str = ""
     evidence_types_used: tuple[str, ...] = ()
+    # The `survivors` set this calculator's own border/artist/symbol intersection already
+    # computed to pick `skip_reason` above - never re-derived, just carried out of the function
+    # instead of discarded. Only ever set alongside a skip (`printing_pk` is None): on a match
+    # `survivors` is the single winning pk, already exposed via `printing_pk` itself, so this
+    # stays `None` there. `None` (not `()`) also for the pre-`calculate_fallback_verdict`
+    # `FALLBACK_NO_EVIDENCE_SKIP_REASON` skip (evidence is missing, so `run_fallback_calculator`
+    # never resolves `candidates`, let alone `survivors`, for that row) - the caller distinguishes
+    # "no evidence to compute from" from "computed, sub-checks eliminated to N".
+    survivor_pks: Optional[tuple[int, ...]] = None
 
 
 def _filter_by_symbol_phash(symbol_phash: Optional[int], candidates: list[CandidatePrinting]) -> Optional[set[int]]:
@@ -1906,14 +1915,24 @@ def calculate_fallback_verdict(
             evidence_types_used.append(name)
 
     if not evidence_types_used:
-        return FallbackVerdict(card_id=card_id, skip_reason=FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON)
+        return FallbackVerdict(
+            card_id=card_id,
+            skip_reason=FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
+            survivor_pks=tuple(sorted(survivors)),
+        )
     if len(survivors) == 0:
         return FallbackVerdict(
-            card_id=card_id, skip_reason=FALLBACK_ELIMINATED_SKIP_REASON, evidence_types_used=tuple(evidence_types_used)
+            card_id=card_id,
+            skip_reason=FALLBACK_ELIMINATED_SKIP_REASON,
+            evidence_types_used=tuple(evidence_types_used),
+            survivor_pks=(),
         )
     if len(survivors) > 1:
         return FallbackVerdict(
-            card_id=card_id, skip_reason=FALLBACK_AMBIGUOUS_SKIP_REASON, evidence_types_used=tuple(evidence_types_used)
+            card_id=card_id,
+            skip_reason=FALLBACK_AMBIGUOUS_SKIP_REASON,
+            evidence_types_used=tuple(evidence_types_used),
+            survivor_pks=tuple(sorted(survivors)),
         )
 
     confidence = (
@@ -2110,6 +2129,8 @@ def run_fallback_calculator(
                         anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
                         run_id=run_id,
                         skip_reason=verdict.skip_reason,
+                        evidence_types_used=list(verdict.evidence_types_used),
+                        survivor_pks=list(verdict.survivor_pks) if verdict.survivor_pks is not None else None,
                     )
                 )
             continue
