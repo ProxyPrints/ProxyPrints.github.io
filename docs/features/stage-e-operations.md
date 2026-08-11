@@ -2135,6 +2135,74 @@ guarantees the stale row is gone rather than merely superseded, and it is still
 required whenever the stale row must stop counting toward consensus
 immediately.
 
+## `backfill_survivor_pks` — reaching the historical fallback-channel corpus (2026-08-11)
+
+`MPCAutofill/cardpicker/management/commands/backfill_survivor_pks.py` re-dispatches
+`stage-d-fallback-v1` `CardScanLog` rows that predate PR #764 (the fix that made
+`run_fallback_calculator` persist `evidence_types_used`/`survivor_pks` onto every row it writes)
+through the SAME streaming conveyor `stream_full_catalog.py` uses
+(`cardpicker.stage_e_dispatch.dispatch_micro_batch`), so the fields land on the affected corpus
+rather than staying `[]`/`NULL` forever.
+
+### Why re-dispatching is safe rather than a second calculator
+
+The command computes nothing. It picks a cohort and drives it through the existing conveyor;
+`dispatch_micro_batch` calls `_run_stage_d`, which calls the unchanged `run_fallback_calculator`,
+which recomputes `calculate_fallback_verdict` off the card's own already-persisted `ImageEvidence`
+exactly as every other Stage D pass does.
+
+Re-running Stage D under a fresh `run_id` does not re-cast or corrupt any existing vote, for a
+reason established by reading `local_calculate_verdicts._eligible_cards_queryset` rather than
+assumed: a fresh `run_id` only self-suppresses that run's own output, never an earlier run's, so
+every card in the cohort is eligible again. Two things follow:
+
+- A card whose prior fallback pass reached a SKIP (the only rows this command targets — a skip
+  never casts a `CardPrintingTag`) gets a NEW `CardScanLog` row under the new `run_id`, this time
+  carrying both fields. The OLD, field-less row is left exactly where it is — `CardScanLog` is an
+  append-only audit trail by design, never updated or deduplicated in place — which is harmless:
+  every reader of these two fields wants the current/latest row for a card.
+- A card whose prior fallback pass reached a MATCH is safe from a double-cast because the evidence
+  feeding the verdict is unchanged (this command never re-extracts): the recomputed verdict is
+  identical to the stored one, and `_split_new_printing_tag_votes` skips — counts as
+  `already_voted`, never purges or rewrites — a proposed vote that already matches what is stored.
+  No card in this command's own cohort exercises this path (it only selects skip-reason rows), but
+  it is the reasoning that makes the re-dispatch safe for Stage D in general.
+
+### Cohort
+
+Every `Card` carrying a `stage-d-fallback-v1` `CardScanLog` row whose `skip_reason` is one
+`calculate_fallback_verdict` can reach WITH a computed survivor set
+(`no-sub-check-evidence`/`eliminated`/`ambiguous` — never `no-evidence`, which never reaches that
+function and correctly stays `survivor_pks=None` forever) and whose `survivor_pks` is still
+`NULL`, excluding any card that already carries some OTHER row for that anonymous_id with
+`survivor_pks` populated. That exclusion is self-terminating: the moment a batch backfills a card,
+it drops out of the very next cohort query, so the pass runs to genuine exhaustion.
+
+No stage-0 Scryfall freshness gate — unlike `stream_full_catalog`/`run_pipeline`, this command
+never re-extracts evidence, so it has no dependency on reference-data freshness. `dispatch_micro_batch`
+still runs Stage C first exactly as every other dispatch does; its own already-done manifest check
+makes that a no-op for the ~99.99% of the cohort with current evidence.
+
+### Resume, stop conditions, exit codes
+
+Reuses `cardpicker.models.StageEFullCatalogCursor` — the SAME resume model `stream_full_catalog`
+uses — under its own scope key (`RESUME_SCOPE = "survivor-backfill"`), never shared with that
+command's own scopes. The stop-condition and exit-code contract (envelope halt → exit 3, no retry
+ever; concurrency-cap throttle → bounded exponential backoff, budget exhaustion → exit 4; genuine
+cohort exhaustion → exit 0) is imported from `stream_full_catalog`, not redeclared, so the two can
+never drift apart. `--dry-run` is a real pass that walks and sizes the cohort and reports the plan
+without dispatching a single batch or touching the resume mark.
+
+### Running it
+
+```
+python manage.py backfill_survivor_pks --dry-run
+python manage.py backfill_survivor_pks --batch-size auto
+```
+
+Only the owner triggers a real (non-dry-run) invocation against production, after this lands and
+is deployed — resumable with a bare re-invocation, or `--start-pk <resume_pk>` to reset the mark.
+
 ## `channel_report` — what every channel produced, after a run
 
 `manage.py channel_report` answers one question for one run: **what did
