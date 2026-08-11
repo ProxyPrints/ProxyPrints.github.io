@@ -37,6 +37,7 @@ from cardpicker.question_feed_pools import (
     SHARED_CACHE_ALIAS,
     PoolEntry,
     _cache_key,
+    _get_cached_pool,
     draw_cold_entry,
     draw_confirm_card,
     draw_contested_entry,
@@ -229,6 +230,43 @@ class TestWarmPoolCacheValidation:
         first = warm_pool_cache(LANE_RESOLUTION_IMMINENT)
         second = warm_pool_cache(LANE_RESOLUTION_IMMINENT)
         assert first == second == 1
+
+
+class TestNoInlineBuildOnCacheMiss:
+    """A cache miss (never warmed, evicted, or the `"shared"` backend unavailable) must mean
+    "no supply for this request", never trigger a live pool build - the exact Parallel Seq Scan
+    (issue #726/#727) pooling exists to move off the request path."""
+
+    def test_get_cached_pool_returns_none_without_calling_any_builder(self, db):
+        make_one_vote_from_resolving_card()  # real data a builder WOULD find, if ever called
+        with patch("cardpicker.question_feed_pools._build_pool_resolution_imminent") as mock_build:
+            assert _get_cached_pool(LANE_RESOLUTION_IMMINENT) is None
+            mock_build.assert_not_called()
+
+    def test_draw_confirm_card_never_builds_inline_on_a_cold_cache(self, db):
+        make_ai_suggested_card()  # a real confirm-lane candidate, never warmed
+        with patch("cardpicker.question_feed_pools._build_pool_confirm") as mock_build:
+            assert draw_confirm_card(answered_card_ids=set()) is None
+            mock_build.assert_not_called()
+
+
+class TestBoundedPerServeScoring:
+    """A draw must score at most `question_feed._CANDIDATE_SCORING_WINDOW` candidates - each
+    score costs several vote queries (issue #716), and a pool holds up to
+    `settings.QUESTION_FEED_POOL_SIZE` entries per lane, so scoring every entry on every serve
+    reintroduces per-request cost pooling exists to avoid paying."""
+
+    def test_scores_at_most_the_configured_window_per_draw(self, db):
+        from cardpicker.question_feed import _CANDIDATE_SCORING_WINDOW
+
+        for _ in range(_CANDIDATE_SCORING_WINDOW + 20):
+            CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
+        warm_pool_cache(LANE_COLD)
+
+        with patch("cardpicker.question_feed._question_information_gain_score", return_value=0.0) as mock_score:
+            draw_cold_entry("anon-1", set(), set(), contested_card_ids=[])
+
+        assert mock_score.call_count <= _CANDIDATE_SCORING_WINDOW
 
 
 class TestDrawResolutionImminentCard:

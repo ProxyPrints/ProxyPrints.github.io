@@ -2,18 +2,25 @@
 Backs `GET 2/questionFeed/` - the unified single-question feed that replaces the three
 printing/artist/tag tabs (see docs/features/printing-tags.md's questionFeed section and
 journal/2026-07-14-queue-question-feed-design.md for the full design writeup this
-implements). The ranked union is three fixed-order tiers with the first non-empty tier
-winning and no cross-tier scoring/ML, on top of which this module adds two SELECTION-layer
-policies: the served-mix composition policy (2026-07-24, see "Mix composition policy" below)
-and the within-tier information-gain re-ranking of each tier's own candidates (2026-08-09,
-see "Information-gain question scoring" below). Neither changes how any tier's candidate set
-is built or how votes are resolved - they change only WHICH candidate a tier serves.
+implements). The ranked union is three remainder tiers with the first tier with supply winning
+and no cross-tier scoring/ML, on top of which this module adds three SELECTION-layer policies:
+the served-mix composition policy (2026-07-24, see "Mix composition policy" below), the
+remainder-lane rotation policy (2026-08-10, see "Remainder mix policy" below), and the
+within-tier information-gain re-ranking of each tier's own candidates (2026-08-09, see
+"Information-gain question scoring" below). None of these changes how any tier's candidate set
+is built or how votes are resolved - they change only WHICH candidate, and which tier, is served.
 
-Tier 1 (confirm_suggestion) is large relative to the others at current volume (28,112 cards
-- the full machine deductive-vote backfill, confirmed via a live query during design) - a voter
-working only this feed will not reach tiers 2-3 until tier 1 is exhausted. Flagged as a known
-v1 property, not silently accepted - see the design doc's "Starvation risk" section for the
-concrete consequence and the planned v2 fix (interleaved/weighted union, out of scope here).
+Tier 1 (confirm_suggestion) is large relative to the others at current volume (28,112 cards -
+the full machine deductive-vote backfill, confirmed via a live query during design) against the
+contested/cold tiers' `settings.QUESTION_FEED_POOL_SIZE`-capped (500) pools: a voter working only
+this feed used to not reach tiers 2-3 until tier 1 was exhausted, flagged as a known v1 property
+in the original design doc's "Starvation risk" section rather than silently accepted. The
+materialised candidate pools (issue #727, see "Materialised candidate pools" below) made this
+starvation total rather than merely likely - a fixed confirm-then-contested-then-cold order over
+a 500-entry contested/cold pool against a 28k-card confirm supply meant tiers 2/3 were
+functionally unreachable, not just slow to reach - so the design doc's originally-deferred v2 fix
+(a weighted rotation across the remainder lanes) is implemented now rather than deferred further;
+see "Remainder mix policy" below.
 
 Moderator report review used to be a fourth tier here (pending_approval pairs, moderator-only,
 ranked between tiers 2 and 3-formerly-4) but that made every pending report displace the
@@ -43,6 +50,22 @@ recorded in `QuestionFeedServedLog` - the bias-conditioning record the data brie
 NOTE calls for, so a future audit can correlate click behavior against a session's
 easy-question exposure. See `_served_mix_ratio`/`_log_served` below.
 
+Remainder mix policy (2026-08-10): within the remainder (confirm/contested/cold), which lane is
+tried FIRST is no longer a fixed confirm -> contested -> cold order - it rotates per request
+toward whichever of the three is currently furthest below its own target share of
+`settings.QUESTION_FEED_CONFIRM_MIX_WEIGHT`/`_CONTESTED_MIX_WEIGHT`/`_COLD_MIX_WEIGHT` (relative
+weights, not required to sum to any particular total - see `_remainder_lane_order`). Exists
+because the fixed order, against the materialised pools' very different per-lane supply (28k+
+confirm candidates vs. 500-capped contested/cold pools - see this module's own opening
+paragraph), meant a voter would have to personally exhaust the entire confirm pool via their own
+exclusion set before a contested or cold (identify_printing/artist/tag) question could ever reach
+them - the "Starvation risk" this module's docstring already flagged, but total rather than
+merely likely once pools replaced the live per-tier queries. SELECTION-LAYER only, same as the
+mix-composition policy above: it decides WHICH remainder lane is consulted first for a given
+request, never what any lane's own candidate set is or how a vote resolves. Falls through
+honestly whenever the chosen lane has no supply for this voter - see `_remainder_lane_order`'s
+own docstring for the full mechanism and `get_next_question_feed_item`'s loop below.
+
 Information-gain selection within the remainder tiers (issue #716, 2026-08-09): where each
 tier used to serve the first candidate of a fixed queryset, the tiers now score their
 candidates by expected information gain - the entropy of the existing vote distribution across
@@ -68,15 +91,23 @@ whose group is itself alone, which - until that issue's PR-1 populates `Card.md5
 every card in the catalogue. The artist and tag tiers are untouched by this: identity grouping
 is a statement about the IMAGE FILE, and those questions are already keyed differently.
 
-Materialised candidate pools (issue #727): `get_next_question_feed_item` now tries a
-`question_feed_pools.draw_*` call before each of the likely-resolve pool / tier 1 / tier 2 /
-tier 4 branches below, falling back to that branch's own (unchanged) live query whenever the
-pool draw returns `None` - a cache miss (never warmed, or the `"shared"` backend isn't
-configured) or this voter's exclusion/staleness filtering exhausting every entry. See
-`question_feed_pools`'s own module docstring for the full architecture (why pools are shared not
-per-voter, the random-offset serve, per-lane warm cadence, and the staleness/precedence
-reasoning) - this module still owns every tier's SELECTION semantics and every served item's
-construction; the pools only supply candidate ids faster than a live scan would.
+Materialised candidate pools (issue #727): `get_next_question_feed_item` tries a
+`question_feed_pools.draw_*` call for each of its likely-resolve pool / confirm / contested / cold
+branches - likely-resolve always first, the remaining three in whichever order the "Remainder mix
+policy" above picks for this request - and pools are the SOLE serving mechanism on this request
+path - a pool draw returning `None` (a cache miss: never warmed, evicted, or the
+`"shared"` backend isn't configured; or this voter's exclusion/staleness filtering exhausting
+every entry) means that lane has no supply for this request, and the waterfall simply moves on
+to the next lane. The request path never builds a pool inline and never falls back to a live
+scan of a tier's own query - see `question_feed_pools`'s own module docstring for why (the cost
+that would reintroduce). The `_tier_1_confirm_suggestion`/`_tier_2_contested`/`_tier_4_fresh`/
+`_likely_resolve_printing_card` functions below still define each lane's SELECTION semantics
+and item construction (`warm_pool_cache`'s builders mirror their filter/exclude/order clauses)
+and remain directly callable/tested in isolation, but `get_next_question_feed_item` itself never
+calls them - if every lane misses, the feed honestly returns `None` rather than paying for a
+live build. See `question_feed_pools`'s own module docstring for the full pool architecture (why
+pools are shared not per-voter, the bounded-and-randomised serve, per-lane warm cadence, and the
+staleness/precedence reasoning).
 """
 
 import hashlib
@@ -980,6 +1011,85 @@ def _served_mix_ratio(anonymous_id: str) -> float:
     return likely_resolve_count / total
 
 
+# Prefix of `QuestionFeedServedLog.origin_reason` written by each remainder lane's own served
+# items (`_log_served`'s call sites below) - `_remainder_served_counts` reads these back to
+# reconstruct each lane's own share of a session's remainder history without a new column, since
+# every remainder-served row already carries exactly one of these three prefixes today.
+_REMAINDER_LANE_ORIGIN_PREFIXES: dict[str, str] = {
+    question_feed_pools.LANE_CONFIRM: "tier_1_",
+    question_feed_pools.LANE_CONTESTED: "tier_2_",
+    question_feed_pools.LANE_COLD: "tier_4_",
+}
+
+
+def _remainder_served_counts(anonymous_id: str) -> dict[str, int]:
+    """This session's own `QuestionFeedServedLog` history, broken down by which remainder lane
+    (`question_feed_pools.LANE_CONFIRM`/`LANE_CONTESTED`/`LANE_COLD`) served each row - read from
+    `origin_reason`'s existing `tier_1_`/`tier_2_`/`tier_4_` prefix convention
+    (`_REMAINDER_LANE_ORIGIN_PREFIXES`), so no schema change is needed to derive it. Feeds
+    `_remainder_lane_order`'s proportional-fairness ranking. Scoped to `pool=REMAINDER` only -
+    the likely-resolve pool's own share is `_served_mix_ratio`'s separate concern."""
+    rows = QuestionFeedServedLog.objects.filter(
+        anonymous_id=anonymous_id, pool=QuestionFeedServedPool.REMAINDER
+    ).values_list("origin_reason", flat=True)
+    counts = dict.fromkeys(_REMAINDER_LANE_ORIGIN_PREFIXES, 0)
+    for origin_reason in rows:
+        for lane, prefix in _REMAINDER_LANE_ORIGIN_PREFIXES.items():
+            if origin_reason.startswith(prefix):
+                counts[lane] += 1
+                break
+    return counts
+
+
+def _remainder_lane_order(anonymous_id: str) -> list[str]:
+    """
+    Ranks the three remainder lanes (confirm/contested/cold) most-under-served-first, relative to
+    each lane's own target share of `settings.QUESTION_FEED_CONFIRM_MIX_WEIGHT`/
+    `_CONTESTED_MIX_WEIGHT`/`_COLD_MIX_WEIGHT` - the same proportional-fairness idea
+    `_served_mix_ratio` already applies one level up (likely-resolve vs. the remainder as a
+    whole), generalised to split the remainder itself three ways.
+
+    Why this exists: `get_next_question_feed_item` used to try confirm, then contested, then cold
+    in that FIXED order every request - a strict first-hit-wins waterfall with no rotation. Tier 1
+    (confirm_suggestion) is large relative to the others at current volume (this module's own
+    docstring: 28,112 cards, the full machine deductive-vote backfill) while the contested/cold
+    pools cap at `settings.QUESTION_FEED_POOL_SIZE` (500) each - so a voter working only this feed
+    would have to personally exhaust the entire confirm supply via their own exclusion set before
+    tier 2 or tier 4 could ever be reached, even though real identify_printing/artist/tag
+    questions were sitting in those pools the whole time. This was flagged as a known, deferred v1
+    property in this module's own docstring ("Starvation risk" - see the top of this file) but the
+    materialised pools (issue #727) made the effective supply gap far more severe than it was
+    against the old live per-tier queries, so it is fixed here rather than deferred further.
+
+    Returns all three lane names in try-order; the caller draws from each in turn, honestly moving
+    on to the next-most-underserved lane whenever the current one has no supply for this voter
+    (a cache miss or this voter's own exclusion exhausting it), so a starved single lane can never
+    block or stall the others - the WATERFALL property `question_feed_pools`'s own module
+    docstring documents is unchanged, only which lane goes first each request is now dynamic.
+
+    A session with no remainder history yet (every count 0) ranks lanes by weight alone, largest
+    first - `QUESTION_FEED_CONFIRM_MIX_WEIGHT` defaults highest, so a fresh session's first
+    remainder-tier question is still a confirm_suggestion where one exists, same as before this
+    change for the common case; the rotation only becomes visible once a session's own history
+    diverges from the target mix.
+    """
+    weights = {
+        question_feed_pools.LANE_CONFIRM: settings.QUESTION_FEED_CONFIRM_MIX_WEIGHT,
+        question_feed_pools.LANE_CONTESTED: settings.QUESTION_FEED_CONTESTED_MIX_WEIGHT,
+        question_feed_pools.LANE_COLD: settings.QUESTION_FEED_COLD_MIX_WEIGHT,
+    }
+    weight_total = sum(weights.values())
+    counts = _remainder_served_counts(anonymous_id)
+    served_total = sum(counts.values())
+
+    def _deficit(lane: str) -> float:
+        target_share = weights[lane] / weight_total
+        actual_share = (counts[lane] / served_total) if served_total > 0 else 0.0
+        return target_share - actual_share
+
+    return sorted(weights, key=_deficit, reverse=True)
+
+
 def _log_served(anonymous_id: str, item: QuestionFeedItem, pool: str, origin_reason: str) -> QuestionFeedItem:
     """Records one served-question row (see `QuestionFeedServedLog`'s own docstring for why -
     the data brief's SOUNDNESS NOTE bias-conditioning record) and returns `item` unchanged, so
@@ -1055,13 +1165,16 @@ def get_next_question_feed_item(
     below `settings.QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO` AND the likely-resolve pool still
     has supply for this voter, that pool is served first - otherwise (ratio already at/above
     target, or the pool has no supply for this voter right now) this falls through to the
-    three-tier ranked union (tier 1 -> tier 2 -> tier 4, first non-empty tier wins), where each
-    tier now re-ranks its bounded candidate window by information-gain score (issue #716 - see
-    the "Information-gain question scoring" section below; tier 4 keeps its own quick-negative
-    tiebreak, see its docstring). This never infinite-loops or blocks on a starved pool - each
-    branch is a single bounded query/scan, and an exhausted likely-resolve pool simply falls
-    through to the remainder every time, letting the session's ratio drop honestly rather than
-    stalling to protect it.
+    three remainder lanes (confirm/contested/cold), tried in the order `_remainder_lane_order`
+    picks for this session (most-under-served-relative-to-target first - see that function's own
+    docstring for why a fixed confirm-then-contested-then-cold order starved the latter two),
+    first lane with supply wins. Each lane's own bounded candidate window is re-ranked by
+    information-gain score before being drawn from (issue #716 - see the "Information-gain
+    question scoring" section below; the cold lane keeps its own quick-negative tiebreak, see its
+    docstring). This never infinite-loops or blocks on a starved pool - each branch is a single
+    bounded query/scan, and an exhausted lane simply moves on to the next in the order, letting
+    both the likely-resolve ratio and the per-lane remainder mix drop honestly rather than
+    stalling to protect either.
 
     The voter's answered-card exclusion set (`_voter_answered_printing_card_ids`, md5-group-
     expanded per issue #473) is resolved ONCE here and passed to every printing tier below - it
@@ -1109,37 +1222,42 @@ def get_next_question_feed_item(
                 anonymous_id, item, QuestionFeedServedPool.LIKELY_RESOLVE, "printing_one_vote_from_resolving"
             )
 
-    tier_1_card = question_feed_pools.draw_confirm_card(answered_card_ids, hidden_card_ids=hidden_card_ids)
-    if tier_1_card is not None:
-        tier_1_item = _confirm_suggestion_item(tier_1_card)
-        if tier_1_item is not None:
-            return _log_served(anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion")
-
-    if contested_card_ids is None:
-        contested_card_ids = get_contested_card_ids()
-    get_contested_artist_card_ids()
-
-    tier_2_result = _pool_contested_result(
-        answered_card_ids,
-        answered_artist_card_ids,
-        answered_tag_card_ids_by_tag,
-        not_official_art_card_ids,
-        hidden_card_ids=hidden_card_ids,
-    )
-    if tier_2_result is not None:
-        tier_2_item, tier_2_reason = tier_2_result
-        return _log_served(anonymous_id, tier_2_item, QuestionFeedServedPool.REMAINDER, tier_2_reason)
-
-    tier_4_result = _pool_cold_result(
-        anonymous_id,
-        answered_card_ids,
-        not_official_art_card_ids,
-        contested_card_ids,
-        hidden_card_ids=hidden_card_ids,
-    )
-    if tier_4_result is not None:
-        tier_4_item, tier_4_reason = tier_4_result
-        return _log_served(anonymous_id, tier_4_item, QuestionFeedServedPool.REMAINDER, tier_4_reason)
+    for lane in _remainder_lane_order(anonymous_id):
+        if lane == question_feed_pools.LANE_CONFIRM:
+            tier_1_card = question_feed_pools.draw_confirm_card(answered_card_ids, hidden_card_ids=hidden_card_ids)
+            if tier_1_card is not None:
+                tier_1_item = _confirm_suggestion_item(tier_1_card)
+                if tier_1_item is not None:
+                    return _log_served(
+                        anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion"
+                    )
+        elif lane == question_feed_pools.LANE_CONTESTED:
+            if contested_card_ids is None:
+                contested_card_ids = get_contested_card_ids()
+            get_contested_artist_card_ids()
+            tier_2_result = _pool_contested_result(
+                answered_card_ids,
+                answered_artist_card_ids,
+                answered_tag_card_ids_by_tag,
+                not_official_art_card_ids,
+                hidden_card_ids=hidden_card_ids,
+            )
+            if tier_2_result is not None:
+                tier_2_item, tier_2_reason = tier_2_result
+                return _log_served(anonymous_id, tier_2_item, QuestionFeedServedPool.REMAINDER, tier_2_reason)
+        else:
+            if contested_card_ids is None:
+                contested_card_ids = get_contested_card_ids()
+            tier_4_result = _pool_cold_result(
+                anonymous_id,
+                answered_card_ids,
+                not_official_art_card_ids,
+                contested_card_ids,
+                hidden_card_ids=hidden_card_ids,
+            )
+            if tier_4_result is not None:
+                tier_4_item, tier_4_reason = tier_4_result
+                return _log_served(anonymous_id, tier_4_item, QuestionFeedServedPool.REMAINDER, tier_4_reason)
 
     return None
 
