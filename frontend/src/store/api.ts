@@ -78,6 +78,7 @@ import {
   SaveDeckRequest,
   SaveDeckResponse,
   SourcesResponse,
+  SubmitIllustrationRejectionResponse,
   SubmitIllustrationVoteResponse,
   SubmitQuestionAbstentionResponse,
   Tag,
@@ -761,6 +762,42 @@ export async function APISubmitIllustrationVote(
       return content as SubmitIllustrationVoteResponse;
     }
     // `status` lets the UI distinguish the rate-limit case (429) for a friendlier message
+    throw {
+      name: content.name,
+      message: content.message,
+      status: rawResponse.status,
+    };
+  });
+}
+
+// "Not this art" - the negative counterpart to APISubmitIllustrationVote. Always sends a
+// concrete illustrationId (never isUnknown) and gets back no printing/artist channel report -
+// see SubmitIllustrationRejectionResponse's own comment for why.
+export async function APISubmitIllustrationRejection(
+  backendURL: string,
+  identifier: string,
+  anonymousId: string,
+  illustrationId: string,
+  voteSurface?: string
+): Promise<SubmitIllustrationRejectionResponse> {
+  const rawResponse = await fetch(
+    formatURL(backendURL, "/2/submitIllustrationRejection/"),
+    {
+      method: "POST",
+      body: JSON.stringify({
+        identifier,
+        anonymousId,
+        illustrationId,
+        voteSurface,
+      }),
+      credentials: "same-origin",
+      headers: getCSRFHeader(),
+    }
+  );
+  return rawResponse.json().then((content) => {
+    if (rawResponse.status === 200 && content.illustrationId != null) {
+      return content as SubmitIllustrationRejectionResponse;
+    }
     throw {
       name: content.name,
       message: content.message,

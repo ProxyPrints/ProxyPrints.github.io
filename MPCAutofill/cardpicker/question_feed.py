@@ -292,23 +292,43 @@ def _tag_confidence(card: Card) -> dict[str, float]:
 
 
 def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
-    # "Not this art" (docs/features/wtc-question-model.md §7.1) closes the loop here: a
-    # suggestion whose artwork the group has already reached ELIMINATION CONSENSUS on
-    # (`illustration_consensus.eliminated_illustration_ids`) must not be re-served as a NEW
-    # confirm_suggestion question to a DIFFERENT voter - that would ask the same rejected
-    # question again, which is exactly the "discards usable evidence" failure this whole feature
-    # exists to close. `eliminated_illustration_ids(card)` is a single group-scoped query,
-    # computed lazily (only once a candidate with a non-null illustration_id is actually seen)
-    # so a card with no AI votes at all, or whose sole AI vote has no illustration metadata,
-    # pays nothing for it - same "pay only when needed" convention as every other lazy index in
-    # this pipeline.
-    eliminated_ids: Optional[set[uuid.UUID]] = None
-    ai_vote = None
-    ai_votes = (
+    # Two independent gates compose here, in the order that keeps the expensive read lazy.
+    #
+    # 1. The EVIDENCE GATE (#775, `_evidence_justifies_confirmation` below): a CARD-level
+    #    property - does `card`'s own recorded `CardScanLog.evidence_types_used` cover every
+    #    type the pipeline can record? Decides whether a printing confirmation may be offered
+    #    for this card AT ALL.
+    # 2. ELIMINATION CONSENSUS - "Not this art" (docs/features/wtc-question-model.md §7.1): a
+    #    candidate-SET-level filter. A suggestion whose artwork the group has already reached
+    #    elimination consensus on (`illustration_consensus.eliminated_illustration_ids`) must
+    #    not be re-served as a NEW confirm_suggestion question to a DIFFERENT voter - that
+    #    would ask the same rejected question again, which is exactly the "discards usable
+    #    evidence" failure this whole feature exists to close.
+    #
+    # The two commute semantically (both must hold; neither reads the other's output), so the
+    # ordering is a COST decision, not a correctness one: the gate is one cheap indexed read of
+    # the card's most recent `CardScanLog` row, while `eliminated_illustration_ids(card)` is a
+    # group-scoped consensus query - so the gate runs first, and the elimination read is paid
+    # only for a card the gate has already admitted. Measured 2026-08-11, the gate rejects
+    # 0-for-110,130 confirm-eligible cards, so keeping the elimination read inside the
+    # candidate loop (its laziness is untouched: still computed only once a candidate with a
+    # non-null illustration_id is actually seen) would have paid that consensus query for every
+    # sampled confirm-shaped card at pool-warm time for zero served items - see
+    # `question_feed_pools._build_pool_confirm`, which calls this per card. Only a card that
+    # could actually be served as confirm_suggestion ever touches the elimination machinery.
+    ai_votes = list(
         card.printing_tags.filter(source__in=[VoteSource.DEDUCTION, VoteSource.OCR], is_no_match=False)
         .select_related("printing__expansion", "printing__printing_metadata", "printing__artist")
         .order_by("pk")[:20]
     )
+    # #775's own short-circuit, preserved: a card with no machine candidate at all is not
+    # confirm-shaped, so neither the gate nor the elimination read is paid for it.
+    if not ai_votes:
+        return None
+    if not _evidence_justifies_confirmation(card):
+        return None
+    eliminated_ids: Optional[set[uuid.UUID]] = None
+    ai_vote = None
     for candidate_vote in ai_votes:
         metadata = getattr(candidate_vote.printing, "printing_metadata", None)
         illustration_id = getattr(metadata, "illustration_id", None) if metadata is not None else None
@@ -320,8 +340,6 @@ def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
         ai_vote = candidate_vote
         break
     if ai_vote is None or ai_vote.printing is None:
-        return None
-    if not _evidence_justifies_confirmation(card):
         return None
     candidates = get_ranked_printing_candidates(card, card.name)
     return QuestionFeedItem(

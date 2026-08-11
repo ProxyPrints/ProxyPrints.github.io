@@ -603,6 +603,68 @@ describe("QuestionFeed", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("'Not this art' submits the suggested printing's illustrationId to /2/submitIllustrationRejection/ and collapses the suggestion slot", async () => {
+    const confirmSuggestionItem = {
+      ...identifyPrintingItem,
+      type: "confirm_suggestion",
+      suggestedPrinting: {
+        ...identifyPrintingItem.candidates[0],
+        illustrationId: "illustration-rejected",
+      },
+    };
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: confirmSuggestionItem,
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    let submittedBody:
+      | { identifier?: string; illustrationId?: string }
+      | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitIllustrationRejection/"),
+        async ({ request }) => {
+          submittedBody = (await request.json()) as typeof submittedBody;
+          return HttpResponse.json(
+            { illustrationId: "illustration-rejected" },
+            { status: 200 }
+          );
+        }
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    fireEvent.click(
+      await screen.findByTestId("question-feed-suggestion-not-this-art")
+    );
+
+    await waitFor(() =>
+      expect(submittedBody).toEqual({
+        identifier: "card-1",
+        anonymousId: expect.any(String),
+        illustrationId: "illustration-rejected",
+        voteSurface: undefined,
+      })
+    );
+    // Same slot-collapse as the #770 answer set - "Not this art" reuses the rejected-context
+    // rendering rather than inventing a separate transition.
+    expect(
+      await screen.findByTestId("question-feed-rejected-context")
+    ).toHaveTextContent("You said: not");
+  });
+
   it("shows the suggested printing's own reference image on the suggested-match question (regression: dropped when the suggestion slot was introduced in #49)", async () => {
     server.use(
       http.get(buildRoute("2/questionFeed/"), () =>

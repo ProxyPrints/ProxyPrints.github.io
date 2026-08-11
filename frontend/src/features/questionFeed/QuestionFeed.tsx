@@ -110,6 +110,7 @@ import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
 import { recordSessionContribution } from "@/features/stats/sessionContributionSlice";
 import {
   APIGetQuestionFeed,
+  APISubmitIllustrationRejection,
   APISubmitIllustrationVote,
   APISubmitPrintingTag,
   APISubmitQuestionAbstention,
@@ -1233,19 +1234,34 @@ export function QuestionFeed() {
     advance();
   };
 
-  // confirm_suggestion's "Not this art" answer. There is no backend concept of "reject just
-  // this one candidate specifically" (only a positive vote for a specific printing or a
-  // generic isNoMatch for the whole set - see selectCandidate above), and no CardIllustrationVote
-  // shape means "the suggested illustration specifically is wrong" either (only an affirmative
-  // illustrationId or a definitive isUnknown - "I don't know the artwork at all", a different
-  // claim). This purely records the rejection client-side and collapses the suggestion slot
-  // into the candidate-grid identification question on the SAME page, carrying the #748
-  // re-selectable-tile mechanic (the rejected printing stays reachable, not the terminal
-  // isNoMatch vote a truly-empty grid used to force here - "wrong artwork entirely" and
-  // "no official printing at all" are different claims, and only the latter has a vote to cast).
+  // confirm_suggestion's "Not this art" answer. Two things happen on tap.
+  //
+  // 1. A negative ILLUSTRATION signal is recorded when the suggested printing carries an
+  //    illustrationId: a fire-and-forget POST to /2/submitIllustrationRejection/
+  //    (`APISubmitIllustrationRejection` -> `CardIllustrationRejection` - see
+  //    docs/features/wtc-question-model.md §7.1 and printing-tags.md's illustration-elimination
+  //    section for the mechanism). Best-effort, same convention as `abstainAndAdvance`'s
+  //    abstention write. This is the write path #770's comment below could not name - it was
+  //    landed by the same series that introduced the answer set, closing the loop so a
+  //    rejected suggestion is not re-served to a different voter as if it were new
+  //    (`question_feed._confirm_suggestion_item` consumes the resulting elimination consensus).
+  // 2. The client-side collapse #770 describes: the suggestion slot gives way to the
+  //    candidate-grid identification question on the SAME page, carrying the #748
+  //    re-selectable-tile mechanic (the rejected printing stays reachable, not the terminal
+  //    isNoMatch vote a truly-empty grid used to force here - "wrong artwork entirely" and
+  //    "no official printing at all" are different claims, and only the latter has a vote to cast).
   const markNotThisArt = () => {
     if (item?.suggestedPrinting == null || voteInFlightRef.current) {
       return;
+    }
+    const illustrationId = item.suggestedPrinting.illustrationId;
+    if (backendURL != null && illustrationId != null) {
+      APISubmitIllustrationRejection(
+        backendURL,
+        item.card.identifier,
+        getOrCreateAnonymousId(),
+        illustrationId
+      ).catch(() => undefined);
     }
     const rejectedIdentifier = item.suggestedPrinting.identifier;
     setRejectedCandidateIds((previous) =>

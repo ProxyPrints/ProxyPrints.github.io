@@ -1191,7 +1191,12 @@ class TestGetNextQuestionFeedItemUsesPools:
 class TestConfirmSuggestionSkipsEliminatedSuggestions:
     """ "Not this art" closes the loop at the ONE consumer this PR wires: a suggestion whose
     artwork the group has already reached elimination consensus on must not be re-served as a
-    NEW confirm_suggestion question."""
+    NEW confirm_suggestion question.
+
+    Every card here carries complete `CardScanLog` evidence (the `_evidence_justifies_
+    confirmation` gate from #775 passes), so a `None` result is attributable to elimination
+    consensus, not to the gate - the gate failing would produce the same `None` for an
+    unrelated reason and prove nothing about this feature."""
 
     def test_the_only_ai_vote_being_eliminated_yields_no_item(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -1199,6 +1204,7 @@ class TestConfirmSuggestionSkipsEliminatedSuggestions:
         printing = CanonicalCardFactory()
         CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=illustration_id)
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        CardScanLog.objects.create(card=card, anonymous_id="ai-bot", skip_reason="ambiguous", evidence_types_used=["border", "artist", "symbol"])
         for anonymous_id in ("voter-1", "voter-2"):
             CardIllustrationRejectionFactory(
                 card=card, illustration_id=illustration_id, source=VoteSource.USER, anonymous_id=anonymous_id
@@ -1222,6 +1228,7 @@ class TestConfirmSuggestionSkipsEliminatedSuggestions:
         CardPrintingTagFactory(
             card=card, printing=eliminated_printing, source=VoteSource.DEDUCTION, anonymous_id="calc-a-v1"
         )
+        CardScanLog.objects.create(card=card, anonymous_id="calc-a-v1", skip_reason="ambiguous", evidence_types_used=["border", "artist", "symbol"])
         for anonymous_id in ("voter-1", "voter-2"):
             CardIllustrationRejectionFactory(
                 card=card, illustration_id=eliminated_illustration, source=VoteSource.USER, anonymous_id=anonymous_id
