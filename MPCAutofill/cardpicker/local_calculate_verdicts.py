@@ -1888,6 +1888,12 @@ def calculate_fallback_verdict(
     `CardPrintingTag`/`CardScanLog` exactly like the join-key calculator's own
     `run_join_key_calculator`. Same name-scoping caller contract as `calculate_join_key_verdict`:
     `candidates` MUST already be narrowed to this card's own name (`_resolve_candidates_for_card`).
+
+    `FallbackVerdict.evidence_types_used` can also carry `"collector_line"` (2026-08-11) when
+    `evidence.collector_line_collector_number` is non-empty - RECORDED only, never a fourth
+    sub-check: it never filters `candidates`/`survivors` and never affects `skip_reason` or
+    `confidence`, both of which are still decided purely by the border/artist/symbol
+    intersection above. See the inline comment at its append site for why.
     """
     candidate_pks = {c.pk for c in candidates}
     canonicals = {
@@ -1914,24 +1920,44 @@ def calculate_fallback_verdict(
             survivors &= filtered
             evidence_types_used.append(name)
 
+    # COLLECTOR LINE (2026-08-11, owner ruling): RECORDED, never FILTERED - the fourth element
+    # `docs/features/wtc-question-model.md` §2 gates a printing confirmation on, added to
+    # `CardScanLog.evidence_types_used` without touching `survivors`, `skip_reason`, or
+    # `confidence`. "Present" means `collector_line_collector_number` is non-empty - the same
+    # boundary `image_evidence.compute_card_evidence` already uses to decide the `collector_line_ocr`
+    # extractor itself succeeded (`EXTRACTOR_NO_TEXT_SKIP_REASON` fires exactly when this field
+    # comes back empty), so this is "Stage C got a genuine collector-number reading", not "the
+    # extractor ran" (`extractor_versions` is set unconditionally and would be vacuous here).
+    # `collector_line_set_code` alone is deliberately NOT sufficient: a set code with no number is
+    # a much weaker read (matches every printing in the set) and `run_fallback_calculator`'s own
+    # eligibility filter already requires the `collector_line_ocr` extractor to have run for every
+    # row this function sees, so set-code-only would only ever mean the number half of the same
+    # read failed - not a real fourth signal. Appended to a SEPARATE list below - `evidence_types_used`
+    # above stays exactly what it was, so the `if not evidence_types_used` skip check and the
+    # single/multi-evidence confidence split are bit-identical to the pre-2026-08-11 code path.
+    recorded_evidence_types_used = list(evidence_types_used)
+    if evidence.collector_line_collector_number:
+        recorded_evidence_types_used.append("collector_line")
+
     if not evidence_types_used:
         return FallbackVerdict(
             card_id=card_id,
             skip_reason=FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
+            evidence_types_used=tuple(recorded_evidence_types_used),
             survivor_pks=tuple(sorted(survivors)),
         )
     if len(survivors) == 0:
         return FallbackVerdict(
             card_id=card_id,
             skip_reason=FALLBACK_ELIMINATED_SKIP_REASON,
-            evidence_types_used=tuple(evidence_types_used),
+            evidence_types_used=tuple(recorded_evidence_types_used),
             survivor_pks=(),
         )
     if len(survivors) > 1:
         return FallbackVerdict(
             card_id=card_id,
             skip_reason=FALLBACK_AMBIGUOUS_SKIP_REASON,
-            evidence_types_used=tuple(evidence_types_used),
+            evidence_types_used=tuple(recorded_evidence_types_used),
             survivor_pks=tuple(sorted(survivors)),
         )
 
@@ -1942,7 +1968,7 @@ def calculate_fallback_verdict(
         card_id=card_id,
         printing_pk=next(iter(survivors)),
         confidence=confidence,
-        evidence_types_used=tuple(evidence_types_used),
+        evidence_types_used=tuple(recorded_evidence_types_used),
     )
 
 

@@ -2308,6 +2308,101 @@ class TestCalculateFallbackVerdict:
         assert verdict.skip_reason == FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON
         assert verdict.survivor_pks == (printing.pk,)
 
+    def test_collector_line_is_recorded_as_a_fourth_evidence_type(self, db):
+        """docs/features/wtc-question-model.md §2's fourth gated element - RECORDED alongside
+        border, never filtered: appears in evidence_types_used even though only `border` narrowed
+        `candidates`, and does not bump confidence to multi-evidence (that still requires a second
+        sub-check that actually narrowed something)."""
+        printing_black = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_black, border_color="black")
+        printing_white = CanonicalCardFactory(name="Test Card", expansion__code="vow", collector_number="200")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_white, border_color="white")
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing_black.pk, expansion_code="mom", collector_number="158"),
+            CandidatePrinting(pk=printing_white.pk, expansion_code="vow", collector_number="200"),
+        ]
+        evidence = _evidence(card, layout_class="black", collector_line_collector_number="158")
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing_black.pk
+        assert set(verdict.evidence_types_used) == {"border", "collector_line"}
+        assert verdict.confidence == FALLBACK_CONFIDENCE_SINGLE_EVIDENCE  # unchanged: still one real sub-check
+
+    def test_collector_line_absent_is_not_recorded(self, db):
+        printing_black = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_black, border_color="black")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing_black.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, layout_class="black", collector_line_collector_number="")
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.evidence_types_used == ("border",)
+
+    def test_collector_line_set_code_alone_without_a_number_is_not_recorded(self, db):
+        """`collector_line_set_code` alone is a much weaker read (matches every printing in the
+        set) - see calculate_fallback_verdict's own inline comment for why only the number half
+        counts as "present"."""
+        printing_black = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=printing_black, border_color="black")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing_black.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card, layout_class="black", collector_line_set_code="mom", collector_line_collector_number=""
+        )
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.evidence_types_used == ("border",)
+
+    def test_collector_line_recorded_on_an_eliminated_skip_without_changing_the_skip_reason(self, db):
+        """Proves the hard constraint: adding collector_line to the recorded list never changes
+        `skip_reason` or `survivors` - the same eliminated-vs-not outcome as
+        test_border_and_artist_disagreement_abstains_never_a_false_accept, just with
+        collector_line evidence also present and also recorded."""
+        printing_a = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing_a, border_color="black")
+        printing_b = CanonicalCardFactory(
+            name="Test Card", expansion__code="vow", collector_number="200", artist__name="Someone Else"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing_b, border_color="white")
+        card = CardFactory(name="Test Card")
+        candidates = [
+            CandidatePrinting(pk=printing_a.pk, expansion_code="mom", collector_number="158"),
+            CandidatePrinting(pk=printing_b.pk, expansion_code="vow", collector_number="200"),
+        ]
+        evidence = _evidence(
+            card, layout_class="black", artist_ocr_name="Someone Else", collector_line_collector_number="158"
+        )
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk is None
+        assert verdict.skip_reason == "eliminated"  # unchanged from the collector_line-less test
+        assert verdict.survivor_pks == ()  # unchanged from the collector_line-less test
+        assert set(verdict.evidence_types_used) == {"border", "artist", "collector_line"}
+
+    def test_collector_line_recorded_on_a_no_sub_check_evidence_skip(self, db):
+        """The `evidence_types_used` list stays truthful even when border/artist/symbol found
+        nothing at all - the skip_reason and survivor_pks are still driven purely by the
+        border/artist/symbol intersection, matching
+        test_no_sub_check_produced_a_reading_abstains_even_with_a_single_candidate exactly."""
+        printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(card, collector_line_collector_number="158")
+
+        verdict = calculate_fallback_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk is None
+        assert verdict.skip_reason == FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON  # unchanged
+        assert verdict.survivor_pks == (printing.pk,)  # unchanged
+        assert verdict.evidence_types_used == ("collector_line",)
+
 
 class TestRunFallbackCalculator:
     def _no_hit_card(self, *, skip_reason="no-text", is_no_match=False, **evidence_overrides):
@@ -2349,6 +2444,98 @@ class TestRunFallbackCalculator:
         card.refresh_from_db()
         # a single VoteSource.OCR vote (weight 0.5) can never clear the human-backed gate alone.
         assert card.printing_tag_status == PrintingTagStatus.UNRESOLVED
+
+    def test_collector_line_evidence_leaves_every_skip_reason_and_vote_bit_identical_across_a_corpus(self, db):
+        """The proof the owner ruling demands: a small corpus covering every outcome branch
+        (match, eliminated, ambiguous, no-sub-check-evidence), each card built as a
+        collector-line-absent/collector-line-present pair with otherwise IDENTICAL border/artist/
+        symbol evidence. Runs the real `run_fallback_calculator` end to end (not just
+        `calculate_fallback_verdict`) and asserts every pair's skip_reason, survivor_pks,
+        CardPrintingTag.printing_id and CardPrintingTag.confidence are bit-identical - the only
+        difference permitted anywhere is collector_line_absent's evidence_types_used missing
+        "collector_line" that collector_line_present's carries."""
+        # MATCH pair: border alone narrows to one printing.
+        match_printing = CanonicalCardFactory(name="Match Card", expansion__code="mom", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=match_printing, border_color="black")
+        match_absent, _ = self._no_hit_card(layout_class="black")
+        match_absent.name = "Match Card"
+        match_absent.save()
+        match_present_card = CardFactory(name="Match Card", content_phash=43)
+        _evidence(match_present_card, layout_class="black", collector_line_collector_number="158")
+        CardScanLog.objects.create(card=match_present_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+
+        # ELIMINATED pair: border and artist evidence point at different printings.
+        elim_a = CanonicalCardFactory(
+            name="Elim Card", expansion__code="mid", collector_number="158", artist__name="Rebecca Guay"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=elim_a, border_color="black")
+        elim_b = CanonicalCardFactory(
+            name="Elim Card", expansion__code="vow", collector_number="200", artist__name="Someone Else"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=elim_b, border_color="white")
+        elim_absent_card = CardFactory(name="Elim Card", content_phash=44)
+        _evidence(elim_absent_card, layout_class="black", artist_ocr_name="Someone Else")
+        CardScanLog.objects.create(card=elim_absent_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+        elim_present_card = CardFactory(name="Elim Card", content_phash=45)
+        _evidence(
+            elim_present_card,
+            layout_class="black",
+            artist_ocr_name="Someone Else",
+            collector_line_collector_number="158",
+        )
+        CardScanLog.objects.create(card=elim_present_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+
+        # AMBIGUOUS pair: border matches two printings that share a border colour.
+        amb_a = CanonicalCardFactory(name="Amb Card", expansion__code="war", collector_number="158")
+        CanonicalPrintingMetadataFactory(canonical_card=amb_a, border_color="black")
+        amb_b = CanonicalCardFactory(name="Amb Card", expansion__code="isd", collector_number="200")
+        CanonicalPrintingMetadataFactory(canonical_card=amb_b, border_color="black")
+        amb_absent_card = CardFactory(name="Amb Card", content_phash=46)
+        _evidence(amb_absent_card, layout_class="black")
+        CardScanLog.objects.create(card=amb_absent_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+        amb_present_card = CardFactory(name="Amb Card", content_phash=47)
+        _evidence(amb_present_card, layout_class="black", collector_line_collector_number="158")
+        CardScanLog.objects.create(card=amb_present_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+
+        # NO-SUB-CHECK-EVIDENCE pair: no border/artist/symbol reading at all.
+        CanonicalCardFactory(name="NoEv Card", expansion__code="khm", collector_number="158")
+        noev_absent_card = CardFactory(name="NoEv Card", content_phash=48)
+        _evidence(noev_absent_card)
+        CardScanLog.objects.create(card=noev_absent_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+        noev_present_card = CardFactory(name="NoEv Card", content_phash=49)
+        _evidence(noev_present_card, collector_line_collector_number="158")
+        CardScanLog.objects.create(card=noev_present_card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason="no-text")
+
+        run_fallback_calculator(dry_run=False)
+
+        # MATCH: same printing, same (single-evidence) confidence, both cast a vote.
+        vote_absent = CardPrintingTag.objects.get(card=match_absent, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        vote_present = CardPrintingTag.objects.get(card=match_present_card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert vote_absent.printing_id == vote_present.printing_id == match_printing.pk
+        assert vote_absent.confidence == vote_present.confidence
+
+        # ELIMINATED: same skip_reason, same (empty) survivor_pks, evidence_types_used differs
+        # only by the added "collector_line".
+        log_absent = CardScanLog.objects.get(card=elim_absent_card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        log_present = CardScanLog.objects.get(card=elim_present_card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log_absent.skip_reason == log_present.skip_reason == "eliminated"
+        assert log_absent.survivor_pks == log_present.survivor_pks == []
+        assert set(log_present.evidence_types_used) == set(log_absent.evidence_types_used) | {"collector_line"}
+
+        # AMBIGUOUS: same skip_reason, same survivor_pks shortlist.
+        log_absent = CardScanLog.objects.get(card=amb_absent_card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        log_present = CardScanLog.objects.get(card=amb_present_card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log_absent.skip_reason == log_present.skip_reason == FALLBACK_AMBIGUOUS_SKIP_REASON
+        assert set(log_absent.survivor_pks) == set(log_present.survivor_pks) == {amb_a.pk, amb_b.pk}
+        assert set(log_present.evidence_types_used) == set(log_absent.evidence_types_used) | {"collector_line"}
+
+        # NO-SUB-CHECK-EVIDENCE: same skip_reason, same survivor_pks.
+        log_absent = CardScanLog.objects.get(card=noev_absent_card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        log_present = CardScanLog.objects.get(card=noev_present_card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert log_absent.skip_reason == log_present.skip_reason == FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON
+        assert log_absent.survivor_pks == log_present.survivor_pks
+        assert log_absent.evidence_types_used == []
+        assert log_present.evidence_types_used == ["collector_line"]
 
     def test_a_card_the_join_key_calculator_already_resolved_is_not_eligible(self, db):
         card = CardFactory(name="Some Card", content_phash=42)
