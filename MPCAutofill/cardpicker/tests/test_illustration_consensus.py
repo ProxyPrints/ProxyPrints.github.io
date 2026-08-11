@@ -30,6 +30,7 @@ from cardpicker import illustration_consensus, printing_consensus
 from cardpicker.illustration_consensus import (
     UNKNOWN,
     build_group_illustration_vote_tuples,
+    eliminated_illustration_ids,
     get_contested_illustration_card_ids,
     get_illustration_vote_tally,
     group_illustration_votes,
@@ -45,6 +46,7 @@ from cardpicker.models import (
 from cardpicker.tests.factories import (
     CanonicalCardFactory,
     CardFactory,
+    CardIllustrationRejectionFactory,
     CardIllustrationVoteFactory,
     CardPrintingTagFactory,
 )
@@ -769,3 +771,112 @@ def test_module_never_reads_the_perceptual_hash(db):
 
     assert "phash" in executable_source(reads_the_phash)
     assert "phash" not in executable_source(only_mentions_it_in_prose)
+
+
+# =================================================================================================
+# eliminated_illustration_ids - the "Not this art" follow-up's read side. Narrows; never elects.
+# =================================================================================================
+
+
+class TestEliminatedIllustrationIds:
+    def test_no_rejections_eliminates_nothing(self, db):
+        card = CardFactory()
+        assert eliminated_illustration_ids(card) == set()
+
+    def test_two_agreeing_human_rejections_clear_quorum(self, db):
+        # Same 2.0 min-weight bar as everywhere else in this module - one lone human rejection
+        # (weight 1.0) does not clear it by itself, matching resolve_illustration's own gate.
+        card = CardFactory()
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_A, source=VoteSource.USER, anonymous_id="voter-1"
+        )
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_A, source=VoteSource.USER, anonymous_id="voter-2"
+        )
+        assert eliminated_illustration_ids(card) == {ILLUSTRATION_A}
+
+    def test_machine_rejections_alone_never_eliminate_however_many_agents(self, db):
+        """The human-backed gate, restated per-candidate: no volume of machine eliminations - any
+        number of distinct calculator families - clears the bar alone. Mirrors
+        TestHumanBackedGate's own claim for the affirmative tally."""
+        card = CardFactory()
+        for i in range(5):
+            CardIllustrationRejectionFactory(
+                card=card, illustration_id=ILLUSTRATION_A, source=VoteSource.OCR, anonymous_id=f"machine-{i}-v1"
+            )
+        assert eliminated_illustration_ids(card) == set()
+
+    def test_one_human_vote_promotes_agreeing_machine_weight_over_the_bar(self, db):
+        # 1 human (1.0) + 2 distinct machine agents (0.5 + 0.5) = 2.0, the same D2 shape
+        # TestHumanBackedGate.test_one_human_vote_promotes_agreeing_machine_weight uses.
+        card = CardFactory()
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_A, source=VoteSource.OCR, anonymous_id="machine-a-v1"
+        )
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_A, source=VoteSource.OCR, anonymous_id="machine-b-v1"
+        )
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_A, source=VoteSource.USER, anonymous_id="voter-1"
+        )
+        assert eliminated_illustration_ids(card) == {ILLUSTRATION_A}
+
+    def test_each_illustration_id_is_judged_independently(self, db):
+        """Narrows, does not elect: two DIFFERENT illustration_ids can both be eliminated for the
+        same card at once - they never compete against each other for a single winning slot the
+        way resolve_illustration's own outcomes do."""
+        card = CardFactory()
+        for anonymous_id in ("voter-1", "voter-2"):
+            CardIllustrationRejectionFactory(
+                card=card, illustration_id=ILLUSTRATION_A, source=VoteSource.USER, anonymous_id=anonymous_id
+            )
+            CardIllustrationRejectionFactory(
+                card=card, illustration_id=ILLUSTRATION_B, source=VoteSource.USER, anonymous_id=anonymous_id
+            )
+        assert eliminated_illustration_ids(card) == {ILLUSTRATION_A, ILLUSTRATION_B}
+
+    def test_a_below_quorum_illustration_is_not_eliminated_while_a_quorate_one_is(self, db):
+        card = CardFactory()
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_A, source=VoteSource.OCR, anonymous_id="machine-only-v1"
+        )
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_B, source=VoteSource.USER, anonymous_id="voter-1"
+        )
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_B, source=VoteSource.USER, anonymous_id="voter-2"
+        )
+        assert eliminated_illustration_ids(card) == {ILLUSTRATION_B}
+
+    def test_never_touches_resolve_illustrations_own_winner(self, db):
+        """The load-bearing separation: an eliminated candidate's presence changes nothing about
+        what resolve_illustration (the AFFIRMATIVE tally) reports for a DIFFERENT, winning
+        illustration on the same card - eliminations narrow a candidate SET some other reader
+        consults; they never compete inside the weighted-consensus winner computation itself."""
+        card = CardFactory()
+        human_vote(card, ILLUSTRATION_A, "voter-1")
+        human_vote(card, ILLUSTRATION_A, "voter-2")
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_B, source=VoteSource.USER, anonymous_id="voter-3"
+        )
+        CardIllustrationRejectionFactory(
+            card=card, illustration_id=ILLUSTRATION_B, source=VoteSource.USER, anonymous_id="voter-4"
+        )
+
+        assert resolve_illustration(card) == ILLUSTRATION_A
+        assert eliminated_illustration_ids(card) == {ILLUSTRATION_B}
+
+    def test_md5_group_pools_rejections_the_same_way_votes_are_pooled(self, db, md5_groups):
+        card_a = CardFactory()
+        card_b = CardFactory()
+        md5_groups("checksum-1", card_a, card_b)
+        CardIllustrationRejectionFactory(
+            card=card_a, illustration_id=ILLUSTRATION_A, source=VoteSource.OCR, anonymous_id="machine-1-v1"
+        )
+        CardIllustrationRejectionFactory(
+            card=card_b, illustration_id=ILLUSTRATION_A, source=VoteSource.OCR, anonymous_id="machine-1-v2"
+        )
+
+        # Same agent family across two group members pools to ONE event - still machine-only,
+        # still below the human-backed gate, exactly as CardIllustrationVote's own pooling works.
+        assert eliminated_illustration_ids(card_a) == set()

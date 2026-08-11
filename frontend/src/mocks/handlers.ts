@@ -1747,6 +1747,17 @@ export const submitIllustrationVoteCastsNothingOnPrintingChannel = http.post(
     )
 );
 
+// "Not this art" - 2/submitIllustrationRejection/. Mirrors SubmitIllustrationRejectionResponse's
+// narrower shape (no printing/artist channel to report on - see that response's own comment).
+export const submitIllustrationRejection = http.post(
+  buildRoute("2/submitIllustrationRejection/"),
+  () =>
+    HttpResponse.json(
+      { illustrationId: "illustration-shared" },
+      { status: 200 }
+    )
+);
+
 export const questionFeedArtist = http.get(buildRoute("2/questionFeed/"), () =>
   HttpResponse.json(
     {

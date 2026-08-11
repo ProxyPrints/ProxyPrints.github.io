@@ -2101,3 +2101,32 @@ migrations themselves.
 worktree before the first `makemigrations`/`migrate`/any other
 management command in it. Output lands in the gitignored `/static/`
 directory at the repo root, harmless to leave in place.
+
+## Backend test suite fails with `cluster_block_exception` / "disk usage exceeded flood-stage watermark"
+
+**Symptom**: a local full backend run (`python -m pytest -v --tb=short ./MPCAutofill/cardpicker -q`) reports a handful of failures — all in
+`test_local_file_source.py::TestLocalFileIndexing` and
+`test_sources.py::TestUpdateDatabase` — with
+`cluster_block_exception` hiding in the captured output:
+`index [cards] blocked by: [TOO_MANY_REQUESTS/12/disk usage exceeded flood-stage watermark, index has read-only-allow-delete block]`. The
+other few thousand tests pass, so the suite looks "almost green".
+Meanwhile `df -h /` shows the host disk near full (seen 2026-08-11 at
+98%, 4.2G free).
+
+**Cause**: the indexing tests write into the live
+`mpcautofill_elasticsearch` docker container's real `cards` index.
+Elasticsearch's default `cluster.routing.allocation.disk.watermark`
+`flood_stage` (95%) flips an index to `read-only-allow-delete` once the
+HOST disk crosses it, and every bulk write then fails with HTTP 429
+`cluster_block_exception` until usage drops back below the high
+watermark. Only the tests that actually write to ES fail; the rest
+never touch the index, which is why the suite is "mostly green" while
+actually blocked. This is an environment condition, not a code
+regression — before debugging the failing tests, confirm whether the
+host is disk-full (`df -h /`).
+
+**Fix**: no code fix — free disk on the host until `df -h /` is below
+the ~90% high watermark so ES lifts the block, then re-run the affected
+tests. A `docker system df`-visible stale/unused image or log set is a
+good place to look. CI is unaffected (GitHub Actions provisions a fresh
+ES per run); this only bites local runs on the shared box.

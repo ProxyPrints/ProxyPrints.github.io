@@ -66,6 +66,7 @@ from cardpicker.models import (
     CanonicalCard,
     Card,
     CardArtistVote,
+    CardIllustrationRejection,
     CardIllustrationVote,
     CardPrintingTag,
     VoteSource,
@@ -291,3 +292,51 @@ def cast_illustration_vote(
         artist_vote_cast=artist_vote_cast,
         artist_abstain_reason=artist_abstain_reason,
     )
+
+
+def cast_illustration_rejection(
+    *,
+    card: Card,
+    anonymous_id: str,
+    illustration_id: uuid.UUID,
+    user: Optional[User],
+    vote_surface: Optional[str],
+) -> CardIllustrationRejection:
+    """
+    The one write behind `2/submitIllustrationRejection/` ("Not this art" - the negative
+    counterpart to `cast_illustration_vote` above, and deliberately a SEPARATE endpoint rather
+    than a polarity flag on that one's request body: see `CardIllustrationRejection`'s own model
+    docstring for why a rejection cannot share `CardIllustrationVote`'s unconditional
+    (card, anonymous_id) slot, and `views.post_submit_illustration_rejection`'s docstring for why
+    that also means a genuinely different, simpler response shape - no printing/artist channel
+    exists here to report on, because a rejected ARTWORK implies nothing about which PRINTINGS
+    share it (that narrowing stays the read-only `printings_for_illustration`/
+    `printings_for_card_and_illustration`, never materialised into votes either direction).
+
+    `update_or_create` keyed on the model's own `(card, anonymous_id, illustration_id)` unique
+    constraint - a repeat "Not this art" tap on the same artwork updates the existing row (same
+    changed-answer-is-an-update convention `cast_illustration_vote` uses above) rather than
+    colliding with it; a tap on a DIFFERENT artwork for the same card creates a second, unrelated
+    row, which is the entire point of keying on the artwork rather than just (card, anonymous_id).
+
+    No consensus recompute happens here, unlike `cast_illustration_vote`'s unconditional
+    `resolve_and_persist_illustration` call. There is nothing to persist: elimination consensus
+    (`illustration_consensus.eliminated_illustration_ids`) is a pure READ over
+    `CardIllustrationRejection` rows, computed on demand by its one consumer
+    (`question_feed._confirm_suggestion_item`) rather than materialised onto `Card` the way
+    `inferred_illustration_id`/`illustration_vote_status` are - the same "the narrowing stays a
+    READ" posture this whole model's docstring insists on, applied to writes as well as reads.
+    """
+    rejection, _ = CardIllustrationRejection.objects.update_or_create(
+        card=card,
+        anonymous_id=anonymous_id,
+        illustration_id=illustration_id,
+        defaults={
+            "source": VoteSource.USER,
+            "user": user,
+            "confidence": None,
+            "run_id": None,
+            "vote_surface": vote_surface,
+        },
+    )
+    return rejection

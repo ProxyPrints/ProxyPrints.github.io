@@ -1122,6 +1122,63 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     in `schemas/schemas/endpoints/` — the generator itself was NOT run (see
     issue #332: it destroys the hand-added `CastImplicitVoteRequest`/
     `RetractImplicitVoteRequest` types).
+  - **Illustration elimination — "Not this art"** (the negative counterpart
+    to illustration voting above; `docs/features/wtc-question-model.md`
+    §7.1's `confirm_suggestion` answer of the same name). `CardIllustrationVote`'s
+    `(card, anonymous_id)` unique constraint is unconditional — one identity
+    holds AT MOST ONE illustration opinion per card (issue #525) — so a
+    rejection cannot share that model or that constraint: consuming the
+    same slot to reject one artwork would block ever affirming a different
+    one, backwards from the intent. `CardIllustrationRejection` is therefore
+    a SEPARATE model, keyed on `(card, anonymous_id, illustration_id)` — one
+    identity may reject many artworks for one card, and a rejection never
+    touches the `CardIllustrationVote` row. The human path
+    (`POST /2/submitIllustrationRejection/`, `views.post_submit_illustration_rejection`,
+    `illustration_vote.cast_illustration_rejection`) always names a concrete
+    `illustrationId` (no `isUnknown` branch — rejecting "unknown" is not a
+    meaningful claim) and writes nothing on the printing or artist channels:
+    a rejected ARTWORK implies nothing about which PRINTINGS share it, the
+    same "narrowing stays a read" posture `printings_for_illustration`
+    already enforces for the affirmative side.
+
+    The MACHINE side (`local_illustration.run_illustration_calculator`)
+    casts eliminations alongside every `CardIllustrationVote` it writes: one
+    resolved positive implies a rejection for every OTHER `illustration_id`
+    among `get_ranked_printing_candidates(card, None)` — the same
+    name-ranked candidate space `illustration_vote. printings_for_card_and_illustration` already reads for the human 1:1
+    check, not the narrower artist+name index the positive itself came from
+    (that index holds exactly one surviving illustration by construction
+    whenever a vote is cast, so it has nothing left to reject). Measured
+    live against production data (300-card sample, cards with a machine
+    `CardIllustrationVote`): mean 2.79 distinct illustrations among a
+    card's ranked candidates (so ~1.79 eliminations per card among the
+    ~50% of cards with any other candidate at all — the other ~50% have a
+    unique illustration among their candidates and produce zero
+    eliminations), median 2, p90 6, max 35. Eliminations are written with
+    `source=VoteSource.DEDUCTION` through the same `resolve_vote_weight`
+    machinery every machine vote uses — no separate rejection weight scale
+    exists. Retraction (a later run resolving a DIFFERENT illustration)
+    goes through the same `purge_stale_machine_votes` family-scoped purge
+    every other Stage D write uses: eliminations are recomputed from
+    scratch and rewritten only for cards whose positive actually changed
+    this run (`_split_new_illustration_votes`'s own scope), so a genuine
+    no-op re-run writes zero rows here too.
+
+    **Consumption is a read, never a materialisation** — narrows a candidate
+    SET, never elects a winner. `illustration_consensus. eliminated_illustration_ids(card)` judges each `illustration_id`
+    independently against only its own rejection rows, reusing
+    `vote_consensus.resolve_weighted_consensus` with a single possible
+    outcome (so `min_share` is trivially satisfied and the call reduces to
+    the ordinary weighted-quorum-plus-human-backed-gate every other vote
+    type already applies — no volume of machine eliminations alone can
+    eliminate anything). It never touches `resolve_illustration`'s own
+    affirmative tally. The one consumer wired in this PR:
+    `question_feed._confirm_suggestion_item` skips an AI-suggested printing
+    whose artwork has reached elimination consensus and falls through to
+    the next machine vote for the card, so a suggestion the group has
+    already rejected is not re-served to a different voter as if it were
+    new.
+
   - **No-re-presentation rule** (owner-directed fix, was a real live bug:
     Level 1 "Is it M21 203?" → NO → Level 2 grid containing only M21 203
     again): within a single question item's flow, the suggested candidate

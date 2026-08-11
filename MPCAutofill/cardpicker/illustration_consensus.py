@@ -173,11 +173,17 @@ rather than a code change.
 """
 
 import uuid
+from collections import defaultdict
 from typing import Iterable, Literal, Sequence, TypedDict
 
 from django.conf import settings
 
-from cardpicker.models import Card, CardIllustrationVote, IllustrationVoteStatus
+from cardpicker.models import (
+    Card,
+    CardIllustrationRejection,
+    CardIllustrationVote,
+    IllustrationVoteStatus,
+)
 from cardpicker.printing_consensus import (
     _require_full_md5_group,
     agent_dedupe_key,
@@ -493,6 +499,70 @@ def get_illustration_vote_tally(card: Card) -> list[IllustrationVoteTallyEntry]:
     return sorted(tally.values(), key=lambda entry: entry["count"], reverse=True)
 
 
+def eliminated_illustration_ids(card: Card, group_card_ids: Sequence[int] | None = None) -> set[uuid.UUID]:
+    """
+    Every `illustration_id` that `card`'s md5 identity group has reached ELIMINATION CONSENSUS
+    on - the "Not this art" follow-up's read side. Group-scoped, weighted, human-backed-gated,
+    on the identical contract `resolve_illustration` uses for its own affirmative tally; see this
+    module's docstring for why group scoping is sound (md5 identity, never phash).
+
+    THIS NARROWS; IT DOES NOT ELECT. `resolve_illustration`'s tally has every surviving
+    `illustration_id` COMPETE for one winning outcome (`min_share` matters: a uuid must hold a
+    majority SHARE of the weighted vote, not just clear a floor). Elimination is a different
+    shape - each `illustration_id` is judged ALONE, against only its own
+    `CardIllustrationRejection` rows, with exactly one possible outcome ("reject"). Reusing
+    `resolve_weighted_consensus` for that one-outcome case is not a coincidence: with a single
+    key, `min_share` is trivially 1.0 whenever there is any weight at all, so the call reduces
+    to precisely the weighted-quorum-plus-human-backed-gate test every other vote model here
+    already applies - restated per candidate rather than argued as a new mechanism. No volume of
+    machine eliminations - one calculator run, one agent, pooled to one event per
+    `illustration_id` by `pool_group_votes` exactly as any other machine vote is - can clear that
+    gate alone; a human "Not this art" is what promotes a candidate from "the machine also
+    thinks so" to "eliminated".
+
+    Returns a `uuid.UUID` set - never mutates `CardIllustrationVote`, never touches
+    `resolve_illustration`'s own tally, and never expands into `CardPrintingTag` rows. Consumers
+    (e.g. `question_feed._confirm_suggestion_item`) use this purely to stop RE-SURFACING a
+    candidate the group has already eliminated; nothing here is persisted.
+    """
+    if group_card_ids is None:
+        group_card_ids = md5_group_card_ids(card)
+    else:
+        _require_full_md5_group(card, group_card_ids, "group_card_ids")
+    is_group = len(group_card_ids) > 1
+    rejections = (
+        CardIllustrationRejection.objects.filter(card_id__in=group_card_ids).order_by("card_id", "pk")
+        if is_group
+        else list(card.illustration_rejections.all())
+    )
+
+    rejections_by_illustration: dict[uuid.UUID, list[CardIllustrationRejection]] = defaultdict(list)
+    for rejection in rejections:
+        rejections_by_illustration[rejection.illustration_id].append(rejection)
+
+    eliminated: set[uuid.UUID] = set()
+    for illustration_id, rows in rejections_by_illustration.items():
+        vote_tuples = [
+            VoteTuple(
+                outcome_key=True,
+                weight=resolve_vote_weight(row.source, row.anonymous_id, row.run_id),
+                is_human_backed=is_human_backed_source(row.source),
+                dedupe_key=agent_dedupe_key(row.anonymous_id) if is_group else None,
+            )
+            for row in rows
+        ]
+        if is_group:
+            vote_tuples = pool_group_votes(vote_tuples)
+        if (
+            resolve_weighted_consensus(
+                vote_tuples, min_weight=illustration_min_votes(), min_share=illustration_min_share()
+            )
+            is not None
+        ):
+            eliminated.add(illustration_id)
+    return eliminated
+
+
 def get_contested_illustration_card_ids() -> list[int]:
     """
     IDs of cards with conflicting illustration votes on record - more than one distinct
@@ -525,5 +595,6 @@ __all__ = [
     "resolve_and_persist_illustration",
     "get_illustration_vote_tally",
     "get_contested_illustration_card_ids",
+    "eliminated_illustration_ids",
     "IllustrationVoteTallyEntry",
 ]

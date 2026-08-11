@@ -1073,6 +1073,24 @@ export interface SubmitIllustrationVoteResponse {
 }
 
 /**
+ * 2/submitIllustrationRejection/ ("Not this art") - mirrors
+ * MPCAutofill/cardpicker/schema_types.py's SubmitIllustrationRejectionRequest. Always names the
+ * rejected artwork - no isUnknown counterpart, see CardIllustrationRejection's own model
+ * docstring for why a rejection has no "unknown" claim to make.
+ */
+export interface SubmitIllustrationRejectionRequest {
+  anonymousId: string;
+  identifier: string;
+  illustrationId: string;
+  voteSurface?: null | string;
+}
+
+/** Response to 2/submitIllustrationRejection/ - mirrors SubmitIllustrationRejectionResponse. */
+export interface SubmitIllustrationRejectionResponse {
+  illustrationId: string;
+}
+
+/**
  * 2/castImplicitVote/ - hand-maintained, mirroring MPCAutofill/cardpicker/schema_types.py's
  * CastImplicitVoteRequest (PR #325's implicit-vote backend contract; the frontend request-type
  * propagation it deferred - see that PR's own "Deviations" section). No JSON schema source

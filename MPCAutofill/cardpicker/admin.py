@@ -13,6 +13,7 @@ from .models import (
     CanonicalPrintingMetadata,
     Card,
     CardArtistVote,
+    CardIllustrationRejection,
     CardIllustrationVote,
     CardPrintingTag,
     CardQuestionAbstention,
@@ -222,6 +223,17 @@ class AdminCardIllustrationVote(admin.ModelAdmin[CardIllustrationVote]):
     # `illustration_id` is a plain indexed UUIDField, not an FK (there is no CanonicalIllustration
     # table - see the model's own docstring), so it is searchable directly rather than via a
     # related lookup.
+    search_fields = ("card__name", "illustration_id")
+    raw_id_fields = ["card"]
+
+
+@admin.register(CardIllustrationRejection)
+class AdminCardIllustrationRejection(admin.ModelAdmin[CardIllustrationRejection]):
+    """The "Not this art" follow-up to `AdminCardIllustrationVote` above - see
+    `CardIllustrationRejection`'s own model docstring for why this is a separate model/table."""
+
+    list_display = ("card", "illustration_id", "source", "peer", "confidence", "anonymous_id", "created_at")
+    list_filter = ("source", "peer")
     search_fields = ("card__name", "illustration_id")
     raw_id_fields = ["card"]
 

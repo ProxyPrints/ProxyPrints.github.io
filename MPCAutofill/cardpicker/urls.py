@@ -31,6 +31,7 @@ urlpatterns = [
     path("2/artistConsensus/", views.post_artist_consensus),
     path("2/submitArtistVote/", views.post_submit_artist_vote),
     path("2/submitIllustrationVote/", views.post_submit_illustration_vote),
+    path("2/submitIllustrationRejection/", views.post_submit_illustration_rejection),
     path("2/artistAutocomplete/", views.post_artist_autocomplete),
     path("2/submitArtistWriteInVote/", views.post_submit_artist_writein_vote),
     path("2/tagConsensus/", views.post_tag_consensus),

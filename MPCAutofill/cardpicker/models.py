@@ -1400,6 +1400,85 @@ class CardIllustrationVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> illustration {outcome}"
 
 
+class CardIllustrationRejection(AbstractWeightedVote):
+    """
+    A vote that a given `Card` does NOT depict a specific Scryfall ARTWORK (issue #524's "Not
+    this art" follow-up) - the negative counterpart to `CardIllustrationVote`, and deliberately
+    a SEPARATE model rather than a polarity flag on that one.
+
+    WHY NOT A POLARITY FLAG ON `CardIllustrationVote`. That model's (card, anonymous_id) unique
+    constraint is UNCONDITIONAL BY DESIGN (issue #525 - see its own docstring): one identity
+    holds AT MOST ONE illustration opinion per card, full stop. A rejection is not that opinion -
+    it is the opposite kind of claim, "one of these artworks is wrong", and a voter must be able
+    to reject several candidate artworks for one card while still affirming a different one, or
+    affirming none at all. Consuming the same unconditional slot for a rejection would mean
+    rejecting one artwork could block ever affirming the right one - backwards from the intent,
+    and exactly the failure this model exists to avoid. So this is its own table, its own
+    constraint, unrelated to `CardIllustrationVote`'s.
+
+    THE CONSTRAINT IS (card, anonymous_id, illustration_id) - conditional in the sense that
+    matters (per-artwork, not per-card): one identity may hold many rejections for one card (one
+    per rejected artwork), but at most one rejection of any GIVEN artwork. No XOR/unknown split
+    either - a rejection always names the artwork it rejects (`illustration_id` is NOT NULL);
+    "I don't know what this artwork is" is `CardIllustrationVote.is_unknown`'s claim, not this
+    model's, and rejecting "unknown" is not a meaningful statement.
+
+    NARROWS BY ELIMINATION, NEVER BY ELECTION. This model competes for nothing:
+    `illustration_consensus.eliminated_illustration_ids` runs `vote_consensus.
+    resolve_weighted_consensus` independently per `illustration_id`, over just that artwork's
+    own rejection rows, with a single possible outcome - so the function reduces to the same
+    weighted-quorum-plus-human-backed-gate test every other vote model here already uses, applied
+    per candidate rather than across candidates. It never assigns a winner and never touches
+    `CardIllustrationVote.resolve_illustration`'s own tally; see that function's module for the
+    full read-side design. Nothing here is ever expanded into `CardPrintingTag` rows either - the
+    illustration-to-printing narrowing stays the same READ (`local_illustration.
+    printings_for_illustration`) it always was; a rejected ARTWORK says nothing about which
+    PRINTINGS sharing it are themselves rejected.
+
+    WEIGHT IS UNCHANGED MACHINERY. A rejection's weight resolves through the exact same
+    `vote_consensus.resolve_vote_weight(source, anonymous_id, run_id)` every other
+    `AbstractWeightedVote` subclass uses - there is no separate rejection weight scale. A vote's
+    weight is a property of WHO cast it and BY WHAT METHOD, never of which way it points; see
+    that function's own docstring for the argument against a weight ever depending on the claim
+    itself.
+
+    MACHINE-CAST ROWS (`local_illustration.run_illustration_calculator`) are written alongside
+    every accepted `CardIllustrationVote`: one positive implies a rejection for every OTHER
+    illustration candidate available for that card (`get_ranked_printing_candidates` - the same
+    candidate space `illustration_vote.printings_for_card_and_illustration` already draws on),
+    so the elimination space stays dense even though human rejections alone are sparse. Retracted
+    the same way every other Stage D write is: `models.purge_stale_machine_votes`, family-scoped
+    on `ILLUSTRATION_ANONYMOUS_ID`, re-run each time the calculator's positive for that card
+    changes - see that function's own call site in `local_illustration.py` for the exact
+    ordering/idempotence contract.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="illustration_rejections")
+    # Always set - a rejection names the artwork it rejects. Not nullable, unlike
+    # `CardIllustrationVote.illustration_id`: there is no "unknown" analogue here (see the
+    # docstring above).
+    illustration_id = models.UUIDField(db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["card", "anonymous_id", "illustration_id"],
+                name="cardillustrationrejection_unique_vote",
+            ),
+        ]
+        indexes = [
+            # Covers `illustration_consensus.eliminated_illustration_ids`' per-group read
+            # (`WHERE card_id IN (<md5 group>) ORDER BY card_id, id`, then bucketed by
+            # illustration_id in Python) - card_id-first because the query is always scoped by
+            # card/group first and only ever fans out to illustration_id afterwards in-memory,
+            # never filtered by illustration_id alone at the DB layer.
+            models.Index(fields=["card", "illustration_id"], name="cardillusrej_card_illus_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"[{self.source}] {self.card.name} -> NOT illustration {self.illustration_id}"
+
+
 class ArtboxPhashExemplarSeedKind(models.TextChoices):
     """
     How an `ArtboxPhashExemplar` row was seeded (issue #508 phase 1) - the provenance distinction

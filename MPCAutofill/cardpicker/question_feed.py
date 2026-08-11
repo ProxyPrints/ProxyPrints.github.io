@@ -138,6 +138,7 @@ staleness/precedence reasoning).
 
 import hashlib
 import math
+import uuid
 from collections import defaultdict
 from typing import Any, Callable, Hashable, Iterable, Optional, Sequence
 
@@ -158,6 +159,7 @@ from django.db.models import (
 from cardpicker import question_feed_pools
 from cardpicker.artist_consensus import get_contested_artist_card_ids
 from cardpicker.attribute_tags import ATTRIBUTE_CHIP_TAG_NAMES
+from cardpicker.illustration_consensus import eliminated_illustration_ids
 from cardpicker.local_calculate_verdicts import (
     FALLBACK_ELIMINATED_SKIP_REASON,
     JOIN_KEY_ANONYMOUS_ID,
@@ -290,14 +292,54 @@ def _tag_confidence(card: Card) -> dict[str, float]:
 
 
 def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
-    ai_vote = (
+    # Two independent gates compose here, in the order that keeps the expensive read lazy.
+    #
+    # 1. The EVIDENCE GATE (#775, `_evidence_justifies_confirmation` below): a CARD-level
+    #    property - does `card`'s own recorded `CardScanLog.evidence_types_used` cover every
+    #    type the pipeline can record? Decides whether a printing confirmation may be offered
+    #    for this card AT ALL.
+    # 2. ELIMINATION CONSENSUS - "Not this art" (docs/features/wtc-question-model.md §7.1): a
+    #    candidate-SET-level filter. A suggestion whose artwork the group has already reached
+    #    elimination consensus on (`illustration_consensus.eliminated_illustration_ids`) must
+    #    not be re-served as a NEW confirm_suggestion question to a DIFFERENT voter - that
+    #    would ask the same rejected question again, which is exactly the "discards usable
+    #    evidence" failure this whole feature exists to close.
+    #
+    # The two commute semantically (both must hold; neither reads the other's output), so the
+    # ordering is a COST decision, not a correctness one: the gate is one cheap indexed read of
+    # the card's most recent `CardScanLog` row, while `eliminated_illustration_ids(card)` is a
+    # group-scoped consensus query - so the gate runs first, and the elimination read is paid
+    # only for a card the gate has already admitted. Measured 2026-08-11, the gate rejects
+    # 0-for-110,130 confirm-eligible cards, so keeping the elimination read inside the
+    # candidate loop (its laziness is untouched: still computed only once a candidate with a
+    # non-null illustration_id is actually seen) would have paid that consensus query for every
+    # sampled confirm-shaped card at pool-warm time for zero served items - see
+    # `question_feed_pools._build_pool_confirm`, which calls this per card. Only a card that
+    # could actually be served as confirm_suggestion ever touches the elimination machinery.
+    ai_votes = list(
         card.printing_tags.filter(source__in=[VoteSource.DEDUCTION, VoteSource.OCR], is_no_match=False)
         .select_related("printing__expansion", "printing__printing_metadata", "printing__artist")
-        .first()
+        .order_by("pk")[:20]
     )
-    if ai_vote is None or ai_vote.printing is None:
+    # #775's own short-circuit, preserved: a card with no machine candidate at all is not
+    # confirm-shaped, so neither the gate nor the elimination read is paid for it.
+    if not ai_votes:
         return None
     if not _evidence_justifies_confirmation(card):
+        return None
+    eliminated_ids: Optional[set[uuid.UUID]] = None
+    ai_vote = None
+    for candidate_vote in ai_votes:
+        metadata = getattr(candidate_vote.printing, "printing_metadata", None)
+        illustration_id = getattr(metadata, "illustration_id", None) if metadata is not None else None
+        if illustration_id is not None:
+            if eliminated_ids is None:
+                eliminated_ids = eliminated_illustration_ids(card)
+            if illustration_id in eliminated_ids:
+                continue
+        ai_vote = candidate_vote
+        break
+    if ai_vote is None or ai_vote.printing is None:
         return None
     candidates = get_ranked_printing_candidates(card, card.name)
     return QuestionFeedItem(
@@ -889,13 +931,21 @@ def _tier_1_confirm_suggestion(
         item = _confirm_suggestion_item(card)
         if item is not None:
             return item
-    # Every tier-1 candidate carries a machine suggestion, but none cleared the evidence gate
-    # (`_evidence_justifies_confirmation`) - this tier still has a card to ask about, it just
-    # cannot ask for a printing confirmation yet. Per the ratified question model (docs/features/
+    # Every tier-1 candidate carries a machine suggestion, but none built an item - either the
+    # evidence gate (`_evidence_justifies_confirmation`) rejected the card, or every
+    # suggestion's artwork is elimination-consensus-eliminated ("Not this art", §7.1) - this
+    # tier still has a card to ask about, it just cannot ask for a printing confirmation yet.
+    # Per the ratified question model (docs/features/
     # wtc-question-model.md §2: "any element unmatched -> ask the question that fills the gap"),
     # fall through to `identify_printing` on this tier's own best (highest-variance) candidate
     # rather than returning `None` and silently dropping it - the same confirm-or-identify
-    # fallback `_likely_resolve_item` already uses for the likely-resolve pool.
+    # fallback `_likely_resolve_item` already uses for the likely-resolve pool. An eliminated
+    # suggestion implies "this specific artwork is wrong", not "this card is unidentifiable", so
+    # the card still gets asked - as the cheaper, evidence-agnostic question, exactly like a
+    # gate-failing card. `identify_printing`'s own candidate grid is deliberately not
+    # elimination-filtered: narrowing the served SUGGESTION is this feature's scope; a voter
+    # asked "which of these is it" should still be able to pick the correct printing even after
+    # a wrong suggestion was eliminated.
     if windowed:
         return _identify_printing_item(windowed[0])
     return None
