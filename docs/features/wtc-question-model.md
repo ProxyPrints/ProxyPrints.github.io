@@ -221,6 +221,24 @@ alone.
 A single attribute asked cold, with no printing context. Retained for the contexts where we
 genuinely need one attribute answered on its own.
 
+### border — asked cold (2026-08-11, per-element question types)
+
+The border colour axis asked on its own: renders the plain scan with the four
+`BORDER_COLOR_GROUP` chips as the entire answer surface (Black / White / Silver / Borderless,
+additive-only scope - no new vote model, endpoint, or schema shape beyond the `border`
+question-type value). Built as `_border_item` in `question_feed.py` + `BorderColorQuestion.tsx`
+(votes through the same `useTagVoting` path as the narrowing chips, §5 rule 1: only what the
+current question needs). No reveal treatment - a non-candidate question like artist/tag.
+
+**Symbols and collector lines are explicitly NOT built as question types** (2026-08-11, same
+scope), each for a different reason. The set symbol has no vote target - nothing in the vote
+system records a set/expansion judgement - and reading one by sight is expert knowledge a lay
+user cannot reliably give, so a `symbol` question would harvest guesses rather than votes. The
+collector line has no vote target either: `ImageEvidence.collector_line_*` is OCR-written
+evidence with no `CardCollectorLineVote` model or endpoint behind it (see §2's recorded-only
+treatment), so a `collector_line` answer would have nothing to cast through; asking it would
+be a pointless question. Both stay gaps - documented, not built.
+
 ## 8. Layout technique (restated from SPEC §3, unchanged)
 
 Container-first. Components style against their container via `@container`, never the
@@ -254,6 +272,14 @@ All items ruled 2026-08-11. Nothing in this document is awaiting a decision.
    collector line is the unmatched element, ask about the collector line. "Route to the gap"
    and "ask about the missing element" are the same rule. A printing confirmation is not
    offered until all four elements match.
+4. **`border` becomes a first-class question type; `symbol` and `collector_line` are ruled
+   out for now** (§7.7). Border adds the `border` question-type value, the `_border_item`
+   feed builder, and the `BorderColorQuestion` render branch - the answer surface is the four
+   `BORDER_COLOR_GROUP` chips, casting real `CardTagVote`s through the existing chip
+   machinery, so no new vote model or endpoint is required. Symbol is ruled out against §5:
+   set symbols by sight are expert knowledge, so the question would harvest guesses, not
+   votes. Collector line is ruled out for lack of a vote target: `ImageEvidence. collector_line_*` is OCR-written evidence, and there is no `CardCollectorLineVote` model
+   or endpoint to cast through. Both gaps are recorded in §7.7 and stay unbuilt.
 
 Earlier rulings folded into the body above: illustration votes never imply a printing
 whatever the group size; each voting axis is a first-class question; confirming and
