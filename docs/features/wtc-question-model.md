@@ -42,7 +42,15 @@ is not true.
 
 All four: **border, artist credit, set symbol, collector line.** Recorded, never inferred —
 `CardScanLog.evidence_types_used` is the field, and it must be populated for the claim to be
-made.
+made. The four values it can carry are `"border"`, `"artist"`, `"symbol"`, `"collector_line"`
+(`cardpicker.local_calculate_verdicts.calculate_fallback_verdict`, 2026-08-11). The first
+three FILTER `CandidatePrinting` survivors as well as being recorded; `collector_line` is
+RECORDED ONLY — "present" means `ImageEvidence.collector_line_collector_number` is non-empty
+(a set code with no number is a much weaker read, matching every printing in the set, so it
+does not count) — and it never filters, never changes a `skip_reason`, and never changes a
+`CardPrintingTag` confidence. That asymmetry is deliberate: folding it into the same filter as
+the other three would change which candidates a machine vote can survive against, and no
+change to machine votes was in scope for adding it.
 
 - All four matched → a printing confirmation may be offered. It must still carry escapes
   that produce better data rather than a bare skip.
