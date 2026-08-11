@@ -365,6 +365,27 @@ def _tag_item(card: Card, tag_name: str) -> QuestionFeedItem:
     return QuestionFeedItem(type=TypeEnum.tag, card=card.serialise(), tagName=tag_name)
 
 
+def _border_item(card: Card) -> QuestionFeedItem:
+    """
+    The per-element border question (wtc-question-model.md §7): asks which of the four
+    border colours - Black / White / Silver / Borderless, the exclusive `BORDER_COLOR_GROUP`
+    axis - this card has. Renders the border axis alone as the answer surface; each chip tap
+    casts through the existing `CardTagVote` path (`useTagVoting`/`APISubmitTagVote`, the same
+    call every other attribute chip in the feed makes), so no new vote model or endpoint is
+    involved. `tagConfidence` carries the full attribute-chip net-polarity set (the same
+    payload confirm/identify items ship) so the frontend can seed the chips' fill overlay; the
+    border chips are the only ones the border question renders.
+
+    Additive-only by scope: this builder exists beside `_artist_item`/`_tag_item` but is NOT
+    wired into `get_next_question_feed_item`'s selection/waterfall, which PR #775 owns.
+    """
+    return QuestionFeedItem(
+        type=TypeEnum.border,
+        card=card.serialise(),
+        tagConfidence=_tag_confidence(card),
+    )
+
+
 def _printing_vote_tuples(card: Card) -> list[VoteTuple]:
     """
     Builds `VoteTuple`s for the current `CardPrintingTag` rows of `card`'s md5 IDENTITY GROUP -
