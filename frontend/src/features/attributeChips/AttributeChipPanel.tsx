@@ -221,8 +221,8 @@ export function AttributeChipPanel({
 
   // EXCLUSION_GROUPS[0] (Border Color) renders left, [1] (Frame Style) renders right - an
   // arbitrary but fixed assignment, not a semantic left/right meaning for either group.
-  // [2] (Frame Treatment) renders bottom, full width - it gates Border Color's own
-  // visibility (isChipContradicted), so it can't share a flanking column with it.
+  // [2] (Frame Treatment, now just Showcase/Extended Art) renders bottom, full width, since it
+  // has no natural left/right partner of its own.
   const [leftGroup, rightGroup, bottomGroup] = EXCLUSION_GROUPS;
   const isFlat = cardSlot == null;
 
