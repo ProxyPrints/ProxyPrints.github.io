@@ -296,10 +296,11 @@ test.describe("question feed - Level 3 (conditional open-attribute confirm)", ()
 
 // Issue #503 (WTC phase C1) - grouping the Level 2 candidate grid by shared Scryfall
 // illustration. `questionFeedIdentifyPrintingGroupedByIllustration` serves a MIXED set:
-// candidateA/B share an illustration (a real cluster), candidateC has its own distinct
-// illustrationId (no sibling), candidateD carries no illustrationId at all - the nullable,
+// candidateA/B share an illustration (a real 2-member cluster), candidateC has its own
+// distinct illustrationId (a cluster of one - group size is orthogonal to whether a candidate
+// clusters at all), candidateD carries no illustrationId at all - the nullable,
 // frequently-absent shape (CanonicalPrintingMetadata.illustration_id, see
-// local_illustration.py:137's isnull filter).
+// local_illustration.py:137's isnull filter) and the only one of the four that never clusters.
 test.describe("question feed - Level 2 illustration grouping", () => {
   test("every candidate in a mixed illustration set is accounted for - a group collapses to its one representative tile, ungrouped candidates still render individually", async ({
     page,
@@ -340,7 +341,7 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     }
   });
 
-  test("only the illustration group's representative candidate renders inside its one illustration-group container; unique/null-illustration candidates don't", async ({
+  test("only the illustration group's representative candidate renders inside its own illustration-group container; a null-illustration candidate never clusters", async ({
     page,
     network,
   }) => {
@@ -350,34 +351,39 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const group = page.getByTestId("question-feed-illustration-group");
-    await expect(group).toHaveCount(1);
-    await expect(group).toHaveAttribute(
-      "data-illustration-id",
-      "illustration-shared"
+    // Two groups render: A/B's real 2-member cluster, and C's own cluster of one (group size
+    // is orthogonal to whether a candidate clusters at all).
+    const groups = page.getByTestId("question-feed-illustration-group");
+    await expect(groups).toHaveCount(2);
+
+    const sharedGroup = page.locator(
+      '[data-testid="question-feed-illustration-group"][data-illustration-id="illustration-shared"]'
     );
     await expect(
-      group.locator(
+      sharedGroup.locator(
         `[data-card-identifier="${illustrationGroupCandidateA.identifier}"]`
       )
     ).toHaveCount(1);
     // candidateB shares the illustration but has no art crop, so A wins the representative
     // pick and the group renders only A's tile - not B's.
     await expect(
-      group.locator(
+      sharedGroup.locator(
         `[data-card-identifier="${illustrationGroupCandidateB.identifier}"]`
       )
     ).toHaveCount(0);
 
-    // candidateC (distinct illustrationId, no sibling) and candidateD (null illustrationId)
-    // both render OUTSIDE the clustered group - neither forms (or joins) a cluster of one.
+    const soloGroup = page.locator(
+      '[data-testid="question-feed-illustration-group"][data-illustration-id="illustration-unique-to-c"]'
+    );
     await expect(
-      group.locator(
+      soloGroup.locator(
         `[data-card-identifier="${illustrationGroupCandidateC.identifier}"]`
       )
-    ).toHaveCount(0);
+    ).toHaveCount(1);
+
+    // candidateD (null illustrationId) never forms or joins any cluster.
     await expect(
-      group.locator(
+      groups.locator(
         `[data-card-identifier="${illustrationGroupCandidateD.identifier}"]`
       )
     ).toHaveCount(0);
@@ -393,21 +399,25 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const group = page.getByTestId("question-feed-illustration-group");
+    const sharedGroup = page.locator(
+      '[data-testid="question-feed-illustration-group"][data-illustration-id="illustration-shared"]'
+    );
     await expect(
-      group.locator(
+      sharedGroup.locator(
         `[data-card-identifier="${illustrationGroupCandidateA.identifier}"] img`
       )
     ).toHaveAttribute("src", illustrationGroupCandidateA.artCropUrl as string);
 
+    // candidateD is the only member of this mixed set with no illustrationId, so it's the
+    // only one that stays in the flat ungrouped grid at all.
     const ungroupedGrid = page.getByTestId(
       "question-feed-candidate-grid-ungrouped"
     );
     await expect(
       ungroupedGrid.locator(
-        `[data-card-identifier="${illustrationGroupCandidateC.identifier}"] img`
+        `[data-card-identifier="${illustrationGroupCandidateD.identifier}"] img`
       )
-    ).toHaveAttribute("src", illustrationGroupCandidateC.mediumThumbnailUrl);
+    ).toHaveAttribute("src", illustrationGroupCandidateD.mediumThumbnailUrl);
   });
 
   // Issue #746 - the illustration crop isn't card-shaped, so its tile's frame must not force
@@ -426,8 +436,10 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     // tile - the tile's total height also includes the caption strip below the frame, whose
     // own fixed text height would dilute the frame's actual aspect ratio at narrow tile
     // widths where the caption is a larger fraction of the total.
-    const group = page.getByTestId("question-feed-illustration-group");
-    const groupFrameBox = await group
+    const sharedGroup = page.locator(
+      '[data-testid="question-feed-illustration-group"][data-illustration-id="illustration-shared"]'
+    );
+    const groupFrameBox = await sharedGroup
       .locator(
         `[data-card-identifier="${illustrationGroupCandidateA.identifier}"]`
       )
@@ -439,12 +451,13 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     expect(groupFrameRatio).toBeGreaterThan(1.2);
     expect(groupFrameRatio).toBeLessThan(1.4);
 
+    // candidateD is the only member of this mixed set that stays in the flat ungrouped grid.
     const ungroupedGrid = page.getByTestId(
       "question-feed-candidate-grid-ungrouped"
     );
     const ungroupedFrameBox = await ungroupedGrid
       .locator(
-        `[data-card-identifier="${illustrationGroupCandidateC.identifier}"]`
+        `[data-card-identifier="${illustrationGroupCandidateD.identifier}"]`
       )
       .getByTestId("question-feed-candidate-art-frame")
       .boundingBox();
@@ -470,7 +483,13 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     );
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const credit = page.getByTestId("question-feed-illustration-credit");
+    // Both illustration groups (A/B's cluster and C's own cluster of one) carry the same
+    // artist, so scope to the shared-illustration group specifically to keep this locator
+    // unambiguous.
+    const sharedGroup = page.locator(
+      '[data-testid="question-feed-illustration-group"][data-illustration-id="illustration-shared"]'
+    );
+    const credit = sharedGroup.getByTestId("question-feed-illustration-credit");
     const applet = credit.getByTestId("artist-support-applet");
     await expect(applet.getByTestId("artist-support-link")).toContainText(
       "Some Artist"
@@ -557,7 +576,7 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     expect(printingTagSubmitted).toBe(false);
   });
 
-  test("selecting an ungrouped candidate (distinct or null illustrationId) still submits to /2/submitPrintingTag/, unchanged", async ({
+  test("selecting a null-illustration candidate still submits to /2/submitPrintingTag/, unchanged", async ({
     page,
     network,
   }) => {
@@ -581,9 +600,49 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    // candidateC carries its own distinct illustrationId (no sibling, so it never clusters) -
-    // exercises the "distinct" half of this title alongside candidateD's null-illustrationId
-    // case already covered by the mixed-set rendering test above.
+    // candidateD is the only member of this mixed set with no illustrationId - the only one
+    // that never clusters and stays on the ungrouped /2/submitPrintingTag/ path.
+    await page
+      .locator(
+        `[data-card-identifier="${illustrationGroupCandidateD.identifier}"]`
+      )
+      .click();
+
+    await expect
+      .poll(() => submittedPrinting?.printingIdentifier)
+      .toBe(illustrationGroupCandidateD.identifier);
+    expect(submittedPrinting?.isNoMatch).toBe(false);
+    expect(illustrationVoteSubmitted).toBe(false);
+  });
+
+  // Issue #503 (WTC composition pass) - the old `>= 2` cluster rule is deleted: group size is
+  // orthogonal to whether a candidate clusters at all. candidateC has its own distinct
+  // illustrationId and no sibling, but still forms a cluster of one and still votes through
+  // the illustration channel, never a direct printing vote.
+  test("a singleton illustration still submits its illustrationId to /2/submitIllustrationVote/, never /2/submitPrintingTag/", async ({
+    page,
+    network,
+  }) => {
+    let submittedIllustrationVote:
+      | { illustrationId?: string; isUnknown?: boolean }
+      | undefined;
+    let printingTagSubmitted = false;
+    network.use(
+      questionFeedIdentifyPrintingGroupedByIllustration,
+      submitIllustrationVoteCastsPrintingAndArtist,
+      submitTagVoteResolvesToApply,
+      ...defaultHandlers
+    );
+    page.on("request", (request) => {
+      if (request.url().includes("/2/submitIllustrationVote/")) {
+        submittedIllustrationVote = request.postDataJSON();
+      }
+      if (request.url().includes("/2/submitPrintingTag/")) {
+        printingTagSubmitted = true;
+      }
+    });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
     await page
       .locator(
         `[data-card-identifier="${illustrationGroupCandidateC.identifier}"]`
@@ -591,15 +650,15 @@ test.describe("question feed - Level 2 illustration grouping", () => {
       .click();
 
     await expect
-      .poll(() => submittedPrinting?.printingIdentifier)
-      .toBe(illustrationGroupCandidateC.identifier);
-    expect(submittedPrinting?.isNoMatch).toBe(false);
-    expect(illustrationVoteSubmitted).toBe(false);
+      .poll(() => submittedIllustrationVote?.illustrationId)
+      .toBe("illustration-unique-to-c");
+    expect(submittedIllustrationVote).not.toHaveProperty("printingIdentifier");
+    expect(printingTagSubmitted).toBe(false);
   });
 });
 
 test.describe("question feed - confirm_suggestion question type", () => {
-  test("lands on the suggested-match question - the suggestion is asked about in its own slot on page one, never re-judged as a grid tile", async ({
+  test("lands on the suggested-match question - the suggestion is asked about in its own slot, never re-presented as a grid tile", async ({
     page,
     network,
   }) => {
@@ -612,14 +671,12 @@ test.describe("question feed - confirm_suggestion question type", () => {
     await expect(
       page.getByTestId("question-feed-suggestion-yes")
     ).toBeVisible();
-    // Issue #728 - the de-laddered feed shows the rest of the candidates on the SAME page,
-    // and the suggested candidate is never re-presented as a tile (judged once, in its slot).
+    // The suggested candidate is judged once, in its own slot, never re-presented as a tile -
+    // the rest of the candidates render only once "Not this art" summons the identification
+    // question (its own dedicated test above), not on this fresh page.
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
     ).toHaveCount(0);
-    await expect(
-      page.locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
-    ).toBeVisible();
 
     // Regression check (#49 dropped this): the suggestion slot still needs its own reference
     // render of the suggested printing to compare against - "Is it this one?" is
@@ -664,7 +721,23 @@ test.describe("question feed - confirm_suggestion question type", () => {
       .toBe(printingCandidate1.identifier);
   });
 
-  test("NOT SURE records an abstention and advances to the next question, without casting a printing vote", async ({
+  test("confirm_suggestion's own question renders no chip panel and no candidate grid", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await expect(
+      page.getByTestId("question-feed-suggestion-yes")
+    ).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-panel")).toHaveCount(0);
+    await expect(
+      page.getByTestId("question-feed-candidate-grid-ungrouped")
+    ).toHaveCount(0);
+  });
+
+  test("SKIP records an abstention and advances to the next question, without casting a printing vote", async ({
     page,
     network,
   }) => {
@@ -689,10 +762,8 @@ test.describe("question feed - confirm_suggestion question type", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-suggestion-not-sure").click();
+    await page.getByTestId("question-feed-suggestion-skip").click();
 
-    // Issue #728 - "Not sure" means "I can't resolve this": abstention + advance to the next
-    // question, not a second page re-judging the same candidates.
     expect(printingTagSubmitted).toBe(false);
     await expect.poll(() => feedFetchCount).toBeGreaterThanOrEqual(2);
     await expect
@@ -701,26 +772,31 @@ test.describe("question feed - confirm_suggestion question type", () => {
     expect(abstentionBody.questionType).toBe("confirm_suggestion");
   });
 
-  test("NO on the suggestion collapses its slot (rejected candidate stays in the grid as a de-emphasised, re-selectable tile) and keeps the remaining candidates selectable on the same page, without casting a vote", async ({
+  test("'Not this art' gives way to the candidate-grid identification question, where the rejected suggestion stays as a de-emphasised, re-selectable tile, and keeps the remaining candidates selectable, without casting a vote", async ({
     page,
     network,
   }) => {
-    // Issue #728 - the suggestion slot is judged once and collapses on NO (no stage
-    // transition); issue #748 - the rejected suggestion does NOT vanish: it joins the grid
-    // as a de-emphasised (`data-rejected="true"`) tile that stays fully selectable (the
+    // Issue #728 - the suggestion slot is judged once and gives way on "Not this art" (no
+    // stage transition); issue #748 - the rejected suggestion does NOT vanish: it joins the
+    // grid as a de-emphasised (`data-rejected="true"`) tile that stays fully selectable (the
     // reconsider path), while the remaining candidate (printingCandidate2) stays selectable
-    // on the SAME page. NO itself still casts no vote in the general (non-singleton) case.
-    // See rejectSuggestion/rejectedCandidateIds in QuestionFeed.tsx.
+    // on the SAME page. "Not this art" itself casts no vote - see markNotThisArt in
+    // QuestionFeed.tsx for why no backend channel records "this specific illustration is
+    // wrong".
     let printingTagSubmitted = false;
+    let illustrationVoteSubmitted = false;
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     page.on("request", (request) => {
       if (request.url().includes("/2/submitPrintingTag/")) {
         printingTagSubmitted = true;
       }
+      if (request.url().includes("/2/submitIllustrationVote/")) {
+        illustrationVoteSubmitted = true;
+      }
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-suggestion-no").click();
+    await page.getByTestId("question-feed-suggestion-not-this-art").click();
 
     // #748 - the rejected suggestion is present, but only as the de-emphasised tile.
     await expect(
@@ -737,29 +813,23 @@ test.describe("question feed - confirm_suggestion question type", () => {
     // contextual copy replaces the suggestion slot's "Is it this one?"
     await expect(
       page.getByTestId("question-feed-suggestion-prompt")
-    ).toContainText("Is it any official printing at all?");
+    ).toContainText("let's find the actual printing");
     expect(printingTagSubmitted).toBe(false);
+    expect(illustrationVoteSubmitted).toBe(false);
   });
 
-  test("NO on a singleton suggestion (no other candidates) casts the terminal no-match vote immediately, keeping the rejected candidate as a de-emphasised grid tile", async ({
+  test("'Not this art' on a singleton suggestion leaves the rejected candidate as the grid's one de-emphasised tile and casts nothing automatically", async ({
     page,
     network,
   }) => {
-    // Owner-reported dedup bug (docs/features/printing-tags.md's questionFeed section): the
-    // suggestion slot's "Is it M21 203?" -> NO, where M21 203 was the card's ONLY candidate.
-    // Previously (this test used to assert `printingTagSubmitted === false` here - that
-    // assertion WAS the bug, not a correct behavior spec) "No" cast no vote at all and merely
-    // revealed a further "None of these" tap the user still had to make; if that tap never
-    // happened, no CardPrintingTag row ever existed for question_feed.py's tier-1 exclusion to
-    // match against, so the exact same question resurfaced on the next feed fetch. Since there
-    // is nothing else this card's "No" could mean (no other candidate exists), it must now be
-    // treated as the terminal answer: the same isNoMatch vote "None of these" itself casts is
-    // submitted the moment "No" is tapped, with no further tap required. (Issue #728 - the
-    // ladder is gone, so this lives on the same page; the singleton path is unchanged.)
-    let submittedPrinting: {
-      printingIdentifier?: string;
-      isNoMatch?: boolean;
-    } = {};
+    // The singleton case no longer auto-casts a terminal isNoMatch vote (that shortcut
+    // belonged to the old "No, different printing" answer, whose claim was "no OTHER
+    // candidate matches" - a claim "Not this art" doesn't make; "wrong artwork entirely" has
+    // nothing to auto-vote). The user reaches the same "None of these" fallback explicitly,
+    // via the identification body's own bottom row, same as identify_printing.
+    let submittedPrinting:
+      | { printingIdentifier?: string; isNoMatch?: boolean }
+      | undefined;
     network.use(
       questionFeedConfirmSuggestionSingleton,
       submitPrintingTagNoMatch,
@@ -772,10 +842,8 @@ test.describe("question feed - confirm_suggestion question type", () => {
     });
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    await page.getByTestId("question-feed-suggestion-no").click();
+    await page.getByTestId("question-feed-suggestion-not-this-art").click();
 
-    // #748 - the rejected singleton stays reachable in the grid as the single de-emphasised,
-    // re-selectable tile; the "none left" state is decided by candidate count, not grid count.
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate1.identifier}"]`)
     ).toHaveCount(1);
@@ -784,20 +852,47 @@ test.describe("question feed - confirm_suggestion question type", () => {
         `[data-card-identifier="${printingCandidate1.identifier}"][data-rejected="true"]`
       )
     ).toBeVisible();
-    // contextual copy replaces the generic "Which of these is it?" grid prompt
-    await expect(
-      page.getByTestId("question-feed-suggestion-prompt")
-    ).toContainText("Is it any official printing at all?");
-    // rejected candidate stays visible as grayed, non-interactive context
     const rejectedContext = page.getByTestId("question-feed-rejected-context");
     await expect(rejectedContext).toBeVisible();
     await expect(rejectedContext).toContainText("not");
+    // nothing cast automatically - "None of these" is still one explicit tap away
+    expect(submittedPrinting).toBeUndefined();
 
-    // the terminal no-match vote is cast automatically - no further "None of these" tap needed
-    await expect.poll(() => submittedPrinting.isNoMatch).toBe(true);
-    expect(submittedPrinting.printingIdentifier).toBeUndefined();
-    // ...and hands off to the same "why not" follow-up "None of these" itself opens
+    await page.getByTestId("question-feed-no-match").click();
+    await expect.poll(() => submittedPrinting?.isNoMatch).toBe(true);
+    expect(submittedPrinting?.printingIdentifier).toBeUndefined();
     await expect(page.getByTestId("no-match-reason-strip")).toBeVisible();
+  });
+
+  test("'Same art, but...' casts the illustration vote for the suggested printing on tap, then summons the border/frame attribute chips - no candidate grid", async ({
+    page,
+    network,
+  }) => {
+    let submittedIllustrationVote:
+      | { illustrationId?: string; isUnknown?: boolean }
+      | undefined;
+    network.use(
+      questionFeedConfirmSuggestion,
+      submitIllustrationVoteCastsPrintingAndArtist,
+      submitTagVoteResolvesToApply,
+      ...defaultHandlers
+    );
+    page.on("request", (request) => {
+      if (request.url().includes("/2/submitIllustrationVote/")) {
+        submittedIllustrationVote = request.postDataJSON();
+      }
+    });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    await page.getByTestId("question-feed-suggestion-same-art-but").click();
+
+    await expect
+      .poll(() => submittedIllustrationVote?.illustrationId)
+      .toBe(printingCandidate1.illustrationId);
+    await expect(page.getByTestId("attribute-chip-panel")).toBeVisible();
+    await expect(
+      page.getByTestId("question-feed-candidate-grid-ungrouped")
+    ).toHaveCount(0);
   });
 
   test("at a 390px mobile viewport, no answer control overlaps the card art", async ({
@@ -807,10 +902,8 @@ test.describe("question feed - confirm_suggestion question type", () => {
     // Regression guard for a real-device-only bug (not reproducible in this sandbox's
     // Chromium): the pinned reference card (Subject, A2) used a sticky, negative-z-index
     // CardPanel that composited incorrectly on a real phone at narrow widths - answer controls
-    // painted overlapping the card art instead of cleanly below it. The de-laddered feed
-    // (issue #728) renders this same card panel for every candidate question, so the guard
-    // now covers the whole single-page surface: suggestion slot + bottom row. This asserts
-    // the non-overlap property directly via bounding-box math rather than relying on visual
+    // painted overlapping the card art instead of cleanly below it. This asserts the
+    // non-overlap property directly via bounding-box math rather than relying on visual
     // diffing this sandbox can't validate against real hardware anyway.
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     await page.setViewportSize({ width: 390, height: 844 });
@@ -831,11 +924,9 @@ test.describe("question feed - confirm_suggestion question type", () => {
       page.getByTestId("question-feed-tier-badge"),
       page.getByTestId("question-feed-suggestion-prompt"),
       page.getByTestId("question-feed-suggestion-yes"),
-      page.getByTestId("question-feed-suggestion-not-sure"),
-      page.getByTestId("question-feed-suggestion-no"),
-      page.getByTestId("question-feed-no-match"),
-      page.getByTestId("question-feed-custom-art"),
-      page.getByTestId("question-feed-skip"),
+      page.getByTestId("question-feed-suggestion-same-art-but"),
+      page.getByTestId("question-feed-suggestion-not-this-art"),
+      page.getByTestId("question-feed-suggestion-skip"),
     ];
     for (const control of controls) {
       const controlBox = await control.boundingBox();

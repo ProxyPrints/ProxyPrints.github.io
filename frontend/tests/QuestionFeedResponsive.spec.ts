@@ -310,8 +310,9 @@ test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
 
     for (const testId of [
       "question-feed-suggestion-yes",
-      "question-feed-suggestion-not-sure",
-      "question-feed-suggestion-no",
+      "question-feed-suggestion-same-art-but",
+      "question-feed-suggestion-not-this-art",
+      "question-feed-suggestion-skip",
     ]) {
       const box = await page.getByTestId(testId).boundingBox();
       expect(box).not.toBeNull();
@@ -715,7 +716,7 @@ test.describe("question feed - hover-zoom is not clipped by its frame (issue #70
 // content-sized width, like its ActionGrid siblings. Hierarchy comes from position (its own
 // row, above the grid) and its `.primary` colour, not from disproportionate size.
 test.describe("question feed - suggestion-slot answer-row hierarchy (issue #711)", () => {
-  test("the Yes button reads at the same font size as its 'Not sure' sibling", async ({
+  test("the Yes button reads at the same font size as its 'Same art, but...' sibling", async ({
     page,
     network,
   }) => {
@@ -723,17 +724,19 @@ test.describe("question feed - suggestion-slot answer-row hierarchy (issue #711)
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     const yesButton = page.getByTestId("question-feed-suggestion-yes");
-    const notSureButton = page.getByTestId("question-feed-suggestion-not-sure");
+    const sameArtButButton = page.getByTestId(
+      "question-feed-suggestion-same-art-but"
+    );
     await expect(yesButton).toBeVisible();
-    await expect(notSureButton).toBeVisible();
+    await expect(sameArtButButton).toBeVisible();
 
     const yesFontSize = await yesButton.evaluate(
       (el) => window.getComputedStyle(el).fontSize
     );
-    const notSureFontSize = await notSureButton.evaluate(
+    const sameArtButFontSize = await sameArtButButton.evaluate(
       (el) => window.getComputedStyle(el).fontSize
     );
-    expect(yesFontSize).toBe(notSureFontSize);
+    expect(yesFontSize).toBe(sameArtButFontSize);
   });
 
   test("the Yes button sizes to its content instead of spanning full width (issue #740)", async ({
@@ -745,17 +748,20 @@ test.describe("question feed - suggestion-slot answer-row hierarchy (issue #711)
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     const yesButton = page.getByTestId("question-feed-suggestion-yes");
-    const notSureButton = page.getByTestId("question-feed-suggestion-not-sure");
+    const sameArtButButton = page.getByTestId(
+      "question-feed-suggestion-same-art-but"
+    );
     await expect(yesButton).toBeVisible();
-    await expect(notSureButton).toBeVisible();
+    await expect(sameArtButButton).toBeVisible();
 
     const yesBox = await yesButton.boundingBox();
-    const notSureBox = await notSureButton.boundingBox();
+    const sameArtButBox = await sameArtButButton.boundingBox();
     expect(yesBox).not.toBeNull();
-    expect(notSureBox).not.toBeNull();
+    expect(sameArtButBox).not.toBeNull();
     // A content-sized button's width tracks its label length, not a fixed ratio - 1.5x is a
-    // generous tolerance for "Yes — that's the one" being a longer label than "Not sure",
-    // while still catching a full-width regression (which measures ~2x at this viewport).
-    expect(yesBox!.width).toBeLessThan(notSureBox!.width * 1.5);
+    // generous tolerance for "Yes — that's the one" being a longer label than "Same art,
+    // but...", while still catching a full-width regression (which measures ~2x at this
+    // viewport).
+    expect(yesBox!.width).toBeLessThan(sameArtButBox!.width * 1.5);
   });
 });
