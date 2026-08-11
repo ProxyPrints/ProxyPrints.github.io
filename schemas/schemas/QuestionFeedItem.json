@@ -5,7 +5,13 @@
   "properties": {
     "type": {
       "type": "string",
-      "enum": ["confirm_suggestion", "identify_printing", "artist", "tag"]
+      "enum": [
+        "confirm_suggestion",
+        "identify_printing",
+        "artist",
+        "tag",
+        "border"
+      ]
     },
     "card": { "$ref": "./Card.json" },
     "suggestedPrinting": { "$ref": "./PrintingCandidate.json" },
