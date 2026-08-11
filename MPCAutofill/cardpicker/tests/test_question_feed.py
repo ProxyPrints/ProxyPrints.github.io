@@ -33,6 +33,7 @@ from cardpicker.printing_consensus import (
 )
 from cardpicker.question_feed import (
     _artist_item,
+    _border_item,
     _likely_resolve_printing_card,
     _scryfall_illustration_url,
     _tier_1_confirm_suggestion,
@@ -485,6 +486,39 @@ class TestScryfallIllustrationUrl:
         item = _artist_item(card)
 
         assert item.scryfallIllustrationUrl is None
+
+
+class TestBorderItem:
+    """`_border_item` - the per-element border question (wtc-question-model.md §7): asks
+    which of the four border colours (Black / White / Silver / Borderless, the exclusive
+    BORDER_COLOR_GROUP axis) a card has. Self-contained builder: not wired into the
+    selection/waterfall (PR #775 owns that), casts through the existing tag-vote path.
+    """
+
+    def test_border_item_is_type_border(self, db):
+        card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        item = _border_item(card)
+
+        assert item.type.value == "border"
+        assert item.card.name == card.name
+
+    def test_border_item_carries_tag_confidence_for_the_seeded_border_chips(self, db):
+        # Seed the four border-axis tags the way production's seed_attribute_tags does - the
+        # payload must carry each one's net polarity so the frontend chips get a fill overlay,
+        # reading 0.0 (neutral) for unvoted chips rather than being absent.
+        for tag_name in ("Black Border", "White Border", "Silver Border", "Borderless"):
+            TagFactory(name=tag_name)
+        card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        item = _border_item(card)
+
+        assert item.tagConfidence == {
+            "Black Border": 0.0,
+            "White Border": 0.0,
+            "Silver Border": 0.0,
+            "Borderless": 0.0,
+        }
 
 
 def _remaining_estimate(*args, **kwargs):

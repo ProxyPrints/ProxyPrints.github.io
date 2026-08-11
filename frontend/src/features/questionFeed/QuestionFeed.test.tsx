@@ -9,8 +9,16 @@ import { http, HttpResponse } from "msw";
 import React from "react";
 import { Provider } from "react-redux";
 
-import { localBackend, localBackendURL } from "@/common/test-constants";
-import { submitTagVoteResolvesToApply, tagsNoResults } from "@/mocks/handlers";
+import {
+  cardDocument9,
+  localBackend,
+  localBackendURL,
+} from "@/common/test-constants";
+import {
+  questionFeedBorder,
+  submitTagVoteResolvesToApply,
+  tagsNoResults,
+} from "@/mocks/handlers";
 import { server } from "@/mocks/server";
 import { setupStore } from "@/store/store";
 
@@ -1314,5 +1322,63 @@ describe("QuestionFeed", () => {
 
       expect(abstentionCalls).toBe(0);
     });
+  });
+
+  // Border question type (per-element question types branch): the answer surface is the four
+  // BORDER_COLOR_GROUP chips rendered through the shared useTagVoting machinery (see
+  // BorderColorQuestion.tsx) - a tap casts a real CardTagVote on the existing
+  // /2/submitTagVote/ path with voteSurface "question-feed", not a new vote model. And like
+  // the other non-candidate question types (artist/tag), the subject card renders with no
+  // reveal treatment - no revealCard() here.
+  it("renders the border-colour chips for a border question and casts a tag vote on tap", async () => {
+    server.use(questionFeedBorder);
+    let tagVoteBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        tagVoteBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(
+          {
+            tagName: "Black Border",
+            resolvedPolarity: 1,
+            netPolarity: 1,
+            tally: [{ polarity: 1, count: 1 }],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+
+    // the border axis's four chips are the whole answer surface - and only them (§5 rule 1:
+    // "render only what the current question needs"), so no standalone chips like "Full Art".
+    expect(
+      await screen.findByTestId("attribute-chip-Black Border")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("attribute-chip-White Border")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("attribute-chip-Silver Border")
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("attribute-chip-Borderless")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("attribute-chip-Full Art")
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
+
+    await waitFor(() => expect(tagVoteBody).toBeDefined());
+    expect(tagVoteBody).toMatchObject({
+      identifier: cardDocument9.identifier,
+      tagName: "Black Border",
+      polarity: 1,
+      voteSurface: "question-feed",
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("attribute-chip-Black Border")).toHaveAttribute(
+        "data-chip-state",
+        "positive"
+      )
+    );
   });
 });

@@ -456,6 +456,7 @@ class Card(BaseModel):
 
 class TypeEnum(str, Enum):
     artist = "artist"
+    border = "border"
     confirmsuggestion = "confirm_suggestion"
     identifyprinting = "identify_printing"
     tag = "tag"

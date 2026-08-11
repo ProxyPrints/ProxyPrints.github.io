@@ -318,6 +318,7 @@ export enum TagVoteDisplayStatus {
 
 export enum Type {
   Artist = "artist",
+  Border = "border",
   ConfirmSuggestion = "confirm_suggestion",
   IdentifyPrinting = "identify_printing",
   Tag = "tag",
