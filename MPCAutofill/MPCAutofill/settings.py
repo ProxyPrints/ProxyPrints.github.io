@@ -105,20 +105,13 @@ ILLUSTRATION_MIN_SHARE = env.float("ILLUSTRATION_MIN_SHARE", default=PRINTING_TA
 # weight/threshold/gate. See docs/features/printing-tags.md's "Unified question feed" section.
 QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO = env.float("QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO", default=0.51)
 
-# Relative target-share weights for the three REMAINDER lanes (confirm/contested/cold) -
-# `cardpicker.question_feed._remainder_lane_order`'s proportional-fairness policy tries whichever
-# lane is furthest below its own weight/total share of a session's remainder history first, so
-# confirm's much larger real supply (28,112 machine-suggested cards) never crowds contested/cold
-# (500-entry pools each) out of a session entirely, the way a fixed confirm-first order did. Not
-# required to sum to any particular total - normalised against their own sum, not against 1.0.
-# Chosen defaults (3:2:1 -> roughly 50%/33%/17%), not derived from any existing measurement:
-# confirm stays the largest share since a quick suggestion-confirmation is genuinely lower voter
-# effort than the other two; contested outweighs cold since resolving a live disagreement is
-# higher-value than a totally untouched card. See "Remainder mix policy" in this module's own
-# docstring.
-QUESTION_FEED_CONFIRM_MIX_WEIGHT = env.float("QUESTION_FEED_CONFIRM_MIX_WEIGHT", default=3.0)
-QUESTION_FEED_CONTESTED_MIX_WEIGHT = env.float("QUESTION_FEED_CONTESTED_MIX_WEIGHT", default=2.0)
-QUESTION_FEED_COLD_MIX_WEIGHT = env.float("QUESTION_FEED_COLD_MIX_WEIGHT", default=1.0)
+# QUESTION_FEED_CONFIRM_MIX_WEIGHT/_CONTESTED_MIX_WEIGHT/_COLD_MIX_WEIGHT (2026-08-10, defaults
+# 3/2/1) removed (issue #766): they rationed a fixed SHARE of a session's questions to
+# confirm_suggestion regardless of whether the machine's own evidence justified asking it. The
+# ratified question model (docs/features/wtc-question-model.md §2/§3) replaces the ratio with a
+# GATE instead - confirm_suggestion is offered only when the card's own recorded evidence is
+# complete (`cardpicker.question_feed._evidence_justifies_confirmation`) - so there is no target
+# share left to tune here.
 
 # issue #727: per-lane candidate-pool warm cadence (minutes) - each is its own settings-driven
 # knob, not one global interval, so lane 1 ("churns with every vote cast, wants minutes") and
