@@ -63,7 +63,10 @@ from cardpicker.constants import (
     SAVED_DECK_SNAPSHOT_RING_SIZE,
 )
 from cardpicker.documents import CardSearch
-from cardpicker.illustration_vote import cast_illustration_vote
+from cardpicker.illustration_vote import (
+    cast_illustration_rejection,
+    cast_illustration_vote,
+)
 from cardpicker.integrations.integrations import get_configured_game_integration
 from cardpicker.integrations.patreon import get_patreon_campaign_details, get_patrons
 from cardpicker.models import (
@@ -217,6 +220,8 @@ from cardpicker.schema_types import (
     SubmitArtistVoteRequest,
     SubmitArtistWriteInVoteRequest,
     SubmitArtistWriteInVoteResponse,
+    SubmitIllustrationRejectionRequest,
+    SubmitIllustrationRejectionResponse,
     SubmitIllustrationVoteRequest,
     SubmitIllustrationVoteResponse,
     SubmitPrintingTagRequest,
@@ -1346,6 +1351,54 @@ def post_submit_illustration_vote(request: HttpRequest) -> HttpResponse:
             artistAbstainReason=outcome.artist_abstain_reason,
         ).model_dump()
     )
+
+
+@csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_submit_illustration_rejection(request: HttpRequest) -> HttpResponse:
+    """
+    Submit a vote that a card does NOT depict a specific Scryfall illustration (artwork) -
+    the "Not this art" follow-up to `2/submitIllustrationVote/` (`docs/features/
+    wtc-question-model.md` §7.1). See `illustration_vote.cast_illustration_rejection` and
+    `CardIllustrationRejection`'s own model docstring for the full rationale behind this being a
+    separate endpoint (and a separate model) rather than a polarity flag on the affirmative one.
+
+    Always names a concrete `illustrationId` - unlike `post_submit_illustration_vote`'s request,
+    there is no `isUnknown` branch here: rejecting "unknown" is not a meaningful claim.
+
+    Reuses the same rate-limit plumbing as every other WTC submission endpoint
+    (`_printing_tag_rate_limit_key`/`_printing_tag_rate_limit_rate`).
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many illustration rejection submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = SubmitIllustrationRejectionRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    try:
+        illustration_id = uuid.UUID(req.illustrationId)
+    except (ValueError, AttributeError, TypeError):
+        raise BadRequestException(f"illustrationId {req.illustrationId!r} is not a valid UUID.")
+
+    rejection = cast_illustration_rejection(
+        card=card,
+        anonymous_id=req.anonymousId,
+        illustration_id=illustration_id,
+        user=_requesting_user(request),
+        vote_surface=req.voteSurface,
+    )
+
+    return JsonResponse(SubmitIllustrationRejectionResponse(illustrationId=str(rejection.illustration_id)).model_dump())
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")

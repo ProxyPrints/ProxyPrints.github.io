@@ -2826,6 +2826,60 @@ class SubmitIllustrationVoteResponse(BaseModel):
         return result
 
 
+class SubmitIllustrationRejectionRequest(BaseModel):
+    """
+    2/submitIllustrationRejection/ - the "Not this art" follow-up to
+    2/submitIllustrationVote/. Always names the artwork being rejected (`illustrationId` is
+    required, unlike that endpoint's optional/XOR-with-isUnknown field) - there is no "unknown"
+    analogue for a rejection, see `CardIllustrationRejection`'s own model docstring.
+    """
+
+    anonymousId: str
+    identifier: str
+    illustrationId: str
+    voteSurface: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitIllustrationRejectionRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        illustrationId = from_str(obj.get("illustrationId"))
+        voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
+        return SubmitIllustrationRejectionRequest(anonymousId, identifier, illustrationId, voteSurface)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["illustrationId"] = from_str(self.illustrationId)
+        if self.voteSurface is not None:
+            result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
+        return result
+
+
+class SubmitIllustrationRejectionResponse(BaseModel):
+    """
+    Response to 2/submitIllustrationRejection/. Deliberately narrower than
+    `SubmitIllustrationVoteResponse` - a rejection never writes a printing or artist channel (see
+    `illustration_vote.cast_illustration_rejection`'s own docstring), so there is nothing there
+    to report.
+    """
+
+    illustrationId: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitIllustrationRejectionResponse":
+        assert isinstance(obj, dict)
+        illustrationId = from_str(obj.get("illustrationId"))
+        return SubmitIllustrationRejectionResponse(illustrationId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["illustrationId"] = from_str(self.illustrationId)
+        return result
+
+
 class SubmitTagVoteRequest(BaseModel):
     anonymousId: str
     identifier: str
