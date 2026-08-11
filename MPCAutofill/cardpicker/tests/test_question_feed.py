@@ -34,6 +34,7 @@ from cardpicker.printing_consensus import (
 from cardpicker.question_feed import (
     _artist_item,
     _border_item,
+    _confirm_suggestion_item,
     _likely_resolve_printing_card,
     _scryfall_illustration_url,
     _tier_1_confirm_suggestion,
@@ -56,6 +57,7 @@ from cardpicker.tests.factories import (
     CanonicalPrintingMetadataFactory,
     CardArtistVoteFactory,
     CardFactory,
+    CardIllustrationRejectionFactory,
     CardPrintingTagFactory,
     CardTagVoteFactory,
     TagFactory,
@@ -1184,3 +1186,51 @@ class TestGetNextQuestionFeedItemUsesPools:
             item = get_next_question_feed_item("anon-1")
 
         assert item is None
+
+
+class TestConfirmSuggestionSkipsEliminatedSuggestions:
+    """ "Not this art" closes the loop at the ONE consumer this PR wires: a suggestion whose
+    artwork the group has already reached elimination consensus on must not be re-served as a
+    NEW confirm_suggestion question."""
+
+    def test_the_only_ai_vote_being_eliminated_yields_no_item(self, db):
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        illustration_id = uuid.uuid4()
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=illustration_id)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        for anonymous_id in ("voter-1", "voter-2"):
+            CardIllustrationRejectionFactory(
+                card=card, illustration_id=illustration_id, source=VoteSource.USER, anonymous_id=anonymous_id
+            )
+
+        assert _confirm_suggestion_item(card) is None
+
+    def test_a_non_eliminated_suggestion_is_unaffected(self, db):
+        card, printing = make_ai_suggested_card()
+
+        item = _confirm_suggestion_item(card)
+
+        assert item is not None
+        assert item.suggestedPrinting.identifier == str(printing.identifier)
+
+    def test_falls_through_to_a_second_ai_vote_once_the_first_is_eliminated(self, db):
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        eliminated_illustration = uuid.uuid4()
+        eliminated_printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=eliminated_printing, illustration_id=eliminated_illustration)
+        CardPrintingTagFactory(
+            card=card, printing=eliminated_printing, source=VoteSource.DEDUCTION, anonymous_id="calc-a-v1"
+        )
+        for anonymous_id in ("voter-1", "voter-2"):
+            CardIllustrationRejectionFactory(
+                card=card, illustration_id=eliminated_illustration, source=VoteSource.USER, anonymous_id=anonymous_id
+            )
+
+        survivor_printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card, printing=survivor_printing, source=VoteSource.OCR, anonymous_id="calc-b-v1")
+
+        item = _confirm_suggestion_item(card)
+
+        assert item is not None
+        assert item.suggestedPrinting.identifier == str(survivor_printing.identifier)

@@ -8,11 +8,13 @@ from django.urls import reverse
 from cardpicker import illustration_vote, views
 from cardpicker.illustration_vote import (
     artist_name_indicates_combined_credit,
+    cast_illustration_rejection,
     cast_illustration_vote,
     printings_for_card_and_illustration,
 )
 from cardpicker.models import (
     CardArtistVote,
+    CardIllustrationRejection,
     CardIllustrationVote,
     CardPrintingTag,
     VoteSource,
@@ -409,6 +411,154 @@ class TestPostSubmitIllustrationVote:
                 "illustrationId": str(uuid.uuid4()),
                 "isUnknown": False,
             },
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+
+
+class TestCastIllustrationRejection:
+    def test_a_voter_can_reject_several_artworks_for_one_card(self, db):
+        card = CardFactory(name="Brainstorm")
+        first, second, third = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+
+        cast_illustration_rejection(
+            card=card, anonymous_id="voter-1", illustration_id=first, user=None, vote_surface=None
+        )
+        cast_illustration_rejection(
+            card=card, anonymous_id="voter-1", illustration_id=second, user=None, vote_surface=None
+        )
+        cast_illustration_rejection(
+            card=card, anonymous_id="voter-1", illustration_id=third, user=None, vote_surface=None
+        )
+
+        rejected = set(
+            CardIllustrationRejection.objects.filter(card=card, anonymous_id="voter-1").values_list(
+                "illustration_id", flat=True
+            )
+        )
+        assert rejected == {first, second, third}
+
+    def test_a_rejection_does_not_consume_the_affirmation_slot(self, db):
+        # The whole point of the separate model (CardIllustrationRejection's own docstring):
+        # rejecting three artworks must not block affirming a fourth, distinct one, through
+        # CardIllustrationVote's own unconditional (card, anonymous_id) slot.
+        card = CardFactory(name="Brainstorm")
+        rejected_ids = [uuid.uuid4() for _ in range(3)]
+        affirmed_id = uuid.uuid4()
+
+        for illustration_id in rejected_ids:
+            cast_illustration_rejection(
+                card=card, anonymous_id="voter-1", illustration_id=illustration_id, user=None, vote_surface=None
+            )
+        cast_illustration_vote(
+            card=card,
+            anonymous_id="voter-1",
+            illustration_id=affirmed_id,
+            is_unknown=False,
+            user=None,
+            vote_surface=None,
+        )
+
+        assert CardIllustrationRejection.objects.filter(card=card, anonymous_id="voter-1").count() == 3
+        affirmation = CardIllustrationVote.objects.get(card=card, anonymous_id="voter-1")
+        assert affirmation.illustration_id == affirmed_id
+
+    def test_a_second_reject_of_the_same_artwork_updates_rather_than_duplicates(self, db):
+        card = CardFactory(name="Brainstorm")
+        illustration_id = uuid.uuid4()
+
+        first = cast_illustration_rejection(
+            card=card, anonymous_id="voter-1", illustration_id=illustration_id, user=None, vote_surface="a"
+        )
+        second = cast_illustration_rejection(
+            card=card, anonymous_id="voter-1", illustration_id=illustration_id, user=None, vote_surface="b"
+        )
+
+        assert first.pk == second.pk
+        assert CardIllustrationRejection.objects.filter(card=card, anonymous_id="voter-1").count() == 1
+        assert CardIllustrationRejection.objects.get(pk=first.pk).vote_surface == "b"
+
+    def test_machine_and_human_rejections_of_the_same_artwork_are_two_distinct_rows(self, db):
+        # Different anonymous_ids are different agents - both rows persist, and
+        # eliminated_illustration_ids (tested separately) is what pools/weighs them together.
+        card = CardFactory(name="Brainstorm")
+        illustration_id = uuid.uuid4()
+
+        CardIllustrationRejection.objects.create(
+            card=card,
+            illustration_id=illustration_id,
+            anonymous_id="stage-d-illustration-v2",
+            source=VoteSource.DEDUCTION,
+        )
+        cast_illustration_rejection(
+            card=card, anonymous_id="voter-1", illustration_id=illustration_id, user=None, vote_surface=None
+        )
+
+        assert CardIllustrationRejection.objects.filter(card=card, illustration_id=illustration_id).count() == 2
+
+
+class TestPostSubmitIllustrationRejection:
+    def test_end_to_end(self, client, django_settings):
+        card = CardFactory(name="Brainstorm")
+        illustration_id = uuid.uuid4()
+
+        response = client.post(
+            reverse(views.post_submit_illustration_rejection),
+            {
+                "identifier": card.identifier,
+                "anonymousId": "voter-1",
+                "illustrationId": str(illustration_id),
+            },
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        assert response.json()["illustrationId"] == str(illustration_id)
+        rejection = CardIllustrationRejection.objects.get(card=card, anonymous_id="voter-1")
+        assert rejection.illustration_id == illustration_id
+        assert rejection.source == VoteSource.USER
+
+    def test_does_not_touch_the_printing_or_artist_channels(self, client, django_settings):
+        card = CardFactory(name="Brainstorm")
+        illustration_id = uuid.uuid4()
+
+        client.post(
+            reverse(views.post_submit_illustration_rejection),
+            {"identifier": card.identifier, "anonymousId": "voter-1", "illustrationId": str(illustration_id)},
+            content_type="application/json",
+        )
+
+        assert not CardPrintingTag.objects.filter(card=card).exists()
+        assert not CardArtistVote.objects.filter(card=card).exists()
+        assert not CardIllustrationVote.objects.filter(card=card).exists()
+
+    def test_missing_illustration_id_is_a_bad_request(self, client, django_settings):
+        card = CardFactory(name="Brainstorm")
+
+        response = client.post(
+            reverse(views.post_submit_illustration_rejection),
+            {"identifier": card.identifier, "anonymousId": "voter-1"},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+
+    def test_invalid_uuid_is_a_bad_request(self, client, django_settings):
+        card = CardFactory(name="Brainstorm")
+
+        response = client.post(
+            reverse(views.post_submit_illustration_rejection),
+            {"identifier": card.identifier, "anonymousId": "voter-1", "illustrationId": "not-a-uuid"},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 400
+
+    def test_unknown_card_identifier_is_a_bad_request(self, client, django_settings):
+        response = client.post(
+            reverse(views.post_submit_illustration_rejection),
+            {"identifier": "does-not-exist", "anonymousId": "voter-1", "illustrationId": str(uuid.uuid4())},
             content_type="application/json",
         )
 
