@@ -262,10 +262,9 @@ describe("QuestionFeed", () => {
         ["Borderless", "Full Art", "Modern Border", "Showcase"].sort()
       )
     );
-    // printing-2's borderColor is "borderless" - outside the Black/White/Silver taxonomy, so
-    // no Border Color chip auto-fires for it (see attributeChips.test.ts's
-    // getOpenExclusionGroups coverage - this is exactly what routes the feed to Level 3
-    // instead of advancing, covered separately in QuestionFeed.spec.ts).
+    // printing-2's borderColor is "borderless" - none of Black/White/Silver match it, so no
+    // "Black Border" auto-tag is derived (Borderless is its own Border Color chip instead) -
+    // see attributeChips.test.ts's getAutoTagChips coverage.
     expect(autoTagCalls.map((call) => call.tagName)).not.toContain(
       "Black Border"
     );

@@ -26,11 +26,26 @@ describe("findExclusionGroup", () => {
     expect(findExclusionGroup("Black Border")?.id).toBe("borderColor");
   });
 
+  // Owner ruling (frame-treatment axis rework, 2026-08): Borderless is Scryfall's own
+  // border_color value, not a separate frame treatment - it moved into Border Color, mutually
+  // exclusive with Black/White/Silver.
+  it("finds Borderless in the border-color group, not a standalone chip", () => {
+    expect(findExclusionGroup("Borderless")?.id).toBe("borderColor");
+  });
+
   it("finds the group a frame-style chip belongs to", () => {
     expect(findExclusionGroup("Old Border")?.id).toBe("frameStyle");
   });
 
+  it("finds the frame-treatment group a Showcase/Extended Art chip belongs to", () => {
+    expect(findExclusionGroup("Showcase")?.id).toBe("frameTreatment");
+    expect(findExclusionGroup("Extended")?.id).toBe("frameTreatment");
+  });
+
   it("returns undefined for a standalone chip", () => {
+    expect(findExclusionGroup("Etched")).toBeUndefined();
+    // Full Art co-occurs with every border colour and with Showcase (measured against
+    // CanonicalPrintingMetadata) - it's independent, not a member of any exclusion group.
     expect(findExclusionGroup("Full Art")).toBeUndefined();
   });
 });
@@ -66,7 +81,8 @@ describe("filterCandidatesByChipStates", () => {
   });
 
   it("a positive exclusion-group chip naturally excludes sibling values with no extra logic", () => {
-    // printingCandidate1 is black-bordered, printingCandidate2 is borderless (not in this group)
+    // printingCandidate1 is black-bordered, printingCandidate2 is borderless (a different
+    // sibling of the same Border Color group)
     const result = filterCandidatesByChipStates(candidates, {
       "Black Border": "positive",
     });
@@ -85,6 +101,17 @@ describe("filterCandidatesByChipStates", () => {
     });
     expect(noMatch).toEqual([]);
   });
+
+  // Measured against CanonicalPrintingMetadata: 4,902 printings are both borderless and full
+  // art (82% of all borderless printings) - e.g. Ghalta, Primal Hunger. Full Art is standalone,
+  // so this combination must stay representable.
+  it("a card can be borderless and full art at the same time", () => {
+    const result = filterCandidatesByChipStates(candidates, {
+      Borderless: "positive",
+      "Full Art": "positive",
+    });
+    expect(result).toEqual([printingCandidate2]);
+  });
 });
 
 describe("getAutoTagChips", () => {
@@ -98,8 +125,10 @@ describe("getAutoTagChips", () => {
   });
 
   // printingCandidate2: fullArt=true, isBorderless=true, isShowcase=true, borderColor=
-  // "borderless" (outside the Border Color taxonomy), frame="2003"
-  it("derives every true standalone plus the matching frame chip, but no border-color chip", () => {
+  // "borderless" (its own Border Color chip, not outside the taxonomy), frame="2003" - a real
+  // three-way combination (full art AND borderless AND showcase), same shape as Cathars'
+  // Crusade (INR 483), which is also full art, showcase, and borderless all at once.
+  it("derives every true standalone plus the matching border-color and frame chips", () => {
     const tagNames = getAutoTagChips(printingCandidate2).map(
       (chip) => chip.tagName
     );
@@ -122,9 +151,28 @@ describe("getOpenExclusionGroups", () => {
     expect(getOpenExclusionGroups(printingCandidate1)).toEqual([]);
   });
 
-  it("flags Border Color as open for a candidate outside black/white/silver", () => {
-    const openGroups = getOpenExclusionGroups(printingCandidate2);
+  // printingCandidate2 is borderless - its own Borderless chip in the Border Color group
+  // matches it directly now (border_color "borderless" is one of the group's four values), so
+  // nothing is left open for this candidate.
+  it("is empty for a borderless candidate - its own Border Color chip resolves it", () => {
+    expect(getOpenExclusionGroups(printingCandidate2)).toEqual([]);
+  });
+
+  it("flags Border Color as open for a candidate whose border color falls outside the taxonomy", () => {
+    const openGroups = getOpenExclusionGroups({
+      ...printingCandidate1,
+      borderColor: "gold",
+      isShowcase: true,
+    });
     expect(openGroups.map((group) => group.id)).toEqual(["borderColor"]);
+  });
+
+  it("never flags Frame Treatment as open - an ordinary card's two false booleans are a complete answer", () => {
+    const openGroups = getOpenExclusionGroups({
+      ...printingCandidate1,
+      borderColor: "gold",
+    });
+    expect(openGroups.map((group) => group.id)).not.toContain("frameTreatment");
   });
 });
 
@@ -135,6 +183,15 @@ describe("isChipContradicted", () => {
     ).toBe(true);
     expect(
       isChipContradicted("Silver Border", { "Black Border": "positive" })
+    ).toBe(true);
+  });
+
+  // Borderless is now a Border Color sibling of Black/White/Silver (Scryfall's own
+  // border_color enum), so it's contradicted by them exactly like any other sibling - no
+  // separate cross-group gate is needed for this anymore.
+  it("is true for Borderless once a different Border Color sibling is explicitly positive", () => {
+    expect(
+      isChipContradicted("Borderless", { "Black Border": "positive" })
     ).toBe(true);
   });
 
@@ -161,9 +218,26 @@ describe("isChipContradicted", () => {
   });
 
   it("is false for standalone chips, which have no exclusion group", () => {
-    expect(isChipContradicted("Full Art", { "Full Art": "positive" })).toBe(
+    expect(isChipContradicted("Etched", { Etched: "positive" })).toBe(false);
+    expect(isChipContradicted("Etched", {})).toBe(false);
+  });
+
+  // Measured against CanonicalPrintingMetadata: Full Art is independent - it co-occurs with
+  // every border colour and with Showcase, so it's never contradicted by a Border Color or
+  // Frame Treatment vote.
+  it("is false for Full Art regardless of Border Color or Frame Treatment votes", () => {
+    expect(isChipContradicted("Full Art", { Borderless: "positive" })).toBe(
       false
     );
-    expect(isChipContradicted("Full Art", {})).toBe(false);
+    expect(isChipContradicted("Full Art", { Showcase: "positive" })).toBe(
+      false
+    );
+  });
+
+  // Showcase and Extended Art co-occur in exactly 0 of 113,224 measured printings - the one
+  // genuinely exclusive pair in the frame-treatment axis.
+  it("is true for Showcase once Extended Art is explicitly positive, and vice versa", () => {
+    expect(isChipContradicted("Showcase", { Extended: "positive" })).toBe(true);
+    expect(isChipContradicted("Extended", { Showcase: "positive" })).toBe(true);
   });
 });

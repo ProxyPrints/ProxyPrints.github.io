@@ -37,25 +37,61 @@ export interface ExclusionGroup {
 // group-awareness beyond this - see filterCandidatesByChipStates in QuestionFeed.tsx: an
 // explicit positive on one member already excludes every candidate whose border_color/frame
 // doesn't match, which naturally excludes the group's other values with no extra logic.
+const BLACK_BORDER_CHIP: AttributeChipDef = {
+  tagName: "Black Border",
+  label: "Black Border",
+  matches: (candidate) => candidate.borderColor === "black",
+};
+const WHITE_BORDER_CHIP: AttributeChipDef = {
+  tagName: "White Border",
+  label: "White Border",
+  matches: (candidate) => candidate.borderColor === "white",
+};
+const SILVER_BORDER_CHIP: AttributeChipDef = {
+  tagName: "Silver Border",
+  label: "Silver Border",
+  matches: (candidate) => candidate.borderColor === "silver",
+};
+const BORDERLESS_CHIP: AttributeChipDef = {
+  tagName: "Borderless",
+  label: "Borderless",
+  matches: (candidate) => candidate.isBorderless,
+};
+const FULL_ART_CHIP: AttributeChipDef = {
+  tagName: "Full Art",
+  label: "Full Art",
+  matches: (candidate) => candidate.fullArt,
+};
+const SHOWCASE_CHIP: AttributeChipDef = {
+  tagName: "Showcase",
+  label: "Showcase",
+  matches: (candidate) => candidate.isShowcase,
+};
+const EXTENDED_ART_CHIP: AttributeChipDef = {
+  tagName: "Extended",
+  label: "Extended Art",
+  matches: (candidate) => candidate.isExtendedArt,
+};
+const ETCHED_CHIP: AttributeChipDef = {
+  tagName: "Etched",
+  label: "Etched",
+  matches: (candidate) => candidate.isEtched,
+};
+
+// Owner ruling (frame-treatment axis rework, 2026-08, grounded in a live count against
+// CanonicalPrintingMetadata's 113,224 printings): Borderless belongs here, not in a "frame
+// treatment" axis - Scryfall's own `border_color` field enum IS {black, white, silver,
+// borderless, gold}, so a card has exactly one value of it, same closed-taxonomy shape the
+// other three chips already assume. "No border colour to ask about" falls out of the axis
+// itself once Borderless is a member - no separate disqualification rule is needed.
 export const BORDER_COLOR_GROUP: ExclusionGroup = {
   id: "borderColor",
   label: "Border Color",
   chips: [
-    {
-      tagName: "Black Border",
-      label: "Black Border",
-      matches: (candidate) => candidate.borderColor === "black",
-    },
-    {
-      tagName: "White Border",
-      label: "White Border",
-      matches: (candidate) => candidate.borderColor === "white",
-    },
-    {
-      tagName: "Silver Border",
-      label: "Silver Border",
-      matches: (candidate) => candidate.borderColor === "silver",
-    },
+    BLACK_BORDER_CHIP,
+    WHITE_BORDER_CHIP,
+    SILVER_BORDER_CHIP,
+    BORDERLESS_CHIP,
   ],
 };
 
@@ -86,44 +122,62 @@ export const FRAME_STYLE_GROUP: ExclusionGroup = {
   ],
 };
 
+// Owner ruling (frame-treatment axis rework, 2026-08), measured against CanonicalPrintingMetadata
+// (113,224 printings): Showcase and Extended Art co-occur in exactly 0 of them, so they're the
+// genuinely exclusive pair here - not the old four-way "Frame Treatment" group. Full Art
+// co-occurs with Showcase in 652 printings (21% of all showcase printings) and with Extended Art
+// in only 2 (an EOC pair that reads as a tagging quirk, not a real interaction) - not exclusive
+// with either, so it lives in STANDALONE_CHIPS below instead.
+export const FRAME_TREATMENT_GROUP: ExclusionGroup = {
+  id: "frameTreatment",
+  label: "Frame Treatment",
+  chips: [SHOWCASE_CHIP, EXTENDED_ART_CHIP],
+};
+
 export const EXCLUSION_GROUPS: ExclusionGroup[] = [
   BORDER_COLOR_GROUP,
   FRAME_STYLE_GROUP,
+  FRAME_TREATMENT_GROUP,
 ];
 
 // Independent toggles - not mutually exclusive with each other or with the exclusion groups
-// above (a card can be simultaneously Full Art, Showcase, and black-bordered).
+// above. Full Art co-occurs with every border colour (82% of borderless printings are also full
+// art - Ghalta, Primal Hunger; Cathars' Crusade is full art AND showcase AND borderless all at
+// once) and with Showcase, so it can't live in an exclusion group at all; Etched is a finish, not
+// a frame treatment, and stays independently toggleable alongside it.
 export const STANDALONE_CHIPS: AttributeChipDef[] = [
-  {
-    tagName: "Full Art",
-    label: "Full Art",
-    matches: (candidate) => candidate.fullArt,
-  },
-  {
-    tagName: "Borderless",
-    label: "Borderless",
-    matches: (candidate) => candidate.isBorderless,
-  },
-  {
-    tagName: "Showcase",
-    label: "Showcase",
-    matches: (candidate) => candidate.isShowcase,
-  },
-  {
-    tagName: "Extended",
-    label: "Extended Art",
-    matches: (candidate) => candidate.isExtendedArt,
-  },
-  {
-    tagName: "Etched",
-    label: "Etched",
-    matches: (candidate) => candidate.isEtched,
-  },
+  FULL_ART_CHIP,
+  ETCHED_CHIP,
 ];
 
 export const ALL_ATTRIBUTE_CHIPS: AttributeChipDef[] = [
   ...STANDALONE_CHIPS,
   ...EXCLUSION_GROUPS.flatMap((group) => group.chips),
+];
+
+// AttributesSection.tsx (the /display rail) and FUNNEL_AXES' /display funnel below were
+// ratified as their own shape on 2026-07-22 (PR #329) and never had a frame-treatment exclusion
+// axis at all - Border Color is Black/White/Silver only and Treatment is five independent,
+// non-exclusive toggles. The WTC-specific mutual-exclusivity ruling above is scoped to the
+// question feed (AttributeChipPanel.tsx/QuestionFeed.tsx's EXCLUSION_GROUPS); these two surfaces
+// get their own explicit exports instead of inheriting it through a shared array.
+export const DISPLAY_RAIL_BORDER_COLOR_GROUP: ExclusionGroup = {
+  id: "borderColor",
+  label: "Border Color",
+  chips: [BLACK_BORDER_CHIP, WHITE_BORDER_CHIP, SILVER_BORDER_CHIP],
+};
+
+export const DISPLAY_RAIL_EXCLUSION_GROUPS: ExclusionGroup[] = [
+  DISPLAY_RAIL_BORDER_COLOR_GROUP,
+  FRAME_STYLE_GROUP,
+];
+
+export const DISPLAY_RAIL_STANDALONE_CHIPS: AttributeChipDef[] = [
+  FULL_ART_CHIP,
+  BORDERLESS_CHIP,
+  SHOWCASE_CHIP,
+  EXTENDED_ART_CHIP,
+  ETCHED_CHIP,
 ];
 
 export type ChipVoteState = "untouched" | "positive" | "negative";
@@ -237,10 +291,10 @@ export interface FunnelAxis {
 
 export const FUNNEL_AXES: FunnelAxis[] = [
   {
-    id: BORDER_COLOR_GROUP.id,
+    id: DISPLAY_RAIL_BORDER_COLOR_GROUP.id,
     label: "Border",
     exclusive: true,
-    chips: BORDER_COLOR_GROUP.chips,
+    chips: DISPLAY_RAIL_BORDER_COLOR_GROUP.chips,
   },
   {
     id: FRAME_STYLE_GROUP.id,
@@ -252,10 +306,14 @@ export const FUNNEL_AXES: FunnelAxis[] = [
     // D23 honesty note (funnel-spec.md): no "finish" axis exists in the catalog taxonomy -
     // foil/finish is a print SETTING (finishSettingsSlice), not a per-card vote/filter
     // dimension; "Etched" is the only finish-adjacent chip and it lives here, in Treatment.
+    // The /display funnel predates and is out of scope for the WTC-specific mutual-exclusivity
+    // ruling above - like DISPLAY_RAIL_BORDER_COLOR_GROUP above, this axis uses
+    // DISPLAY_RAIL_STANDALONE_CHIPS to keep its own pre-existing non-exclusive checkbox
+    // behaviour and exact five-chip set unchanged.
     id: "treatment",
     label: "Treatment",
     exclusive: false,
-    chips: STANDALONE_CHIPS,
+    chips: DISPLAY_RAIL_STANDALONE_CHIPS,
   },
 ];
 
@@ -355,16 +413,22 @@ export function candidateSatisfiesAttributeTag(
 
 /**
  * An exclusion group is "open" for a candidate when none of its chips match it - e.g.
- * borderColor "borderless" or "gold" fall outside the Black/White/Silver taxonomy (see
- * printingCandidate2's fixture, borderColor: "borderless"). Standalone chips are never open:
- * their underlying fields are plain booleans, so a definite "false" is itself a complete
- * derived answer, not an unknown one. Drives Level 3's conditional render in QuestionFeed.tsx
- * - most candidates leave nothing open and skip straight past it.
+ * borderColor "gold" falls outside the Black/White/Silver/Borderless taxonomy. Border Color and
+ * Frame Style chips read plain enum-like fields (`borderColor`/`frame`) that CAN fall outside
+ * their taxonomy, so "no match" there is a genuine unknown - a borderless candidate is never
+ * open here, since its own Borderless chip already matches it. FRAME_TREATMENT_GROUP is
+ * different and never counts as open: its two chips are plain booleans, so "neither is true" is
+ * itself a complete, definite answer (an ordinary card, no special treatment) - same reasoning
+ * STANDALONE_CHIPS chips have always used. Drives Level 3's conditional render in
+ * QuestionFeed.tsx - most candidates leave nothing open and skip straight past it.
  */
 export function getOpenExclusionGroups(
   candidate: PrintingCandidate
 ): ExclusionGroup[] {
-  return EXCLUSION_GROUPS.filter(
-    (group) => !group.chips.some((chip) => chip.matches(candidate))
-  );
+  return EXCLUSION_GROUPS.filter((group) => {
+    if (group === FRAME_TREATMENT_GROUP) {
+      return false;
+    }
+    return !group.chips.some((chip) => chip.matches(candidate));
+  });
 }

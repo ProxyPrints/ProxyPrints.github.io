@@ -45,6 +45,32 @@ Past iterations suffered from patchwork scaling, horizontal bloat, and mismatche
 
 - The MTGAC artist disclosure link (`ArtistSupportLink`) must render consistently and cleanly under **both** illustration renders and Scryfall card renders.
 
+### Rule 7: Borderless Is a Border Color Value; Showcase and Extended Art Are the Only Exclusive Treatment Pair
+
+Measured live against CanonicalPrintingMetadata (113,224 printings):
+
+| combination               | count | share                           |
+| ------------------------- | ----: | ------------------------------- |
+| borderless + full art     | 4,902 | 82% of all borderless printings |
+| borderless + showcase     | 1,056 |                                 |
+| full art + showcase       |   652 | 21% of all showcase printings   |
+| full art + extended art   |     2 | one EOC pair, a tagging quirk   |
+| borderless + extended art |     0 |                                 |
+| showcase + extended art   |     0 |                                 |
+
+- Borderless belongs to the **Border Color** axis (Black/White/Silver/Borderless), not a
+  separate "frame treatment" axis - Scryfall's own `border_color` field enum literally includes
+  `borderless`, so a card has exactly one value of it, same closed taxonomy the other three
+  chips already assume. "No border colour to ask about" falls out of the axis itself once
+  Borderless is a member there.
+- **Showcase and Extended Art** are the one genuinely exclusive pair (0 measured
+  co-occurrences) and form their own exclusion-group axis.
+- **Full Art is independent** - it combines freely with any border colour and with Showcase (a
+  card can be full art, showcase, AND borderless all at once, e.g. Cathars' Crusade, INR 483;
+  Ghalta, Primal Hunger is borderless and full art). It is not part of any exclusion group.
+- Presentation only - the underlying vote/tag data model is unchanged. No new vote types, no
+  new consensus logic; this only changes which questions are asked and how they're grouped.
+
 ---
 
 ## 3. Implementation Roadmap
