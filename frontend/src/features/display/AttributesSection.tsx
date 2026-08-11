@@ -23,8 +23,8 @@ import {
 import {
   ALL_ATTRIBUTE_CHIPS,
   ChipVoteState,
-  EXCLUSION_GROUPS,
-  STANDALONE_CHIPS,
+  DISPLAY_RAIL_EXCLUSION_GROUPS,
+  DISPLAY_RAIL_STANDALONE_CHIPS,
 } from "@/features/attributeChips/attributeChips";
 import { useTagVoting } from "@/features/attributeChips/useTagVoting";
 import { APIGetTagConsensus } from "@/store/api";
@@ -139,8 +139,7 @@ export function AttributesSection({
     tap,
     getTagDisplayName,
   };
-  const [borderColorGroup, frameStyleGroup, frameTreatmentGroup] =
-    EXCLUSION_GROUPS;
+  const [borderColorGroup, frameStyleGroup] = DISPLAY_RAIL_EXCLUSION_GROUPS;
 
   return (
     <div data-testid="display-attributes-section">
@@ -151,7 +150,7 @@ export function AttributesSection({
         </p>
       )}
       <ChipRow className="mb-2">
-        {STANDALONE_CHIPS.map((chip) =>
+        {DISPLAY_RAIL_STANDALONE_CHIPS.map((chip) =>
           renderAttributeChip(chipArgs, chip.tagName, chip.label)
         )}
       </ChipRow>
@@ -168,18 +167,8 @@ export function AttributesSection({
       {frameStyleGroup != null && (
         <>
           <div className="text-muted small">{frameStyleGroup.label}</div>
-          <ChipRow className="mb-2">
-            {frameStyleGroup.chips.map((chip) =>
-              renderAttributeChip(chipArgs, chip.tagName, chip.label)
-            )}
-          </ChipRow>
-        </>
-      )}
-      {frameTreatmentGroup != null && (
-        <>
-          <div className="text-muted small">{frameTreatmentGroup.label}</div>
           <ChipRow>
-            {frameTreatmentGroup.chips.map((chip) =>
+            {frameStyleGroup.chips.map((chip) =>
               renderAttributeChip(chipArgs, chip.tagName, chip.label)
             )}
           </ChipRow>
