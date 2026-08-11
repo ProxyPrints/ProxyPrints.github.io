@@ -1,0 +1,27 @@
+name: Web CI scoping rules
+
+# Issue #773 regression guard: fails if surface-scoping (a `changes`
+# detection job, `needs.changes.outputs.*` gates, or a push-time `paths:`
+# filter) is reintroduced into web-ci.yml. Runs on every pull_request
+# and every push to master with NO path filter — the whole point is to
+# catch a workflow re-scoping change that lands inside an otherwise
+# unrelated-looking diff, exactly the blind spot coverage-delta.yml
+# documents for itself. Pure stdlib Python, no install step, low cost.
+
+on:
+  pull_request:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  web-ci-scoping-rules:
+    name: web-ci.yml surface-scoping regression guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run web-ci surface-scoping regression test
+        run: python3 .github/scripts/tests/test_web_ci_surface_scoping.py
