@@ -661,17 +661,20 @@ printings, artists, tags, and moderation from one screen.
   stream (`confirm_suggestion` → contested pairs → `moderation` → fresh
   unresolved; "dumb ranked union," no cross-tier scoring, with three
   deliberate selection-layer policies on top: the mix-composition policy
-  below, the remainder mix policy immediately after it, and the
-  information-gain question-scoring policy after that).
+  below, the evidence-gated confirmation policy immediately after it, and
+  the information-gain question-scoring policy after that).
   Full rationale in `journal/2026-07-14-queue-question-feed-design.md`
   (gitignored, local-only). At current volume tier 1 (`confirm_suggestion`,
-  ~28k cards) dwarfs the contested/cold pools (500-entry cap each) — a
-  voter working only this feed used to not reach the other question kinds
-  until tier 1 was personally exhausted, originally flagged as a known v1
-  property with an interleaved/weighted union as the planned v2 fix; that
-  fix is now the remainder mix policy below (2026-08-10), not deferred any
-  further. Every tier excludes `(card, tag)` pairs the requesting
-  `anonymous_id` already voted on.
+  110,130 cards carrying a machine printing vote, measured 2026-08-11)
+  dwarfs the contested/cold pools (500-entry cap each) — a voter working
+  only this feed used to not reach the other question kinds until tier 1
+  was personally exhausted, originally flagged as a known v1 property. A
+  weighted rotation (2026-08-10) fixed that for one release; the evidence
+  gate below (2026-08-11, issue #766) replaces it, since gating tier 1
+  removes almost all of that volume from the confirm lane in the first
+  place — see that policy's own entry for the measured effect. Every tier
+  excludes `(card, tag)` pairs the requesting `anonymous_id` already voted
+  on.
 - **Materialised candidate pools** (issue #727, `cardpicker/question_feed_pools.py`):
   the request path never scans the four tiers' own live queries - a
   scheduled warm (per-lane cadence, `settings.QUESTION_FEED_POOL_WARM_MINUTES_*`)
@@ -753,33 +756,43 @@ printings, artists, tags, and moderation from one screen.
   `question_feed._served_mix_ratio` reads it back as two cheap indexed
   `COUNT`s, never a per-row scan. Append-only, same convention as
   `CardScanLog` — never read by any consensus computation.
-- **Remainder mix policy** (2026-08-10, `cardpicker/question_feed.py`,
-  `_remainder_lane_order`): within the remainder (confirm/contested/cold —
-  the three-tier ranked union the mix-composition policy above falls
-  through to), which lane is tried FIRST is no longer a fixed
-  confirm → contested → cold order. It rotates per request toward
-  whichever lane is currently furthest below its own target share of
-  `settings.QUESTION_FEED_CONFIRM_MIX_WEIGHT`/`_CONTESTED_MIX_WEIGHT`/
-  `_COLD_MIX_WEIGHT` (relative weights, default `3`/`2`/`1` — roughly
-  50%/33%/17%, chosen defaults rather than derived from any existing
-  measurement, not required to sum to any particular total). **Why**: the
-  fixed order, against the pools' very different per-lane supply (tier 1's
-  ~28k machine-suggested cards vs. the 500-entry-capped contested/cold
-  pools), meant a voter would have to personally exhaust the entire confirm
-  pool via their own exclusion set before a contested or cold question
-  could ever reach them — the "Unified question feed" bullet's starvation
-  note above, made total rather than merely likely once the materialised
-  pools replaced the live per-tier queries. **Mechanism**: each lane's own
-  share of this session's `pool=REMAINDER` `QuestionFeedServedLog` history
-  is read back from `origin_reason`'s existing `tier_1_`/`tier_2_`/`tier_4_`
-  prefix convention (no schema change), and the lane furthest below its
-  target share is tried first; if it has no supply for this voter, the
-  request honestly moves to the next-most-under-served lane, never
-  stalling. **Soundness**: SELECTION-LAYER only, the same boundary the
-  mix-composition and information-gain policies state for themselves — it
-  decides WHICH remainder lane is consulted first for a given request,
-  never what any lane's own candidate set is, how a vote resolves, or the
-  LIKELY-RESOLVE pool's own precedence above it.
+- **Evidence-gated confirmation policy** (2026-08-11, `cardpicker/ question_feed.py`, `_evidence_justifies_confirmation`, issue #766,
+  replaces the 2026-08-10 remainder mix rotation described in the git
+  history of this section): [`wtc-question-model.md`](wtc-question-model.md)
+  §2/§3 (ratified 2026-08-11) holds there is no lane RATIO to tune for
+  confirm/contested/cold — a printing confirmation is either justified by
+  the machine's own recorded evidence for that specific card, or it isn't,
+  so `QUESTION_FEED_CONFIRM_MIX_WEIGHT`/`_CONTESTED_MIX_WEIGHT`/
+  `_COLD_MIX_WEIGHT` (defaults `3`/`2`/`1`, never measured — see that
+  ratified doc's §3) are deleted rather than retuned. **Mechanism**: the
+  gate sits at `confirm_suggestion`'s one construction site,
+  `_confirm_suggestion_item` — a card is built as a confirmation only when
+  its own most recent `CardScanLog.evidence_types_used` covers every type
+  the fallback calculator can record (`border`/`artist`/`symbol` — the
+  ratified doc's own text names a fourth, "collector line", that the
+  calculator never actually produces; see `_KNOWN_EVIDENCE_TYPES`'s own
+  comment and that doc's correction note). Every other card, including one
+  the machine already suggested a printing for, is simply not constructible
+  as `confirm_suggestion` and falls through to whichever of tier 2 or
+  tier 4 already claims it, served as `identify_printing` instead — the
+  question that presupposes nothing, safe to ask regardless of which
+  element (if any) the evidence check failed on. **Measured effect**
+  (2026-08-11): 0 of 110,130 confirm-eligible cards clear the gate today —
+  a MATCHING fallback-calculator run never writes a `CardScanLog` row at
+  all (only a SKIP does), so the population this gate governs has almost
+  nothing to read. Before this change, `QuestionFeedServedLog` showed
+  confirm_suggestion at 507 of 516 remainder-pool serves (98.3%); after,
+  that population is absorbed by tier 4's non-contested printing pool
+  (222,105 cards) as `identify_printing` instead — no starvation, a
+  question-type shift only. The now-gated tier 1 no longer needs a
+  per-session rebalancing policy, so the remainder waterfall
+  (`_REMAINDER_LANE_ORDER`) is a plain, fixed confirm → contested → cold
+  order — restored, not reinvented; see this module's own docstring for
+  the full mechanism. **Soundness**: SELECTION-LAYER only, same boundary
+  the mix-composition and information-gain policies state for
+  themselves — it decides whether tier 1 is even constructible for a
+  given card, never how any lane's candidate set is built, how a vote
+  resolves, or the LIKELY-RESOLVE pool's own precedence above it.
 - **Information-gain question scoring** (2026-08-09, issue #716,
   `cardpicker/question_feed.py`, the same file as the mix-composition
   policy above): where each remainder tier used to serve the first

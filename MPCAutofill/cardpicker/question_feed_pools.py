@@ -83,9 +83,11 @@ live tier functions never prevented it either (get_contested_card_ids() and
 _likely_resolve_printing_card's own filter were never mutually exclusive - see question_feed.py's
 docstring). What has always prevented DOUBLE-SERVING (and still does, unchanged, in
 get_next_question_feed_item) is that the four lane draws are consulted as a strict, first-hit-wins
-WATERFALL (likely-resolve first, then the three remainder lanes in the order
-`question_feed._remainder_lane_order` picks for this request - see that function's own docstring
-for the mix policy that decides it): whichever lane is tried FIRST that has a valid (unexcluded,
+WATERFALL (likely-resolve first, then the three remainder lanes in `question_feed.
+_REMAINDER_LANE_ORDER`'s fixed confirm/contested/cold order - see question_feed.py's own
+"Evidence-gated printing-confirmation policy" docstring section for why tier 1 is gated rather
+than ranked, so a fixed order needs no per-session rebalancing): whichever lane is tried FIRST
+that has a valid (unexcluded,
 unstale) entry for THIS voter wins the request, and every lane after it is never even reached. A
 card sitting in two lanes' pools is drawable from whichever one the waterfall reaches first for a
 given voter/request.
@@ -392,6 +394,11 @@ def _build_pool_resolution_imminent() -> list[PoolEntry]:
 
 
 def _build_pool_confirm() -> list[PoolEntry]:
+    # `_confirm_suggestion_item` (issue #766) now returns `None` for a card whose recorded
+    # evidence is incomplete, not just for a card with no machine suggestion at all - so this
+    # builder can legitimately come back empty even though `candidates` below is non-empty,
+    # rather than that meaning a bug in the sampling. See question_feed.py's own "Evidence-gated
+    # printing-confirmation policy" docstring section for the measured scale of that today.
     from cardpicker.question_feed import _confirm_suggestion_item
 
     limit = settings.QUESTION_FEED_POOL_SIZE
