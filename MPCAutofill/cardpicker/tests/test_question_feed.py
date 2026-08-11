@@ -941,6 +941,20 @@ class TestEvidenceGatedConfirmation:
         assert item.type.value == "confirm_suggestion"
         assert item.card.identifier == card.identifier
 
+    def test_a_card_with_collector_line_recorded_too_is_still_offered_as_confirm_suggestion(self, db):
+        # #776 (2026-08-11) added "collector_line" as a fourth, RECORDED-only value
+        # `evidence_types_used` can carry - the gate must still fire on the three it actually
+        # checks (`_KNOWN_EVIDENCE_TYPES`), via subset rather than equality, so a real four-element
+        # row does not silently stop clearing cards that used to clear with three
+        card, printing = make_ai_suggested_card(evidence_types_used=("border", "artist", "symbol", "collector_line"))
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "confirm_suggestion"
+        assert item.card.identifier == card.identifier
+
     def test_a_card_missing_one_evidence_type_is_not_offered_as_confirm_suggestion(self, db):
         # two of three known evidence types recorded (missing "symbol") - the ratified doc's
         # own ruling (§10 ruling 3) that three-of-four earns no special tier applies here too:
