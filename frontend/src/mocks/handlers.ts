@@ -1655,11 +1655,13 @@ export const questionFeedIdentifyPrintingOpenBorderColor = http.get(
 
 // Issue #503 (WTC phase C1) - a MIXED candidate set for the illustration-grouping regression
 // guard: `illustrationGroupCandidateA`/`B` share an illustration (a real 2+ cluster),
-// `illustrationGroupCandidateC` has its own distinct illustrationId (no sibling - stays
-// unclustered), and `illustrationGroupCandidateD` carries no illustrationId at all
+// `illustrationGroupCandidateC` has its own distinct illustrationId (no sibling - forms a
+// cluster of its own, size 1: group size is orthogonal to whether a candidate clusters at
+// all), and `illustrationGroupCandidateD` carries no illustrationId at all
 // (CanonicalPrintingMetadata.illustration_id is nullable and frequently absent - see
-// local_illustration.py:137). Built by spreading the existing printingCandidate1/2 fixtures
-// rather than editing test-constants.ts, which is out of this change's scope.
+// local_illustration.py:137) - the only member of this set that never clusters. Built by
+// spreading the existing printingCandidate1/2 fixtures rather than editing test-constants.ts,
+// which is out of this change's scope.
 // candidateA carries an art crop (the common case); candidateB shares its illustration but
 // has none (a metadata sidecar gap) - together they cover both the swap and its fallback.
 export const illustrationGroupCandidateA: PrintingCandidate = {
@@ -1729,9 +1731,8 @@ export const submitIllustrationVoteCastsPrintingAndArtist = http.post(
     )
 );
 
-// N>1 live printings - nothing on the printing channel, matching what the always->2-member
-// visual grouping (illustrationGroups' own `.filter((group) => group.length > 1)`) normally
-// produces server-side.
+// N>1 live printings - nothing on the printing channel, the normal outcome for a genuine
+// multi-printing illustration cluster.
 export const submitIllustrationVoteCastsNothingOnPrintingChannel = http.post(
   buildRoute("2/submitIllustrationVote/"),
   () =>

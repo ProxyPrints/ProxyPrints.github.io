@@ -420,12 +420,49 @@ describe("QuestionFeed", () => {
     ).toHaveTextContent("Suggested match");
   });
 
-  it("a rejected Level 1 suggestion stays reachable in the candidate grid as a de-emphasised, re-selectable tile (issue #748)", async () => {
+  it("confirm_suggestion's own question renders no chip panel and no candidate grid (composition contract)", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              type: "confirm_suggestion",
+              suggestedPrinting: identifyPrintingItem.candidates[0],
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    expect(
+      await screen.findByTestId("question-feed-suggestion-yes")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("attribute-chip-panel")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("question-feed-candidate-grid-ungrouped")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("question-feed-illustration-groups")
+    ).not.toBeInTheDocument();
+  });
+
+  it("'Not this art' summons the candidate-grid identification question, where a rejected suggestion stays reachable as a de-emphasised, re-selectable tile (issue #748)", async () => {
     // #748 - rejecting the suggested printing must not drop it from the surface: the
-    // suggestion slot collapses into the "you said not this one" context, and the candidate
+    // suggestion slot gives way to the "you said not this one" context, and the candidate
     // grid gains the rejected candidate as a de-emphasised (`data-rejected`) tile that stays
-    // fully selectable - tapping it re-casts the candidate as a real pick, the reconsider
-    // path for a mis-tapped "No, different printing".
+    // fully selectable - tapping it re-casts the candidate as a real pick.
     const confirmSuggestionItem = {
       ...identifyPrintingItem,
       type: "confirm_suggestion",
@@ -463,20 +500,20 @@ describe("QuestionFeed", () => {
     renderFeed();
     await revealCard();
 
-    // Before rejection: the suggested candidate is judged in its own slot (#728), so the
-    // grid shows only the OTHER candidate - the suggested one never re-appears as a tile.
-    const initialGrid = await screen.findByTestId(
-      "question-feed-candidate-grid-ungrouped"
-    );
-    expect(within(initialGrid).getAllByRole("button")).toHaveLength(1);
+    // Before "Not this art": no candidate grid at all (composition contract, tested above).
+    expect(
+      screen.queryByTestId("question-feed-candidate-grid-ungrouped")
+    ).not.toBeInTheDocument();
 
-    // Reject the suggestion: the slot collapses into context, and the rejected candidate
-    // joins the grid as a de-emphasised, still-selectable tile rather than vanishing.
-    fireEvent.click(await screen.findByTestId("question-feed-suggestion-no"));
+    fireEvent.click(
+      await screen.findByTestId("question-feed-suggestion-not-this-art")
+    );
     expect(
       await screen.findByTestId("question-feed-rejected-context")
     ).toHaveTextContent("You said: not");
-    const grid = screen.getByTestId("question-feed-candidate-grid-ungrouped");
+    const grid = await screen.findByTestId(
+      "question-feed-candidate-grid-ungrouped"
+    );
     expect(within(grid).getAllByRole("button")).toHaveLength(2);
     const rejectedNote = await screen.findByTestId(
       "question-feed-rejected-tile-note"
@@ -489,6 +526,73 @@ describe("QuestionFeed", () => {
     // The reconsider path: tapping the rejected tile casts it as a real pick.
     fireEvent.click(rejectedTile!);
     await waitFor(() => expect(submittedIdentifier).toBe("printing-1"));
+  });
+
+  it("'Same art, but...' casts the suggested printing's illustration vote on tap, then summons the border/frame attribute chips", async () => {
+    const suggested = {
+      ...identifyPrintingItem.candidates[0],
+      illustrationId: "22222222-2222-2222-2222-222222222222",
+    };
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              type: "confirm_suggestion",
+              suggestedPrinting: suggested,
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    let illustrationVoteBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitIllustrationVote/"),
+        async ({ request }) => {
+          illustrationVoteBody = (await request.json()) as Record<
+            string,
+            unknown
+          >;
+          return HttpResponse.json(
+            {
+              illustrationId: suggested.illustrationId,
+              isUnknown: false,
+              printingVoteCast: false,
+              artistVoteCast: true,
+            },
+            { status: 200 }
+          );
+        }
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    fireEvent.click(
+      await screen.findByTestId("question-feed-suggestion-same-art-but")
+    );
+
+    await waitFor(() => expect(illustrationVoteBody).toBeDefined());
+    expect(illustrationVoteBody).toMatchObject({
+      identifier: identifyPrintingItem.card.identifier,
+      illustrationId: suggested.illustrationId,
+      isUnknown: false,
+    });
+    expect(
+      await screen.findByTestId("attribute-chip-Full Art")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("question-feed-candidate-grid-ungrouped")
+    ).not.toBeInTheDocument();
   });
 
   it("shows the suggested printing's own reference image on the suggested-match question (regression: dropped when the suggestion slot was introduced in #49)", async () => {
@@ -1138,36 +1242,18 @@ describe("QuestionFeed", () => {
     });
   });
 
-  // Issue #712 - "Not sure" and "Skip" used to be indistinguishable no-ops; this locks in the
-  // split: "Not sure" records an abstention, "Skip" still writes nothing.
-  describe("Not sure vs. Skip (issue #712)", () => {
+  // Issue #712 - "Not sure" and "Skip" used to be indistinguishable no-ops. confirm_suggestion's
+  // new 4-answer set (Yes / Same art, but... / Not this art / Skip) folds "Not sure" into
+  // Skip, which now records the abstention itself; identify_printing's own bottom-row Skip is
+  // unrelated to this answer set and keeps writing nothing.
+  describe("Skip records an abstention on confirm_suggestion (issue #712)", () => {
     const confirmSuggestionItem = {
       ...identifyPrintingItem,
       type: "confirm_suggestion",
       suggestedPrinting: identifyPrintingItem.candidates[0],
     };
 
-    function serveConfirmSuggestionOnce() {
-      return http.get(buildRoute("2/questionFeed/"), () =>
-        HttpResponse.json(
-          {
-            item: confirmSuggestionItem,
-            remainingEstimate: {
-              total: 1,
-              confirmable: 1,
-              contested: 0,
-              fresh: 0,
-            },
-          },
-          { status: 200 }
-        )
-      );
-    }
-
-    it("tapping the suggested-match 'Not sure' POSTs an abstention for this card and question type, then advances to the next question", async () => {
-      // The de-laddered flow (issue #728): "Not sure" means "I can't resolve this" - it
-      // records the abstention (issue #712) and advances to the next question rather than
-      // falling into a level1 -> level2 re-ask of the same candidates.
+    it("tapping confirm_suggestion's 'Skip' POSTs an abstention for this card and question type, then advances to the next question", async () => {
       let feedFetchCount = 0;
       server.use(
         http.get(buildRoute("2/questionFeed/"), () => {
@@ -1200,7 +1286,7 @@ describe("QuestionFeed", () => {
       await revealCard();
 
       fireEvent.click(
-        await screen.findByTestId("question-feed-suggestion-not-sure")
+        await screen.findByTestId("question-feed-suggestion-skip")
       );
 
       await waitFor(() => expect(abstentionBody).toBeDefined());
@@ -1208,12 +1294,11 @@ describe("QuestionFeed", () => {
         identifier: confirmSuggestionItem.card.identifier,
         questionType: "confirm_suggestion",
       });
-      // advances to the next question - no level2 re-ask of the same candidates
       await waitFor(() => expect(feedFetchCount).toBe(2));
     });
 
-    it("tapping 'Skip' never calls submitQuestionAbstention", async () => {
-      server.use(serveConfirmSuggestionOnce());
+    it("identify_printing's own bottom-row 'Skip' never calls submitQuestionAbstention", async () => {
+      server.use(questionFeedOnce());
       let abstentionCalls = 0;
       server.use(
         http.post(buildRoute("2/submitQuestionAbstention/"), () => {
