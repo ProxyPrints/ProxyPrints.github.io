@@ -262,10 +262,9 @@ describe("QuestionFeed", () => {
         ["Borderless", "Full Art", "Modern Border", "Showcase"].sort()
       )
     );
-    // printing-2's borderColor is "borderless" - outside the Black/White/Silver taxonomy, and
-    // it's also Full Art/Borderless, which disqualifies the Border Color question outright (a
-    // card with no border has nothing to auto-tag there) - see attributeChips.test.ts's
-    // getOpenExclusionGroups coverage.
+    // printing-2's borderColor is "borderless" - none of Black/White/Silver match it, so no
+    // "Black Border" auto-tag is derived (Borderless is its own Border Color chip instead) -
+    // see attributeChips.test.ts's getAutoTagChips coverage.
     expect(autoTagCalls.map((call) => call.tagName)).not.toContain(
       "Black Border"
     );

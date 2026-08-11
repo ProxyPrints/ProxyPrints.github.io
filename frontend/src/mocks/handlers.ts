@@ -1464,8 +1464,8 @@ export const submitPrintingTagResolvesToPrintingCandidate2 = http.post(
     )
 );
 
-// printingCandidate3 is Showcase (not Full Art/Borderless), so unlike candidate2 it doesn't
-// disqualify the Border Color question - used by the Level 3 open-border-color coverage.
+// printingCandidate3's border color falls outside the taxonomy (not Borderless like candidate2),
+// so its Border Color question stays open - used by the Level 3 open-border-color coverage.
 export const submitPrintingTagResolvesToPrintingCandidate3 = http.post(
   buildRoute("2/submitPrintingTag/"),
   () =>
@@ -1635,7 +1635,7 @@ export const questionFeedIdentifyPrinting = http.get(
 
 // Level 3 border-color coverage needs a candidate whose Frame Treatment resolves (Showcase)
 // while its Border Color genuinely stays open (borderColor outside the taxonomy) - candidate2
-// can't serve this any more since Full Art/Borderless now disqualify Border Color outright.
+// can't serve this since it's itself Borderless, which resolves its own Border Color chip.
 export const questionFeedIdentifyPrintingOpenBorderColor = http.get(
   buildRoute("2/questionFeed/"),
   () =>

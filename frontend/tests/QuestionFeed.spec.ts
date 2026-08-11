@@ -101,7 +101,7 @@ test.describe("question feed - Level 2 (candidate grid)", () => {
     ).toBeVisible();
   });
 
-  test("frame treatment axis: Borderless/Full Art hide the Border Color axis and their own siblings; Extended/Showcase leave it visible", async ({
+  test("chip axes: Borderless hides its own Border Color siblings only; Showcase/Extended Art are mutually exclusive; Full Art is independent of both", async ({
     page,
     network,
   }) => {
@@ -114,14 +114,13 @@ test.describe("question feed - Level 2 (candidate grid)", () => {
 
     await expect(page.getByTestId("attribute-chip-Black Border")).toBeVisible();
 
-    await page.getByTestId("attribute-chip-Full Art-yes").click();
-    await expect(page.getByTestId("attribute-chip-Full Art")).toHaveAttribute(
+    // Borderless is a Border Color sibling of Black/White/Silver (Scryfall's own border_color
+    // enum) - it hides them, but leaves Full Art/Showcase/Extended (different axes) untouched.
+    await page.getByTestId("attribute-chip-Borderless-yes").click();
+    await expect(page.getByTestId("attribute-chip-Borderless")).toHaveAttribute(
       "data-chip-state",
       "positive"
     );
-    await expect(page.getByTestId("attribute-chip-Borderless")).toHaveCount(0);
-    await expect(page.getByTestId("attribute-chip-Showcase")).toHaveCount(0);
-    await expect(page.getByTestId("attribute-chip-Extended")).toHaveCount(0);
     await expect(page.getByTestId("attribute-chip-Black Border")).toHaveCount(
       0
     );
@@ -131,14 +130,31 @@ test.describe("question feed - Level 2 (candidate grid)", () => {
     await expect(page.getByTestId("attribute-chip-Silver Border")).toHaveCount(
       0
     );
+    await expect(page.getByTestId("attribute-chip-Full Art")).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Showcase")).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Extended")).toBeVisible();
 
-    // retracting Full Art restores everything
-    await page.getByTestId("attribute-chip-Full Art-yes").click();
+    // retracting Borderless restores the rest of Border Color
+    await page.getByTestId("attribute-chip-Borderless-yes").click();
     await expect(page.getByTestId("attribute-chip-Black Border")).toBeVisible();
 
-    // Extended Art still has a border colour - the axis stays visible for it
-    await page.getByTestId("attribute-chip-Extended-yes").click();
-    await expect(page.getByTestId("attribute-chip-Extended")).toHaveAttribute(
+    // Showcase and Extended Art are the one genuinely exclusive pair (0 co-occurrences,
+    // measured against CanonicalPrintingMetadata) - Showcase hides Extended, but leaves Border
+    // Color and Full Art (both independent of this axis) untouched.
+    await page.getByTestId("attribute-chip-Showcase-yes").click();
+    await expect(page.getByTestId("attribute-chip-Showcase")).toHaveAttribute(
+      "data-chip-state",
+      "positive"
+    );
+    await expect(page.getByTestId("attribute-chip-Extended")).toHaveCount(0);
+    await expect(page.getByTestId("attribute-chip-Black Border")).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Full Art")).toBeVisible();
+    await page.getByTestId("attribute-chip-Showcase-yes").click();
+
+    // Full Art is independent of every other axis - it never hides Border Color, Showcase, or
+    // Extended Art (82% of borderless printings are also full art - Ghalta, Primal Hunger).
+    await page.getByTestId("attribute-chip-Full Art-yes").click();
+    await expect(page.getByTestId("attribute-chip-Full Art")).toHaveAttribute(
       "data-chip-state",
       "positive"
     );
@@ -147,6 +163,8 @@ test.describe("question feed - Level 2 (candidate grid)", () => {
     await expect(
       page.getByTestId("attribute-chip-Silver Border")
     ).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Showcase")).toBeVisible();
+    await expect(page.getByTestId("attribute-chip-Extended")).toBeVisible();
   });
 
   test('"Art matches, not an official printing" casts a no-match printing vote plus a positive custom-art tag vote, then advances', async ({

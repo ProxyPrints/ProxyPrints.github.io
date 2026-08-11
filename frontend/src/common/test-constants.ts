@@ -777,9 +777,10 @@ export const printingCandidate2: PrintingCandidate = {
   releasedAt: "2010-06-15",
 };
 
-// A Showcase card whose border color falls outside the Black/White/Silver taxonomy - unlike
-// printingCandidate2 (Full Art/Borderless), Showcase doesn't disqualify the Border Color
-// question, so this is the fixture Level 3's border-color-only coverage exercises instead.
+// A Showcase card whose border color falls outside the Black/White/Silver/Borderless taxonomy -
+// unlike printingCandidate2 (itself Borderless, which resolves its own Border Color chip),
+// this candidate leaves Border Color genuinely open, so it's the fixture Level 3's
+// border-color-only coverage exercises instead.
 export const printingCandidate3: PrintingCandidate = {
   identifier: "printing-candidate-3",
   canonicalId: "canonical-1",
