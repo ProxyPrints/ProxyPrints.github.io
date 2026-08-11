@@ -87,10 +87,27 @@ def make_shared_illustration_group(name: str = "Brainstorm") -> tuple:
     return card, illustration_id
 
 
-def make_ai_suggested_card(anonymous_id: str = "ai-bot") -> tuple:
+_COMPLETE_EVIDENCE_TYPES = ("border", "artist", "symbol")
+
+
+def make_ai_suggested_card(
+    anonymous_id: str = "ai-bot", evidence_types_used: tuple = _COMPLETE_EVIDENCE_TYPES
+) -> tuple:
+    """A card carrying a machine printing suggestion (issue #766: `confirm_suggestion` is now
+    gated on `evidence_types_used` - see `_evidence_justifies_confirmation` - so this fixture
+    also attaches a `CardScanLog` row recording it, complete by default so every existing
+    confirm_suggestion-shaped test stays a confirm_suggestion-shaped test). Pass `evidence_types_
+    used=()`/a partial tuple/`None` for a test exercising the gate itself."""
     card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
     printing = CanonicalCardFactory()
     CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=anonymous_id)
+    if evidence_types_used is not None:
+        CardScanLog.objects.create(
+            card=card,
+            anonymous_id=anonymous_id,
+            skip_reason="ambiguous",
+            evidence_types_used=list(evidence_types_used),
+        )
     return card, printing
 
 
@@ -708,29 +725,6 @@ def seed_served_log(anonymous_id: str, likely_resolve_count: int, remainder_coun
         )
 
 
-def seed_remainder_log(
-    anonymous_id: str, confirm_count: int = 0, contested_count: int = 0, cold_count: int = 0
-) -> None:
-    """The per-remainder-lane analogue of `seed_served_log` above: writes `pool=REMAINDER` rows
-    carrying each lane's own `origin_reason` prefix (`tier_1_`/`tier_2_`/`tier_4_` -
-    `question_feed._REMAINDER_LANE_ORIGIN_PREFIXES`), so `_remainder_lane_order`'s
-    proportional-fairness ranking sees this session's history as already skewed toward whichever
-    lane(s) this seeds."""
-    counts_and_reasons = (
-        (confirm_count, "tier_1_confirm_suggestion", "confirm_suggestion"),
-        (contested_count, "tier_2_contested_printing", "identify_printing"),
-        (cold_count, "tier_4_fresh_printing", "identify_printing"),
-    )
-    for count, origin_reason, question_type in counts_and_reasons:
-        for _ in range(count):
-            QuestionFeedServedLog.objects.create(
-                anonymous_id=anonymous_id,
-                pool=QuestionFeedServedPool.REMAINDER,
-                question_type=question_type,
-                origin_reason=origin_reason,
-            )
-
-
 class TestIsLikelyResolvePrinting:
     """Serve-time LIKELY-RESOLVE classification (question_feed.is_likely_resolve_printing) -
     matches the real resolver on constructed 1-away/2-away fixtures, per the data brief's
@@ -928,20 +922,63 @@ class TestMixComposition:
         assert log.origin_reason != "tier_4_quick_negative_to_review"
 
 
-class TestRemainderMixRotation:
-    """Remainder mix policy (2026-08-10, see this module's own docstring and
-    `_remainder_lane_order`): which remainder lane (confirm/contested/cold) is tried FIRST
-    rotates toward whichever is furthest below its own target share of this session's history,
-    so contested/cold questions actually reach a voter instead of confirm's much larger real
-    supply crowding them out via the old fixed confirm-first order."""
+class TestEvidenceGatedConfirmation:
+    """Evidence-gated printing-confirmation policy (2026-08-11, issue #766, replaces the
+    2026-08-10 remainder mix rotation - see this module's own docstring's "Evidence-gated
+    printing-confirmation policy" section): `confirm_suggestion` is offered only when the card's
+    own recorded `CardScanLog.evidence_types_used` covers every type the fallback calculator can
+    record; any other card - partial evidence, or none at all - falls through to `identify_
+    printing` via the existing contested/cold machinery instead, and the remainder waterfall
+    itself is a fixed confirm -> contested -> cold order with no session-dependent rotation."""
 
-    def test_a_confirm_heavy_session_is_served_a_contested_question_next(self, db):
-        seed_remainder_log("anon-1", confirm_count=10)  # confirm already well over its target share
+    def test_a_card_with_complete_evidence_is_offered_as_confirm_suggestion(self, db):
+        card, printing = make_ai_suggested_card()  # complete evidence by default
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "confirm_suggestion"
+        assert item.card.identifier == card.identifier
+
+    def test_a_card_missing_one_evidence_type_is_not_offered_as_confirm_suggestion(self, db):
+        # two of three known evidence types recorded (missing "symbol") - the ratified doc's
+        # own ruling (§10 ruling 3) that three-of-four earns no special tier applies here too:
+        # anything less than complete evidence routes to identify_printing, no partial-credit tier
+        incomplete_card, _ = make_ai_suggested_card(evidence_types_used=("border", "artist"))
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "identify_printing"
+        assert item.card.identifier == incomplete_card.identifier
+
+    def test_a_card_with_no_recorded_evidence_at_all_is_not_offered_as_confirm_suggestion(self, db):
+        # the measured-common case (2026-08-11): a machine printing suggestion with no
+        # CardScanLog row at all, since a MATCHING fallback-calculator run never writes one
+        no_evidence_card, _ = make_ai_suggested_card(evidence_types_used=None)
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "identify_printing"
+        assert item.card.identifier == no_evidence_card.identifier
+
+    def test_the_remainder_waterfall_tries_confirm_before_contested_regardless_of_session_history(self, db):
+        # session history used to change which lane went first (the deleted rotation); it must
+        # not any more - a genuinely evidence-complete confirm candidate still wins first even
+        # against a session logged as heavily confirm-served already
+        for _ in range(10):
+            QuestionFeedServedLog.objects.create(
+                anonymous_id="anon-1",
+                pool=QuestionFeedServedPool.REMAINDER,
+                question_type="confirm_suggestion",
+                origin_reason="tier_1_confirm_suggestion",
+            )
         confirm_card, _ = make_ai_suggested_card()
         contested_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
-        # two conflicting machine (OCR) votes, weight 0.5 each: contested (2 distinct printings),
-        # but a hypothetical human vote on the leading side only reaches weight 1.5 - short of
-        # PRINTING_TAG_MIN_VOTES=2 - so this is NOT also likely-resolve, isolating it to tier 2
         CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.OCR)
         CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.OCR)
         _warm_all_lanes()
@@ -949,27 +986,14 @@ class TestRemainderMixRotation:
         item = get_next_question_feed_item("anon-1")
 
         assert item is not None
-        assert item.card.identifier == contested_card.identifier
-        assert item.card.identifier != confirm_card.identifier
-        log = QuestionFeedServedLog.objects.filter(anonymous_id="anon-1").latest("served_at")
-        assert log.origin_reason.startswith("tier_2_")
+        assert item.type.value == "confirm_suggestion"
+        assert item.card.identifier == confirm_card.identifier
 
-    def test_a_confirm_and_contested_saturated_session_is_served_a_cold_question_next(self, db):
-        seed_remainder_log("anon-1", confirm_count=10, contested_count=10)
-        CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
-        _warm_all_lanes()
-
-        item = get_next_question_feed_item("anon-1")
-
-        assert item is not None
-        log = QuestionFeedServedLog.objects.filter(anonymous_id="anon-1").latest("served_at")
-        assert log.pool == QuestionFeedServedPool.REMAINDER
-        assert log.origin_reason.startswith("tier_4_")
-
-    def test_a_starved_remainder_lane_falls_through_to_the_next_without_hanging(self, db):
-        # confirm is the most under-served lane for a fresh session and would be tried first,
-        # but has no supply at all (no confirm-eligible data exists anywhere) - the request must
-        # move on to contested rather than stalling on the empty lane
+    def test_a_starved_confirm_lane_falls_through_to_contested_without_hanging(self, db):
+        # no card anywhere clears the evidence gate - the common case today - so the confirm
+        # lane's pool is genuinely empty; the request must still reach contested rather than
+        # stalling on the empty first lane
+        make_ai_suggested_card(evidence_types_used=None)  # confirm-shaped but ungated
         contested_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
         CardPrintingTagFactory(card=contested_card, printing=CanonicalCardFactory(), source=VoteSource.USER)

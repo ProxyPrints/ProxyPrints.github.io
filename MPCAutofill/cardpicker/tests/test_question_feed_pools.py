@@ -73,10 +73,24 @@ def make_one_vote_from_resolving_card() -> tuple:
     return card, printing
 
 
-def make_ai_suggested_card(anonymous_id: str = "ai-bot") -> tuple:
+_COMPLETE_EVIDENCE_TYPES = ("border", "artist", "symbol")
+
+
+def make_ai_suggested_card(
+    anonymous_id: str = "ai-bot", evidence_types_used: tuple = _COMPLETE_EVIDENCE_TYPES
+) -> tuple:
+    """See `test_question_feed.py`'s own helper of the same name for why this attaches a
+    `CardScanLog` row by default (issue #766's evidence gate on `confirm_suggestion`)."""
     card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
     printing = CanonicalCardFactory()
     CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=anonymous_id)
+    if evidence_types_used is not None:
+        CardScanLog.objects.create(
+            card=card,
+            anonymous_id=anonymous_id,
+            skip_reason="ambiguous",
+            evidence_types_used=list(evidence_types_used),
+        )
     return card, printing
 
 
