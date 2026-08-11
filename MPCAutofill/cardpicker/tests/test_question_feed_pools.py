@@ -7,13 +7,16 @@ already present in the test database) rather than overriding `CACHES`, same conv
 only `TestSharedCacheNotConfigured` below overrides it, to cover the pre-#538/#543 state.
 """
 
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
 from django.core.cache import caches
 from django.core.management import CommandError, call_command
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
@@ -21,6 +24,7 @@ from cardpicker.local_calculate_verdicts import (
 )
 from cardpicker.models import (
     ArtistVoteStatus,
+    Card,
     CardScanLog,
     PrintingTagStatus,
     VotePolarity,
@@ -38,6 +42,8 @@ from cardpicker.question_feed_pools import (
     PoolEntry,
     _cache_key,
     _get_cached_pool,
+    _pool_sample_chunk_size,
+    _sample_across_pk_strata,
     draw_cold_entry,
     draw_confirm_card,
     draw_contested_entry,
@@ -204,6 +210,109 @@ class TestBuildPoolCold:
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
         assert PoolEntry(kind=KIND_TAG, card_id=card.pk, tag_name=tag.name) in entries
+
+
+class TestPoolSamplesAcrossImportBatches:
+    """Covers the pooling defect this module's own `_sample_across_pk_strata` exists to fix: a
+    naive `.order_by(<field>)[:limit]` builder returns one import batch, since cards imported
+    together share both a close pk range and a `date_created`. Uses the cold lane's artist
+    sub-list (a plain DB-filtered `Card.objects.filter(artist_vote_status=...)`, no per-candidate
+    Python check) so every qualifying row is deterministically included, making the batch-mix
+    guarantees below structural rather than probabilistic."""
+
+    def _make_batch(self, count: int, date_created: datetime) -> list[int]:
+        return [
+            CardFactory(
+                date_created=date_created,
+                artist_vote_status=ArtistVoteStatus.UNRESOLVED,
+                printing_tag_status=PrintingTagStatus.RESOLVED,
+            ).pk
+            for _ in range(count)
+        ]
+
+    def test_spans_more_than_one_batch_when_the_population_does(self, db):
+        """5 batches of 20 cards each, each batch confined to its own pk range and
+        `date_created`. With `QUESTION_FEED_POOL_SIZE=30`, filling the pool needs at least 5 of
+        the module's 10 pk-space windows (`_pool_sample_chunk_size(30)` caps each window's yield
+        at 6); since a 20-card batch spans only 2 of those windows, touching 5 windows forces at
+        least 3 distinct batches to contribute - guaranteed by the numbers, not by luck."""
+        batches = [self._make_batch(20, datetime(2023, 1, 1) + timedelta(days=day)) for day in range(5)]
+        with override_settings(QUESTION_FEED_POOL_SIZE=30):
+            warm_pool_cache(LANE_COLD)
+        entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
+        pooled_pks = {entry.card_id for entry in entries if entry.kind == KIND_ARTIST}
+        touched_batches = sum(1 for batch in batches if pooled_pks & set(batch))
+        assert touched_batches > 1
+
+    def test_successive_warms_of_an_unchanged_population_are_not_identical(self, db):
+        """Same population and pool size as above, unchanged across 5 independent warms.
+        `_POOL_SAMPLE_STRATA=10` gives `C(10, 5) = 252` distinct 5-window combinations for this
+        draw, so 5 independent warms landing on the exact same combination every time is
+        vanishingly unlikely - this only reproduces the pre-fix "always the same 500" symptom if
+        the window shuffle has stopped varying."""
+        for day in range(5):
+            self._make_batch(20, datetime(2023, 1, 1) + timedelta(days=day))
+        snapshots = set()
+        with override_settings(QUESTION_FEED_POOL_SIZE=30):
+            for _ in range(5):
+                warm_pool_cache(LANE_COLD)
+                entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
+                snapshots.add(frozenset(entry.card_id for entry in entries if entry.kind == KIND_ARTIST))
+        assert len(snapshots) > 1
+
+
+class TestPoolSamplingPreservesQualifyingSet:
+    def test_sampling_never_pools_a_non_qualifying_card(self, db):
+        """Cards that DO and DON'T qualify interleaved by pk (alternating), across several
+        `date_created` values - so every pk-space window the sampler visits contains a mix, and
+        a boundary bug in window filtering would leak a non-qualifying card into the pool."""
+        qualifying_pks: set[int] = set()
+        for day in range(4):
+            date_created = datetime(2023, 1, 1) + timedelta(days=day)
+            for _ in range(15):
+                qualifying_pks.add(
+                    CardFactory(
+                        date_created=date_created,
+                        artist_vote_status=ArtistVoteStatus.UNRESOLVED,
+                        printing_tag_status=PrintingTagStatus.RESOLVED,
+                    ).pk
+                )
+                CardFactory(
+                    date_created=date_created,
+                    artist_vote_status=ArtistVoteStatus.RESOLVED,
+                    printing_tag_status=PrintingTagStatus.RESOLVED,
+                )
+        with override_settings(QUESTION_FEED_POOL_SIZE=30):
+            warm_pool_cache(LANE_COLD)
+        entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
+        pooled_pks = {entry.card_id for entry in entries if entry.kind == KIND_ARTIST}
+        assert pooled_pks <= qualifying_pks
+        assert len(pooled_pks) == 30
+
+
+class TestPoolSampleCostBounded:
+    def test_query_count_does_not_scale_with_population_size(self, db):
+        """`_sample_across_pk_strata`'s own query count - `_POOL_SAMPLE_STRATA` pk-space windows
+        plus one bounds lookup - must stay identical whether the qualifying population is 15 rows
+        or 315, since it's sized off `_POOL_SAMPLE_STRATA`/`chunk_size`, never off how many rows
+        actually match. Starts at 15 (not fewer) so the pk range already meets
+        `_POOL_SAMPLE_STRATA`'s own window count on the small side too - a population smaller
+        than `_POOL_SAMPLE_STRATA` legitimately uses fewer, wider windows to avoid querying empty
+        ones, which is a different (and already covered) property from cost staying flat once
+        that clamp is no longer in play."""
+        for _ in range(15):
+            CardFactory(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
+        queryset = Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED).values_list("pk", flat=True)
+        chunk_size = _pool_sample_chunk_size(30)
+        with CaptureQueriesContext(connection) as small_population:
+            list(_sample_across_pk_strata(queryset, chunk_size=chunk_size))
+
+        for _ in range(300):
+            CardFactory(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
+        with CaptureQueriesContext(connection) as large_population:
+            list(_sample_across_pk_strata(queryset, chunk_size=chunk_size))
+
+        assert len(large_population.captured_queries) == len(small_population.captured_queries)
 
 
 class TestPoolSizeCap:
