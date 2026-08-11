@@ -851,8 +851,9 @@ def _tier_1_confirm_suggestion(
     # differentiating signal is the "attribute variance" dimension (how internally inconsistent
     # the machine's own attribute-chip picture of the card is), so the bounded window is re-
     # ranked by that. A candidate that fails to build a suggestion (a machine vote with a null
-    # printing) is skipped; if the whole window yields nothing, the unchanged full scan takes
-    # over, so this never returns None where the old code returned a card.
+    # printing, or - issue #766 - one whose evidence doesn't clear
+    # `_evidence_justifies_confirmation`) is skipped; if the whole window yields nothing, the
+    # unchanged full scan takes over.
     windowed = list(cards[:_CANDIDATE_SCORING_WINDOW])
     variances = _attribute_variance_map(windowed)
     windowed.sort(key=lambda card: variances.get(card.pk, 0.0), reverse=True)
@@ -867,6 +868,15 @@ def _tier_1_confirm_suggestion(
         item = _confirm_suggestion_item(card)
         if item is not None:
             return item
+    # Every tier-1 candidate carries a machine suggestion, but none cleared the evidence gate
+    # (`_evidence_justifies_confirmation`) - this tier still has a card to ask about, it just
+    # cannot ask for a printing confirmation yet. Per the ratified question model (docs/features/
+    # wtc-question-model.md §2: "any element unmatched -> ask the question that fills the gap"),
+    # fall through to `identify_printing` on this tier's own best (highest-variance) candidate
+    # rather than returning `None` and silently dropping it - the same confirm-or-identify
+    # fallback `_likely_resolve_item` already uses for the likely-resolve pool.
+    if windowed:
+        return _identify_printing_item(windowed[0])
     return None
 
 
