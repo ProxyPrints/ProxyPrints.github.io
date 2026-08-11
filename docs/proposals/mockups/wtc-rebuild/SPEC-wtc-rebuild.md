@@ -376,6 +376,15 @@ Every visible element on the affected page. Values are binding.
 
 ## 2. QUESTION-SHAPE INVENTORY → interaction contract
 
+> **SUPERSEDED (2026-08-11,
+> [`docs/features/wtc-question-model.md`](../../../features/wtc-question-model.md) — the
+> governing spec for `/whatsthat`).** The seven-shape inventory below, its Level 1/2/3
+> interaction prose, and the "Frame Treatment's mutual exclusivity" paragraph following the
+> table describe a fixed question ladder that issue #728 removed; the table's own file:line
+> citations are stale. The governing question-type and composition model now lives in that
+> document's §5 and §7. Retained below as a historical record of the pre-#728 design, not an
+> active contract.
+
 All shapes live in ONE component tree (QuestionFeed.tsx); the served
 `QuestionFeedItem.type` selects which renders. The contract is preserved EXACTLY.
 
@@ -595,6 +604,12 @@ the habituation risk this seam was designed to monitor, the build item is retire
 This record stands so a future reader understands the decision.
 
 ## ANNEX B — survivor_pks / issue #433 dependency (shape b)
+
+> **SUPERSEDED (2026-08-11,
+> [`docs/features/wtc-question-model.md`](../../../features/wtc-question-model.md) §3).** The
+> "degrade shape b to shape d" stopgap below is superseded by that document's selection model,
+> which partitions pools by missing-evidence dimension rather than degrading a shortlist shape.
+> Retained below as a historical record.
 
 The shortlist shape assumes a machine-narrowed candidate list exists on the
 served item. Per the data brief, `CardScanLog.survivor_pks` is **null for 100%**

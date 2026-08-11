@@ -900,10 +900,18 @@ mystery-card flip only), `CardPulseWrapper`/the sliced WHAT'S/THAT/CARD? pop seq
 document now). Added: the quiet "N tagged this session" affordance (the only reward surface —
 no streak/score/confetti) and the seven question-shapes-as-visually-distinct-modes framing
 (confirm/shortlist/quick-negative/open-ended/artist/tag/follow-up) `SPEC-wtc-rebuild.md`
-section 2 defines. The interaction contract (Level 1/2/3 flows, `getAutoTagChips`, no-re-
-presentation, the singleton-NO terminal vote, per-item state reset, the rate-limit banner) is
-unchanged — every bullet below describing THAT contract (not the retired visual mechanism) is
-still accurate. The detailed "quiz-reveal hero"/starburst/gold-button narrative below is kept
+section 2 originally defined (that section is itself now superseded — see below). **Withdrawn
+(2026-08-11):** this paragraph used to claim the Level 1/2/3 flow was unchanged by the WTC
+rebuild. That is false — issue #728 removed the fixed ladder, and `QuestionFeed.tsx` says so at
+its own file header and at more than a dozen inline call sites (e.g. "The de-laddered feed
+(issue #728) has no fixed level1 -> level2 -> level3 sequence"). The governing question-type
+and composition model, replacing both the Level 1/2/3 ladder and
+[`SPEC-wtc-rebuild.md`](../proposals/mockups/wtc-rebuild/SPEC-wtc-rebuild.md) §2, now lives in
+[`wtc-question-model.md`](wtc-question-model.md). The rest of the parenthetical
+(`getAutoTagChips`, no-re-presentation, the singleton-NO terminal vote, per-item state reset,
+the rate-limit banner) is unaffected by that withdrawal and remains accurate — those are
+mechanics the ladder's removal did not touch. The detailed "quiz-reveal hero"/starburst/
+gold-button narrative below is kept
 for history (this doc's own established convention — see the `cardPanel.tsx` bullet's own prior
 "SUPERSEDED" marker two bullets down) but no longer describes the current rendering; read it as
 "how we got here," not "what's live."

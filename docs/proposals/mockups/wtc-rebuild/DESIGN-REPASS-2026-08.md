@@ -1,7 +1,14 @@
 # WTC Design Repass: Intent, Cohesion, and Contextual HUD Architecture
 
+> **SUPERSEDED (2026-08-11).** Folded in whole into
+> [`docs/features/wtc-question-model.md`](../../../features/wtc-question-model.md). Rules 1–6
+> survive as that document's §5 and §7; Rule 7 (borderless is a border colour, showcase/
+> extended-art the one exclusive treatment pair) survives as its §7 "frame / attribute
+> narrowing". The §3 roadmap table below was never updated after its issues shipped and is
+> discarded. Read this file for history only.
+
 **Date:** August 2026
-**Status:** Active Governing Standard (Epic #704)
+**Status:** Active Governing Standard (Epic #704) — superseded, see banner above
 **Target Surface:** `frontend/src/features/questionFeed/` (`QuestionFeed.tsx`, `QuestionFeedPanel.tsx`, `attributeChips/`, `ArtistSupportLink.tsx`)
 
 ---

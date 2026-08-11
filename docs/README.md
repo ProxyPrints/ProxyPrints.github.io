@@ -131,6 +131,11 @@ The methodology and the systems it governs.
   backend + frontend. Stages 1–7 are the current-state reference; Stage 8
   onward (local/zero-API-cost backfill) is documented live in the next
   entry instead.
+- [`features/wtc-question-model.md`](features/wtc-question-model.md) — the
+  governing document for `/whatsthat`: its question model, selection
+  policy and composition contract, ratified 2026-08-11. Supersedes the
+  wtc-rebuild mockup round's §2 shape ladder and `DESIGN-REPASS-2026-08.md`
+  whole — see its own §0 for the full precedence table.
 - [`features/catalog-completion-plan.md`](features/catalog-completion-plan.md)
   — the six-part catalog-completion package (Stage 8+): run-cohort safety,
   `content_phash` backfill, evidence recovery, LANDS, residual
