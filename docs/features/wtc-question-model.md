@@ -230,14 +230,21 @@ question-type value). Built as `_border_item` in `question_feed.py` + `BorderCol
 (votes through the same `useTagVoting` path as the narrowing chips, §5 rule 1: only what the
 current question needs). No reveal treatment - a non-candidate question like artist/tag.
 
-**Symbols and collector lines are explicitly NOT built as question types** (2026-08-11, same
-scope), each for a different reason. The set symbol has no vote target - nothing in the vote
-system records a set/expansion judgement - and reading one by sight is expert knowledge a lay
-user cannot reliably give, so a `symbol` question would harvest guesses rather than votes. The
-collector line has no vote target either: `ImageEvidence.collector_line_*` is OCR-written
-evidence with no `CardCollectorLineVote` model or endpoint behind it (see §2's recorded-only
-treatment), so a `collector_line` answer would have nothing to cast through; asking it would
-be a pointless question. Both stay gaps - documented, not built.
+**Symbol is not built as a question type; the collector-line question is deferred to its own
+PR** (2026-08-11, same scope; the deferral is the owner's ruling). These are different
+outcomes. The set symbol has no vote target - nothing in the vote system records a
+set/expansion judgement - and reading one by sight is expert knowledge a lay user cannot
+reliably give, so a `symbol` question would harvest guesses rather than votes; it stays a
+gap - documented, not built. The collector line is NOT ruled out: a collector number
+identifies a printing. `CanonicalCard` carries a unique constraint on `(expansion, collector_number)` (`canonicalcard_unique_expansion_collector_number`, `models.py:118`), so
+a set code plus a collector number resolves to exactly one printing by construction - the
+pipeline already resolves printings this way internally (`local_calculate_verdicts.py:950`,
+`local_lands_identify.py:468`). A collector-line answer therefore casts an ordinary
+`CardPrintingTag` - no new vote model is needed. The first version needs no typing or
+search: where candidates exist, present their collector numbers as the options and let the
+user pick the one printed on their card; each option is a printing, so the pick casts a
+printing vote. Its phrasing must make clear the user is confirming the whole printing
+(frame, artist credit and all), because a printing vote is the expensive full claim.
 
 ## 8. Layout technique (restated from SPEC §3, unchanged)
 
@@ -272,14 +279,23 @@ All items ruled 2026-08-11. Nothing in this document is awaiting a decision.
    collector line is the unmatched element, ask about the collector line. "Route to the gap"
    and "ask about the missing element" are the same rule. A printing confirmation is not
    offered until all four elements match.
-4. **`border` becomes a first-class question type; `symbol` and `collector_line` are ruled
-   out for now** (§7.7). Border adds the `border` question-type value, the `_border_item`
-   feed builder, and the `BorderColorQuestion` render branch - the answer surface is the four
-   `BORDER_COLOR_GROUP` chips, casting real `CardTagVote`s through the existing chip
-   machinery, so no new vote model or endpoint is required. Symbol is ruled out against §5:
-   set symbols by sight are expert knowledge, so the question would harvest guesses, not
-   votes. Collector line is ruled out for lack of a vote target: `ImageEvidence. collector_line_*` is OCR-written evidence, and there is no `CardCollectorLineVote` model
-   or endpoint to cast through. Both gaps are recorded in §7.7 and stay unbuilt.
+4. **`border` becomes a first-class question type; `symbol` is ruled out, `collector_line`
+   is deferred to its own PR** (§7.7). Border adds the `border` question-type value, the
+   `_border_item` feed builder, and the `BorderColorQuestion` render branch - the answer
+   surface is the four `BORDER_COLOR_GROUP` chips, casting real `CardTagVote`s through the
+   existing chip machinery, so no new vote model or endpoint is required. Symbol is ruled
+   out against §5: set symbols by sight are expert knowledge, so the question would harvest
+   guesses, not votes. Collector line is deferred, not ruled out (owner's ruling, same
+   date): a collector number identifies a printing - `CanonicalCard`'s unique constraint on
+   `(expansion, collector_number)` (`canonicalcard_unique_expansion_collector_number`,
+   `models.py:118`) resolves set code plus collector number to exactly one printing by
+   construction, as the pipeline already does internally (`local_calculate_verdicts.py:950`,
+   `local_lands_identify.py:468`) - so a collector-line answer casts an ordinary
+   `CardPrintingTag`, no new vote model. First version needs no typing or search: where
+   candidates exist, present their collector numbers as the options and let the user pick
+   the one printed on their card; each option is a printing, phrased as a whole-printing
+   confirmation (frame, artist credit and all), since a printing vote is the expensive
+   full claim. Symbol stays unbuilt; the collector-line question is a documented next PR.
 
 Earlier rulings folded into the body above: illustration votes never imply a printing
 whatever the group size; each voting axis is a first-class question; confirming and
