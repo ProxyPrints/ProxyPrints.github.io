@@ -258,6 +258,35 @@ a completely separate code path, also unaffected.
   of the 2026-07-22 ratification (whose own "narrow to this / don't"
   reasoning was about the funnel-vs-QuestionFeed distinction generally,
   not a hard ban on ever adding an exclude state anywhere in the funnel).
+  - **CORRECTION (ground-truth catalogue measurement, 2026-08-11)**: the
+    Treatment block above — Full Art/Borderless/Showcase/Extended/Etched
+    folded into one unified include/exclude group — mis-models the
+    catalogue. Measured against `CanonicalPrintingMetadata` (113,224
+    printings): `borderless` 5,962 · `full_art` 6,505 · `showcase` 3,074 ·
+    `extendedart` 4,165, and these are not mutually exclusive the way a
+    single shared tri-state cycle assumes. 4,902 of the 5,962 borderless
+    printings (82%) are ALSO full art (e.g. Ghalta, Primal Hunger); 1,056
+    are also showcase; 652 of the 3,074 showcase printings (21%) are also
+    full art (Cathars' Crusade, INR 483, is full art AND showcase AND
+    borderless at once; Tymaret, Chosen from Death, MUL 148, is full art
+    AND showcase on a BLACK border — treatments compose across border
+    colours too). Only showcase and extended art are genuinely exclusive
+    of each other and of borderless (0 co-occurrences each in the
+    catalogue); full art and extended art co-occur in exactly 2 printings
+    catalogue-wide (Exploration Broodship, Uthros Research Craft, both
+    Edge of Eternities Commander). The correct model: **Border** is an
+    exclusive axis of Black/White/Silver/**Borderless** (Scryfall's own
+    `border_color` field already puts borderless there, not in a
+    treatment field); **Frame era** stays its own exclusive
+    Old/Modern/Future axis; **Treatment** is Showcase XOR Extended Art,
+    with **Full Art independent and freely combinable with either** (or
+    with neither). Extended art always carries a border colour; borderless
+    and full art may co-occur with each other and with showcase. This is a
+    documentation correction recording ground truth, not an implementation
+    change — the code fix is tracked separately. See
+    [`docs/reference/funnel-spec.md`](../reference/funnel-spec.md)'s §F2
+    correction note for the same figures measured against the original
+    ratified spec.
 - <a id="sensitive-tags-excluded-from-funnel"></a>**Three chip states**
   (F3): SETTLED (some survivor resolves the tag — `card.tags`), SUGGESTED
   (every carrying survivor only has it via `card.suggestedFilterTagNames`
