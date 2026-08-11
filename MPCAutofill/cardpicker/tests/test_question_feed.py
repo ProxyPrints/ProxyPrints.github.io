@@ -1204,7 +1204,12 @@ class TestConfirmSuggestionSkipsEliminatedSuggestions:
         printing = CanonicalCardFactory()
         CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=illustration_id)
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
-        CardScanLog.objects.create(card=card, anonymous_id="ai-bot", skip_reason="ambiguous", evidence_types_used=["border", "artist", "symbol"])
+        CardScanLog.objects.create(
+            card=card,
+            anonymous_id="ai-bot",
+            skip_reason="ambiguous",
+            evidence_types_used=["border", "artist", "symbol"],
+        )
         for anonymous_id in ("voter-1", "voter-2"):
             CardIllustrationRejectionFactory(
                 card=card, illustration_id=illustration_id, source=VoteSource.USER, anonymous_id=anonymous_id
@@ -1228,7 +1233,12 @@ class TestConfirmSuggestionSkipsEliminatedSuggestions:
         CardPrintingTagFactory(
             card=card, printing=eliminated_printing, source=VoteSource.DEDUCTION, anonymous_id="calc-a-v1"
         )
-        CardScanLog.objects.create(card=card, anonymous_id="calc-a-v1", skip_reason="ambiguous", evidence_types_used=["border", "artist", "symbol"])
+        CardScanLog.objects.create(
+            card=card,
+            anonymous_id="calc-a-v1",
+            skip_reason="ambiguous",
+            evidence_types_used=["border", "artist", "symbol"],
+        )
         for anonymous_id in ("voter-1", "voter-2"):
             CardIllustrationRejectionFactory(
                 card=card, illustration_id=eliminated_illustration, source=VoteSource.USER, anonymous_id=anonymous_id
