@@ -57,6 +57,19 @@ change to machine votes was in scope for adding it.
 - Any element unmatched → do not ask for a printing at all. Ask the question that fills the
   gap. Every such question is cheaper, more reliable, and narrows the printing for free.
 
+**Correction (PR implementing §3's selection, 2026-08-11):** `CardScanLog.evidence_types_used`
+does not carry a "collector line" value and cannot — the fallback calculator that populates it
+(`local_calculate_verdicts.calculate_fallback_verdict`) records only its own three sub-checks,
+`border`/`artist`/`symbol`; the collector line is the precondition that gets the calculator
+running at all, not one of its recorded outcomes, so a fourth value was never produced by any
+code path. The gate this PR ships checks the three that actually exist. Measured live the same
+day: 0 of 110,130 confirm-eligible cards carry a `CardScanLog` row with all three recorded, and
+the field is essentially unpopulated for the confirm-eligible population specifically regardless
+of vocabulary size — a MATCHING calculator run never writes a `CardScanLog` row at all (only a
+skip does), so the population this gate governs almost never has a row to read in the first
+place. See `cardpicker.question_feed._KNOWN_EVIDENCE_TYPES` for the vocabulary and this PR's own
+report for the measurement.
+
 **Resolved (§10 ruling 3):** three-of-four gets no special tier. The gap names the
 question — if the collector line is the unmatched element, ask about the collector line.
 Route to the gap, no extra tier: a tier earns its place only if it changes what we ask.
@@ -75,6 +88,22 @@ The lane-share mix rotation merged in #763 (`QUESTION_FEED_CONFIRM_MIX_WEIGHT` a
 defaults 3/2/1) is **interim**. Those weights were chosen by an implementing worker, never
 measured, and flagged as such. Under this model there is no lane ratio to tune; the rotation
 and its weights are deleted. Tracked in #766.
+
+**Implemented (#766, 2026-08-11):** the four lanes (confirm/contested/cold/likely-resolve) are
+NOT renamed to evidence dimensions — `TypeEnum` has exactly four servable question types
+(`confirm_suggestion`/`identify_printing`/`artist`/`tag`), and there is no per-element type a
+missing border, symbol or collector-line reading could route to on its own; inventing one is
+frontend + schema work outside a backend-only selection change. What ships instead is a GATE at
+`confirm_suggestion`'s one construction site: a card is built as `confirm_suggestion` only when
+its evidence is complete (§2), and every other card — including a card with a machine printing
+suggestion but incomplete or absent evidence — falls through to the SAME `identify_printing`
+question its tier already produces for a card with no suggestion at all, which is the closest
+existing "ask the question that fills the gap" available without a new type: it presupposes
+nothing and narrows the printing regardless of which element is missing. The confirm/contested/
+cold LANE structure and their pools are otherwise unchanged; only tier 1's gate and the (now
+fixed, no-longer-weighted) waterfall order changed. See `cardpicker.question_feed`'s own
+"Evidence-gated printing-confirmation policy" docstring for the mechanism and this PR's report
+for the measured before/after served mix.
 
 A candidate grid is only a shortlist when the machine actually narrowed it. That requires
 `CardScanLog.survivor_pks`, which is populated on 0 of 4,435,119 rows today. Until it is,
