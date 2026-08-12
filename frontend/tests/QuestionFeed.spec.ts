@@ -655,6 +655,50 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     expect(submittedIllustrationVote).not.toHaveProperty("printingIdentifier");
     expect(printingTagSubmitted).toBe(false);
   });
+
+  // Issue #790 - candidateA (black) and candidateB (borderless) share one illustration;
+  // neither carries a white border, so a "White Border" chip must not prune that
+  // illustration from the grid.
+  for (const width of [390, 800, 1400]) {
+    test(`a border chip that matches no member of an illustration keeps that illustration's group tile visible, with no horizontal overflow at ${width}px`, async ({
+      page,
+      network,
+    }) => {
+      network.use(
+        questionFeedIdentifyPrintingGroupedByIllustration,
+        submitTagVoteResolvesToApply,
+        ...defaultHandlers
+      );
+      await page.setViewportSize({ width, height: 900 });
+      await loadPageWithDefaultBackend(page, "whatsthat");
+
+      await page.getByTestId("attribute-chip-White Border-yes").click();
+      await expect(
+        page.getByTestId("attribute-chip-White Border")
+      ).toHaveAttribute("data-chip-state", "positive");
+
+      const sharedGroup = page.locator(
+        '[data-testid="question-feed-illustration-group"][data-illustration-id="illustration-shared"]'
+      );
+      await expect(sharedGroup).toBeVisible();
+      await expect(
+        sharedGroup.locator(
+          `[data-card-identifier="${illustrationGroupCandidateA.identifier}"]`
+        )
+      ).toHaveCount(1);
+
+      const overflow = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
+
+      await page.screenshot({
+        path: `.playwright-mcp/issue-790-border-chip-illustration-${width}.png`,
+        fullPage: false,
+      });
+    });
+  }
 });
 
 test.describe("question feed - confirm_suggestion question type", () => {

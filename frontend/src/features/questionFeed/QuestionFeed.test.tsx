@@ -1312,6 +1312,167 @@ describe("QuestionFeed", () => {
     });
   });
 
+  // Issue #790 - a border chip must narrow WITHIN an illustration, never delete the
+  // illustration outright, and a candidate that stays visible only because of that
+  // narrowing must never have its own (chip-contradicting) attribute auto-tagged onto the
+  // upload.
+  describe("illustration-axis independence (issue #790)", () => {
+    const sharedIllustrationId = "22222222-2222-2222-2222-222222222222";
+    const whitePrinting = {
+      ...identifyPrintingItem.candidates[0],
+      identifier: "printing-white",
+      borderColor: "white",
+      illustrationId: sharedIllustrationId,
+    };
+    const silverPrinting = {
+      ...identifyPrintingItem.candidates[1],
+      identifier: "printing-silver",
+      fullArt: false,
+      isBorderless: false,
+      isShowcase: false,
+      isExtendedArt: false,
+      isEtched: false,
+      borderColor: "silver",
+      illustrationId: sharedIllustrationId,
+    };
+
+    it("a border chip that matches no printing of an illustration keeps the illustration in the grid instead of removing it", async () => {
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: {
+                ...identifyPrintingItem,
+                candidates: [whitePrinting, silverPrinting],
+              },
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      server.use(submitTagVoteResolvesToApply);
+      renderFeed();
+      await revealCard();
+
+      fireEvent.click(
+        await screen.findByTestId("attribute-chip-Black Border-yes")
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId("attribute-chip-Black Border")
+            .getAttribute("data-chip-state")
+        ).toBe("positive")
+      );
+
+      // Neither printing is black-bordered - under the old filter the illustration would
+      // vanish from the grid entirely. Both members must still be here, unnarrowed.
+      const group = await screen.findByTestId(
+        "question-feed-illustration-group"
+      );
+      expect(
+        within(group).getByText("Same illustration - 2 printings")
+      ).toBeInTheDocument();
+    });
+
+    it("reconsidering a rejected candidate that survived only via illustration-group preservation does not auto-tag the attribute that contradicted the active chip", async () => {
+      const confirmSuggestionItem = {
+        ...identifyPrintingItem,
+        type: "confirm_suggestion",
+        suggestedPrinting: whitePrinting,
+        candidates: [whitePrinting, silverPrinting],
+      };
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: confirmSuggestionItem,
+              remainingEstimate: {
+                total: 1,
+                confirmable: 1,
+                contested: 0,
+                fresh: 0,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      server.use(
+        http.post(buildRoute("2/submitPrintingTag/"), () =>
+          HttpResponse.json(
+            { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+            { status: 200 }
+          )
+        )
+      );
+      server.use(
+        http.post(buildRoute("2/submitIllustrationRejection/"), () =>
+          HttpResponse.json(
+            { illustrationId: sharedIllustrationId },
+            { status: 200 }
+          )
+        )
+      );
+      const autoTagCalls: string[] = [];
+      server.use(
+        http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+          const body = (await request.json()) as { tagName: string };
+          autoTagCalls.push(body.tagName);
+          return HttpResponse.json(
+            {
+              tagName: body.tagName,
+              resolvedPolarity: 1,
+              netPolarity: 1,
+              tally: [],
+            },
+            { status: 200 }
+          );
+        })
+      );
+      renderFeed();
+      await revealCard();
+
+      fireEvent.click(
+        await screen.findByTestId("question-feed-suggestion-not-this-art")
+      );
+      const rejectedNote = await screen.findByTestId(
+        "question-feed-rejected-tile-note"
+      );
+      const rejectedTile = rejectedNote.closest("button");
+      expect(rejectedTile).not.toBeNull();
+
+      fireEvent.click(screen.getByTestId("question-feed-filter-toggle"));
+      fireEvent.click(
+        await screen.findByTestId("attribute-chip-Black Border-yes")
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId("attribute-chip-Black Border")
+            .getAttribute("data-chip-state")
+        ).toBe("positive")
+      );
+
+      // The rejected (white-bordered) tile is still reachable - kept alive by the same
+      // illustration-group preservation exercised above - even though it contradicts the
+      // active "Black Border" chip.
+      fireEvent.click(rejectedTile!);
+
+      // "Modern Border" (frame 2015) is derived too and doesn't contradict anything the
+      // voter tapped - waiting for it proves the auto-tag batch actually ran before
+      // asserting the contradicting chip was dropped from it.
+      await waitFor(() => expect(autoTagCalls).toContain("Modern Border"));
+      expect(autoTagCalls).not.toContain("White Border");
+    });
+  });
+
   // Issue #712 - "Not sure" and "Skip" used to be indistinguishable no-ops. confirm_suggestion's
   // new 4-answer set (Yes / Same art, but... / Not this art / Skip) folds "Not sure" into
   // Skip, which now records the abstention itself; identify_printing's own bottom-row Skip is

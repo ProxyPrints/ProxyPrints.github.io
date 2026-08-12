@@ -245,6 +245,21 @@ Only exclusions the data supports are encoded. Borderless and full art co-occur 
 printings — 82% of all borderless printings. Cathars' Crusade (INR 483) is full art, showcase
 and borderless at once.
 
+**Axis independence (issue #790, 2026-08-12).** The `identify_printing`/`confirm_suggestion`
+candidate grid's live filter (`filterCandidatesByChipStates`) narrows **within** an illustration,
+never eliminates one: candidates sharing an `illustrationId` are grouped before a chip is
+applied, and if narrowing would leave that illustration with zero matching printings the group
+survives unnarrowed rather than vanishing from the grid — a border/frame statement is
+independent of which artwork is being confirmed. A candidate whose value for a chip's own axis
+falls outside that axis's taxonomy (`getOpenExclusionGroups`) is likewise never excluded by
+that axis's chips — it's an unknown, not a contradiction. On the write side, picking a
+candidate (`selectCandidate`) still auto-casts one `CardTagVote` per attribute the candidate
+itself derives (`getAutoTagChips`), but now drops any derived chip the voter has already
+explicitly contradicted in the same filter panel — directly (tapped it negative) or via an
+exclusion-group sibling (tapped a different value positive) — so a candidate kept visible only
+by the axis-independence rule above can't have its own attributes overwrite what the voter just
+stated.
+
 ### artist — kept for one case
 
 When the illustration cannot be identified but the credit line is legible. Renders the picker
