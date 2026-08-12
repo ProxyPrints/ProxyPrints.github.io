@@ -3010,6 +3010,7 @@ class SubmitQuestionAbstentionRequest(BaseModel):
     anonymousId: str
     identifier: str
     questionType: str
+    reason: Optional[str] = None
 
     @staticmethod
     def from_dict(obj: Any) -> "SubmitQuestionAbstentionRequest":
@@ -3017,13 +3018,15 @@ class SubmitQuestionAbstentionRequest(BaseModel):
         anonymousId = from_str(obj.get("anonymousId"))
         identifier = from_str(obj.get("identifier"))
         questionType = from_str(obj.get("questionType"))
-        return SubmitQuestionAbstentionRequest(anonymousId, identifier, questionType)
+        reason = from_union([from_none, from_str], obj.get("reason"))
+        return SubmitQuestionAbstentionRequest(anonymousId, identifier, questionType, reason)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["anonymousId"] = from_str(self.anonymousId)
         result["identifier"] = from_str(self.identifier)
         result["questionType"] = from_str(self.questionType)
+        result["reason"] = from_union([from_none, from_str], self.reason)
         return result
 
 

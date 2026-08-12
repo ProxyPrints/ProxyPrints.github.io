@@ -40,6 +40,20 @@ class TestPostSubmitQuestionAbstention:
         assert abstention.card_id == card.pk
         assert abstention.anonymous_id == "anon-1"
         assert abstention.question_type == "confirm_suggestion"
+        assert abstention.reason is None
+
+    def test_abstention_records_the_optional_reason_when_sent(self, client, django_settings):
+        card = CardFactory()
+
+        response = client.post(
+            reverse(views.post_submit_question_abstention),
+            {"identifier": card.identifier, "anonymousId": "anon-1", "questionType": "border", "reason": "cannot-tell"},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        abstention = CardQuestionAbstention.objects.get()
+        assert abstention.reason == "cannot-tell"
 
     def test_repeat_taps_from_the_same_voter_record_the_fact_once(self, client, django_settings):
         card = CardFactory()

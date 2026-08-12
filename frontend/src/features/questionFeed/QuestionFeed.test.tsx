@@ -1387,11 +1387,14 @@ describe("QuestionFeed", () => {
   });
 
   // Border question type (per-element question types branch): the answer surface is the four
-  // BORDER_COLOR_GROUP chips rendered through the shared useTagVoting machinery (see
-  // BorderColorQuestion.tsx) - a tap casts a real CardTagVote on the existing
-  // /2/submitTagVote/ path with voteSurface "question-feed", not a new vote model. And like
-  // the other non-candidate question types (artist/tag), the subject card renders with no
-  // reveal treatment - no revealCard() here.
+  // BORDER_COLOR_GROUP chips plus the Full Art chip (the "No border — full art." answer, a
+  // standalone toggle that co-occurs with every border value), rendered through the shared
+  // useTagVoting machinery (see BorderColorQuestion.tsx) - a tap casts a real CardTagVote on
+  // the existing /2/submitTagVote/ path with voteSurface "question-feed", not a new vote model.
+  // The ActionRow's "Can't tell from this scan." answer records an abstention with reason
+  // `cannot-tell` on the existing abstention write instead. And like the other non-candidate
+  // question types (artist/tag), the subject card renders with no reveal treatment - no
+  // revealCard() here.
   it("renders the border-colour chips for a border question and casts a tag vote on tap", async () => {
     server.use(questionFeedBorder);
     let tagVoteBody: Record<string, unknown> | undefined;
@@ -1411,8 +1414,9 @@ describe("QuestionFeed", () => {
     );
     renderFeed();
 
-    // the border axis's four chips are the whole answer surface - and only them (§5 rule 1:
-    // "render only what the current question needs"), so no standalone chips like "Full Art".
+    // the border question's answer surface is the four BORDER_COLOR_GROUP chips plus the Full
+    // Art chip - "No border — full art." is a real answer here, cast through the same chip
+    // machinery, because Full Art is an independent toggle that co-occurs with any border colour.
     expect(
       await screen.findByTestId("attribute-chip-Black Border")
     ).toBeInTheDocument();
@@ -1423,9 +1427,7 @@ describe("QuestionFeed", () => {
       screen.getByTestId("attribute-chip-Silver Border")
     ).toBeInTheDocument();
     expect(screen.getByTestId("attribute-chip-Borderless")).toBeInTheDocument();
-    expect(
-      screen.queryByTestId("attribute-chip-Full Art")
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("attribute-chip-Full Art")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
 
@@ -1442,5 +1444,73 @@ describe("QuestionFeed", () => {
         "positive"
       )
     );
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art-yes"));
+
+    await waitFor(() => expect(tagVoteBody?.tagName).toBe("Full Art"));
+    expect(tagVoteBody).toMatchObject({
+      identifier: cardDocument9.identifier,
+      tagName: "Full Art",
+      polarity: 1,
+      voteSurface: "question-feed",
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("attribute-chip-Full Art")).toHaveAttribute(
+        "data-chip-state",
+        "positive"
+      )
+    );
+  });
+
+  it("'Can't tell from this scan.' records the border abstention with reason and advances", async () => {
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return HttpResponse.json(
+          {
+            item: {
+              type: "border",
+              card: cardDocument9,
+              tagConfidence: {
+                "Black Border": 0.8,
+                "White Border": 0,
+                "Silver Border": 0,
+                Borderless: 0,
+                "Full Art": 0,
+              },
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        );
+      })
+    );
+    let abstentionBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitQuestionAbstention/"),
+        async ({ request }) => {
+          abstentionBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        }
+      )
+    );
+    renderFeed();
+
+    fireEvent.click(await screen.findByTestId("question-feed-cant-tell"));
+
+    await waitFor(() => expect(abstentionBody).toBeDefined());
+    expect(abstentionBody).toMatchObject({
+      identifier: cardDocument9.identifier,
+      questionType: "border",
+      reason: "cannot-tell",
+    });
+    await waitFor(() => expect(feedFetchCount).toBe(2));
   });
 });

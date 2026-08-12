@@ -57,7 +57,7 @@ const BORDERLESS_CHIP: AttributeChipDef = {
   label: "Borderless",
   matches: (candidate) => candidate.isBorderless,
 };
-const FULL_ART_CHIP: AttributeChipDef = {
+export const FULL_ART_CHIP: AttributeChipDef = {
   tagName: "Full Art",
   label: "Full Art",
   matches: (candidate) => candidate.fullArt,
