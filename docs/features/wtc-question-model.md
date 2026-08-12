@@ -105,6 +105,23 @@ fixed, no-longer-weighted) waterfall order changed. See `cardpicker.question_fee
 "Evidence-gated printing-confirmation policy" docstring for the mechanism and this PR's report
 for the measured before/after served mix.
 
+**Likely-resolve pool routing (2026-08-12):** the likely-resolve pool (a printing question one
+more agreeing human vote would resolve, per `is_likely_resolve_printing`) does not
+unconditionally serve `confirm_suggestion`/`identify_printing` — the two per-element types §7
+adds (`border`, `illustration`) now exist and are cheaper, narrowing questions, so the pool
+routes to the most discriminating one for THIS card: `border` when the card's own candidates
+split on an unrecorded border colour (a border answer eliminates a candidate), else
+`illustration` when the card's own illustration identity is still unresolved and answerable,
+else the pre-existing confirm/identify fallback. The border-split check reads
+`get_ranked_printing_candidates` live (`CardScanLog.survivor_pks` is unpopulated on ~99.7% of
+rows, so there is no cheaper source today) — measured cost is small (a couple of extra queries,
+single-digit milliseconds per served item) and was shipped, not deferred. See
+`cardpicker.question_feed._likely_resolve_item` for the implementation and this PR's report for
+the measured served-mix split by pool. The remainder tier's own illustration-before-printing
+order (§7's "illustration" section) was unreachable in production until this same change — its
+`_tier_4_fresh` filter never matched any row, and the materialised pools carried no illustration
+lane at all — both are now fixed.
+
 A candidate grid is only a shortlist when the machine actually narrowed it. That requires
 `CardScanLog.survivor_pks`, which is populated on 0 of 4,435,119 rows today. Until it is,
 "every printing matching the name" is not a shortlist: measured live, an ambiguous card is
@@ -189,7 +206,8 @@ candidates that share the same artwork identity, so one artwork is asked about o
 not per printing. Backend builder: `_illustration_item()` in `question_feed.py`. Frontend
 component: `IllustrationQuestion.tsx`. Routing (§3): served first in the remainder tier,
 before printing questions, because it is the cheapest answerable and one answer settles the
-artist for free.
+artist for free; also served from the likely-resolve pool when a border split doesn't already
+narrow the card and the illustration is still unresolved and answerable.
 
 ### identify_printing — search-led
 
