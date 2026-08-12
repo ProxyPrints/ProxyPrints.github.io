@@ -146,6 +146,7 @@ export interface QuestionFeedItem {
   candidates?: PrintingCandidate[];
   card: Card;
   confidentlyKnownArtistName?: null | string;
+  illustrationCandidates?: PrintingCandidate[];
   scryfallIllustrationUrl?: null | string;
   suggestedPrinting?: PrintingCandidate;
   tagConfidence?: { [key: string]: number };
@@ -321,6 +322,7 @@ export enum Type {
   Border = "border",
   ConfirmSuggestion = "confirm_suggestion",
   IdentifyPrinting = "identify_printing",
+  Illustration = "illustration",
   Tag = "tag",
 }
 

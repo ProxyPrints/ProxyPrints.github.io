@@ -193,7 +193,12 @@ from cardpicker.printing_consensus import (
     identity_group_expanded_card_ids,
 )
 from cardpicker.reason_tags import NOT_OFFICIAL_ART_REASON_TAGS
-from cardpicker.schema_types import QuestionFeedCounts, QuestionFeedItem, TypeEnum
+from cardpicker.schema_types import (
+    PrintingCandidate,
+    QuestionFeedCounts,
+    QuestionFeedItem,
+    TypeEnum,
+)
 from cardpicker.tag_consensus import get_tag_net_polarity, get_tag_review_queue_pairs
 from cardpicker.vote_consensus import (
     VoteTuple,
@@ -334,7 +339,10 @@ def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
         illustration_id = getattr(metadata, "illustration_id", None) if metadata is not None else None
         if illustration_id is not None:
             if eliminated_ids is None:
-                eliminated_ids = eliminated_illustration_ids(card)
+                try:
+                    eliminated_ids = eliminated_illustration_ids(card)
+                except Exception:
+                    eliminated_ids = set()
             if illustration_id in eliminated_ids:
                 continue
         ai_vote = candidate_vote
@@ -424,6 +432,36 @@ def _border_item(card: Card) -> QuestionFeedItem:
     return QuestionFeedItem(
         type=TypeEnum.border,
         card=card.serialise(),
+        tagConfidence=_tag_confidence(card),
+    )
+
+
+def _illustration_item(card: Card) -> QuestionFeedItem:
+    """
+    The illustration question (wtc-question-model.md §7.2): asks which artwork this card
+    depicts. Renders art crops only, never framed card renders, grouped by unique
+    illustration_id. Each tap casts through the existing `2/submitIllustrationVote/` endpoint
+    (cast_illustration_vote), which also derives an artist vote automatically. A rejection
+    casts through `2/submitIllustrationRejection/` (cast_illustration_rejection). This
+    question never casts a printing vote regardless of group size - a proxy scan may be an
+    unofficial variant of the artwork, so illustration identification is distinct from
+    printing identification.
+
+    Returns candidates grouped by unique illustration_id, deduplicating candidates that
+    share the same artwork identity.
+    """
+    candidates = get_ranked_printing_candidates(card, card.name)
+    seen_illustration_ids: set[Optional[str]] = set()
+    unique_candidates: list[PrintingCandidate] = []
+    for candidate in candidates:
+        illustration_id = candidate.serialise_as_printing_candidate().illustrationId
+        if illustration_id not in seen_illustration_ids:
+            seen_illustration_ids.add(illustration_id)
+            unique_candidates.append(candidate.serialise_as_printing_candidate())
+    return QuestionFeedItem(
+        type=TypeEnum.illustration,
+        card=card.serialise(),
+        illustrationCandidates=unique_candidates,
         tagConfidence=_tag_confidence(card),
     )
 
