@@ -705,13 +705,19 @@ export async function APISubmitQuestionAbstention(
   backendURL: string,
   identifier: string,
   anonymousId: string,
-  questionType: string
+  questionType: string,
+  reason?: string
 ): Promise<SubmitQuestionAbstentionResponse> {
   const rawResponse = await fetch(
     formatURL(backendURL, "/2/submitQuestionAbstention/"),
     {
       method: "POST",
-      body: JSON.stringify({ identifier, anonymousId, questionType }),
+      body: JSON.stringify({
+        identifier,
+        anonymousId,
+        questionType,
+        ...(reason != null && { reason }),
+      }),
       credentials: "same-origin",
       headers: getCSRFHeader(),
     }

@@ -262,16 +262,27 @@ _BORDER_COLOR_TAG_NAMES = frozenset(BORDER_COLOR_TO_TAG.values())
 
 
 def _card_recorded_evidence_types(card: Card) -> frozenset[str]:
-    """`evidence_types_used` off `card`'s own most recent `CardScanLog` row (any source), or an
-    empty set if no such row exists. `evidence_types_used` is ONLY ever written by the fallback
-    calculator, and ONLY on a SKIP outcome ("eliminated"/"ambiguous") - a MATCH never writes a
-    `CardScanLog` row at all (see `local_calculate_verdicts.run_fallback_calculator`), so a card
-    that already carries the machine-suggested printing `_confirm_suggestion_item` is about to
-    build almost never has a row here to read. That is the expected, measured state of the data
-    today (2026-08-11: 0 of 110,130 confirm-eligible cards have complete evidence recorded), not
-    a bug this function works around - see `_evidence_justifies_confirmation`'s own docstring."""
+    """`evidence_types_used` off `card`'s own most recent `CardScanLog` row written by the
+    fallback calculator (STAGE_D_FALLBACK_ANONYMOUS_ID), or an empty set if no such row exists.
+    `evidence_types_used` is ONLY ever written by the fallback calculator, and ONLY on a SKIP
+    outcome ("eliminated"/"ambiguous") - a MATCH never writes a `CardScanLog` row at all (see
+    `local_calculate_verdicts.run_fallback_calculator`). The read is scoped to this single writer
+    because `CardScanLog` is an append-only audit trail with many writers - slow-path router,
+    attribute casters, per-extractor skip rows in `persist_evidence`, pilot stages - and most of
+    them leave `evidence_types_used` at its default empty value (models.py:2298, migration 0072).
+    The fallback calculator itself appends legitimately empty rows for no-evidence and
+    no-sub-check-evidence skip reasons (local_calculate_verdicts.py:2133-2140, 1942-1948), so the
+    read also excludes those rows - "which row is newest" is decided by creation order among
+    non-empty fallback rows, never by a transient empty skip row from any writer. That is the
+    expected state of the data today (measured 2026-08-12: before this fix, 422 of 422 cards
+    carrying evidence had an empty LATEST row and zero cards cleared this gate, masking compounded
+    on genuine absence) - see `_evidence_justifies_confirmation`'s own docstring."""
     latest_evidence_types_used = (
-        CardScanLog.objects.filter(card_id=card.pk)
+        CardScanLog.objects.filter(
+            card_id=card.pk,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+        )
+        .exclude(evidence_types_used=[])
         .order_by("-scanned_at")
         .values_list("evidence_types_used", flat=True)
         .first()

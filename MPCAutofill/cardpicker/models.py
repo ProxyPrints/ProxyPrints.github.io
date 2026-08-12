@@ -2356,6 +2356,11 @@ class CardQuestionAbstention(models.Model):
     source of truth, and duplicating it as a second closed enum here would just be a second
     place for the two to drift apart.
 
+    `reason` is an optional coded why for the abstention (e.g. the border question's "Can't
+    tell from this scan." answer sends `cannot-tell` - the scan genuinely doesn't show the
+    border, which a bare "Not sure" tap cannot distinguish). Nullable and additive-only: a
+    reason-carrying abstention is still this model, never a separate model or vote type.
+
     Unique on (card, anonymous_id, question_type); the write path is `get_or_create`, so a voter
     tapping "Not sure" more than once on the same pair (e.g. across repeat serves) records the
     fact once, not once per tap. This is also exactly the shape a future exclusion query needs
@@ -2368,6 +2373,7 @@ class CardQuestionAbstention(models.Model):
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="question_abstentions")
     anonymous_id = models.CharField(max_length=40)
     question_type = models.CharField(max_length=32)
+    reason = models.CharField(max_length=32, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

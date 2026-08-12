@@ -222,6 +222,14 @@ exists is false and is withdrawn.
 
 A candidate grid appears only when there is a genuinely narrowed shortlist to show (§3).
 
+The owner-proposed "Same artwork, different printing." answer is NOT built (2026-08-12): it must
+cast an illustration vote while provably casting no printing vote, and every existing
+illustration-vote path (`cast_illustration_vote`) derives a printing vote at a live 1:1 match
+with no flag to suppress that derivation. Honoring "must NOT cast a printing vote" would need a
+backend suppression flag or a new endpoint — both outside the additive-only scope this document
+holds (no new endpoints without reporting first). It stays a documented gap pending an owner
+decision on the suppression mechanism; see the 2026-08-12 WTC question-phrasing report.
+
 ### frame / attribute narrowing
 
 Summoned by a question that needs them, never standing open. Axes, measured against the
@@ -250,11 +258,17 @@ genuinely need one attribute answered on its own.
 ### border — asked cold (2026-08-11, per-element question types)
 
 The border colour axis asked on its own: renders the plain scan with the four
-`BORDER_COLOR_GROUP` chips as the entire answer surface (Black / White / Silver / Borderless,
-additive-only scope - no new vote model, endpoint, or schema shape beyond the `border`
-question-type value). Built as `_border_item` in `question_feed.py` + `BorderColorQuestion.tsx`
-(votes through the same `useTagVoting` path as the narrowing chips, §5 rule 1: only what the
-current question needs). No reveal treatment - a non-candidate question like artist/tag.
+`BORDER_COLOR_GROUP` chips plus the `FULL_ART_CHIP` ("No border — full art.") as the answer
+surface (Black / White / Silver / Borderless / Full Art). The Full Art chip casts the same
+`CardTagVote` the narrowing chips cast — Full Art is an independent toggle that co-occurs with
+every border colour (§7 "frame / attribute narrowing"), so "No border — full art." is a real
+border answer, not a new vote target. The ActionRow carries **"Can't tell from this scan."**
+(records the abstention with reason `cannot-tell` on `CardQuestionAbstention`'s optional
+`reason` field — an additive nullable field, no new model or endpoint) and **Skip** (records
+an abstention with no reason). Built as `_border_item` in `question_feed.py` +
+`BorderColorQuestion.tsx` (votes through the same `useTagVoting` path as the narrowing chips,
+§5 rule 1: only what the current question needs). No reveal treatment - a non-candidate
+question like artist/tag.
 
 **Symbol is not built as a question type; the collector-line question is deferred to its own
 PR** (2026-08-11, same scope; the deferral is the owner's ruling). These are different
@@ -308,8 +322,11 @@ All items ruled 2026-08-11. Nothing in this document is awaiting a decision.
 4. **`border` becomes a first-class question type; `symbol` is ruled out, `collector_line`
    is deferred to its own PR** (§7.7). Border adds the `border` question-type value, the
    `_border_item` feed builder, and the `BorderColorQuestion` render branch - the answer
-   surface is the four `BORDER_COLOR_GROUP` chips, casting real `CardTagVote`s through the
-   existing chip machinery, so no new vote model or endpoint is required. Symbol is ruled
+   surface is the four `BORDER_COLOR_GROUP` chips plus the `FULL_ART_CHIP` ("No border —
+   full art."), casting real `CardTagVote`s through the existing chip machinery, so no new
+   vote model or endpoint is required. The "Can't tell from this scan." answer records the
+   abstention with reason `cannot-tell` via `CardQuestionAbstention`'s optional `reason`
+   field (additive nullable, migration 0110). Symbol is ruled
    out against §5: set symbols by sight are expert knowledge, so the question would harvest
    guesses, not votes. Collector line is deferred, not ruled out (owner's ruling, same
    date): a collector number identifies a printing - `CanonicalCard`'s unique constraint on

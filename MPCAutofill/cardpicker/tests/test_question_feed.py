@@ -1,8 +1,10 @@
 import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.core.cache import caches
 from django.urls import reverse
+from django.utils import timezone
 
 from cardpicker import views
 from cardpicker.artist_consensus import (
@@ -11,11 +13,15 @@ from cardpicker.artist_consensus import (
 )
 from cardpicker.illustration_vote import cast_illustration_vote
 from cardpicker.local_calculate_verdicts import (
+    FALLBACK_NO_EVIDENCE_SKIP_REASON,
+    FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
     JOIN_KEY_ANONYMOUS_ID,
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
+    STAGE_D_FALLBACK_ANONYMOUS_ID,
 )
 from cardpicker.models import (
     ArtistVoteStatus,
+    Card,
     CardPrintingTag,
     CardScanLog,
     HiddenCard,
@@ -104,18 +110,32 @@ def make_ai_suggested_card(
     gated on `evidence_types_used` - see `_evidence_justifies_confirmation` - so this fixture
     also attaches a `CardScanLog` row recording it, complete by default so every existing
     confirm_suggestion-shaped test stays a confirm_suggestion-shaped test). Pass `evidence_types_
-    used=()`/a partial tuple/`None` for a test exercising the gate itself."""
+    used=()`/a partial tuple/`None` for a test exercising the gate itself. The evidence row is
+    written under `STAGE_D_FALLBACK_ANONYMOUS_ID` regardless of the suggestion vote's own
+    `anonymous_id`: `evidence_types_used` is ONLY ever written by the fallback calculator (see
+    `_card_recorded_evidence_types`), so that is the only id the reader will see it under."""
     card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
     printing = CanonicalCardFactory()
     CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=anonymous_id)
     if evidence_types_used is not None:
         CardScanLog.objects.create(
             card=card,
-            anonymous_id=anonymous_id,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
             skip_reason="ambiguous",
             evidence_types_used=list(evidence_types_used),
         )
     return card, printing
+
+
+def _pin_scan_log_times(card: Card) -> None:
+    """Pin strict, deterministic `scanned_at` values on `card`'s `CardScanLog` rows (via
+    `.update()`, which bypasses `auto_now_add`'s pre-save override) so "which row is newest" is
+    decided by creation order, never by the microseconds between sequential `auto_now_add`
+    creates. Last-created row reads as the most recent scan."""
+    now = timezone.now()
+    rows = list(CardScanLog.objects.filter(card=card).order_by("pk"))
+    for offset, row in enumerate(rows):
+        CardScanLog.objects.filter(pk=row.pk).update(scanned_at=now - timedelta(minutes=len(rows) - offset))
 
 
 def make_pending_pair(tag_name: str = "sensitive-tag") -> tuple:
@@ -1059,6 +1079,73 @@ class TestEvidenceGatedConfirmation:
         assert item.card.identifier == contested_card.identifier
 
 
+class TestEvidenceReaderWriterScope:
+    """The `_card_recorded_evidence_types` reader must see the evidence it gates on (measured
+    2026-08-12: 422 of 422 evidence-carrying cards had an empty LATEST `CardScanLog` row, and
+    zero cards passed the three-type gate - masking compounding on genuine absence, since the
+    reader took the newest row from ANY writer while `evidence_types_used` has exactly one
+    writer, the fallback calculator). `CardScanLog` is an append-only audit trail with many
+    writers; every non-fallback writer leaves the field at its `default=list` empty value, so
+    the read is scoped to `STAGE_D_FALLBACK_ANONYMOUS_ID` and to non-empty rows. Each test here
+    pins `scanned_at` explicitly so "which row is newest" is the test's decision, not timing."""
+
+    def test_a_newer_non_fallback_row_does_not_mask_recorded_fallback_evidence(self, db):
+        # a populated fallback row followed by a newer slow-path row (this fork's dispatch runs
+        # the slow-path router after the fallback calculator in the same pass) must still read
+        # the evidence - the writer-scope constraint's reason for existing
+        card, _ = make_ai_suggested_card()  # complete evidence, under the fallback writer id
+        CardScanLog.objects.create(
+            card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason=JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON
+        )
+        _pin_scan_log_times(card)
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "confirm_suggestion"
+        assert item.card.identifier == card.identifier
+
+    def test_a_newer_empty_fallback_row_does_not_mask_older_recorded_evidence(self, db):
+        # the non-empty filter is load-bearing: the fallback writer itself appends legitimately
+        # empty rows - the no-sub-check-evidence (and no-evidence) skips, where by definition
+        # nothing fired - so a card whose newest fallback row is one of those must still read an
+        # older populated eliminated/ambiguous row
+        card, _ = make_ai_suggested_card()  # complete evidence, under the fallback writer id
+        CardScanLog.objects.create(
+            card=card,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            skip_reason=FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
+        )
+        _pin_scan_log_times(card)
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "confirm_suggestion"
+        assert item.card.identifier == card.identifier
+
+    def test_a_card_with_only_empty_scan_rows_still_reads_as_evidence_less(self, db):
+        # the fails-closed baseline, pinned as a guard: the non-empty filter excludes an empty
+        # row rather than inventing evidence, so a card whose every row is an empty no-evidence
+        # skip keeps reading as evidence-less and routes to identify_printing, exactly as before
+        card, _ = make_ai_suggested_card(evidence_types_used=None)  # machine vote, no scan row
+        CardScanLog.objects.create(
+            card=card,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            skip_reason=FALLBACK_NO_EVIDENCE_SKIP_REASON,
+        )
+        _pin_scan_log_times(card)
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "identify_printing"
+        assert item.card.identifier == card.identifier
+
+
 class TestIllustrationVoteAnsweredExclusion:
     """Issue #713: `cast_illustration_vote` writes `CardPrintingTag` only when the shared-
     illustration group resolves to exactly one live printing - at N>1 (the premise of the
@@ -1210,7 +1297,7 @@ class TestConfirmSuggestionSkipsEliminatedSuggestions:
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
         CardScanLog.objects.create(
             card=card,
-            anonymous_id="ai-bot",
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
             skip_reason="ambiguous",
             evidence_types_used=["border", "artist", "symbol"],
         )
@@ -1239,7 +1326,7 @@ class TestConfirmSuggestionSkipsEliminatedSuggestions:
         )
         CardScanLog.objects.create(
             card=card,
-            anonymous_id="calc-a-v1",
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
             skip_reason="ambiguous",
             evidence_types_used=["border", "artist", "symbol"],
         )
