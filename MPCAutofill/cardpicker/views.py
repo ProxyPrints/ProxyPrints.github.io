@@ -1148,7 +1148,10 @@ def post_submit_question_abstention(request: HttpRequest) -> HttpResponse:
     req = SubmitQuestionAbstentionRequest.model_validate(json.loads(request.body))
     card = _get_card_or_400(req.identifier)
     CardQuestionAbstention.objects.get_or_create(
-        card=card, anonymous_id=req.anonymousId, question_type=req.questionType
+        card=card,
+        anonymous_id=req.anonymousId,
+        question_type=req.questionType,
+        defaults={"reason": req.reason},
     )
     return JsonResponse(SubmitQuestionAbstentionResponse(recorded=True).model_dump())
 

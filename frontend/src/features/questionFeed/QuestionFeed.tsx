@@ -620,6 +620,11 @@ const ConfidencePill = styled.span`
   }
 `;
 
+const ExactWord = styled.span`
+  text-decoration: underline;
+  text-underline-offset: 2px;
+`;
+
 // Confirm-lands micro-feedback (ANNEX C) - a brief fade-in on a successful cast, instant under
 // reduced motion (no transition at all, per the media query below), then advance. Quiet by
 // design (WD6): success-tinted pill, no motion beyond the fade, no sound, no confetti.
@@ -1218,7 +1223,7 @@ export function QuestionFeed() {
   // not gating, so a failed request never blocks the transition. Used by confirm_suggestion's
   // own Skip answer, which - unlike a bare advance - must leave a distinguishable trace that
   // this question was seen and abstained on rather than never served.
-  const abstainAndAdvance = () => {
+  const abstainAndAdvance = (reason?: string) => {
     if (voteInFlightRef.current) {
       return;
     }
@@ -1228,7 +1233,8 @@ export function QuestionFeed() {
         backendURL,
         item.card.identifier,
         getOrCreateAnonymousId(),
-        item.type
+        item.type,
+        reason
       ).catch(() => undefined);
     }
     advance();
@@ -1529,7 +1535,7 @@ export function QuestionFeed() {
             <ShapePill className="easy">
               &#10003; matched &middot; one more thing
             </ShapePill>
-            <Prompt>Confirm the attributes</Prompt>
+            <Prompt>Anything else true of this card?</Prompt>
           </QHead>
           <QHint>
             Auto-tagged from your pick; adjust only what&apos;s wrong, then
@@ -1698,11 +1704,7 @@ export function QuestionFeed() {
             </ShapePill>
           </QHead>
           {rejectedContext}
-          <Prompt>
-            {isOpenEndedShape
-              ? "You tell us — which printing?"
-              : "Which printing is this?"}
-          </Prompt>
+          <Prompt>Which printing is this?</Prompt>
           {isOpenEndedShape && (
             <QHint>
               No strong machine candidate. This is one of the harder ones - take
@@ -1860,7 +1862,7 @@ export function QuestionFeed() {
                 {submitting && selectedCandidateId === "custom-art" ? (
                   <Spinner size={1} />
                 ) : (
-                  "\u{1F3A8} Art matches, not an official printing"
+                  "This is custom art"
                 )}
               </Btn>
               <Btn
@@ -2000,7 +2002,7 @@ export function QuestionFeed() {
                       </SuggestedSet>
                       <ConfidencePill data-testid="question-feed-suggestion-prompt">
                         <i />
-                        Is it this one?
+                        Is this the <ExactWord>EXACT</ExactWord> printing?
                       </ConfidencePill>
                       {item.suggestedPrinting.artist.trim() !== "" && (
                         <ArtistSupportLink
@@ -2046,7 +2048,7 @@ export function QuestionFeed() {
                       <Btn
                         className="ghost"
                         disabled={submitting}
-                        onClick={abstainAndAdvance}
+                        onClick={() => abstainAndAdvance()}
                         data-testid="question-feed-suggestion-skip"
                       >
                         Skip
@@ -2116,7 +2118,7 @@ export function QuestionFeed() {
           <>
             <QHead>
               <ShapePill className="pick">artist</ShapePill>
-              <Prompt>Who&apos;s the artist?</Prompt>
+              <Prompt>Who made this art?</Prompt>
             </QHead>
             <ArtistVotePicker
               backendURL={backendURL}
@@ -2176,7 +2178,14 @@ export function QuestionFeed() {
               onRateLimited={() => setRateLimited(true)}
             />
             <ActionRow>
-              <Btn className="ghost" onClick={abstainAndAdvance}>
+              <Btn
+                className="ghost"
+                onClick={() => abstainAndAdvance("cannot-tell")}
+                data-testid="question-feed-cant-tell"
+              >
+                Can&apos;t tell from this scan.
+              </Btn>
+              <Btn className="ghost" onClick={() => abstainAndAdvance()}>
                 Skip
               </Btn>
             </ActionRow>
