@@ -1124,6 +1124,18 @@ def _tier_4_fresh(
         contested_card_ids = get_contested_card_ids()
     if hidden_card_ids is None:
         hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
+    illustration_candidates = list(
+        Card.objects.filter(illustration_vote_status=None)
+        .exclude(pk__in=answered_card_ids)
+        .exclude(pk__in=hidden_card_ids)
+        .filter(printing_tags__printing__printing_metadata__illustration_id__isnull=False)
+        .distinct()
+        .order_by("-date_created")[:_CANDIDATE_SCORING_WINDOW]
+    )
+    illustration_card = _max_scored_candidate(illustration_candidates, _printing_question_score)
+    if illustration_card is not None:
+        return _illustration_item(illustration_card), "tier_4_fresh_illustration"
+
     printing_candidates = list(
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=contested_card_ids)

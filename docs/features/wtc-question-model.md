@@ -171,7 +171,8 @@ frame turns out to be, so it is recorded whether or not the user completes the f
 
 ### illustration — the cheap, reliable question
 
-Renders: art crops only, never framed card renders. Casts an illustration vote.
+**Renders:** art crops only, never framed card renders. Casts an illustration vote via
+`2/submitIllustrationVote/` or rejection via `2/submitIllustrationRejection/`.
 
 **An illustration vote is an artist vote.** `illustration_id → artist` is functional, and
 `illustration_vote.py` already derives it through `DERIVED_ARTIST_VOTE_SURFACE`, with a guard
@@ -182,6 +183,13 @@ deleted, not tuned: group size is orthogonal to which question to ask. An illust
 printed once in Scryfall is not a printing match, because the thing being identified is a
 proxy scan which may be an unofficial variant of that illustration — and per §1 the most
 common unofficial variant in our corpus is precisely an altered frame.
+
+**Candidates are grouped by unique `illustration_id`.** The illustration question deduplicates
+candidates that share the same artwork identity, so one artwork is asked about once per card,
+not per printing. Backend builder: `_illustration_item()` in `question_feed.py`. Frontend
+component: `IllustrationQuestion.tsx`. Routing (§3): served first in the remainder tier,
+before printing questions, because it is the cheapest answerable and one answer settles the
+artist for free.
 
 ### identify_printing — search-led
 
