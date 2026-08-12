@@ -106,6 +106,7 @@ import {
   RevealWrapper,
   ZoomableThumbnail,
 } from "@/features/printingTags/cardPanel";
+import { IllustrationQuestion } from "@/features/questionFeed/IllustrationQuestion";
 import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
 import { recordSessionContribution } from "@/features/stats/sessionContributionSlice";
 import {
@@ -2185,6 +2186,28 @@ export function QuestionFeed() {
               >
                 Can&apos;t tell from this scan.
               </Btn>
+              <Btn className="ghost" onClick={() => abstainAndAdvance()}>
+                Skip
+              </Btn>
+            </ActionRow>
+          </>
+        )}
+        {item.type === "illustration" && (
+          <>
+            <QHead>
+              <ShapePill className="pick">artwork</ShapePill>
+              <Prompt>Is this the artwork?</Prompt>
+            </QHead>
+            <IllustrationQuestion
+              item={item}
+              backendURL={backendURL}
+              onAnswered={() => {
+                bumpSessionCount();
+                advance();
+              }}
+              onRateLimited={() => setRateLimited(true)}
+            />
+            <ActionRow>
               <Btn className="ghost" onClick={() => abstainAndAdvance()}>
                 Skip
               </Btn>

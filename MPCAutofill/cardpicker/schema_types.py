@@ -459,6 +459,7 @@ class TypeEnum(str, Enum):
     border = "border"
     confirmsuggestion = "confirm_suggestion"
     identifyprinting = "identify_printing"
+    illustration = "illustration"
     tag = "tag"
 
 
@@ -467,6 +468,7 @@ class QuestionFeedItem(BaseModel):
     type: TypeEnum
     candidates: Optional[List[PrintingCandidate]] = None
     confidentlyKnownArtistName: Optional[str] = None
+    illustrationCandidates: Optional[List[PrintingCandidate]] = None
     scryfallIllustrationUrl: Optional[str] = None
     suggestedPrinting: Optional[PrintingCandidate] = None
     tagConfidence: Optional[Dict[str, float]] = None
@@ -479,6 +481,9 @@ class QuestionFeedItem(BaseModel):
         type = TypeEnum(obj.get("type"))
         candidates = from_union([lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("candidates"))
         confidentlyKnownArtistName = from_union([from_none, from_str], obj.get("confidentlyKnownArtistName"))
+        illustrationCandidates = from_union(
+            [lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("illustrationCandidates")
+        )
         scryfallIllustrationUrl = from_union([from_none, from_str], obj.get("scryfallIllustrationUrl"))
         suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
         tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
@@ -488,6 +493,7 @@ class QuestionFeedItem(BaseModel):
             type,
             candidates,
             confidentlyKnownArtistName,
+            illustrationCandidates,
             scryfallIllustrationUrl,
             suggestedPrinting,
             tagConfidence,
@@ -504,6 +510,11 @@ class QuestionFeedItem(BaseModel):
             )
         if self.confidentlyKnownArtistName is not None:
             result["confidentlyKnownArtistName"] = from_union([from_none, from_str], self.confidentlyKnownArtistName)
+        if self.illustrationCandidates is not None:
+            result["illustrationCandidates"] = from_union(
+                [lambda x: from_list(lambda x: to_class(PrintingCandidate, x), x), from_none],
+                self.illustrationCandidates,
+            )
         if self.scryfallIllustrationUrl is not None:
             result["scryfallIllustrationUrl"] = from_union([from_none, from_str], self.scryfallIllustrationUrl)
         if self.suggestedPrinting is not None:

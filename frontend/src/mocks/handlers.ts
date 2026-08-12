@@ -1691,6 +1691,31 @@ export const illustrationGroupCandidateD: PrintingCandidate = {
   illustrationId: null,
 };
 
+// The illustration question type (wtc-question-model.md §7.2) - art crops only, grouped by
+// unique illustrationId. `A` and `C` carry distinct illustrationIds (each tile is its own
+// question option), unlike `A`/`B` above which deliberately share one for the identify_printing
+// clustering guard - the backend's own dedup (`_illustration_item`) never sends the frontend two
+// candidates with the same illustrationId, so this fixture's shape matches a real payload.
+export const questionFeedIllustration = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "illustration",
+          card: cardDocument1,
+          illustrationCandidates: [
+            illustrationGroupCandidateA,
+            illustrationGroupCandidateC,
+          ],
+          tagConfidence: {},
+        },
+        remainingEstimate: questionFeedCounts({ total: 2, fresh: 2 }),
+      },
+      { status: 200 }
+    )
+);
+
 export const questionFeedIdentifyPrintingGroupedByIllustration = http.get(
   buildRoute("2/questionFeed/"),
   () =>

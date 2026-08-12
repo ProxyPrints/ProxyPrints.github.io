@@ -7,6 +7,7 @@ already present in the test database) rather than overriding `CACHES`, same conv
 only `TestSharedCacheNotConfigured` below overrides it, to cover the pre-#538/#543 state.
 """
 
+import uuid
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -27,12 +28,14 @@ from cardpicker.models import (
     ArtistVoteStatus,
     Card,
     CardScanLog,
+    IllustrationVoteStatus,
     PrintingTagStatus,
     VotePolarity,
     VoteSource,
 )
 from cardpicker.question_feed_pools import (
     KIND_ARTIST,
+    KIND_ILLUSTRATION,
     KIND_PRINTING,
     KIND_TAG,
     LANE_COLD,
@@ -55,6 +58,7 @@ from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
+    CanonicalPrintingMetadataFactory,
     CardArtistVoteFactory,
     CardFactory,
     CardPrintingTagFactory,
@@ -207,6 +211,22 @@ class TestBuildPoolCold:
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
         assert all(entry.card_id != card.pk for entry in entries if entry.kind == KIND_PRINTING)
+
+    def test_includes_an_illustration_candidate(self, db):
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        printing = CanonicalCardFactory(name="Brainstorm")
+        illustration_id = uuid.uuid4()
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=illustration_id)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        warm_pool_cache(LANE_COLD)
+        entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
+        assert PoolEntry(kind=KIND_ILLUSTRATION, card_id=card.pk, reason="tier_4_fresh_illustration") in entries
+
+    def test_excludes_a_card_with_no_illustration_data_at_all(self, db):
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        warm_pool_cache(LANE_COLD)
+        entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
+        assert all(entry.card_id != card.pk for entry in entries if entry.kind == KIND_ILLUSTRATION)
 
     def test_includes_a_fresh_artist_card(self, db):
         card = CardFactory(
@@ -508,6 +528,44 @@ class TestDrawContestedEntry:
 
 
 class TestDrawColdEntry:
+    def test_returns_an_illustration_entry_ahead_of_printing(self, db):
+        """KIND_ILLUSTRATION leads `_iter_by_kind_precedence` - a card with illustration data
+        available is served that instead of `identify_printing`, even though both entries are
+        pooled for the same card."""
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=uuid.uuid4())
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        warm_pool_cache(LANE_COLD)
+
+        drawn = draw_cold_entry("anon-1", set(), set(), contested_card_ids=[])
+
+        assert drawn is not None
+        kind, drawn_card, tag_name, reason = drawn
+        assert kind == KIND_ILLUSTRATION
+        assert drawn_card.pk == card.pk
+        assert reason == "tier_4_fresh_illustration"
+
+    def test_an_illustration_entry_resolved_since_the_warm_falls_through_to_printing(self, db):
+        # `card` is pooled under BOTH KIND_ILLUSTRATION and KIND_PRINTING (it is also a plain
+        # unresolved printing card) - once its illustration resolves mid-warm-cycle, the stale
+        # illustration entry is skipped at read time and the waterfall falls through to the
+        # still-valid printing entry for the same card, not to `None`.
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=uuid.uuid4())
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        warm_pool_cache(LANE_COLD)  # pooled while still unresolved
+        card.illustration_vote_status = IllustrationVoteStatus.RESOLVED
+        card.save(update_fields=["illustration_vote_status"])
+
+        drawn = draw_cold_entry("anon-1", set(), set(), contested_card_ids=[])
+
+        assert drawn is not None
+        kind, drawn_card, tag_name, reason = drawn
+        assert kind == KIND_PRINTING
+        assert drawn_card.pk == card.pk
+
     def test_returns_a_printing_entry_with_its_precomputed_reason(self, db):
         card = CardFactory(
             printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
