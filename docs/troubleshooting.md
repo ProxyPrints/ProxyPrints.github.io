@@ -111,6 +111,33 @@ existing `seed_default_tags`/`seed_no_match_reason_tags`/
 (`journal/2026-07-14-tag-taxonomy-followup.md`) before the lesson had
 even been written down.
 
+## A migration-seeded `Schedule.next_run` assertion fails only when the suite runs long, never alone
+
+**Symptom**: `test_next_run_is_in_the_future`-shaped assertions (`assert schedule.next_run > timezone.now()`) against a django-q2 `Schedule` row a
+data migration seeded fail in CI with `next_run` only seconds or minutes
+behind `now()`, but pass every time the same test file is run alone or
+early in the suite.
+
+**Cause**: the migration sets `next_run = <apply time> + timedelta(minutes= <cadence>)` once, at DB-build time — not at test-run time. The gap between
+those two moments is exactly "however long the rest of the suite took to
+reach this assertion," which grows every time a new test is added anywhere
+in the suite (see `0105_question_feed_pools_schedule.py`) and is unrelated
+to the migration's own correctness. The tightest lane's cadence (5 minutes
+here) is the first to run out of headroom. Confirmed harmless, not a
+regression: django-q2's own `scheduler()` (`django_q/scheduler.py`)
+selects any row with `next_run__lt=now()` on its next poll tick, fires it
+immediately, and recalculates `next_run` from `minutes` from there — an
+overdue `next_run` is routine catch-up behaviour, not a stuck or
+double-firing schedule.
+
+**Fix**: don't race wall-clock at all. Freeze apply-time with
+`unittest.mock.patch.object(<migration_module>.timezone, "now", return_value=<fixed>)`,
+delete-and-recreate the row(s) under that fixed value, and assert
+`next_run == fixed_now + timedelta(minutes=schedule.minutes)` — the actual
+invariant the migration promises, independent of suite duration. See
+`test_next_run_is_set_to_apply_time_plus_the_lane_cadence` in
+`test_question_feed_pools_schedule.py`.
+
 ## nginx 502s everything after a django container restart
 
 **Symptom**: every API request 502s after `docker compose up -d django worker` (or anything that recreates the `django` container) —

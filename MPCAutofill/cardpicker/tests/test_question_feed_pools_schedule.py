@@ -8,13 +8,15 @@ here.
 """
 
 import importlib
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from types import ModuleType
+from unittest.mock import patch
 
 import pytest
 
 from django.apps import apps as django_apps
 from django.test import override_settings
-from django.utils import timezone
 
 MIGRATION_NAME = "0105_question_feed_pools_schedule"
 
@@ -59,12 +61,41 @@ class TestQuestionFeedPoolsScheduleMigration:
             assert schedule.func == "django.core.management.call_command"
             assert schedule.args == f"'warm_question_feed_pools', '{lane}'"
 
-    def test_next_run_is_in_the_future(self):
+    def test_next_run_is_set_to_apply_time_plus_the_lane_cadence(self):
+        """Not "`next_run` is still in the future by the time this assertion happens to
+        run" - that raced wall-clock against total suite duration (see
+        `docs/troubleshooting.md`'s `test_next_run_is_in_the_future` entry) for no
+        real benefit: django-q2's own `scheduler()` (`django_q/scheduler.py`) treats an
+        overdue `next_run` as completely routine - it fires the task on the next poll
+        tick and recalculates `next_run` from `minutes` from there, exactly like any
+        recurring schedule that missed a tick. A `next_run` seeded a few seconds or even
+        minutes in the past is harmless by design, not a bug this test should be
+        guarding against.
+
+        The actual invariant `create_schedules` promises is that `next_run` is computed
+        as apply-time plus the lane's own cadence - so freeze apply-time instead of
+        racing it. Same delete-and-recreate-under-a-controlled-value technique
+        `test_a_custom_cadence_setting_is_honoured_at_apply_time` below uses for
+        `minutes`, applied to `next_run` instead."""
         from django_q.models import Schedule
+
+        frozen_now = datetime(2024, 1, 1, tzinfo=dt_timezone.utc)
+        module = migration_module()
+
+        for schedule_name in EXPECTED_SCHEDULES:
+            Schedule.objects.filter(name=schedule_name).delete()
+        with patch.object(module.timezone, "now", return_value=frozen_now):
+            module.create_schedules(django_apps, None)
 
         for schedule_name in EXPECTED_SCHEDULES:
             schedule = Schedule.objects.get(name=schedule_name)
-            assert schedule.next_run > timezone.now()
+            assert schedule.next_run is not None
+            assert schedule.next_run == frozen_now + timedelta(minutes=schedule.minutes)
+
+        # Restore the real-time rows for any later test in this session.
+        for schedule_name in EXPECTED_SCHEDULES:
+            Schedule.objects.filter(name=schedule_name).delete()
+        module.create_schedules(django_apps, None)
 
     def test_applying_twice_does_not_create_a_second_row_per_lane(self):
         from django_q.models import Schedule
