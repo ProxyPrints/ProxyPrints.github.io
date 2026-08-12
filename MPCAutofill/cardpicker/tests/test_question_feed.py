@@ -19,6 +19,7 @@ from cardpicker.models import (
     CardPrintingTag,
     CardScanLog,
     HiddenCard,
+    IllustrationVoteStatus,
     PrintingTagStatus,
     QuestionFeedServedLog,
     QuestionFeedServedPool,
@@ -35,9 +36,12 @@ from cardpicker.question_feed import (
     _artist_item,
     _border_item,
     _confirm_suggestion_item,
+    _illustration_item,
+    _likely_resolve_item,
     _likely_resolve_printing_card,
     _scryfall_illustration_url,
     _tier_1_confirm_suggestion,
+    _tier_4_fresh,
     _voter_answered_printing_card_ids,
     get_next_question_feed_item,
     get_remaining_estimate,
@@ -1251,3 +1255,178 @@ class TestConfirmSuggestionSkipsEliminatedSuggestions:
 
         assert item is not None
         assert item.suggestedPrinting.identifier == str(survivor_printing.identifier)
+
+
+def _printing_with_border(name: str, border_color: str, illustration_id=None) -> None:
+    """A live `CanonicalCard` candidate matching `name`, carrying `border_color` (and
+    optionally `illustration_id`) on its metadata sidecar - the fixture `_likely_resolve_item`
+    routing tests below use to control what `get_ranked_printing_candidates` returns."""
+    printing = CanonicalCardFactory(name=name)
+    CanonicalPrintingMetadataFactory(
+        canonical_card=printing, border_color=border_color, illustration_id=illustration_id
+    )
+
+
+class TestIllustrationItem:
+    """`_illustration_item` (wtc-question-model.md §7.2): asks which artwork a card depicts,
+    deduplicating candidates that share an `illustration_id`."""
+
+    def test_illustration_item_is_type_illustration(self, db):
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        item = _illustration_item(card)
+
+        assert item.type.value == "illustration"
+        assert item.card.name == card.name
+
+    def test_illustration_item_dedupes_by_illustration_id(self, db):
+        card, illustration_id = make_shared_illustration_group("Brainstorm")
+
+        item = _illustration_item(card)
+
+        assert len(item.illustrationCandidates) == 1
+        assert item.illustrationCandidates[0].illustrationId == str(illustration_id)
+
+    def test_illustration_item_keeps_distinct_illustrations_separate(self, db):
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _printing_with_border("Brainstorm", "black", illustration_id=uuid.uuid4())
+        _printing_with_border("Brainstorm", "black", illustration_id=uuid.uuid4())
+
+        item = _illustration_item(card)
+
+        assert len(item.illustrationCandidates) == 2
+
+
+class TestConfirmSuggestionMissingIllustrationTableDegrades:
+    """The `eliminated_illustration_ids` read inside `_confirm_suggestion_item` is wrapped in a
+    broad `except Exception` (see that function's own comment) so an absent
+    `CardIllustrationRejection` table (a pre-migration environment) degrades to "nothing
+    eliminated" instead of a 500."""
+
+    def test_a_db_error_reading_elimination_consensus_degrades_rather_than_raising(self, db):
+        card, printing = make_ai_suggested_card()
+        # simulate the illustration_id branch being reached at all - a suggestion with no
+        # illustration_id never calls `eliminated_illustration_ids` in the first place, so the
+        # printing here must carry one for this test to actually exercise the guard.
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=uuid.uuid4())
+
+        with patch(
+            "cardpicker.question_feed.eliminated_illustration_ids",
+            side_effect=Exception('relation "cardpicker_cardillustrationrejection" does not exist'),
+        ):
+            item = _confirm_suggestion_item(card)
+
+        assert item is not None
+        assert item.suggestedPrinting.identifier == str(printing.identifier)
+
+
+class TestLikelyResolveRouting:
+    """`_likely_resolve_item`'s pool-dependent routing rule (docs/features/
+    wtc-question-model.md): for the LIKELY-RESOLVE pool, serve the most discriminating question
+    for THIS card - border first if it narrows the candidate set, illustration next, otherwise
+    the pre-existing confirm/identify fallback."""
+
+    def test_candidates_split_on_border_and_unrecorded_serves_border(self, db):
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _printing_with_border("Brainstorm", "black")
+        _printing_with_border("Brainstorm", "white")
+
+        item = _likely_resolve_item(card)
+
+        assert item.type.value == "border"
+
+    def test_border_already_recorded_skips_border_even_when_candidates_split(self, db):
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        card.tag_vote_statuses = {"Black Border": TagVoteStatus.RESOLVED_APPLY}
+        card.save(update_fields=["tag_vote_statuses"])
+        _printing_with_border("Brainstorm", "black")
+        _printing_with_border("Brainstorm", "white")
+
+        item = _likely_resolve_item(card)
+
+        assert item.type.value != "border"
+
+    def test_candidates_do_not_split_on_border_falls_through_to_illustration(self, db):
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        illustration_id = uuid.uuid4()
+        _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
+        _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
+
+        item = _likely_resolve_item(card)
+
+        assert item.type.value == "illustration"
+
+    def test_illustration_already_resolved_falls_through_to_identify_printing(self, db):
+        card = CardFactory(
+            name="Brainstorm",
+            printing_tag_status=PrintingTagStatus.UNRESOLVED,
+            illustration_vote_status=IllustrationVoteStatus.RESOLVED,
+        )
+        illustration_id = uuid.uuid4()
+        _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
+        _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
+
+        item = _likely_resolve_item(card)
+
+        assert item.type.value == "identify_printing"
+
+    def test_no_illustration_data_at_all_falls_through_to_identify_printing(self, db):
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _printing_with_border("Brainstorm", "black")
+        _printing_with_border("Brainstorm", "black")
+
+        item = _likely_resolve_item(card)
+
+        assert item.type.value == "identify_printing"
+
+    def test_border_split_wins_over_an_unresolved_illustration(self, db):
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        illustration_id = uuid.uuid4()
+        _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
+        _printing_with_border("Brainstorm", "white", illustration_id=illustration_id)
+
+        item = _likely_resolve_item(card)
+
+        assert item.type.value == "border"
+
+    def test_a_machine_suggestion_is_still_confirmable_once_border_and_illustration_are_settled(self, db):
+        card, printing = make_ai_suggested_card()
+        card.illustration_vote_status = IllustrationVoteStatus.RESOLVED
+        card.save(update_fields=["illustration_vote_status"])
+
+        item = _likely_resolve_item(card)
+
+        assert item.type.value == "confirm_suggestion"
+
+
+class TestTier4FreshServesIllustration:
+    """The REMAINDER lane's own illustration-before-printing precedence
+    (`_tier_4_fresh`/`_build_pool_cold`): a card whose illustration identity is unresolved but
+    which already carries a candidate with a known `illustration_id` is answerable via the
+    cheaper illustration question, ahead of `identify_printing`."""
+
+    def test_a_remainder_card_with_unresolved_illustration_is_served_illustration(self, db):
+        # `_tier_4_fresh`'s illustration filter reads `card.printing_tags` (an actual cast
+        # vote), not `get_ranked_printing_candidates`' name-matched search results - unlike
+        # `_likely_resolve_item`'s gate, so this fixture needs a real `CardPrintingTag` row.
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        illustration_id = uuid.uuid4()
+        printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=illustration_id)
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+
+        result = _tier_4_fresh("anon-1")
+
+        assert result is not None
+        item, reason = result
+        assert item.type.value == "illustration"
+        assert reason == "tier_4_fresh_illustration"
+
+    def test_a_remainder_card_with_no_illustration_data_falls_through_to_printing(self, db):
+        CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+
+        result = _tier_4_fresh("anon-1")
+
+        assert result is not None
+        item, reason = result
+        assert item.type.value != "illustration"

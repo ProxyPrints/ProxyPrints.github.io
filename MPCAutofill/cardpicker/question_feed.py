@@ -168,6 +168,7 @@ from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
     STAGE_D_FALLBACK_ANONYMOUS_ID,
 )
+from cardpicker.local_fallback import BORDER_COLOR_TO_TAG
 from cardpicker.models import (
     ArtistVoteStatus,
     Card,
@@ -177,6 +178,7 @@ from cardpicker.models import (
     CardScanLog,
     CardTagVote,
     HiddenCard,
+    IllustrationVoteStatus,
     PrintingTagStatus,
     QuestionFeedServedLog,
     QuestionFeedServedPool,
@@ -252,6 +254,11 @@ _HYPOTHETICAL_VOTE_ANONYMOUS_ID = "question-feed-hypothetical-vote"
 # "Evidence-gated printing-confirmation policy" section for the full reasoning, and this PR's own
 # report for the doc correction this discrepancy earned.
 _KNOWN_EVIDENCE_TYPES = frozenset({"border", "artist", "symbol"})
+
+# The four border-colour attribute-chip tags (`local_fallback.BORDER_COLOR_TO_TAG`'s own
+# values, not restated) - the likely-resolve routing gate below checks whether any of them has
+# reached RESOLVED_APPLY consensus for a card before treating its border colour as "recorded".
+_BORDER_COLOR_TAG_NAMES = frozenset(BORDER_COLOR_TO_TAG.values())
 
 
 def _card_recorded_evidence_types(card: Card) -> frozenset[str]:
@@ -648,7 +655,13 @@ def _question_information_gain_score(kind: str, card: Card, tag_name: Optional[s
     """Dispatches `_printing_question_score`/`_artist_question_score`/`_tag_question_score` on
     `question_feed_pools.KIND_*` - one seam the tiers below call instead of three per-kind
     branches."""
-    if kind == question_feed_pools.KIND_PRINTING:
+    # KIND_ILLUSTRATION scores on the same printing-vote/attribute-variance signal as
+    # KIND_PRINTING: there is no separate illustration-vote entropy dimension (illustration
+    # votes derive an artist vote automatically but never cast a printing vote - see
+    # `_illustration_item`'s own docstring), and an illustration-unresolved card is, in
+    # practice, the same cold-start population `_printing_question_score`'s attribute-variance
+    # fallback already covers.
+    if kind in (question_feed_pools.KIND_PRINTING, question_feed_pools.KIND_ILLUSTRATION):
         return _printing_question_score(card)
     if kind == question_feed_pools.KIND_ARTIST:
         return _artist_question_score(card)
@@ -917,12 +930,55 @@ def _likely_resolve_printing_card(
     return None
 
 
+def _card_border_unrecorded(card: Card) -> bool:
+    """True unless one of the four border-colour tags (`_BORDER_COLOR_TAG_NAMES`) has reached
+    RESOLVED_APPLY consensus for `card` - i.e. this card's own border colour has not yet been
+    settled by a resolved attribute-chip vote."""
+    statuses = card.tag_vote_statuses
+    return not any(statuses.get(tag_name) == TagVoteStatus.RESOLVED_APPLY for tag_name in _BORDER_COLOR_TAG_NAMES)
+
+
+def _candidates_split_on_border(candidates: Sequence[PrintingCandidate]) -> bool:
+    """True when `candidates` (a card's own ranked printing candidates) carry more than one
+    distinct non-empty `borderColor` - i.e. a border answer would actually eliminate at least
+    one candidate from this card's own candidate set, rather than merely filling a gap."""
+    border_colors = {candidate.borderColor for candidate in candidates if candidate.borderColor}
+    return len(border_colors) > 1
+
+
 def _likely_resolve_item(card: Card) -> QuestionFeedItem:
-    """Serves `card` as a `confirm_suggestion` (it has a live machine-sourced suggestion to confirm -
-    the common shape within this pool, the data brief's 45,154-of-46,310 single-candidate split)
-    or a bare `identify_printing` question (the multi-candidate remainder) - the same two item
-    shapes tiers 1/2 already produce; the likely-resolve pool changes WHICH card gets served
-    first, never what an individual served item looks like."""
+    """
+    For the LIKELY-RESOLVE pool (a printing question one more agreeing human vote would
+    resolve, per `is_likely_resolve_printing`): serves the MOST DISCRIMINATING question for
+    THIS card rather than always a printing confirmation, per
+    docs/features/wtc-question-model.md's routing rule -
+
+    1. If `card`'s own candidates split on border colour AND that colour hasn't been recorded
+       yet (`_card_border_unrecorded`/`_candidates_split_on_border`), a border answer narrows
+       this card's own candidate set - serve `border`.
+    2. Otherwise, if `card`'s illustration identity is still unresolved, serve the illustration
+       question.
+    3. Otherwise, fall through to the pre-existing behaviour: a `confirm_suggestion` (it has a
+       live machine-sourced suggestion to confirm - the common shape within this pool, the data
+       brief's 45,154-of-46,310 single-candidate split) or a bare `identify_printing` question
+       (the multi-candidate remainder).
+
+    The likely-resolve pool changes WHICH card gets served first; this routing changes WHAT
+    QUESTION is asked about that card - narrowing candidates resolves the card faster than an
+    unconditional printing confirmation whenever a cheaper, narrowing answer is available.
+    """
+    candidates = get_ranked_printing_candidates(card, card.name)
+    serialised_candidates = [candidate.serialise_as_printing_candidate() for candidate in candidates]
+    if _card_border_unrecorded(card) and _candidates_split_on_border(serialised_candidates):
+        return _border_item(card)
+    # Gated on actually carrying illustration data (mirrors `_tier_4_fresh`'s own
+    # `illustration_id__isnull=False` filter), not merely UNRESOLVED - that status is the
+    # model default for every card, so an ungated check would route almost every likely-resolve
+    # card through here regardless of whether an illustration question is even answerable for it.
+    if card.illustration_vote_status == IllustrationVoteStatus.UNRESOLVED and any(
+        candidate.illustrationId is not None for candidate in serialised_candidates
+    ):
+        return _illustration_item(card)
     item = _confirm_suggestion_item(card)
     if item is not None:
         return item
@@ -1125,7 +1181,7 @@ def _tier_4_fresh(
     if hidden_card_ids is None:
         hidden_card_ids = _voter_hidden_card_ids(anonymous_id)
     illustration_candidates = list(
-        Card.objects.filter(illustration_vote_status=None)
+        Card.objects.filter(illustration_vote_status=IllustrationVoteStatus.UNRESOLVED)
         .exclude(pk__in=answered_card_ids)
         .exclude(pk__in=hidden_card_ids)
         .filter(printing_tags__printing__printing_metadata__illustration_id__isnull=False)
@@ -1290,6 +1346,8 @@ def _pool_cold_result(
     if drawn is None:
         return None
     kind, card, tag_name, reason = drawn
+    if kind == question_feed_pools.KIND_ILLUSTRATION:
+        return _illustration_item(card), reason or "tier_4_fresh_illustration"
     if kind == question_feed_pools.KIND_PRINTING:
         return _identify_printing_item(card), reason or "tier_4_fresh_printing"
     if kind == question_feed_pools.KIND_ARTIST:

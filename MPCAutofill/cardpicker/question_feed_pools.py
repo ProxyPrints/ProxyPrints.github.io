@@ -122,6 +122,7 @@ from cardpicker.models import (
     Card,
     CardArtistVote,
     CardTagVote,
+    IllustrationVoteStatus,
     PrintingTagStatus,
     TagVoteStatus,
     VoteSource,
@@ -144,6 +145,7 @@ LANES = (LANE_RESOLUTION_IMMINENT, LANE_CONFIRM, LANE_CONTESTED, LANE_COLD)
 KIND_PRINTING = "printing"
 KIND_ARTIST = "artist"
 KIND_TAG = "tag"
+KIND_ILLUSTRATION = "illustration"
 
 CACHE_KEY_PREFIX = "question-feed-pool-v1"
 # `None` (persist until the next warm overwrites it) - same convention as
@@ -280,7 +282,11 @@ def _iter_by_kind_precedence(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
     rotation happened to place first, silently breaking that precedence on some requests and not
     others - grouping by kind before windowing keeps it structural instead, matching the
     contested/cold lanes' own live-tier counterparts exactly."""
-    for kind in (KIND_PRINTING, KIND_ARTIST, KIND_TAG):
+    # KIND_ILLUSTRATION leads: only the cold pool ever carries it, mirroring
+    # `question_feed._tier_4_fresh`'s own illustration-before-printing order (the cheapest
+    # answerable question wins the remainder waterfall) - a contested-pool draw simply has no
+    # illustration entries to yield here.
+    for kind in (KIND_ILLUSTRATION, KIND_PRINTING, KIND_ARTIST, KIND_TAG):
         yield from _iter_windowed_from_random_offset([entry for entry in entries if entry.kind == kind])
 
 
@@ -469,6 +475,30 @@ def _build_pool_cold() -> list[PoolEntry]:
     limit = settings.QUESTION_FEED_POOL_SIZE
     contested_card_ids = get_contested_card_ids()
 
+    # Illustration entries first (mirrors `_tier_4_fresh`'s own illustration-before-printing
+    # check, and `_iter_by_kind_precedence`'s KIND_ILLUSTRATION-leads order above): a card whose
+    # illustration identity is unresolved but which already carries a candidate with a known
+    # illustration_id is answerable via the cheaper illustration question.
+    illustration_candidates = (
+        Card.objects.filter(
+            illustration_vote_status=IllustrationVoteStatus.UNRESOLVED,
+            printing_tags__printing__printing_metadata__illustration_id__isnull=False,
+        )
+        .distinct()
+        .values_list("pk", "date_created")
+    )
+    illustration_rows: list[tuple[int, Any]] = []
+    for pk, date_created in _sample_across_pk_strata(
+        illustration_candidates, chunk_size=_pool_sample_chunk_size(limit)
+    ):
+        illustration_rows.append((pk, date_created))
+        if len(illustration_rows) >= limit:
+            break
+    illustration_rows.sort(key=lambda row: row[1], reverse=True)
+    entries: list[PoolEntry] = [
+        PoolEntry(kind=KIND_ILLUSTRATION, card_id=pk, reason="tier_4_fresh_illustration") for pk, _ in illustration_rows
+    ]
+
     printing_candidates = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=contested_card_ids)
@@ -494,7 +524,7 @@ def _build_pool_cold() -> list[PoolEntry]:
     printing_rows.sort(key=lambda row: row[4], reverse=True)
     printing_rows.sort(key=lambda row: row[3])
     printing_rows.sort(key=lambda row: row[2], reverse=True)
-    entries: list[PoolEntry] = [
+    entries.extend(
         PoolEntry(
             kind=KIND_PRINTING,
             card_id=pk,
@@ -505,7 +535,7 @@ def _build_pool_cold() -> list[PoolEntry]:
             ),
         )
         for pk, origin_reason, _vote_count, _is_quick_negative, _date_created in printing_rows
-    ]
+    )
 
     artist_candidates = Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED).values_list(
         "pk", "date_created"
@@ -676,6 +706,15 @@ def draw_cold_entry(
     for entry in _iter_by_kind_precedence(entries):
         if entry.card_id in hidden_card_ids:
             continue
+        if entry.kind == KIND_ILLUSTRATION:
+            if entry.card_id in answered_card_ids:
+                continue
+            card = Card.objects.filter(
+                pk=entry.card_id, illustration_vote_status=IllustrationVoteStatus.UNRESOLVED
+            ).first()
+            if card is None:
+                continue
+            return KIND_ILLUSTRATION, card, None, entry.reason
         if entry.kind == KIND_PRINTING:
             if entry.card_id in answered_card_ids or entry.card_id in contested_card_id_set:
                 continue
@@ -712,6 +751,7 @@ __all__ = [
     "KIND_PRINTING",
     "KIND_ARTIST",
     "KIND_TAG",
+    "KIND_ILLUSTRATION",
     "PoolEntry",
     "warm_pool_cache",
     "draw_resolution_imminent_card",
