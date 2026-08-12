@@ -237,9 +237,19 @@ export function isChipContradicted(
 
 /**
  * Filters candidates against the current explicit chip vote states: a positive chip drops
- * any candidate that doesn't match it, a negative chip drops any candidate that does. Implied-
- * negative (exclusion-group sibling) styling never contributes an extra filter condition on
- * its own - see the exclusion-group comment above for why that's unnecessary.
+ * any candidate that doesn't match it, a negative chip drops any candidate that does - with
+ * two carve-outs, both about a chip's inability to prove a negative:
+ *
+ * 1. Taxonomy unknowns never count as a mismatch. A candidate whose value for a chip's own
+ *    exclusion group falls outside that group's taxonomy entirely (getOpenExclusionGroups -
+ *    e.g. borderColor "gold" against Black/White/Silver/Borderless) is a genuine unknown, not
+ *    a contradiction, so it can't be excluded by that group's chips either way.
+ * 2. A chip never eliminates an illustration outright. Candidates are grouped by
+ *    illustrationId (an ungrouped candidate is its own group of one) before filtering; within
+ *    a group of more than one, a chip narrows to the matching members same as always, but if
+ *    that would empty the group completely, the group survives unnarrowed instead of
+ *    disappearing. Border/frame axes are independent of illustration identity - a statement
+ *    about one must not remove the other from consideration.
  */
 export function filterCandidatesByChipStates<T extends PrintingCandidate>(
   candidates: T[],
@@ -251,12 +261,45 @@ export function filterCandidatesByChipStates<T extends PrintingCandidate>(
   if (activeChips.length === 0) {
     return candidates;
   }
+
+  const satisfiesChip = (candidate: T, chip: AttributeChipDef): boolean => {
+    const state = chipStates[chip.tagName] ?? "untouched";
+    if (chip.matches(candidate)) {
+      return state === "positive";
+    }
+    const group = findExclusionGroup(chip.tagName);
+    if (group != null && getOpenExclusionGroups(candidate).includes(group)) {
+      return true;
+    }
+    return state === "negative";
+  };
+
+  const satisfiesActiveChips = (candidate: T): boolean =>
+    activeChips.every((chip) => satisfiesChip(candidate, chip));
+
+  const groupKeys: string[] = [];
+  const groups = new Map<string, T[]>();
+  candidates.forEach((candidate) => {
+    const key = candidate.illustrationId ?? `solo:${candidate.identifier}`;
+    let group = groups.get(key);
+    if (group == null) {
+      group = [];
+      groups.set(key, group);
+      groupKeys.push(key);
+    }
+    group.push(candidate);
+  });
+
+  const survivingIds = new Set<string>();
+  groupKeys.forEach((key) => {
+    const group = groups.get(key) as T[];
+    const matched = group.filter(satisfiesActiveChips);
+    const survivors = matched.length > 0 || group.length <= 1 ? matched : group;
+    survivors.forEach((candidate) => survivingIds.add(candidate.identifier));
+  });
+
   return candidates.filter((candidate) =>
-    activeChips.every((chip) => {
-      const state = chipStates[chip.tagName] ?? "untouched";
-      const isMatch = chip.matches(candidate);
-      return state === "positive" ? isMatch : !isMatch;
-    })
+    survivingIds.has(candidate.identifier)
   );
 }
 

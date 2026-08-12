@@ -84,6 +84,7 @@ import {
   filterCandidatesByChipStates,
   getAutoTagChips,
   getOpenExclusionGroups,
+  isChipContradicted,
 } from "@/features/attributeChips/attributeChips";
 import { BorderColorQuestion } from "@/features/attributeChips/BorderColorQuestion";
 import { ArtistVotePicker } from "@/features/attributeVoting/ArtistVotePicker";
@@ -1020,7 +1021,22 @@ export function QuestionFeed() {
       .then(() => {
         bumpSessionCount();
         if (candidate != null) {
-          const autoTagChips = getAutoTagChips(candidate);
+          // A candidate can surface in the identification grid while carrying an attribute
+          // the voter has already explicitly voted against in this same chip panel -
+          // filterCandidatesByChipStates keeps an illustration's other printings reachable
+          // even when one of them doesn't match an active chip (see that function's own
+          // comment), so the printing actually tapped here can still disagree with a chip
+          // the voter set moments earlier. Auto-tagging that attribute would silently
+          // overwrite the voter's own explicit statement with a derived one that disputes
+          // it, so any chip the voter has already contradicted - directly, by tapping it
+          // negative, or indirectly, by tapping a different sibling in its exclusion group
+          // positive - is dropped from the auto-tag batch. Every other derived vote still
+          // casts exactly as before.
+          const autoTagChips = getAutoTagChips(candidate).filter(
+            (chip) =>
+              (chipStates[chip.tagName] ?? "untouched") !== "negative" &&
+              !isChipContradicted(chip.tagName, chipStates)
+          );
           Promise.all(
             autoTagChips.map((chip) =>
               APISubmitTagVote(

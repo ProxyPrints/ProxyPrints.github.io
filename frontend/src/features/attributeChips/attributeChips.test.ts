@@ -1,6 +1,7 @@
 import {
   printingCandidate1,
   printingCandidate2,
+  printingCandidate3,
 } from "@/common/test-constants";
 
 import {
@@ -111,6 +112,65 @@ describe("filterCandidatesByChipStates", () => {
       "Full Art": "positive",
     });
     expect(result).toEqual([printingCandidate2]);
+  });
+
+  // Issue #790, defect 2: a border outside the Black/White/Silver/Borderless taxonomy is a
+  // genuine unknown, not a contradiction - it must not be treated as "definitely not black".
+  it("a positive border chip does not filter out a candidate whose border falls outside the taxonomy", () => {
+    const result = filterCandidatesByChipStates(
+      [printingCandidate1, printingCandidate3],
+      { "Black Border": "positive" }
+    );
+    expect(result).toContainEqual(printingCandidate3);
+    expect(result).toEqual([printingCandidate1, printingCandidate3]);
+  });
+
+  // Issue #790, defect 1: an illustration usually spans several printings with different
+  // borders - a chip must narrow WITHIN that illustration, never eliminate it outright.
+  describe("illustration-grouped candidates", () => {
+    const illustrationId = "11111111-1111-1111-1111-111111111111";
+    const whiteBordered = {
+      ...printingCandidate1,
+      identifier: "printing-white",
+      borderColor: "white",
+      illustrationId,
+    };
+    const silverBordered = {
+      ...printingCandidate1,
+      identifier: "printing-silver",
+      borderColor: "silver",
+      illustrationId,
+    };
+    const blackBordered = {
+      ...printingCandidate1,
+      identifier: "printing-black",
+      borderColor: "black",
+      illustrationId,
+    };
+
+    it("keeps every printing of an illustration that has none matching the active border chip", () => {
+      const result = filterCandidatesByChipStates(
+        [whiteBordered, silverBordered],
+        { "Black Border": "positive" }
+      );
+      expect(result).toEqual([whiteBordered, silverBordered]);
+    });
+
+    it("still narrows within an illustration that does have a matching printing", () => {
+      const result = filterCandidatesByChipStates(
+        [whiteBordered, blackBordered],
+        { "Black Border": "positive" }
+      );
+      expect(result).toEqual([blackBordered]);
+    });
+
+    it("a candidate with no illustrationId at all is unaffected - still excluded on a genuine mismatch", () => {
+      const result = filterCandidatesByChipStates(
+        [printingCandidate1, printingCandidate2],
+        { "White Border": "positive" }
+      );
+      expect(result).toEqual([]);
+    });
   });
 });
 
