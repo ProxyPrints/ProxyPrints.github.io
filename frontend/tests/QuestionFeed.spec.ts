@@ -667,7 +667,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
 
     await expect(
       page.getByTestId("question-feed-suggestion-prompt")
-    ).toContainText("Is it this one?");
+    ).toContainText("Is this the EXACT printing?");
     await expect(
       page.getByTestId("question-feed-suggestion-yes")
     ).toBeVisible();
@@ -679,7 +679,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
     ).toHaveCount(0);
 
     // Regression check (#49 dropped this): the suggestion slot still needs its own reference
-    // render of the suggested printing to compare against - "Is it this one?" is
+    // render of the suggested printing to compare against - "Is this the EXACT printing?" is
     // unanswerable from text alone. `getByRole("img")` (not a plain `img` locator) - round
     // 3's shared `<MysteryCard />` (own comment, cardPanel.tsx) renders a SECOND `<img>` in
     // this same container (its own "?" glyph, `alt=""`), which a bare `locator("img")` now
@@ -810,7 +810,7 @@ test.describe("question feed - confirm_suggestion question type", () => {
     await expect(
       page.locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
     ).toBeVisible();
-    // contextual copy replaces the suggestion slot's "Is it this one?"
+    // contextual copy replaces the suggestion slot's "Is this the EXACT printing?"
     await expect(
       page.getByTestId("question-feed-suggestion-prompt")
     ).toContainText("let's find the actual printing");
