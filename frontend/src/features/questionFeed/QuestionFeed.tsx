@@ -2199,7 +2199,7 @@ export function QuestionFeed() {
               onRateLimited={() => setRateLimited(true)}
             />
             <ActionRow>
-              <Btn className="ghost" onClick={abstainAndAdvance}>
+              <Btn className="ghost" onClick={() => abstainAndAdvance()}>
                 Skip
               </Btn>
             </ActionRow>
