@@ -118,7 +118,7 @@ from cardpicker.pilot_run_lifecycle import mark_ledger_failed, merge_counters
 from cardpicker.process_metrics import get_process_rss_mb
 from cardpicker.stage_e_batch_sizing import MODE_INCREMENTAL, resolve_micro_batch_size
 from cardpicker.stage_e_concurrency import try_acquire_dispatch_slot
-from cardpicker.stage_e_load_brake import apply_load_brake
+from cardpicker.stage_e_load_brake import apply_load_governor
 from cardpicker.stage_e_signals import suppress_evidence_change_echo
 from cardpicker.utils import get_baked_git_sha
 from cardpicker.vote_write import purge_and_write_votes
@@ -305,13 +305,13 @@ class DispatchOutcome:
     # selection).
     stage_c_backlog_found: int = 0
     stage_c_backlog_wrapped: bool = False
-    # Stage E host-load soft brake (`stage_e_load_brake.py`) -
+    # Stage E host-load AIMD governor (`stage_e_load_brake.py`) -
     # how many times, and for how long in total, THIS dispatch call slept before its own fresh
-    # envelope sample below, because live load was in the soft-to-hard band. Zero/0.0 means either
-    # the brake never engaged (the common case) or this outcome was constructed before the brake
-    # ever ran (`halted-open-trip`, returned before the brake's insertion point) - both read the
-    # same as "no delay", which is the correct reading for a caller that only wants to know
-    # whether THIS call was delayed.
+    # envelope sample below, because live load was in the equilibrium band or above the hard
+    # ceiling. Zero/0.0 means either the governor never engaged (the common case) or this outcome
+    # was constructed before the governor ever ran (`halted-open-trip`, returned before its
+    # insertion point) - both read the same as "no delay", which is the correct reading for a
+    # caller that only wants to know whether THIS call was delayed.
     load_brake_waits: int = 0
     load_brake_seconds: float = 0.0
     trip_id: Optional[str] = None
@@ -1608,8 +1608,9 @@ def dispatch_micro_batch(
     unique per-attempt, per-batch ledger row while `run_id` keeps stamping every data row with
     the clean identity. When `ledger_run_id` is None this function behaves exactly as before.
 
-    Ordering: no-self-resume gate -> load brake (`cardpicker.stage_e_load_brake`) -> fresh envelope
-    sample -> batch selection -> concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`) ->
+    Ordering: no-self-resume gate -> load governor (`cardpicker.stage_e_load_brake`) -> fresh envelope
+    sample -> batch selection -> concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`,
+    bounded by the governor's own chosen concurrency) ->
     Stage C (sequential, per-card) -> Stage D (AS-IS entry points, scoped) -> ledger write -> slot
     release. Every gate below returns WITHOUT touching the DB (aside from the envelope check's own
     trip-persist side effect, the concurrency-cap check's own advisory-lock round trip, plus -
@@ -1634,13 +1635,14 @@ def dispatch_micro_batch(
         )
         return DispatchOutcome(status="halted-open-trip", run_id=run_id, trip_id=existing_trip.trip_id)
 
-    # LOAD BRAKE (`stage_e_load_brake.py`): a delay, never a
-    # bypass, sits here - after the no-self-resume gate so a braking process never blocks a check
-    # of an already-open trip, and before the fresh envelope sample below so the brake's own
+    # LOAD GOVERNOR (`stage_e_load_brake.py`): a delay, never a
+    # bypass, sits here - after the no-self-resume gate so a governing process never blocks a
+    # check of an already-open trip, and before the fresh envelope sample below so its own
     # (possibly repeated) reads are never reused as that sample and can never suppress a genuine
-    # breach. Also before `try_acquire_dispatch_slot`, so a braking process holds no
-    # concurrency-cap slot while it waits.
-    brake_outcome = apply_load_brake()
+    # breach. Also before `try_acquire_dispatch_slot`, so a governing process holds no
+    # concurrency-cap slot while it waits, and its chosen concurrency is what that call below
+    # actually enforces (`max_slots=governor_outcome.state.concurrency`).
+    governor_outcome = apply_load_governor()
 
     signals = _sample_envelope_signals()
     fresh_trip = check_envelope(signals, run_id=run_id)
@@ -1655,8 +1657,8 @@ def dispatch_micro_batch(
             status="halted-new-trip",
             run_id=run_id,
             trip_id=fresh_trip.trip_id,
-            load_brake_waits=brake_outcome.waits,
-            load_brake_seconds=brake_outcome.seconds,
+            load_brake_waits=governor_outcome.waits,
+            load_brake_seconds=governor_outcome.seconds,
         )
 
     # BATCH SIZE (2026-07-29 - `cardpicker.stage_e_batch_sizing`'s own module docstring carries the
@@ -1677,37 +1679,37 @@ def dispatch_micro_batch(
             run_id=run_id,
             stage_c_backlog_found=stage_c_fill.found,
             stage_c_backlog_wrapped=stage_c_fill.wrapped,
-            load_brake_waits=brake_outcome.waits,
-            load_brake_seconds=brake_outcome.seconds,
+            load_brake_waits=governor_outcome.waits,
+            load_brake_seconds=governor_outcome.seconds,
         )
 
     # CONCURRENCY CAP (companion to PR #448's vote-collision fix - cardpicker.stage_e_concurrency's
     # own module docstring has the full incident/mechanism writeup): acquired around exactly the
     # CPU-heavy segment below (ledger create through Stage C/D completion), not around the cheap
     # batch-selection query above - holding a scarce slot while doing nothing but a bounded read
-    # would only starve other dispatches for no benefit. `slot is None` means every
-    # `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slot is already held elsewhere - PROACTIVE
+    # would only starve other dispatches for no benefit. `slot is None` means every one of the
+    # governor's OWN currently-chosen concurrency slots is already held elsewhere - PROACTIVE
     # throttling, distinct from the envelope's own REACTIVE halted-new-trip below.
-    with try_acquire_dispatch_slot() as slot:
+    with try_acquire_dispatch_slot(max_slots=governor_outcome.state.concurrency) as slot:
         if slot is None:
             logger.info(
                 "Stage E dispatch throttled - all %s concurrency-cap slots already held",
-                getattr(settings, "STAGE_E_MAX_CONCURRENT_DISPATCHES", 2),
+                governor_outcome.state.concurrency,
             )
             # Observability signal (Tron gate anomaly 4, 2026-07-25): a throttled dispatch writes
             # no PilotRunLedger row (see the comment above this `with` block for why), so this
             # singleton counter (StageEThrottleCounter's own docstring has the full "why a
             # counter, not a per-event row" reasoning) is the ONLY durable, queryable record that
-            # throttling happened - the runbook's "tune STAGE_E_MAX_CONCURRENT_DISPATCHES against
-            # the observed throttle rate" instruction has nothing else to check against.
+            # throttling happened - the runbook's own tuning instruction now has the governor's
+            # own live concurrency, not a static setting, to check against.
             StageEThrottleCounter.record()
             return DispatchOutcome(
                 status="throttled-concurrency-cap",
                 run_id=run_id,
                 stage_c_backlog_found=stage_c_fill.found,
                 stage_c_backlog_wrapped=stage_c_fill.wrapped,
-                load_brake_waits=brake_outcome.waits,
-                load_brake_seconds=brake_outcome.seconds,
+                load_brake_waits=governor_outcome.waits,
+                load_brake_seconds=governor_outcome.seconds,
             )
 
         dispatch_run_id = run_id or f"stage-e-stream-{timezone.now().strftime('%Y%m%dT%H%M%S%f')}Z"
@@ -1736,8 +1738,8 @@ def dispatch_micro_batch(
             card_ids=batch_ids,
             stage_c_backlog_found=stage_c_fill.found,
             stage_c_backlog_wrapped=stage_c_fill.wrapped,
-            load_brake_waits=brake_outcome.waits,
-            load_brake_seconds=brake_outcome.seconds,
+            load_brake_waits=governor_outcome.waits,
+            load_brake_seconds=governor_outcome.seconds,
         )
         batch_start = time.monotonic()
 
@@ -1796,6 +1798,7 @@ def dispatch_micro_batch(
                     "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,
                     "load_brake_waits": outcome.load_brake_waits,
                     "load_brake_seconds": outcome.load_brake_seconds,
+                    "load_governor_concurrency": governor_outcome.state.concurrency,
                 },
             )
             ledger.save(update_fields=["status", "finished_at", "counters"])

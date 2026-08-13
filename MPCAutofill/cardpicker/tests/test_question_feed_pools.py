@@ -22,7 +22,6 @@ from django.test.utils import CaptureQueriesContext
 from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_ANONYMOUS_ID,
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
-    STAGE_D_FALLBACK_ANONYMOUS_ID,
 )
 from cardpicker.models import (
     ArtistVoteStatus,
@@ -84,20 +83,18 @@ _COMPLETE_EVIDENCE_TYPES = ("border", "artist", "symbol")
 def make_ai_suggested_card(
     anonymous_id: str = "ai-bot", evidence_types_used: tuple = _COMPLETE_EVIDENCE_TYPES
 ) -> tuple:
-    """See `test_question_feed.py`'s own helper of the same name for why this attaches a
-    `CardScanLog` row by default (issue #766's evidence gate on `confirm_suggestion`). The
-    evidence row is written under `STAGE_D_FALLBACK_ANONYMOUS_ID` - the field's only writer -
-    so the writer-scoped reader sees it."""
+    """See `test_question_feed.py`'s own helper of the same name: `evidence_types_used` (issue
+    #766's evidence gate on `confirm_suggestion`) lives on the suggestion vote itself, not on a
+    `CardScanLog` row - a MATCH never writes one (issue #797)."""
     card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
     printing = CanonicalCardFactory()
-    CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id=anonymous_id)
-    if evidence_types_used is not None:
-        CardScanLog.objects.create(
-            card=card,
-            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
-            skip_reason="ambiguous",
-            evidence_types_used=list(evidence_types_used),
-        )
+    CardPrintingTagFactory(
+        card=card,
+        printing=printing,
+        source=VoteSource.DEDUCTION,
+        anonymous_id=anonymous_id,
+        evidence_types_used=list(evidence_types_used) if evidence_types_used is not None else None,
+    )
     return card, printing
 
 

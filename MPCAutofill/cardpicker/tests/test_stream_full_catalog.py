@@ -871,7 +871,10 @@ class TestThrottleBackoffAndRetry:
         assert "stopped_reason=cohort-exhausted" in output
 
     @STREAMING_ON
-    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    # STAGE_E_GOVERNOR_CONCURRENCY_CAP=1 - same reasoning as the identical fix in
+    # test_stage_e_dispatch.py::TestConcurrencyCapIntegration and test_stage_e_shakedown.py: pins
+    # the governor's ceiling to this test's single held slot.
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1, STAGE_E_GOVERNOR_CONCURRENCY_CAP=1)
     def test_a_real_saturated_cap_backs_off_then_gives_up(
         self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ) -> None:

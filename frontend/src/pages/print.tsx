@@ -68,11 +68,11 @@ export default function Print() {
   // Nav+footer redesign (2026-07-22, N10) - the cloud download-queue counter/manager (image/
   // XML/decklist/PDF export downloads) used to live in the global navbar, cut from there per
   // the redesign. This page is the other of its two new mounts (the first is FinishFooter.tsx
-  // on /display, which owns the lightweight XML/Card Images/Decklist exports) - this one covers
-  // the memory-heavy PDF (and desktop-tool XML) downloads FinishedMyProject's own PDFGenerator/
-  // ProjectDownload trigger, which its own DisplayExportMenu deliberately excludes. Both mounts
-  // read the same global fileDownloadsSlice, so either always shows every download regardless
-  // of which page started it.
+  // on /display, whose DisplayExportMenu now covers XML/Card Images/Decklist/PDF) - this one
+  // covers the same PDF path plus Save PDF to Google Drive and the desktop-tool XML download
+  // FinishedMyProject's own PDFGenerator/ProjectDownload trigger, neither of which /display
+  // exposes. Both mounts read the same global fileDownloadsSlice, so either always shows every
+  // download regardless of which page started it.
   const [showDownloadManager, setShowDownloadManager] = useState(false);
   return (
     <ProjectContainer gutter={0}>

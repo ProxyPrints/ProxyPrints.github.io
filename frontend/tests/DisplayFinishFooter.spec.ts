@@ -243,7 +243,7 @@ test.describe("/display local draft auto-backup + restore nudge (issue #275)", (
 
     await expect(page.getByTestId("display-empty-state")).toHaveCount(0);
     // Every grid position still renders a `page-preview-slot` placeholder (8, this page's own
-    // default Letter/Borderless/3.175mm-bleed 4x2 capacity) regardless of how many are filled -
+    // default Letter/Rear-feed/3.175mm-bleed 4x2 capacity) regardless of how many are filled -
     // only the resolved `<img>` count reflects the actually-restored member (DisplayPage.spec.ts's
     // own established pattern for this same distinction).
     await expect(

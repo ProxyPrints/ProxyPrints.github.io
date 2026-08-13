@@ -310,9 +310,9 @@ because the two hooks return differently:
 
 This used to also be mounted from `DisplayPage.tsx`'s own inline export
 (Proposal H, item 2) — issue #275 retired that pipeline entirely (the
-memory-heavy Generate PDF/Save-to-Drive operations now live solely here,
-reached from `/display`'s Finish footer via a pre-print save gate; see
-`docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
+memory-heavy Generate PDF/Save-to-Drive operations moved solely to
+`/print`, reached from `/editor`'s Finish footer via a pre-print save gate;
+see `docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
 Footer](../proposals/proposal-h-display-layout-spec.md#finish-footer-save-before-print)
 and [Print-Page
 Funnel](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)
@@ -322,11 +322,170 @@ in-tree, deletion is a separate later decision) — this component's only
 LIVE mounts today are `FinishedMyProject.tsx`'s PDF tab (reached solely via
 the standalone `/print` route, `pages/print.tsx`) and `PDFGeneratorModal.tsx`
 (mounted globally via `Modals.tsx`, route-independent); one implementation
-either way, not a forked second copy. See `docs/features/printing-tags.md`'s
-own entry for the full detail (why `/whatsthat` and not a new route, the
-`sessionStorage`-backed "never repeats within a session" rule) and
-`docs/features/print-export-page.md` for the classic "Print!" tab's own
-(now unrouted) history.
+either way, not a forked second copy. `/editor`'s own PDF export item (see
+"Editor-native PDF export" below) reuses `useDownloadPDF` but does NOT mount
+this prompt, so `/whatsthat` promotion still only ever fires from the two
+mounts above. See `docs/features/printing-tags.md`'s own entry for the full
+detail (why `/whatsthat` and not a new route, the `sessionStorage`-backed
+"never repeats within a session" rule) and `docs/features/print-export-page.md`
+for the classic "Print!" tab's own (now unrouted) history.
+
+## Editor-native PDF export (`/editor`'s Export ▾ menu)
+
+`/editor` (`DisplayPage.tsx`) had no PDF export of its own after issue #275
+above retired its inline pipeline — its Export ▾ menu (`DisplayExportMenu.tsx`)
+offered only XML/Card Images/Decklist, and its own centre sheet (a real
+`computeLayout()`-driven `PagePreview`, not a preview of the PDF) had no
+export action at all. The only way to get a PDF was navigating to `/print`,
+whose `PDFGenerator.tsx` carries an entirely separate settings panel that
+never read `/editor`'s own `DisplaySheetSettings`/margin-profile/card-spacing
+state — a rail configured for LETTER landscape 4x2 could silently export an
+A4 3x3 PDF.
+
+Two pieces close that gap, without forking the render pipeline:
+
+- **`pdfDownload.tsx`** — `useDownloadPDF`/`useSaveToDrivePDF`/
+  `ImageFailureConfirmModal`/`ConfirmDespiteFailures`, moved out of
+  `PDFGenerator.tsx` verbatim (no logic changes) so `/editor`'s own PDF item
+  can reuse the exact download plumbing `/print` uses without statically
+  importing `PDFGenerator.tsx` itself — that module pulls in
+  `PDFCanvasPreview` (`pdfjs-dist`) and its whole settings panel, which
+  `/editor`'s page must not pay for (its sheet already IS the preview).
+  `PDFGenerator.tsx` now imports these same functions back from here.
+- **`displayPdfProps.ts`** — the one adapter from `/editor`'s live state
+  (`DisplaySheetSettings`, the margin-profile/card-spacing redux slices,
+  project members/cardback, and `projectSlice.manualOverrides`) to the
+  `PDFProps` shape `PDF.tsx` already consumes. `PDF.tsx`'s `PageSize` table
+  is portrait-oriented; `/editor`'s sheet is landscape by convention
+  (width/height swapped), so the adapter always emits `pageSize: "CUSTOM"`
+  with the swapped dimensions computed from the rail's own page-size
+  selection via the same `getPageSizeMM` lookup (now factored out into its
+  own `pageSize.ts` module so both `PDF.tsx` and this adapter share it,
+  rather than one importing the other's page-size table). Every `PDFProps`
+  field with no editor equivalent yet (quality/DPI, corner rounding, cut-line
+  geometry beyond the rail's single Guides toggle, SCM settings, per-side
+  page margins beyond the margin profile, card selection mode) gets an
+  explicit named default in this one module — see its own module comment for
+  the full list and reasoning, including why the rail's Fronts/Backs toggle
+  is deliberately NOT read as a card-selection filter.
+
+`DisplayExportPDF.tsx` (the new fourth `Dropdown.Item` in
+`DisplayExportMenu.tsx`) wires the two together: `useDisplayPDFProps` for
+props, `useDownloadPDF` to trigger the download, `ImageFailureConfirmModal`
+for the same blank-card safeguard bug 4 above added. It mounts no preview of
+its own (no `PDFCanvasPreview`, no fast DOM preview) — the sheet the user is
+already looking at makes one redundant, and rendering a second one live on
+this page would cost it the render budget it has to stay fast. The rail's
+"Guides" toggle (`DisplaySheetSettings.showCutLines`), which previously only
+drove `PagePreview`'s on-screen lime corner guides, now reaches the exported
+file's `drawCardCutLines` through this same adapter, with cut-line
+placement/length/thickness/offset defaults matching that on-screen guide
+style (`InsideOnly`, `Inside`) so the export looks like the sheet that
+produced it.
+
+### Editor export controls (card selection, page range, quality, cut-line style)
+
+`displayPdfProps.ts`'s original defaults covered every `PDFProps` field the
+rail had no control for at all. Four of those are now real controls, owned
+by `DisplayExportPDF.tsx`'s own settings step (opened by clicking the
+Export ▾ menu's "PDF" item, shown before the actual download starts) rather
+than the right rail — these are choices about a given export RUN, not about
+the sheet's own layout, so they live with the export affordance itself. The
+`DisplayExportSettings` interface (`displayPdfProps.ts`) is this state's own
+shape; `buildDisplayPDFProps` maps it straight into the matching `PDFProps`
+fields, same as the rail's sheet settings.
+
+- **Card selection mode** — the four `CardSelectionMode` options
+  (`PDF.tsx`), each with a one-line explanation in the settings step, since
+  the names alone mislead ("Fronts + Distinct Backs" sounds like it emits
+  backs, and for a deck where every card uses the shared project cardback it
+  emits none). The starting value reads `DEFAULT_CARD_SELECTION_MODE`
+  (`PDF.tsx`) rather than a literal, so a change to that constant moves both
+  `/print` and `/editor` together.
+- **Page range** — `PDFProps.pageRangeStart`/`pageRangeEnd` (1-indexed,
+  inclusive, `undefined` on either bound meaning "no restriction on that
+  end"). `PDF.tsx`'s pagination itself is unchanged; a new `sliceToPageRange`
+  step slices the already-paginated `pages` array afterwards, clamped
+  defensively against the real count. That real count is what
+  `computePDFPageCount` (`PDF.tsx`, also exported) is for: pagination can
+  only run once page size, margins, spacing, bleed, and card selection mode
+  are all known, so the settings step calls this on its own live props to
+  show "N total" and bound the range inputs against a real number, rather
+  than letting a request outlive the actual page count.
+- **Image quality (DPI, JPG quality)** — `DisplayExportSettings.imageDPI`/
+  `jpgQuality`, sliders at the same 100–1500 DPI / 5–100% ranges `/print`'s
+  own `CardQualitySettings` panel uses, so output is comparable between the
+  two surfaces while both exist. A one-line note in the settings step names
+  the trade this makes explicit: higher DPI and quality print sharper but
+  cost a much larger file and a slower export.
+- **Cut-line colour and shape** — `DisplayExportSettings.cutLineColor`/
+  `cutLineShape`, shown only when the rail's Guides toggle is on (nothing to
+  style when no cut lines are drawn).
+
+### Editor export controls, part 2 (SCM cutting mode, corner rounding, cut-line geometry, page margins, custom page size)
+
+The remaining `displayPdfProps.ts` named defaults from the first pass above are now real
+controls too, all in `DisplayExportPDF.tsx`'s own settings step — every default they replace is
+removed from the adapter's default block, not left shadowed (the same pattern the first pass
+established).
+
+- **Silhouette (SCM) cutting mode** — `DisplayExportSettings.scmMode` plus its six sub-settings
+  (`scmPaperSize`, `scmVariant`, `scmRegistration`, `scmDuplex`, `scmOffsetXMM`/`scmOffsetYMM`,
+  `scmOffsetAngleDeg`). `PDF.tsx`'s `PDF` component returns straight into `<SCMPDF>` for
+  `scmMode: true` and never touches card selection, cut-line geometry, corner rounding, or page
+  margins for that render — a genuinely different output format, not a style option on the
+  standard grid. The settings step reads this the same way: a switch at the top of the modal
+  swaps its ENTIRE body between the standard-grid panel and SCM's own six controls, rather than
+  appending SCM's settings to the existing list (where they'd be meaningless whenever SCM is
+  off, and the standard controls would be equally meaningless whenever SCM is on). Only image
+  quality (DPI/JPG) is genuinely shared — `SCMCard` reads it exactly like the standard grid's own
+  card image does — so it's the one group visible in both panels.
+- **Corner rounding** — `DisplayExportSettings.roundCorners`, a single Round/Square switch next
+  to the cut-line group below (standard-grid panel only; SCM's own template never reads
+  `roundCorners`).
+- **Cut-line geometry** — `cutLinePlacement`/`cutLineLengthMM`/`cutLineThicknessMM`/
+  `cutLineOffsetMM` extend the existing colour/shape group from the first pass above (same
+  `Form.Group`, same `showCutLines`-gated visibility) rather than starting a second one.
+- **Per-side page margins** — the rail's margin PROFILE (`marginProfileSlice`, three named
+  presets) still drives both the live sheet and, by default, the export, unchanged. The four
+  independent per-side values a real print run sometimes needs are a genuinely finer model than
+  a 3-option preset, so they're an opt-in ADVANCED OVERRIDE scoped to a single export run:
+  `DisplayExportSettings.marginOverride`, `undefined` by default. The settings step's own
+  checkbox seeds it from the current profile's own values the moment it's turned on (so the
+  numbers a user first sees are never a jarring unrelated default), and the four fields become
+  editable from there. Turning the override off restores `undefined` — back to reading the
+  profile exactly as before this field existed. The profile itself, the live sheet, and every
+  other export are never touched by an override scoped to one settings-step session.
+- **Custom page dimensions** — the rail's own paper-size `Form.Select` (`DisplayPage.tsx`'s Page
+  Setup section) gains a `Custom` option (`PageSize.CUSTOM`, already supported by `PDFProps`/
+  `getPageSizeMM` — the gap was only the rail's own option list), with two mm inputs (portrait
+  convention, same as every other table entry) that appear once selected. Chosen as a rail
+  control rather than an export-only one because page size already IS a rail-owned, shared field
+  — the live sheet and the export have read the exact same `pageSize` since the first "Editor
+  export controls" pass, and Custom is a straightforward additional value on that same field, not
+  a different model requiring a coexistence decision (unlike the page-margin override above).
+  Picking `Custom` seeds both mm fields together, in the same state update, from whatever paper
+  size was selected immediately before — never a transient undefined pair.
+
+### Bleed-normalization signal on the editor sheet
+
+`willLikelyGenerateBleed` (`bleedNormalize.ts`) — the cheap, preview-only
+hedge for whether export is expected to synthesize bleed for a given card —
+used to be reachable only from `PDFGenerator.tsx`'s own fast preview
+(`fastPreviewSlots`), so `/editor`'s sheet never showed the badge
+`PagePreview`'s `willGenerateBleed` slot flag already supports rendering.
+`DisplayPage.tsx` now resolves the same signal for its own sheet: bleed
+priors for every eligible card (`isBleedNormalizationEligible`, `PDF.tsx` —
+full-resolution Google Drive/local-file sources only, since this page always
+exports at full resolution) are fetched via `resolveBleedPriors`
+(`bleedPriorResolution.ts`) and debounced the same way the fast preview
+debounces its own identifier list, then combined with
+`projectSlice.manualOverrides` using the same "only render once there's a
+real signal to hedge on" gate the fast preview uses, so the badge never
+flickers wrong-then-right while a prior fetch is still in flight. This is a
+prerequisite for eventually retiring `/print`: once that page is deleted,
+`PDFGenerator.tsx`'s own copy of this wiring goes with it, and the editor
+sheet is the only place left that needs to show it.
 
 ## Key files
 
@@ -355,6 +514,14 @@ own entry for the full detail (why `/whatsthat` and not a new route, the
   parked-spec port wave, issue #272 — the second, `/display`-inline-export
   surface this file used to also cover was already retired by issue #275,
   above)
+- `frontend/src/features/pdf/pdfDownload.tsx`, `frontend/src/features/pdf/pageSize.ts`
+  — shared download plumbing and page-size table, factored out of
+  `PDFGenerator.tsx`/`PDF.tsx` respectively so `/editor`'s own PDF export
+  item can reuse them (see "Editor-native PDF export" above)
+- `frontend/src/features/pdf/displayPdfProps.ts` (+ `displayPdfProps.test.ts`),
+  `frontend/src/features/export/DisplayExportPDF.tsx`,
+  `frontend/src/features/export/DisplayExportMenu.tsx` — `/editor`'s own PDF
+  export item and its editor-state-to-`PDFProps` adapter
 
 ## Status
 

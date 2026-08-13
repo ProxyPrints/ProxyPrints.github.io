@@ -182,6 +182,23 @@ def deterministic_process_rss(request, monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def deterministic_load_governor_state():
+    """
+    Resets `cardpicker.stage_e_load_brake`'s own module-global AIMD state (`_state`) before every
+    test. That module-level global is deliberately PROCESS-lifetime-scoped in production (its own
+    "WHERE CONCURRENCY STATE LIVES" docstring section) - the whole pytest session IS one such
+    process, so without this reset, `deterministic_host_load` above pinning every test's load
+    comfortably below the soft ceiling would silently ADDITIVE-INCREASE the governor's concurrency
+    across every test that calls `dispatch_micro_batch`, one test at a time, contaminating any
+    later test's `override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=...)` expectation with
+    whatever concurrency the test session had already ratcheted up to.
+    """
+    import cardpicker.stage_e_load_brake as stage_e_load_brake
+
+    stage_e_load_brake._state = None
+
+
 def google_drive_credentials_available() -> bool:
     """
     CI baseline cleanup, 2026-07-19: a real capability probe (mirrors the

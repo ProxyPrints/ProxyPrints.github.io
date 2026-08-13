@@ -1091,6 +1091,23 @@ class CardPrintingTag(AbstractWeightedVote):
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="printing_tags")
     printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, null=True, blank=True, related_name="tags")
     is_no_match = models.BooleanField(default=False)
+    # Issue #797: `local_calculate_verdicts.calculate_fallback_verdict`'s own border/artist/
+    # symbol(/collector_line) evidence list, carried onto the vote it justifies instead of
+    # discarded. `CardScanLog.evidence_types_used` (that field's own docstring) is this field's
+    # sibling on the SKIP side; a MATCH never writes a `CardScanLog` row at all
+    # (`local_calculate_verdicts.run_fallback_calculator`), which is exactly why
+    # `question_feed._evidence_justifies_confirmation` reads THIS field, off the specific vote
+    # being confirmed, rather than that table. Null (not `default=list`) distinguishes "no writer
+    # has ever populated this vote" - every vote cast before this field existed, every human vote,
+    # every join-key/deductive-backfill vote, none of which share the fallback calculator's
+    # border/artist/symbol vocabulary - from "the fallback calculator looked and recorded
+    # something"; both read as "evidence does not justify confirmation" at the one call site that
+    # reads this field, so the distinction is for a future backfill pass to act on, not for
+    # today's gate to branch on. No `survivor_pks` sibling here: `FallbackVerdict.survivor_pks` is
+    # only ever populated alongside a SKIP (see that dataclass's own docstring) - on a MATCH it is
+    # always `None`, so a vote-side copy would carry zero information for every row that could
+    # ever write one.
+    evidence_types_used = models.JSONField(null=True, blank=True)
 
     class Meta:
         constraints = [

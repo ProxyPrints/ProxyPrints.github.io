@@ -8,24 +8,21 @@
  *
  * D6's own honesty note carries forward: full MPC bleed (3.175mm) + the D4 4x2 grid fits ONLY
  * the Borderless profile - every bordered profile caps bleed below that. `maxBleedForFourColumns`
- * below computes each profile's cap from the SAME formula `layout.ts`'s `fitAxisWithBleed`
- * uses (rather than copying the D6 table's numbers verbatim), so the cap stays correct if the
- * page size or column spacing ever changes instead of silently drifting from the real layout
- * engine's own math.
+ * below answers that question by calling straight into `computeLayout` (the real layout engine,
+ * `features/pdf/layout.ts`) rather than re-deriving `fitAxisWithBleed`'s water-filling arithmetic
+ * a second time - a hand-copied formula can silently drift from the engine it was copied from the
+ * moment either one changes; reading the engine's own output cannot.
  *
- * #301 (croppable bleed) reframed what this cap MEANS, not its formula: pre-#301, exceeding it
- * meant `layout.ts`'s rigid slot-fit dropped the sheet from 4 columns to 3 (a whole card gone).
- * Post-#301, the fit is bare-card-count-first (see `fitAxisWithBleed`'s own comment) - the 4th
- * column no longer disappears; bleed on the affected edge crops down to this same cap value
- * instead. The formula below is UNCHANGED (it already computed exactly the per-edge bleed
- * `fitAxisWithBleed`'s water-filling converges to at count=4 - `(available - 4*card -
- * 3*spacing - 0.1) / 8` is `slackMM / (2*count)` with count=4, the same expression) - only
- * `MarginProfileControl.tsx`'s warning copy, which used to describe the old "fewer cards"
- * behavior, needed to change to describe the new "cropped, with reduced cutting tolerance"
- * behavior (issue #301 decision 3).
+ * #301 (croppable bleed) reframed what this cap MEANS: pre-#301, exceeding it meant `layout.ts`'s
+ * rigid slot-fit dropped the sheet from 4 columns to 3 (a whole card gone). Post-#301, the fit is
+ * bare-card-count-first (see `fitAxisWithBleed`'s own comment) - the 4th column no longer
+ * disappears; bleed on the affected edge crops down to this same cap value instead. The granted-
+ * vs-requested readout (`BleedGrantedReadout.tsx`) is what surfaces that crop to the user now -
+ * this module no longer owns any warning copy of its own.
  */
+import { CardHeightMM } from "@/common/constants";
 import { MarginProfileKey } from "@/common/types";
-import { LayoutMargins } from "@/features/pdf/layout";
+import { computeLayout, LayoutMargins } from "@/features/pdf/layout";
 
 export interface MarginProfileDefinition {
   key: MarginProfileKey;
@@ -76,15 +73,16 @@ export const MARGIN_PROFILES: Record<
 };
 
 /**
- * The largest bleed edge (mm) a 4-column sheet can render at FULL bleed under the given page
- * width/margins - beyond this, `computeLayout`'s width axis (the D4/D6 binding constraint) still
- * keeps all 4 columns (#301: bare card count no longer depends on bleed at all), but crops the
- * bleed on every column boundary down to exactly this value (see `fitAxisWithBleed`'s own
- * per-axis water-filling comment, features/pdf/layout.ts - this is that formula's
- * `slackMM / (2*count)` solved at a fixed count of 4, algebraically identical to the pre-#301
- * "count * slotSizeMM + (count-1)*spacingMM + 0.1 < availableMM" boundary this was originally
- * derived from), rather than hardcoding the D6 table's numbers - so a paper-size or spacing
- * change can never leave this cap silently wrong.
+ * The largest bleed edge (mm) the column axis can render, under the given page width/margins,
+ * for however many columns that width naturally bare-fits (in practice 4, for every margin
+ * profile this repo ships - see the D6 table this function's own tests check against). Reads
+ * `computeLayout`'s real output instead of re-deriving `fitAxisWithBleed`'s water-filling
+ * formula: an effectively unbounded `bleedEdgeMM` target (`Number.MAX_SAFE_INTEGER`) means the
+ * axis's own slack is what binds the returned `bleedMM`, not the target cap - exactly "the most
+ * this axis could ever grant," which is the question this function answers. The row axis is
+ * irrelevant to a column-width question, so its inputs (card height, page height) are dummy
+ * values sized only to keep `fitAxisWithBleed`'s bare-fit loop from iterating needlessly, not to
+ * describe any real card.
  */
 export function maxBleedForFourColumns(
   pageWidthMM: number,
@@ -92,6 +90,14 @@ export function maxBleedForFourColumns(
   cardWidthMM: number,
   spacingColMM: number
 ): number {
-  const availableWidthMM = pageWidthMM - margins.left - margins.right;
-  return (availableWidthMM - 4 * cardWidthMM - 3 * spacingColMM - 0.1) / 8;
+  const layout = computeLayout(
+    pageWidthMM,
+    CardHeightMM + 1,
+    cardWidthMM,
+    CardHeightMM,
+    Number.MAX_SAFE_INTEGER,
+    margins,
+    { row: 0, col: spacingColMM }
+  );
+  return layout.slots[0]?.bleedMM.left ?? 0;
 }
