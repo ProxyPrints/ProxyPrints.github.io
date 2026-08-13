@@ -247,6 +247,7 @@ import {
   ReportBlock,
 } from "@/features/cardDetailedView/CardDetailedViewBody";
 import { ArtistSection } from "@/features/display/ArtistSection";
+import { BleedGrantedReadout } from "@/features/display/BleedGrantedReadout";
 import { CardSpacingControl } from "@/features/display/CardSpacingControl";
 import { CatalogBrowseResults } from "@/features/display/CatalogBrowseResults";
 import { ConfidenceElement } from "@/features/display/ConfidenceElement";
@@ -254,6 +255,7 @@ import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { FinishFooter } from "@/features/display/FinishFooter";
 import { MarginProfileControl } from "@/features/display/MarginProfileControl";
 import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
+import { PageOffsetControl } from "@/features/display/PageOffsetControl";
 import { usePrePrintSaveGate } from "@/features/display/PrePrintSaveGate";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import {
@@ -333,6 +335,12 @@ interface DisplaySheetSettings {
   pageSize: keyof typeof PageSize;
   bleedEdgeMM: number;
   showCutLines: boolean;
+  // Registration compensation (PageOffsetControl.tsx) - plain, unpersisted component state, same
+  // as every other field here (see this file's own "known gap" note on why Page Setup state
+  // doesn't survive to the classic PDFGenerator). Defaults to 0: no correction until the user
+  // asks for one.
+  offsetXMM: number;
+  offsetYMM: number;
 }
 
 // Proposal H D1/D4/D6 (docs/proposals/proposal-h-display-layout-spec.md, amended by issue #286's
@@ -340,12 +348,15 @@ interface DisplaySheetSettings {
 // against US Letter throughout (279.4x215.9mm landscape), and A4's own 297x210mm landscape ratio
 // (1.414, vs Letter's 1.294) doesn't land on the same grid. STANDARD_BLEED_MARGIN_MM (3.175, the
 // MPC 1/8in convention) replaces the old BleedEdgeMM (3.048, an Epson-margin-shaped constant
-// inherited from upstream) as the default bleed edge - see D6's own fit table for why 3.175 only
-// fits a 4x2 sheet under the Borderless margin profile (marginProfileSlice.ts's own default).
+// inherited from upstream) as the default bleed edge - see the granted-vs-requested readout
+// (BleedGrantedReadout.tsx) for how much of that 3.175mm request the default Rear-feed margin
+// profile (marginProfileSlice.ts's own default) actually renders.
 const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   pageSize: "LETTER",
   bleedEdgeMM: STANDARD_BLEED_MARGIN_MM,
   showCutLines: true,
+  offsetXMM: 0,
+  offsetYMM: 0,
 };
 
 // Upper bound, in real CSS px, on every sheet's rendered width - was PagePreview's own fixed
@@ -2821,6 +2832,8 @@ export function DisplayPage() {
                       bleedEdgeMM={settings.bleedEdgeMM}
                       margins={margins}
                       spacing={spacing}
+                      offsetXMM={settings.offsetXMM}
+                      offsetYMM={settings.offsetYMM}
                       slots={sheet.slots}
                       showCutLines={settings.showCutLines}
                       maxWidthPx={sheetRenderWidthPx}
@@ -2981,18 +2994,29 @@ export function DisplayPage() {
 
                 {/* D5 (proposal-h-display-layout-spec.md) - the margin-profile control: no
                     `max` clamp on the Bleed edge input above (removed the old `max={BleedEdgeMM}`
-                    cap - 3.048mm, below the new 3.175mm default) since the task's own instruction
-                    is to WARN, never hard-clamp, when a bleed edge exceeds a profile's cap; this
-                    control surfaces that warning instead. */}
+                    cap - 3.048mm, below the new 3.175mm default) - a profile that can't fit the
+                    requested bleed still renders every card, just with less bleed on the crowded
+                    edge; the readout right below states exactly how much. */}
                 <MarginProfileControl
                   profile={marginProfile}
                   onChange={(profile: MarginProfileKey) =>
                     dispatch(setMarginProfile(profile))
                   }
-                  bleedEdgeMM={settings.bleedEdgeMM}
-                  pageWidthMM={sheetWidthMM}
-                  cardWidthMM={CardWidthMM}
-                  spacingColMM={spacing.col}
+                />
+
+                {/* Granted-vs-requested bleed readout - reads the SAME `layout` this section's
+                    own live sheet renders from (below), so it's always in sync with the current
+                    page size / margin profile / spacing / bleed-edge combination. */}
+                <BleedGrantedReadout
+                  requestedBleedMM={settings.bleedEdgeMM}
+                  grantedBleedMM={
+                    layout.slots[0]?.bleedMM ?? {
+                      top: 0,
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                    }
+                  }
                 />
 
                 <Form.Check
@@ -3019,6 +3043,23 @@ export function DisplayPage() {
                   spacing={spacing}
                   onChangeCol={(value) => dispatch(setCardSpacingCol(value))}
                   onChangeRow={(value) => dispatch(setCardSpacingRow(value))}
+                />
+
+                <PageOffsetControl
+                  offsetXMM={settings.offsetXMM}
+                  offsetYMM={settings.offsetYMM}
+                  onChangeX={(value) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      offsetXMM: value,
+                    }))
+                  }
+                  onChangeY={(value) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      offsetYMM: value,
+                    }))
+                  }
                 />
               </div>
 

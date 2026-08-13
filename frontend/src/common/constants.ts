@@ -26,14 +26,18 @@ export const DefaultCardSpacing: CardSpacingState = { row: 14.5, col: 0 };
 
 /**
  * Proposal H D5 (docs/proposals/proposal-h-display-layout-spec.md) - the /display Page Setup's
- * default margin profile: Borderless (0mm), which the Epson ET-8500/8550 supports up to Letter/
- * Legal (spec sheet CPD-59931R2) and is the only profile that fits the D6 default bleed
- * (3.175mm) alongside the D4 4x2 grid. `marginProfileSlice.ts`'s initial state and
+ * default margin profile: Rear-feed (3mm top/bottom, 20mm trailing edge). Borderless renders the
+ * largest theoretical bleed, but the ET-8500/8550 only actually loads Letter through its rear
+ * tray for this print run's paper stock - a fresh project's on-screen sheet should match the
+ * margins the printer really imposes, not the best case the hardware merely supports. The bleed
+ * this profile actually grants is small (see marginProfiles.ts's own D6 table) and the new
+ * granted-vs-requested readout (BleedGrantedReadout.tsx) is what makes that honest at a glance
+ * instead of silently assuming full bleed. `marginProfileSlice.ts`'s initial state and
  * `deckPayload.ts`'s legacy-payload backfill both import this single constant, mirroring
  * `DefaultCardSpacing`'s own precedent immediately above.
  */
 export const DefaultMarginProfile: MarginProfileState = {
-  profile: "borderless",
+  profile: "rearFeed",
 };
 
 export const ProjectName = "ProxyPrints";

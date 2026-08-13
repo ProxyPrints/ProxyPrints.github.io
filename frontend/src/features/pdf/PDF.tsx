@@ -232,6 +232,15 @@ export interface PDFProps {
   pageMarginBottomMM: number;
   pageMarginLeftMM: number;
   pageMarginRightMM: number;
+  // Registration compensation (PageOffsetControl.tsx, /display's right rail) - shifts the whole
+  // CardGrid container away from its otherwise-centered position, applied AFTER layoutForPage has
+  // already resolved card counts/granted bleed, never fed into that computation itself: it must
+  // never change either. Never clamped to the page's own margins/slack (a real printer
+  // correction can legitimately exceed them) - see CardGrid's own render for where this applies.
+  // Optional, additive, defaults to 0 (via `?? 0` at the one render site that reads it) so every
+  // existing caller (none of which set it yet) renders at the exact position it always did.
+  pageOffsetXMM?: number;
+  pageOffsetYMM?: number;
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
   projectMembers: Array<SlotProjectMembers>;
   projectCardback: string | undefined;
@@ -852,6 +861,8 @@ const CardGrid = ({
     pageMarginRightMM,
     pageMarginTopMM,
     pageMarginBottomMM,
+    pageOffsetXMM,
+    pageOffsetYMM,
   } = usePDFContext();
 
   const {
@@ -888,6 +899,12 @@ const CardGrid = ({
         height: containerHeight + "mm",
         alignSelf: "center",
         position: "relative" as const,
+        // Registration compensation - shifts this already-centered container, applied on top of
+        // (not instead of) the centering above. Never clamped: a negative margin here is exactly
+        // as valid as a positive one, and react-pdf/Yoga's flexbox honors it the same way a
+        // browser would.
+        marginLeft: (pageOffsetXMM ?? 0) + "mm",
+        marginTop: (pageOffsetYMM ?? 0) + "mm",
       }}
     >
       {/* Pass 0: page cut-line underlay — painted before all images so it is always on bottom */}

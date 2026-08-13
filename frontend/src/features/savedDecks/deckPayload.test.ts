@@ -256,14 +256,14 @@ describe("buildDeckPayload/projectFromDeckPayload - cardSpacing (D18/D19)", () =
 // Proposal H D5 (docs/proposals/proposal-h-display-layout-spec.md) - marginProfile persistence,
 // mirroring the cardSpacing (D18/D19) coverage above almost exactly.
 describe("buildDeckPayload/projectFromDeckPayload - marginProfile (D5)", () => {
-  test("buildDeckPayload defaults marginProfile to Borderless when the caller omits it - every pre-D5 call site keeps compiling with no changes", () => {
+  test("buildDeckPayload defaults marginProfile to Rear-feed when the caller omits it - every pre-D5 call site keeps compiling with no changes", () => {
     const content = buildDeckPayload(
       "My Deck",
       emptyProject,
       emptyFinishSettings,
       {}
     );
-    expect(content.marginProfile).toEqual({ profile: "borderless" });
+    expect(content.marginProfile).toEqual({ profile: "rearFeed" });
   });
 
   test("buildDeckPayload carries an explicitly-passed marginProfile value through verbatim", () => {
@@ -290,7 +290,7 @@ describe("buildDeckPayload/projectFromDeckPayload - marginProfile (D5)", () => {
     expect(marginProfile).toEqual({ profile: "bordered" });
   });
 
-  test("projectFromDeckPayload backfills the Borderless default marginProfile for a legacy (pre-D5) payload with no marginProfile field", () => {
+  test("projectFromDeckPayload backfills the Rear-feed default marginProfile for a legacy (pre-D5) payload with no marginProfile field", () => {
     const legacyPayload = {
       ...v1Payload("Legacy"),
       version: 2 as const,
@@ -298,7 +298,7 @@ describe("buildDeckPayload/projectFromDeckPayload - marginProfile (D5)", () => {
       modifiedAt: "2026-01-01T00:00:00.000Z",
     };
     const { marginProfile } = projectFromDeckPayload(legacyPayload);
-    expect(marginProfile).toEqual({ profile: "borderless" });
+    expect(marginProfile).toEqual({ profile: "rearFeed" });
   });
 
   test("a legacy payload's dirty-check baseline (deckContentForComparison) agrees with a freshly-rebuilt payload's default marginProfile - no false-dirty on load", () => {
