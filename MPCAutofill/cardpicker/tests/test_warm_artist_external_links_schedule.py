@@ -19,14 +19,15 @@ migrations, which would silently delete the row after the first test method ran.
 """
 
 import importlib
+from datetime import datetime
 from datetime import timezone as dt_timezone
 from types import ModuleType
+from unittest.mock import patch
 
 import pytest
 
 from django.apps import apps as django_apps
 from django.db import connection
-from django.utils import timezone
 
 MIGRATION_NAME = "0093_warm_artist_external_links_weekly_schedule"
 SCHEDULE_NAME = "warm_artist_external_links"
@@ -72,14 +73,41 @@ class TestWarmArtistExternalLinksScheduleMigration:
         assert schedule.func == "django.core.management.call_command"
         assert schedule.args == "'warm_artist_external_links'"
 
-    def test_next_run_is_exactly_midnight_utc_and_in_the_future(self):
+    def test_next_run_is_pinned_to_the_next_midnight_utc_after_apply_time(self):
         """
         THE point of this migration (see its own module docstring): `next_run` must be
         pinned to a real wall-clock slot, not left to django-q2's default-to-now
         behaviour, which would silently drift to whatever moment `migrate` happened to
         run.
+
+        Not "`next_run` is still in the future by the time this assertion happens to
+        run" - that raced wall-clock against total suite duration for no real benefit,
+        and a midnight-pinned `next_run` is *guaranteed* to be in the past by 00:02 UTC
+        on whatever day the suite happens to run, no matter how fast the rest of the
+        suite is (see `docs/troubleshooting.md`'s `test_next_run_is_in_the_future`
+        entry). django-q2's own `scheduler()` (`django_q/scheduler.py`) treats an
+        overdue `next_run` as completely routine - it fires the task on the next poll
+        tick and recalculates `next_run` from the schedule's own cadence from there,
+        exactly like any recurring schedule that missed a tick. A midnight `next_run`
+        observed a minute or two after midnight is behaving normally, not broken.
+
+        The actual invariant `create_schedule` promises is that `next_run` is pinned to
+        the next occurrence of 00:00 UTC strictly after apply-time - so freeze
+        apply-time instead of racing it. Same delete-and-recreate-under-a-controlled-
+        value technique `test_question_feed_pools_schedule.py`'s
+        `test_next_run_is_set_to_apply_time_plus_the_lane_cadence` uses.
         """
         from django_q.models import Schedule
+
+        module = migration_module()
+        # Noon, not midnight itself, so this also exercises `_next_midnight_utc`'s
+        # "roll to the next day" branch rather than its exact-boundary edge case.
+        frozen_now = datetime(2024, 1, 1, 12, 0, tzinfo=dt_timezone.utc)
+        expected_next_run = datetime(2024, 1, 2, 0, 0, tzinfo=dt_timezone.utc)
+
+        Schedule.objects.filter(name=SCHEDULE_NAME).delete()
+        with patch.object(module.timezone, "now", return_value=frozen_now):
+            module.create_schedule(django_apps, None)
 
         schedule = Schedule.objects.get(name=SCHEDULE_NAME)
         next_run = schedule.next_run
@@ -91,8 +119,11 @@ class TestWarmArtistExternalLinksScheduleMigration:
         # would still fail this test.
         as_utc = next_run.astimezone(dt_timezone.utc)
         assert (as_utc.hour, as_utc.minute, as_utc.second, as_utc.microsecond) == (0, 0, 0, 0)
+        assert next_run == expected_next_run
 
-        assert next_run > timezone.now()
+        # Restore the real-time row for any later test in this session.
+        Schedule.objects.filter(name=SCHEDULE_NAME).delete()
+        module.create_schedule(django_apps, None)
 
     def test_applying_twice_does_not_create_a_second_row(self):
         """
