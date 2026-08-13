@@ -316,6 +316,14 @@ export function getAutoTagChips(
 }
 
 /**
+ * `voteSurface` for the CardTagVote(s) selectCandidate (QuestionFeed.tsx) casts from
+ * getAutoTagChips above - distinct from any surface a voter's own deliberate tap uses, so the
+ * backend can recast these as VoteSource.IMPLICIT without touching a genuine tag-question
+ * answer (issue #790). Must match `views.AUTO_DERIVED_TAG_VOTE_SURFACE` exactly.
+ */
+export const AUTO_DERIVED_TAG_VOTE_SURFACE = "question-feed-auto-tag";
+
+/**
  * The /display art-picker FUNNEL's axis descriptor (funnel-spec.md F2, XF1) - a thin wrapper
  * over the exclusion groups/standalone chips above so the funnel can render one segmented
  * `ToggleButtonGroup` per axis (radio for an exclusive group, checkbox for Treatment) instead of

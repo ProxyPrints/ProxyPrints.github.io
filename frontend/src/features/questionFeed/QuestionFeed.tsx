@@ -78,6 +78,7 @@ import {
   initialChipStates,
 } from "@/features/attributeChips/AttributeChipPanel";
 import {
+  AUTO_DERIVED_TAG_VOTE_SURFACE,
   ChipVoteState,
   EXCLUSION_GROUPS,
   ExclusionGroup,
@@ -1046,7 +1047,7 @@ export function QuestionFeed() {
                 chip.tagName,
                 1,
                 "same-origin",
-                "question-feed"
+                AUTO_DERIVED_TAG_VOTE_SURFACE
               )
             )
           ).catch(() => undefined); // best-effort - a failed auto-tag shouldn't block advancing

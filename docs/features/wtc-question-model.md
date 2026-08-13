@@ -258,7 +258,12 @@ itself derives (`getAutoTagChips`), but now drops any derived chip the voter has
 explicitly contradicted in the same filter panel — directly (tapped it negative) or via an
 exclusion-group sibling (tapped a different value positive) — so a candidate kept visible only
 by the axis-independence rule above can't have its own attributes overwrite what the voter just
-stated.
+stated. **These auto-derived votes cast `VoteSource.IMPLICIT`, not `USER`** (issue #790,
+fixed 2026-08-13): they're a machine inference read off the candidate's own Scryfall metadata,
+not the voter's own assertion, so they carry implicit weight/cap/gate-exclusion rather than
+full human-backed weight — see [`printing-tags.md`](printing-tags.md)'s implicit-vote section
+for the mechanism. A voter's own direct answer to a tag/border/artist question elsewhere in
+this feed is unaffected and still casts `VoteSource.USER`.
 
 ### artist — kept for one case
 
