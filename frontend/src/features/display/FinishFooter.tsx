@@ -1,14 +1,13 @@
 /**
  * Proposal H ADDENDUM D9/F2 (docs/proposals/proposal-h-display-layout-spec.md, issue #275) - the
  * right-rail pinned Finish footer: `Save Deck` and `Print / Export →` as CO-EQUAL `btn-primary`
- * buttons of equal width side by side, a secondary `Export ▾` (`DisplayExportMenu.tsx`,
- * lightweight XML/Card Images/Decklist only) below them, and the compact "✓ Draft backed up
- * locally" note. Replaces the old three-button "Prepare Print footer" stack (Export ▾/Save PDF
- * to Google Drive/Generate PDF) - the memory-heavy Generate PDF and Save PDF to Google Drive
- * operations move OUT of this footer entirely, to the Print page (D10/pages/print.tsx), so this
- * footer itself can never trigger the OOM D9's own hard constraint warns about ("save deck
- * should come before PDF completes because we have to rely on clients available mem for the
- * PDF").
+ * buttons of equal width side by side, a secondary `Export ▾` (`DisplayExportMenu.tsx` - XML/
+ * Card Images/Decklist, plus this page's own inline PDF item, `DisplayExportPDF.tsx`) below
+ * them, and the compact "✓ Draft backed up locally" note. Replaces the old three-button "Prepare
+ * Print footer" stack (Export ▾/Save PDF to Google Drive/Generate PDF) - Save PDF to Google
+ * Drive stays on the Print page (D10/pages/print.tsx) only, so this footer itself can never
+ * trigger the OOM D9's own hard constraint warns about ("save deck should come before PDF
+ * completes because we have to rely on clients available mem for the PDF").
  *
  * `Save Deck` reuses useSaveDeckFlow.ts's own passphrase-setup/unlock/save modal chain (the same
  * one SavedDeckPanel.tsx's toolbar Save button already drives) - this component owns its OWN
@@ -30,6 +29,7 @@ import {
   OpenDownloadManagerButton,
 } from "@/features/download/DownloadManager";
 import { DisplayExportMenu } from "@/features/export/DisplayExportMenu";
+import { DisplaySheetExportSettings } from "@/features/pdf/displayPdfProps";
 import { useSaveDeckFlow } from "@/features/savedDecks/useSaveDeckFlow";
 import { useGetWhoamiQuery } from "@/store/api";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
@@ -42,11 +42,15 @@ interface FinishFooterProps {
   /** usePrePrintSaveGate's own `startPrintFlow` - runs the D9(3) persist-before-navigate sequence
    * before any PDF render begins. */
   onPrintClick: () => void;
+  /** DisplayPage's own local sheet settings, forwarded to DisplayExportMenu's PDF item so the
+   * rail's live Page Setup drives the exported file - see displayPdfProps.ts's own comment. */
+  sheetSettings: DisplaySheetExportSettings;
 }
 
 export function FinishFooter({
   hasBackedUpThisSession,
   onPrintClick,
+  sheetSettings,
 }: FinishFooterProps) {
   const { element, triggerSave, isAuthenticated, isProjectEmpty } =
     useSaveDeckFlow();
@@ -113,10 +117,10 @@ export function FinishFooter({
         </Button>
       </div>
       <div className="d-flex gap-2 align-items-center">
-        {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist,
-            unchanged and unforked; the ONLY export surface this footer still owns directly, per
-            D9's own "memory-heavy operations move OUT" line. */}
-        <DisplayExportMenu />
+        {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist, plus
+            this page's own PDF item (DisplayExportPDF.tsx), which downloads straight from the
+            rail's live sheet settings rather than opening the classic PDFGenerator modal. */}
+        <DisplayExportMenu sheetSettings={sheetSettings} />
         <OpenDownloadManagerButton
           handleClick={() => setShowDownloadManager(true)}
         />
