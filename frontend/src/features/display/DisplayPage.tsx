@@ -52,9 +52,11 @@
  * features/export/postExportContributionPrompt.ts + usePostExportContributionPrompt.ts's
  * success-detection and show-once-per-session logic. Originally mounted from BOTH this page's
  * own inline export (item 2, below) and PDFGenerator.tsx itself; issue #275 removed this page's
- * inline export entirely (see that issue's own module comment further down), so PDFGenerator.tsx
- * - now the sole place PDF generation happens, reached via the Print page (D10, pages/print.tsx)
- * - is this feature's only remaining mount.
+ * inline export pipeline (see that issue's own module comment further down), so PDFGenerator.tsx
+ * - reached via the Print page (D10, pages/print.tsx) - remained its only mount. This page's own
+ * PDF export item (DisplayExportPDF.tsx, added alongside issue #275's module comment below) does
+ * not mount this prompt; it reuses only the download plumbing PDFGenerator.tsx already shares
+ * via pdfDownload.tsx, not the wider surface this prompt lives on.
  *
  * Issue #238 (deck-input landing, design doc §4.1) - the `isProjectEmpty` early return used to
  * render only a plain "head to /editor" link, meaning this page could never start a project
@@ -79,9 +81,10 @@
  * Issue #241 (Export ▾ toolbar parity, design doc §5's export-beyond-PDF row) - the last of the
  * three toolbar-parity findings from the same audit. DisplayExportMenu.tsx composes the same
  * unchanged ExportXML/ExportImages/ExportDecklist Dropdown.Items Export.tsx already mounts on the
- * classic editor's own "Download" dropdown - same hooks, same gating selectors. ExportPDF.tsx's
- * own item is deliberately excluded, since PDF generation itself lives on the Print page (D10,
- * pages/print.tsx) now, not this one - see issue #275's own module comment further down.
+ * classic editor's own "Download" dropdown - same hooks, same gating selectors - plus this page's
+ * own PDF item, DisplayExportPDF.tsx (not the classic editor's modal-opening ExportPDF.tsx; see
+ * issue #275's own module comment further down for how it downloads straight from this page's
+ * live sheet state instead).
  *
  * Issue #266 (mobile responsive shell - docs/proposals' /display layout spec, owner-approved
  * 2026-07-21, §2/§4/§6 rows R1/R2/R4/R5/R6) replaced the single always-rendered `RailWrapper`
@@ -183,24 +186,28 @@
  * addendum, tracked as its own follow-up): the Print page's tab REORDER/new PDF default, and the
  * PDF tab's own preview removal - see `pages/print.tsx`'s own module comment.
  *
- * Known, deliberately-out-of-scope gap this leaves (documented, not silently accepted): this
- * page's own Page Setup controls (paper size/bleed edge/guides - plain `DisplaySheetSettings`
- * component state, never persisted) don't carry over to the Print page's classic `PDFGenerator`,
- * which has always had its own separate settings and doesn't read this page's margin-profile/
- * card-spacing redux slices either. A user who configures those here and then prints lands on a
- * PDFGenerator with its own unrelated defaults - a genuine settings-parity gap, out of scope for
- * this issue (D9/D10 resolve the SAVE-vs-PRINT ordering and the route linkage, not settings
- * portability), left for a future issue.
+ * `DisplayExportMenu.tsx`'s PDF item (`DisplayExportPDF.tsx`) closes the settings-parity gap
+ * this page's Export ▾ used to leave for PDF specifically: `displayPdfProps.ts` is the one
+ * adapter from this page's live `DisplaySheetSettings` + margin-profile/card-spacing/project
+ * redux state to the same `PDFProps` `PDF.tsx` already consumes, so a rail configured here (page
+ * size, bleed, guides, spacing, margins, registration offset) exports exactly that sheet - no
+ * modal, no second settings panel, no preview beyond the sheet itself. It reuses
+ * `pdfDownload.tsx`'s `useDownloadPDF` (the same download plumbing `pages/print.tsx`'s
+ * `PDFGenerator` uses) rather than reintroducing the removed item-2 inline pipeline; Save PDF to
+ * Google Drive and the post-export contribution prompt remain Print-page-only, unchanged.
  *
- * Editor-completion package, E19/X19 (lime rounded corner-only cut guides) inherits this exact
- * same gap: PagePreview.tsx's screenPresentation variant now renders the reference's lime corner
- * guides on THIS page's own live sheet (screen-only, gated on screenPresentation - PDFGenerator's
- * own fast preview is unaffected), but the REAL exported PDF's guide style is drawn by
- * PDFGenerator.tsx/PDF.tsx's own independent cutLineColor/cutLineShape settings on the Print page -
- * upstream already carries the corner-only geometry this needs (`CutLineCorner`, `cutLineShape:
- * "InsideOnly"` - confirmed by reading `upstream/master`'s `PDF.tsx` directly, not assumed), so no
- * new PDF engine work is required, only wiring a lime preset through - genuine screen/print parity
- * for the guide COLOR is blocked on the same settings-portability gap above, not attempted here.
+ * Known, deliberately-out-of-scope gap that remains for the separate Print page: this page's own
+ * Page Setup controls don't carry over to the Print page's classic `PDFGenerator`, which has
+ * always had its own separate settings and doesn't read this page's margin-profile/card-spacing
+ * redux slices either. A user who configures those here and then follows "Print / Export →"
+ * lands on a PDFGenerator with its own unrelated defaults for that OTHER surface - this page's
+ * own Export ▾ PDF item does not have this gap, since it reads the same live state directly.
+ *
+ * Editor-completion package, E19/X19 (lime rounded corner-only cut guides): PagePreview.tsx's
+ * screenPresentation variant renders the reference's lime corner guides on this page's own live
+ * sheet, and `displayPdfProps.ts` carries that same lime corner-only geometry into this page's
+ * own PDF export, so the exported file's cut lines match what the rail showed. The Print page's
+ * separate `PDFGenerator.tsx`/`PDF.tsx` settings are untouched and still default independently.
  */
 import styled from "@emotion/styled";
 import React, {
@@ -219,11 +226,13 @@ import Offcanvas, { OffcanvasPlacement } from "react-bootstrap/Offcanvas";
 import Row from "react-bootstrap/Row";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
+import { useDebounce } from "use-debounce";
 
 import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
+import { SourceType } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import {
   CardDocument,
@@ -285,13 +294,22 @@ import { ImportText } from "@/features/import/ImportText";
 import { ImportURL } from "@/features/import/ImportURL";
 import { ImportXML } from "@/features/import/ImportXML";
 import { InvalidIdentifiersStatus } from "@/features/invalidIdentifiers/InvalidIdentifiersStatus";
-import { STANDARD_BLEED_MARGIN_MM } from "@/features/pdf/bleedNormalize";
+import {
+  BleedPrior,
+  STANDARD_BLEED_MARGIN_MM,
+  willLikelyGenerateBleed,
+} from "@/features/pdf/bleedNormalize";
+import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
   PagePreviewSlotContent,
 } from "@/features/pdf/PagePreview";
-import { getPageSizeMM, PageSize } from "@/features/pdf/PDF";
+import {
+  getPageSizeMM,
+  isBleedNormalizationEligible,
+  PageSize,
+} from "@/features/pdf/PDF";
 import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { SearchSettings } from "@/features/searchSettings/SearchSettings";
 import { APICastImplicitVote, APIRetractImplicitVote } from "@/store/api";
@@ -312,6 +330,7 @@ import {
   deleteSlots,
   duplicateSlot,
   selectIsProjectEmpty,
+  selectManualOverrides,
   selectProjectCardback,
   selectProjectMember,
   selectProjectMembers,
@@ -333,6 +352,12 @@ import {
 
 interface DisplaySheetSettings {
   pageSize: keyof typeof PageSize;
+  // Portrait mm, same convention as pageSize.ts's own table - only read when pageSize is
+  // "CUSTOM" (see the paper-size Form.Select's own onChange, which seeds both together from
+  // whatever paper size was previously selected the moment the user picks Custom, and
+  // displayPdfProps.ts's own DisplaySheetExportSettings, which this interface mirrors).
+  customPageWidthMM?: number;
+  customPageHeightMM?: number;
   bleedEdgeMM: number;
   showCutLines: boolean;
   // Registration compensation (PageOffsetControl.tsx) - plain, unpersisted component state, same
@@ -2154,7 +2179,11 @@ export function DisplayPage() {
   // export's own page-size semantics, unchanged there) - swapping width/height here is what
   // makes THIS page's sheet landscape, per the design doc's own default. See the design doc's
   // §1 for the computeLayout() math confirming this yields a 4x2 grid at A4 + realistic bleed.
-  const portraitSize = getPageSizeMM(settings.pageSize, undefined, undefined);
+  const portraitSize = getPageSizeMM(
+    settings.pageSize,
+    settings.customPageWidthMM,
+    settings.customPageHeightMM
+  );
   const sheetWidthMM = portraitSize.height;
   const sheetHeightMM = portraitSize.width;
 
@@ -2313,6 +2342,52 @@ export function DisplayPage() {
   );
   const cardsPerPage = layout.cardsPerRow * layout.cardsPerCol;
 
+  // willLikelyGenerateBleed used to be reachable only from PDFGenerator.tsx's own fast preview
+  // (/print), so this sheet never showed which cards would have bleed synthesized at export -
+  // same eligibility rule and prior-resolution pattern as that surface's fastPreviewSlots, ported
+  // here so PagePreview's existing willGenerateBleed slot flag has a real signal to render on
+  // /display too. This page always exports at full-resolution (DisplayPage's own
+  // useDisplayPDFProps caller), matching the same "full-resolution" literal that surface assumes.
+  const manualOverrides = useAppSelector(selectManualOverrides);
+  const bleedEligibleIdentifiers = useMemo(
+    () =>
+      Object.values(cardDocumentsByIdentifier)
+        .filter(
+          (doc): doc is CardDocument =>
+            doc != null && isBleedNormalizationEligible(doc, "full-resolution")
+        )
+        .map((doc) => doc.identifier),
+    [cardDocumentsByIdentifier]
+  );
+  const [debouncedBleedEligibleIdentifiers] = useDebounce(
+    bleedEligibleIdentifiers,
+    500,
+    {
+      equalityFn: (a, b) =>
+        a.length === b.length && a.every((id, i) => id === b[i]),
+    }
+  );
+  const [bleedPriors, setBleedPriors] = useState<{
+    [identifier: string]: BleedPrior;
+  }>({});
+  useEffect(() => {
+    let cancelled = false;
+    if (backendURL == null || debouncedBleedEligibleIdentifiers.length === 0) {
+      setBleedPriors({});
+      return;
+    }
+    resolveBleedPriors(backendURL, debouncedBleedEligibleIdentifiers).then(
+      (priors) => {
+        if (!cancelled) {
+          setBleedPriors(priors);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [backendURL, debouncedBleedEligibleIdentifiers]);
+
   const pages = useMemo(
     () => paginateSlotsForDisplay(projectMembers, cardsPerPage),
     [projectMembers, cardsPerPage]
@@ -2403,6 +2478,25 @@ export function DisplayPage() {
               projectCardback != null &&
               entry.member.back?.selectedImage != null &&
               entry.member.back.selectedImage !== projectCardback,
+            willGenerateBleed: (() => {
+              const eligible =
+                cardDocument != null &&
+                isBleedNormalizationEligible(cardDocument, "full-resolution");
+              const prior =
+                cardDocument != null
+                  ? bleedPriors[cardDocument.identifier]
+                  : undefined;
+              const override =
+                cardDocument != null
+                  ? manualOverrides[cardDocument.identifier] ?? "auto"
+                  : "auto";
+              // Same "only render once there's a real signal to hedge on" gate
+              // fastPreviewSlots uses - an explicit override, or a resolved prior - so the
+              // badge never flickers wrong-then-right while the prior fetch is in flight.
+              return eligible && (override !== "auto" || prior != null)
+                ? willLikelyGenerateBleed(prior ?? "unresolved", override)
+                : undefined;
+            })(),
           };
           return content;
         }),
@@ -2414,6 +2508,8 @@ export function DisplayPage() {
       searchResultsLoading,
       flippedPreviewSlots,
       projectCardback,
+      bleedPriors,
+      manualOverrides,
     ]
   );
 
@@ -2952,22 +3048,85 @@ export function DisplayPage() {
                   size="sm"
                   className="mb-2"
                   value={settings.pageSize}
-                  onChange={(event) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      pageSize: event.target.value as keyof typeof PageSize,
-                    }))
-                  }
+                  onChange={(event) => {
+                    const nextPageSize = event.target
+                      .value as keyof typeof PageSize;
+                    setSettings((previous) => {
+                      // Seed Custom's own width/height together, the moment it's picked, from
+                      // whatever paper size was selected before - never an undefined pair that
+                      // getPageSizeMM/the export adapter would have to fall back on.
+                      if (
+                        nextPageSize === "CUSTOM" &&
+                        previous.customPageWidthMM === undefined
+                      ) {
+                        const seed = getPageSizeMM(
+                          previous.pageSize,
+                          undefined,
+                          undefined
+                        );
+                        return {
+                          ...previous,
+                          pageSize: nextPageSize,
+                          customPageWidthMM: seed.width,
+                          customPageHeightMM: seed.height,
+                        };
+                      }
+                      return { ...previous, pageSize: nextPageSize };
+                    });
+                  }}
                   aria-label="Paper size"
                 >
-                  {Object.keys(PageSize)
-                    .filter((key) => key !== "CUSTOM")
-                    .map((key) => (
-                      <option key={key} value={key}>
-                        {key} (landscape)
-                      </option>
-                    ))}
+                  {Object.keys(PageSize).map((key) => (
+                    <option key={key} value={key}>
+                      {key === "CUSTOM"
+                        ? PageSize.CUSTOM
+                        : `${key} (landscape)`}
+                    </option>
+                  ))}
                 </Form.Select>
+
+                {settings.pageSize === "CUSTOM" && (
+                  <div className="d-flex gap-2 align-items-center mb-2">
+                    <Form.Control
+                      type="number"
+                      size="sm"
+                      min={1}
+                      step={0.1}
+                      aria-label="Custom paper width (mm, portrait)"
+                      data-testid="display-custom-page-width"
+                      value={settings.customPageWidthMM ?? ""}
+                      onChange={(event) => {
+                        const value = parseFloat(event.target.value);
+                        if (!Number.isNaN(value)) {
+                          setSettings((previous) => ({
+                            ...previous,
+                            customPageWidthMM: value,
+                          }));
+                        }
+                      }}
+                    />
+                    <span className="text-muted small">×</span>
+                    <Form.Control
+                      type="number"
+                      size="sm"
+                      min={1}
+                      step={0.1}
+                      aria-label="Custom paper height (mm, portrait)"
+                      data-testid="display-custom-page-height"
+                      value={settings.customPageHeightMM ?? ""}
+                      onChange={(event) => {
+                        const value = parseFloat(event.target.value);
+                        if (!Number.isNaN(value)) {
+                          setSettings((previous) => ({
+                            ...previous,
+                            customPageHeightMM: value,
+                          }));
+                        }
+                      }}
+                    />
+                    <span className="text-muted small">mm, portrait</span>
+                  </div>
+                )}
 
                 <Form.Group className="mb-2">
                   <Form.Label className="small mb-1">
@@ -3108,6 +3267,7 @@ export function DisplayPage() {
               <FinishFooter
                 hasBackedUpThisSession={draftBackup.hasBackedUpThisSession}
                 onPrintClick={prePrintSaveGate.startPrintFlow}
+                sheetSettings={settings}
               />
             </div>
           </Offcanvas.Body>

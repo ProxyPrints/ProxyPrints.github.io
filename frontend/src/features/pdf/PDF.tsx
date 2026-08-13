@@ -13,6 +13,7 @@ import { chunk } from "@/common/utils";
 import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
 import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
 import { computeLayout, LayoutEdgeBleed } from "@/features/pdf/layout";
+import { getPageSizeMM, PageSize } from "@/features/pdf/pageSize";
 import {
   computeBleedCropMM,
   computeRenderedBleedMM,
@@ -27,6 +28,8 @@ import {
 } from "@/features/pdf/scm/scmLayout";
 import { SCMPDF } from "@/features/pdf/scm/SCMPDF";
 
+export { getPageSizeMM, PageSize };
+
 const PDFContext = createContext<PDFProps | undefined>(undefined);
 
 const usePDFContext = (): PDFProps => {
@@ -35,86 +38,6 @@ const usePDFContext = (): PDFProps => {
     throw new Error("Attempted to use pdfContext outside of provider");
   }
   return context;
-};
-
-// copy-pasted from react-pdf because they don't export this data
-// measured in PDF points
-const SIZES: { [key: string]: { width: number; height: number } } = {
-  "4A0": { width: 4767.87, height: 6740.79 },
-  "2A0": { width: 3370.39, height: 4767.87 },
-  A0: { width: 2383.94, height: 3370.39 },
-  A1: { width: 1683.78, height: 2383.94 },
-  A2: { width: 1190.55, height: 1683.78 },
-  A3: { width: 841.89, height: 1190.55 },
-  A4: { width: 595.28, height: 841.89 },
-  A5: { width: 419.53, height: 595.28 },
-  A6: { width: 297.64, height: 419.53 },
-  A7: { width: 209.76, height: 297.64 },
-  A8: { width: 147.4, height: 209.76 },
-  A9: { width: 104.88, height: 147.4 },
-  A10: { width: 73.7, height: 104.88 },
-  B0: { width: 2834.65, height: 4008.19 },
-  B1: { width: 2004.09, height: 2834.65 },
-  B2: { width: 1417.32, height: 2004.09 },
-  B3: { width: 1000.63, height: 1417.32 },
-  B4: { width: 708.66, height: 1000.63 },
-  B5: { width: 498.9, height: 708.66 },
-  B6: { width: 354.33, height: 498.9 },
-  B7: { width: 249.45, height: 354.33 },
-  B8: { width: 175.75, height: 249.45 },
-  B9: { width: 124.72, height: 175.75 },
-  B10: { width: 87.87, height: 124.72 },
-  C0: { width: 2599.37, height: 3676.54 },
-  C1: { width: 1836.85, height: 2599.37 },
-  C2: { width: 1298.27, height: 1836.85 },
-  C3: { width: 918.43, height: 1298.27 },
-  C4: { width: 649.13, height: 918.43 },
-  C5: { width: 459.21, height: 649.13 },
-  C6: { width: 323.15, height: 459.21 },
-  C7: { width: 229.61, height: 323.15 },
-  C8: { width: 161.57, height: 229.61 },
-  C9: { width: 113.39, height: 161.57 },
-  C10: { width: 79.37, height: 113.39 },
-  RA0: { width: 2437.8, height: 3458.27 },
-  RA1: { width: 1729.13, height: 2437.8 },
-  RA2: { width: 1218.9, height: 1729.13 },
-  RA3: { width: 864.57, height: 1218.9 },
-  RA4: { width: 609.45, height: 864.57 },
-  SRA0: { width: 2551.18, height: 3628.35 },
-  SRA1: { width: 1814.17, height: 2551.18 },
-  SRA2: { width: 1275.59, height: 1814.17 },
-  SRA3: { width: 907.09, height: 1275.59 },
-  SRA4: { width: 637.8, height: 907.09 },
-  EXECUTIVE: { width: 521.86, height: 756.0 },
-  FOLIO: { width: 612.0, height: 936.0 },
-  LEGAL: { width: 612.0, height: 1008.0 },
-  LETTER: { width: 612.0, height: 792.0 },
-  TABLOID: { width: 792.0, height: 1224.0 },
-} as const;
-
-const pdfPointsToMM = (pdfPoints: number) => (pdfPoints / 72) * 25.4;
-
-// Exported so the WYSIWYG page preview (PagePreview.tsx) can resolve the same page-size table
-// (Letter/A4/.../CUSTOM) the PDF generator itself uses, rather than duplicating this lookup.
-export const getPageSizeMM = (
-  pageSize: keyof typeof PageSize,
-  pageWidth: number | undefined,
-  pageHeight: number | undefined
-) => {
-  if (
-    pageSize === "CUSTOM" &&
-    pageWidth !== undefined &&
-    pageHeight !== undefined
-  ) {
-    return { width: pageWidth, height: pageHeight };
-  } else {
-    const pdfPointsSize =
-      SIZES[pageSize as keyof Omit<typeof PageSize, "CUSTOM">];
-    return {
-      width: pdfPointsToMM(pdfPointsSize.width),
-      height: pdfPointsToMM(pdfPointsSize.height),
-    };
-  }
 };
 
 // Thin wrapper over the shared computeLayout() - was previously two independently-tuned
@@ -174,15 +97,6 @@ const contextAvailableBleedMM = (ctx: PDFProps): LayoutEdgeBleed => {
   return layout.slots[0]?.bleedMM ?? ZERO_BLEED;
 };
 
-export const PageSize = {
-  A4: "A4",
-  A3: "A3",
-  LETTER: "LETTER",
-  LEGAL: "LEGAL",
-  TABLOID: "TABLOID",
-  CUSTOM: "Custom", // special case
-} as const;
-
 export const CutLinePlacement = {
   Inside: "Inside",
   Centre: "Centre",
@@ -201,6 +115,16 @@ export const CardSelectionMode = {
   frontsAndBacks: "Fronts + Backs",
   backsOnly: "Backs Only",
 } as const;
+
+// The mode a fresh export starts in. Must be a mode that emits a back for every card:
+// "Fronts + Distinct Backs" deliberately omits the shared project cardback (it is meant to be
+// printed in bulk once, not once per card), so a deck whose cards all share the project
+// cardback would export fronts-only with no warning - exactly the scenario the pre-print
+// cardback reminder gate warns about. "Fronts + Backs" emits every card's back, so a
+// shared-cardback deck still gets a duplex-printable file. Users who want the paper-saving
+// behaviour can still select "Fronts + Distinct Backs" explicitly.
+export const DEFAULT_CARD_SELECTION_MODE: keyof typeof CardSelectionMode =
+  "frontsAndBacks";
 
 // Create styles
 const styles = StyleSheet.create({
@@ -241,6 +165,13 @@ export interface PDFProps {
   // existing caller (none of which set it yet) renders at the exact position it always did.
   pageOffsetXMM?: number;
   pageOffsetYMM?: number;
+  // 1-indexed, inclusive; applied AFTER pagination has already resolved the full page set (see
+  // sliceToPageRange below) - never changes card selection, layout, or page count itself, only
+  // which of the already-computed pages are emitted. `undefined` on either bound means "no
+  // restriction on that end" - both undefined (every existing caller) exports every page, same
+  // as before this field existed.
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
   projectMembers: Array<SlotProjectMembers>;
   projectCardback: string | undefined;
@@ -1091,6 +1022,80 @@ export const CardSelectionModeToPaginator: {
   frontsAndBacks: paginateFrontsAndBacks,
 };
 
+// Everything CardSelectionModeToPaginator + the per-page chunking needs - the same subset both
+// the real render (PDF, below) and a caller that only wants the page COUNT (computePDFPageCount,
+// for a page-range control that must reflect the real total - see PDFProps.pageRangeStart/End's
+// own comment) require. Deliberately does not depend on pageRangeStart/pageRangeEnd - the range
+// slices this result, it never changes what this computes.
+type PDFPaginationInput = Pick<
+  PDFProps,
+  | "pageSize"
+  | "pageWidth"
+  | "pageHeight"
+  | "bleedEdgeMM"
+  | "cardSpacingRowMM"
+  | "cardSpacingColMM"
+  | "pageMarginTopMM"
+  | "pageMarginBottomMM"
+  | "pageMarginLeftMM"
+  | "pageMarginRightMM"
+  | "cardSelectionMode"
+  | "projectMembers"
+  | "cardDocumentsByIdentifier"
+  | "projectCardback"
+>;
+
+const computePDFPages = (
+  props: PDFPaginationInput
+): Array<Array<CardDocument>> => {
+  const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
+
+  const { cardsPerRow, cardsPerCol } = layoutForPage(
+    size.width,
+    size.height,
+    props.bleedEdgeMM,
+    props.cardSpacingRowMM,
+    props.cardSpacingColMM,
+    props.pageMarginTopMM,
+    props.pageMarginBottomMM,
+    props.pageMarginLeftMM,
+    props.pageMarginRightMM
+  );
+  const cardsPerPage = cardsPerRow * cardsPerCol;
+
+  const cardDocumentSets = CardSelectionModeToPaginator[
+    props.cardSelectionMode
+  ](
+    props.projectMembers,
+    props.cardDocumentsByIdentifier,
+    props.projectCardback,
+    cardsPerPage
+  );
+  return cardDocumentSets.flatMap((set) => chunk(set, cardsPerPage));
+};
+
+// The real, un-ranged page count a page-range control needs to show/clamp against (see
+// PDFProps.pageRangeStart/End's own comment on why the control can't know this up front) -
+// SCM mode paginates independently inside SCMPDF.tsx and isn't covered by this count.
+export const computePDFPageCount = (props: PDFPaginationInput): number =>
+  computePDFPages(props).length;
+
+// 1-indexed, inclusive bounds, clamped defensively against the real page count so an
+// out-of-range value (e.g. a stale range left over from a larger project) degrades to the
+// nearest valid page rather than producing an empty or out-of-bounds slice.
+const sliceToPageRange = (
+  pages: Array<Array<CardDocument>>,
+  pageRangeStart: number | undefined,
+  pageRangeEnd: number | undefined
+): Array<Array<CardDocument>> => {
+  if (pageRangeStart == null && pageRangeEnd == null) {
+    return pages;
+  }
+  const startIndex = Math.max(0, (pageRangeStart ?? 1) - 1);
+  const endIndex = Math.min(pages.length, pageRangeEnd ?? pages.length);
+  return pages.slice(startIndex, endIndex);
+};
+
 export const PDF = (props: PDFProps) => {
   if (props.scmMode) {
     return (
@@ -1116,29 +1121,11 @@ export const PDF = (props: PDFProps) => {
   }
 
   const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
-
-  const { cardsPerRow, cardsPerCol } = layoutForPage(
-    size.width,
-    size.height,
-    props.bleedEdgeMM,
-    props.cardSpacingRowMM,
-    props.cardSpacingColMM,
-    props.pageMarginTopMM,
-    props.pageMarginBottomMM,
-    props.pageMarginLeftMM,
-    props.pageMarginRightMM
+  const pages = sliceToPageRange(
+    computePDFPages(props),
+    props.pageRangeStart,
+    props.pageRangeEnd
   );
-  const cardsPerPage = cardsPerRow * cardsPerCol;
-
-  const cardDocumentSets = CardSelectionModeToPaginator[
-    props.cardSelectionMode
-  ](
-    props.projectMembers,
-    props.cardDocumentsByIdentifier,
-    props.projectCardback,
-    cardsPerPage
-  );
-  const pages = cardDocumentSets.flatMap((set) => chunk(set, cardsPerPage));
 
   return (
     <PDFContext.Provider value={props}>
