@@ -2445,6 +2445,21 @@ class TestRunFallbackCalculator:
         # a single VoteSource.OCR vote (weight 0.5) can never clear the human-backed gate alone.
         assert card.printing_tag_status == PrintingTagStatus.UNRESOLVED
 
+    def test_a_match_persists_evidence_types_used_onto_the_vote_itself(self, db):
+        """Issue #797: the skip branch already carried `verdict.evidence_types_used` out to
+        `CardScanLog` (see `test_skip_writes_a_scan_log_row` below) - a match discarded the same
+        field entirely until now. This is the first-time-ever write this issue's fix adds."""
+        printing = CanonicalCardFactory(
+            name="Some Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+        card, _ = self._no_hit_card(layout_class="black", artist_ocr_name="Rebecca Guay")
+
+        run_fallback_calculator(dry_run=False)
+
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID)
+        assert set(vote.evidence_types_used) == {"border", "artist"}
+
     def test_collector_line_evidence_leaves_every_skip_reason_and_vote_bit_identical_across_a_corpus(self, db):
         """The proof the owner ruling demands: a small corpus covering every outcome branch
         (match, eliminated, ambiguous, no-sub-check-evidence), each card built as a

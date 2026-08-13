@@ -41,8 +41,10 @@ is not true.
 ## 2. What the machine must have matched before we ask for a printing
 
 All four: **border, artist credit, set symbol, collector line.** Recorded, never inferred —
-`CardScanLog.evidence_types_used` is the field, and it must be populated for the claim to be
-made. The four values it can carry are `"border"`, `"artist"`, `"symbol"`, `"collector_line"`
+`evidence_types_used` is the field, and it must be populated for the claim to be made (issue
+#797, 2026-08-13: carried on the `CardPrintingTag` vote a confirmation would confirm, not on
+`CardScanLog` — see the correction note below §3's "Implemented" paragraph for why). The four
+values it can carry are `"border"`, `"artist"`, `"symbol"`, `"collector_line"`
 (`cardpicker.local_calculate_verdicts.calculate_fallback_verdict`, 2026-08-11). The first
 three FILTER `CandidatePrinting` survivors as well as being recorded; `collector_line` is
 RECORDED ONLY — "present" means `ImageEvidence.collector_line_collector_number` is non-empty
@@ -104,6 +106,22 @@ cold LANE structure and their pools are otherwise unchanged; only tier 1's gate 
 fixed, no-longer-weighted) waterfall order changed. See `cardpicker.question_feed`'s own
 "Evidence-gated printing-confirmation policy" docstring for the mechanism and this PR's report
 for the measured before/after served mix.
+
+**Correction (issue #797, 2026-08-13):** at #766's ratification the gate above read
+`CardScanLog.evidence_types_used`, scoped to the fallback calculator's own writer id. That
+reader was structurally unreachable for the population the gate governs: the fallback
+calculator's MATCH outcome — the one that produces the `CardPrintingTag` vote a confirmation
+would confirm — never writes a `CardScanLog` row at all (only a SKIP does), so a card with a
+machine printing suggestion had no row for the gate to find, ever. Measured 2026-08-11, 0 of
+110,130 confirm-eligible cards cleared it. The fix moved `evidence_types_used` onto
+`CardPrintingTag` itself, populated by `run_fallback_calculator` on a match exactly as the skip
+branch already populates the sibling `CardScanLog` field, and the gate now reads that column off
+the specific vote a confirmation would confirm rather than a card-level `CardScanLog` lookup —
+a card with several machine votes can therefore have some clear the gate and others not. The
+skip path's own `CardScanLog` write, and everything else in §2/§3, is unchanged. Historical
+votes (cast before this field existed, and every join-key/deductive-backfill vote, which share
+no evidence vocabulary with the fallback calculator) carry `evidence_types_used=null` and fail
+the gate exactly like an empty list does, until a future backfill pass populates them.
 
 **Likely-resolve pool routing (2026-08-12):** the likely-resolve pool (a printing question one
 more agreeing human vote would resolve, per `is_likely_resolve_printing`) does not
