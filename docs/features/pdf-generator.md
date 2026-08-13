@@ -517,15 +517,19 @@ sheet is the only place left that needs to show it.
   `frontend/src/features/export/usePostExportContributionPrompt.ts`,
   `frontend/src/features/export/PostExportContributionPrompt.tsx` — issue
   #166's post-export contribution prompt
-- `frontend/tests/PDFGenerator.spec.ts` — mocked-CDN Playwright coverage for
-  bug 4 (preview warning, confirm-gated download/cancel, and a real-image
-  success-path regression check)
-- `frontend/tests/PostExportContributionPrompt.spec.ts` — issue #166
-  coverage against this component's one remaining live mount, `/print`'s
-  PDF tab (re-homed there from the classic "Print!" tab in the 2026-07-24
-  parked-spec port wave, issue #272 — the second, `/display`-inline-export
-  surface this file used to also cover was already retired by issue #275,
-  above)
+- Editor export rescue (docs' own "Editor-native PDF export" section, below):
+  once `Print / Export` stopped navigating anywhere, `/print` lost its last
+  in-app entry point (`pages/print.tsx`'s own comment — only a direct/
+  bookmarked URL reaches it, always with an empty project), so
+  `PDFGenerator.tsx`'s bug-4 (image-fetch failures) and issue #166
+  (post-export contribution prompt) Playwright coverage — `PDFGenerator.spec.ts`,
+  `PagePreview.spec.ts`, `PostExportContributionPrompt.spec.ts`,
+  `PDFWaitExperience.spec.ts` — was dropped rather than ported: none of it
+  has a reachable equivalent on `/editor`'s own inline export
+  (`DisplayExportPDF.tsx`/`pdfDownload.tsx` never mount `PDFWaitPanel.tsx`,
+  the component these files' progress-bar/game-embed assertions targeted).
+  See `.github/coverage-acks.txt`'s "Editor export rescue, continued" entry
+  for the full reasoning.
 - `frontend/src/features/pdf/pdfDownload.tsx`, `frontend/src/features/pdf/pageSize.ts`
   — shared download plumbing and page-size table, factored out of
   `PDFGenerator.tsx`/`PDF.tsx` respectively so `/editor`'s own PDF export
