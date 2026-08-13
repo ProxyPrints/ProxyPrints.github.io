@@ -43,6 +43,20 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   jpgQuality: 100,
   cutLineColor: "#8ae234",
   cutLineShape: "InsideOnly",
+  cutLinePlacement: "Inside",
+  cutLineLengthMM: 3,
+  cutLineThicknessMM: 0.6,
+  cutLineOffsetMM: 0,
+  roundCorners: false,
+  marginOverride: undefined,
+  scmMode: false,
+  scmPaperSize: "letter",
+  scmVariant: "default",
+  scmRegistration: 3,
+  scmDuplex: true,
+  scmOffsetXMM: 0,
+  scmOffsetYMM: 0,
+  scmOffsetAngleDeg: 0,
 };
 
 const EMPTY_DOCS: { [identifier: string]: undefined } = {};
@@ -125,17 +139,35 @@ describe("buildDisplayPDFProps - page size and grid match the rail's live sheet"
     expect(props.pageWidth).toBeCloseTo(a4Portrait.height, 5);
     expect(props.pageHeight).toBeCloseTo(a4Portrait.width, 5);
   });
+
+  it("a Custom rail page size exports at exactly the entered portrait dimensions, swapped", () => {
+    const props = buildDisplayPDFProps({
+      ...baseInput,
+      sheetSettings: {
+        ...DEFAULT_SHEET_SETTINGS,
+        pageSize: "CUSTOM",
+        customPageWidthMM: 100,
+        customPageHeightMM: 150,
+      },
+    });
+    expect(props.pageSize).toBe("CUSTOM");
+    // Landscape rule swap, same as every other page size: portrait height becomes the
+    // exported width, portrait width becomes the exported height.
+    expect(props.pageWidth).toBeCloseTo(150, 5);
+    expect(props.pageHeight).toBeCloseTo(100, 5);
+  });
 });
 
 describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut lines", () => {
   it("showCutLines: true -> drawCardCutLines: true (and the default lime corner-only geometry)", () => {
     const props = buildDisplayPDFProps(baseInput);
     expect(props.drawCardCutLines).toBe(true);
-    // Colour/shape come from exportSettings now (real controls); placement/length/thickness/
-    // offset stay adapter defaults, matching PagePreview's E19 lime corner-only guides.
     expect(props.cutLineColor).toBe("#8ae234");
     expect(props.cutLineShape).toBe("InsideOnly");
     expect(props.cutLinePlacement).toBe("Inside");
+    expect(props.cutLineLengthMM).toBe(3);
+    expect(props.cutLineThicknessMM).toBe(0.6);
+    expect(props.cutLineOffsetMM).toBe(0);
   });
 
   it("showCutLines: false -> drawCardCutLines: false", () => {
@@ -150,17 +182,36 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
     expect(buildDisplayPDFProps(baseInput).drawPageCutLines).toBe(false);
   });
 
-  it("cut line colour and shape map straight through from export settings", () => {
+  it("cut line colour, shape, placement, and geometry all map straight through from export settings", () => {
     const props = buildDisplayPDFProps({
       ...baseInput,
       exportSettings: {
         ...DEFAULT_EXPORT_SETTINGS,
         cutLineColor: "#ff0000",
         cutLineShape: "Cross",
+        cutLinePlacement: "Outside",
+        cutLineLengthMM: 5,
+        cutLineThicknessMM: 1,
+        cutLineOffsetMM: 0.5,
       },
     });
     expect(props.cutLineColor).toBe("#ff0000");
     expect(props.cutLineShape).toBe("Cross");
+    expect(props.cutLinePlacement).toBe("Outside");
+    expect(props.cutLineLengthMM).toBe(5);
+    expect(props.cutLineThicknessMM).toBe(1);
+    expect(props.cutLineOffsetMM).toBe(0.5);
+  });
+});
+
+describe("buildDisplayPDFProps - corner rounding maps straight through", () => {
+  it("defaults to square (false), and reads true when set", () => {
+    expect(buildDisplayPDFProps(baseInput).roundCorners).toBe(false);
+    const props = buildDisplayPDFProps({
+      ...baseInput,
+      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, roundCorners: true },
+    });
+    expect(props.roundCorners).toBe(true);
   });
 });
 
@@ -181,6 +232,27 @@ describe("buildDisplayPDFProps - live editor state maps through", () => {
     });
     expect(bordered.pageMarginTopMM).toBe(3);
     expect(bordered.pageMarginRightMM).toBe(3);
+  });
+
+  it("an explicit margin override replaces the profile's margins for this export only", () => {
+    const props = buildDisplayPDFProps({
+      ...baseInput,
+      marginProfile: "borderless",
+      exportSettings: {
+        ...DEFAULT_EXPORT_SETTINGS,
+        marginOverride: { top: 1, bottom: 2, left: 3, right: 4 },
+      },
+    });
+    expect(props.pageMarginTopMM).toBe(1);
+    expect(props.pageMarginBottomMM).toBe(2);
+    expect(props.pageMarginLeftMM).toBe(3);
+    expect(props.pageMarginRightMM).toBe(4);
+    // The "borderless" profile itself (all-zero margins) is unaffected by the override - only
+    // this call's OWN output changed.
+    expect(
+      buildDisplayPDFProps({ ...baseInput, marginProfile: "borderless" })
+        .pageMarginTopMM
+    ).toBe(0);
   });
 
   it("card spacing maps straight through", () => {
@@ -285,10 +357,9 @@ describe("buildDisplayPDFProps - export settings map straight through", () => {
   });
 });
 
-describe("buildDisplayPDFProps - named defaults for fields with no editor equivalent", () => {
-  it("corners stay square and SCM mode stays off", () => {
+describe("buildDisplayPDFProps - SCM mode maps straight through", () => {
+  it("defaults to off, with the standard SCM baseline values", () => {
     const props = buildDisplayPDFProps(baseInput);
-    expect(props.roundCorners).toBe(false);
     expect(props.scmMode).toBe(false);
     expect(props.scmPaperSize).toBe("letter");
     expect(props.scmVariant).toBe("default");
@@ -297,5 +368,30 @@ describe("buildDisplayPDFProps - named defaults for fields with no editor equiva
     expect(props.scmOffsetXMM).toBe(0);
     expect(props.scmOffsetYMM).toBe(0);
     expect(props.scmOffsetAngleDeg).toBe(0);
+  });
+
+  it("every SCM sub-setting maps straight through from export settings when scmMode is on", () => {
+    const props = buildDisplayPDFProps({
+      ...baseInput,
+      exportSettings: {
+        ...DEFAULT_EXPORT_SETTINGS,
+        scmMode: true,
+        scmPaperSize: "a4",
+        scmVariant: "borderless",
+        scmRegistration: 4,
+        scmDuplex: false,
+        scmOffsetXMM: 1.5,
+        scmOffsetYMM: -0.5,
+        scmOffsetAngleDeg: 0.25,
+      },
+    });
+    expect(props.scmMode).toBe(true);
+    expect(props.scmPaperSize).toBe("a4");
+    expect(props.scmVariant).toBe("borderless");
+    expect(props.scmRegistration).toBe(4);
+    expect(props.scmDuplex).toBe(false);
+    expect(props.scmOffsetXMM).toBe(1.5);
+    expect(props.scmOffsetYMM).toBe(-0.5);
+    expect(props.scmOffsetAngleDeg).toBe(0.25);
   });
 });
