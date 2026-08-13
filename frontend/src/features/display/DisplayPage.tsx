@@ -226,11 +226,13 @@ import Offcanvas, { OffcanvasPlacement } from "react-bootstrap/Offcanvas";
 import Row from "react-bootstrap/Row";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
+import { useDebounce } from "use-debounce";
 
 import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
+import { SourceType } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import {
   CardDocument,
@@ -292,13 +294,22 @@ import { ImportText } from "@/features/import/ImportText";
 import { ImportURL } from "@/features/import/ImportURL";
 import { ImportXML } from "@/features/import/ImportXML";
 import { InvalidIdentifiersStatus } from "@/features/invalidIdentifiers/InvalidIdentifiersStatus";
-import { STANDARD_BLEED_MARGIN_MM } from "@/features/pdf/bleedNormalize";
+import {
+  BleedPrior,
+  STANDARD_BLEED_MARGIN_MM,
+  willLikelyGenerateBleed,
+} from "@/features/pdf/bleedNormalize";
+import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
   PagePreviewSlotContent,
 } from "@/features/pdf/PagePreview";
-import { getPageSizeMM, PageSize } from "@/features/pdf/PDF";
+import {
+  getPageSizeMM,
+  isBleedNormalizationEligible,
+  PageSize,
+} from "@/features/pdf/PDF";
 import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { SearchSettings } from "@/features/searchSettings/SearchSettings";
 import { APICastImplicitVote, APIRetractImplicitVote } from "@/store/api";
@@ -319,6 +330,7 @@ import {
   deleteSlots,
   duplicateSlot,
   selectIsProjectEmpty,
+  selectManualOverrides,
   selectProjectCardback,
   selectProjectMember,
   selectProjectMembers,
@@ -2320,6 +2332,52 @@ export function DisplayPage() {
   );
   const cardsPerPage = layout.cardsPerRow * layout.cardsPerCol;
 
+  // willLikelyGenerateBleed used to be reachable only from PDFGenerator.tsx's own fast preview
+  // (/print), so this sheet never showed which cards would have bleed synthesized at export -
+  // same eligibility rule and prior-resolution pattern as that surface's fastPreviewSlots, ported
+  // here so PagePreview's existing willGenerateBleed slot flag has a real signal to render on
+  // /display too. This page always exports at full-resolution (DisplayPage's own
+  // useDisplayPDFProps caller), matching the same "full-resolution" literal that surface assumes.
+  const manualOverrides = useAppSelector(selectManualOverrides);
+  const bleedEligibleIdentifiers = useMemo(
+    () =>
+      Object.values(cardDocumentsByIdentifier)
+        .filter(
+          (doc): doc is CardDocument =>
+            doc != null && isBleedNormalizationEligible(doc, "full-resolution")
+        )
+        .map((doc) => doc.identifier),
+    [cardDocumentsByIdentifier]
+  );
+  const [debouncedBleedEligibleIdentifiers] = useDebounce(
+    bleedEligibleIdentifiers,
+    500,
+    {
+      equalityFn: (a, b) =>
+        a.length === b.length && a.every((id, i) => id === b[i]),
+    }
+  );
+  const [bleedPriors, setBleedPriors] = useState<{
+    [identifier: string]: BleedPrior;
+  }>({});
+  useEffect(() => {
+    let cancelled = false;
+    if (backendURL == null || debouncedBleedEligibleIdentifiers.length === 0) {
+      setBleedPriors({});
+      return;
+    }
+    resolveBleedPriors(backendURL, debouncedBleedEligibleIdentifiers).then(
+      (priors) => {
+        if (!cancelled) {
+          setBleedPriors(priors);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [backendURL, debouncedBleedEligibleIdentifiers]);
+
   const pages = useMemo(
     () => paginateSlotsForDisplay(projectMembers, cardsPerPage),
     [projectMembers, cardsPerPage]
@@ -2410,6 +2468,25 @@ export function DisplayPage() {
               projectCardback != null &&
               entry.member.back?.selectedImage != null &&
               entry.member.back.selectedImage !== projectCardback,
+            willGenerateBleed: (() => {
+              const eligible =
+                cardDocument != null &&
+                isBleedNormalizationEligible(cardDocument, "full-resolution");
+              const prior =
+                cardDocument != null
+                  ? bleedPriors[cardDocument.identifier]
+                  : undefined;
+              const override =
+                cardDocument != null
+                  ? manualOverrides[cardDocument.identifier] ?? "auto"
+                  : "auto";
+              // Same "only render once there's a real signal to hedge on" gate
+              // fastPreviewSlots uses - an explicit override, or a resolved prior - so the
+              // badge never flickers wrong-then-right while the prior fetch is in flight.
+              return eligible && (override !== "auto" || prior != null)
+                ? willLikelyGenerateBleed(prior ?? "unresolved", override)
+                : undefined;
+            })(),
           };
           return content;
         }),
@@ -2421,6 +2498,8 @@ export function DisplayPage() {
       searchResultsLoading,
       flippedPreviewSlots,
       projectCardback,
+      bleedPriors,
+      manualOverrides,
     ]
   );
 

@@ -116,6 +116,16 @@ export const CardSelectionMode = {
   backsOnly: "Backs Only",
 } as const;
 
+// The mode a fresh export starts in. Must be a mode that emits a back for every card:
+// "Fronts + Distinct Backs" deliberately omits the shared project cardback (it is meant to be
+// printed in bulk once, not once per card), so a deck whose cards all share the project
+// cardback would export fronts-only with no warning - exactly the scenario the pre-print
+// cardback reminder gate warns about. "Fronts + Backs" emits every card's back, so a
+// shared-cardback deck still gets a duplex-printable file. Users who want the paper-saving
+// behaviour can still select "Fronts + Distinct Backs" explicitly.
+export const DEFAULT_CARD_SELECTION_MODE: keyof typeof CardSelectionMode =
+  "frontsAndBacks";
+
 // Create styles
 const styles = StyleSheet.create({
   section: {
@@ -155,6 +165,13 @@ export interface PDFProps {
   // existing caller (none of which set it yet) renders at the exact position it always did.
   pageOffsetXMM?: number;
   pageOffsetYMM?: number;
+  // 1-indexed, inclusive; applied AFTER pagination has already resolved the full page set (see
+  // sliceToPageRange below) - never changes card selection, layout, or page count itself, only
+  // which of the already-computed pages are emitted. `undefined` on either bound means "no
+  // restriction on that end" - both undefined (every existing caller) exports every page, same
+  // as before this field existed.
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
   projectMembers: Array<SlotProjectMembers>;
   projectCardback: string | undefined;
@@ -1005,6 +1022,80 @@ export const CardSelectionModeToPaginator: {
   frontsAndBacks: paginateFrontsAndBacks,
 };
 
+// Everything CardSelectionModeToPaginator + the per-page chunking needs - the same subset both
+// the real render (PDF, below) and a caller that only wants the page COUNT (computePDFPageCount,
+// for a page-range control that must reflect the real total - see PDFProps.pageRangeStart/End's
+// own comment) require. Deliberately does not depend on pageRangeStart/pageRangeEnd - the range
+// slices this result, it never changes what this computes.
+type PDFPaginationInput = Pick<
+  PDFProps,
+  | "pageSize"
+  | "pageWidth"
+  | "pageHeight"
+  | "bleedEdgeMM"
+  | "cardSpacingRowMM"
+  | "cardSpacingColMM"
+  | "pageMarginTopMM"
+  | "pageMarginBottomMM"
+  | "pageMarginLeftMM"
+  | "pageMarginRightMM"
+  | "cardSelectionMode"
+  | "projectMembers"
+  | "cardDocumentsByIdentifier"
+  | "projectCardback"
+>;
+
+const computePDFPages = (
+  props: PDFPaginationInput
+): Array<Array<CardDocument>> => {
+  const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
+
+  const { cardsPerRow, cardsPerCol } = layoutForPage(
+    size.width,
+    size.height,
+    props.bleedEdgeMM,
+    props.cardSpacingRowMM,
+    props.cardSpacingColMM,
+    props.pageMarginTopMM,
+    props.pageMarginBottomMM,
+    props.pageMarginLeftMM,
+    props.pageMarginRightMM
+  );
+  const cardsPerPage = cardsPerRow * cardsPerCol;
+
+  const cardDocumentSets = CardSelectionModeToPaginator[
+    props.cardSelectionMode
+  ](
+    props.projectMembers,
+    props.cardDocumentsByIdentifier,
+    props.projectCardback,
+    cardsPerPage
+  );
+  return cardDocumentSets.flatMap((set) => chunk(set, cardsPerPage));
+};
+
+// The real, un-ranged page count a page-range control needs to show/clamp against (see
+// PDFProps.pageRangeStart/End's own comment on why the control can't know this up front) -
+// SCM mode paginates independently inside SCMPDF.tsx and isn't covered by this count.
+export const computePDFPageCount = (props: PDFPaginationInput): number =>
+  computePDFPages(props).length;
+
+// 1-indexed, inclusive bounds, clamped defensively against the real page count so an
+// out-of-range value (e.g. a stale range left over from a larger project) degrades to the
+// nearest valid page rather than producing an empty or out-of-bounds slice.
+const sliceToPageRange = (
+  pages: Array<Array<CardDocument>>,
+  pageRangeStart: number | undefined,
+  pageRangeEnd: number | undefined
+): Array<Array<CardDocument>> => {
+  if (pageRangeStart == null && pageRangeEnd == null) {
+    return pages;
+  }
+  const startIndex = Math.max(0, (pageRangeStart ?? 1) - 1);
+  const endIndex = Math.min(pages.length, pageRangeEnd ?? pages.length);
+  return pages.slice(startIndex, endIndex);
+};
+
 export const PDF = (props: PDFProps) => {
   if (props.scmMode) {
     return (
@@ -1030,29 +1121,11 @@ export const PDF = (props: PDFProps) => {
   }
 
   const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
-
-  const { cardsPerRow, cardsPerCol } = layoutForPage(
-    size.width,
-    size.height,
-    props.bleedEdgeMM,
-    props.cardSpacingRowMM,
-    props.cardSpacingColMM,
-    props.pageMarginTopMM,
-    props.pageMarginBottomMM,
-    props.pageMarginLeftMM,
-    props.pageMarginRightMM
+  const pages = sliceToPageRange(
+    computePDFPages(props),
+    props.pageRangeStart,
+    props.pageRangeEnd
   );
-  const cardsPerPage = cardsPerRow * cardsPerCol;
-
-  const cardDocumentSets = CardSelectionModeToPaginator[
-    props.cardSelectionMode
-  ](
-    props.projectMembers,
-    props.cardDocumentsByIdentifier,
-    props.projectCardback,
-    cardsPerPage
-  );
-  const pages = cardDocumentSets.flatMap((set) => chunk(set, cardsPerPage));
 
   return (
     <PDFContext.Provider value={props}>
