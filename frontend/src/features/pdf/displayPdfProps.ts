@@ -27,32 +27,32 @@
  *
  * ## Named defaults
  *
- * Every `PDFProps` field with no editor equivalent yet — quality/DPI, corner rounding, cut-line
- * geometry, SCM settings, and page selection mode — gets an explicit named default HERE, the one
- * place those defaults live. Each is named so a later PR can replace it with a real rail control
- * without touching any other file:
+ * Every `PDFProps` field with no editor equivalent yet — corner rounding, cut-line placement/
+ * length/thickness/offset, SCM settings, and page cut lines — gets an explicit named default
+ * HERE, the one place those defaults live. Each is named so a later PR can replace it with a
+ * real rail control without touching any other file:
  *
- * - `imageQuality: "full-resolution"` / `imageDPI: 600` / `jpgQuality: 100` — same full-res
- *   export pipeline `PDFGenerator.tsx`'s own download path uses (`fullResolutionPDFProps`).
- * - `cardSelectionMode: "frontsAndDistinctBacks"` — the classic export default (fronts +
- *   distinct backs). The rail's Fronts/Backs toggle (`viewSettingsSlice.frontsVisible`) is a
- *   VIEW setting — which face the user is editing — not an export filter, so it is deliberately
- *   not mapped to a selection mode here.
+ * - `imageQuality: "full-resolution"` — same full-res export pipeline `PDFGenerator.tsx`'s own
+ *   download path uses (`fullResolutionPDFProps`). DPI and JPG quality themselves are real
+ *   controls now (`DisplayExportSettings.imageDPI`/`jpgQuality`), not defaulted here.
  * - `roundCorners: false`.
- * - Cut-line geometry is matched to the rail's own guide visual (`PagePreview.tsx`'s E19 lime
- *   corner-only guides: `#8ae234`, 3mm legs, 0.6mm stroke, inside placement), so the exported
- *   PDF's guides look like the guides the sheet showed — `cutLineColor: "#8ae234"`,
- *   `cutLineShape: "InsideOnly"`, `cutLinePlacement: "Inside"`, `cutLineLengthMM: 3`,
- *   `cutLineThicknessMM: 0.6`, `cutLineOffsetMM: 0`.
+ * - Cut-line placement/length/thickness/offset stay matched to the rail's own guide visual
+ *   (`PagePreview.tsx`'s E19 lime corner-only guides: 3mm legs, 0.6mm stroke, inside placement)
+ *   — `cutLinePlacement: "Inside"`, `cutLineLengthMM: 3`, `cutLineThicknessMM: 0.6`,
+ *   `cutLineOffsetMM: 0`. Colour and shape are real controls now
+ *   (`DisplayExportSettings.cutLineColor`/`cutLineShape`), not defaulted here.
  * - `drawPageCutLines: false` — the rail's single "Guides" toggle only ever drew the per-card
  *   corner guides (page cut lines were never part of this page's sheet).
  * - SCM mode is off: `scmMode: false` with the standard `scmPaperSize: "letter"`,
  *   `scmVariant: "default"`, `scmRegistration: 3`, `scmDuplex: true`,
  *   `scmOffsetXMM: 0`, `scmOffsetYMM: 0`, `scmOffsetAngleDeg: 0`.
  *
- * The two fields that DO have editor equivalents beyond the sheet settings — per-side page
- * margins (the rail's margin profile, `marginProfiles.ts`) and card spacing
- * (`cardSpacingSlice`) — are mapped from live state, never defaulted.
+ * Card selection mode, page range, image DPI/JPG quality, and cut-line colour/shape all come
+ * from `DisplayExportSettings` — the export affordance's own local state
+ * (`DisplayExportPDF.tsx`), not the sheet's. The two fields that DO have editor equivalents
+ * beyond the sheet settings — per-side page margins (the rail's margin profile,
+ * `marginProfiles.ts`) and card spacing (`cardSpacingSlice`) — are mapped from live state,
+ * never defaulted.
  */
 import {
   CardDocument,
@@ -63,7 +63,11 @@ import {
 import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
 import { ManualOverride } from "@/features/pdf/bleedNormalize";
 import { getPageSizeMM, PageSize } from "@/features/pdf/pageSize";
-import type { PDFProps } from "@/features/pdf/PDF";
+import type {
+  CardSelectionMode,
+  CutLineShape,
+  PDFProps,
+} from "@/features/pdf/PDF";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import { selectCardSpacing } from "@/store/slices/cardSpacingSlice";
 import { selectMarginProfile } from "@/store/slices/marginProfileSlice";
@@ -87,10 +91,25 @@ export interface DisplaySheetExportSettings {
   offsetYMM: number;
 }
 
+/** The export affordance's own settings (`DisplayExportPDF.tsx`) - export-time choices with no
+ * relationship to the sheet's own layout, so they live separately from
+ * `DisplaySheetExportSettings` above. `pageRangeStart`/`pageRangeEnd` are 1-indexed and inclusive
+ * (see `PDFProps.pageRangeStart`'s own comment); `undefined` on either means "all pages". */
+export interface DisplayExportSettings {
+  cardSelectionMode: keyof typeof CardSelectionMode;
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
+  imageDPI: number;
+  jpgQuality: number;
+  cutLineColor: string;
+  cutLineShape: keyof typeof CutLineShape;
+}
+
 /** Everything `buildDisplayPDFProps` reads — every source the adapter maps, named explicitly so
  * the pure function is trivially testable without a Redux store. */
 export interface DisplayPDFPropsInput {
   sheetSettings: DisplaySheetExportSettings;
+  exportSettings: DisplayExportSettings;
   marginProfile: MarginProfileKey;
   cardSpacing: { row: number; col: number };
   projectMembers: Array<SlotProjectMembers>;
@@ -102,7 +121,7 @@ export interface DisplayPDFPropsInput {
 export const buildDisplayPDFProps = (
   input: DisplayPDFPropsInput
 ): Omit<PDFProps, "fileHandles"> => {
-  const { sheetSettings } = input;
+  const { sheetSettings, exportSettings } = input;
   const margins = MARGIN_PROFILES[input.marginProfile].margins;
   // Landscape rule — see the module comment. Same portrait-table lookup + swap DisplayPage uses
   // for its own sheet, so the exported page is exactly the size the rail shows.
@@ -112,9 +131,9 @@ export const buildDisplayPDFProps = (
     undefined
   );
   return {
-    cardSelectionMode: "frontsAndDistinctBacks",
+    cardSelectionMode: exportSettings.cardSelectionMode,
     cutLinePlacement: "Inside",
-    cutLineShape: "InsideOnly",
+    cutLineShape: exportSettings.cutLineShape,
     pageSize: "CUSTOM",
     pageWidth: portraitSize.height,
     pageHeight: portraitSize.width,
@@ -125,7 +144,7 @@ export const buildDisplayPDFProps = (
     cutLineLengthMM: 3,
     cutLineOffsetMM: 0,
     cutLineThicknessMM: 0.6,
-    cutLineColor: "#8ae234",
+    cutLineColor: exportSettings.cutLineColor,
     cardSpacingRowMM: input.cardSpacing.row,
     cardSpacingColMM: input.cardSpacing.col,
     pageMarginTopMM: margins.top,
@@ -134,12 +153,14 @@ export const buildDisplayPDFProps = (
     pageMarginRightMM: margins.right,
     pageOffsetXMM: sheetSettings.offsetXMM,
     pageOffsetYMM: sheetSettings.offsetYMM,
+    pageRangeStart: exportSettings.pageRangeStart,
+    pageRangeEnd: exportSettings.pageRangeEnd,
     cardDocumentsByIdentifier: input.cardDocumentsByIdentifier,
     projectMembers: input.projectMembers,
     projectCardback: input.projectCardback,
     imageQuality: "full-resolution",
-    imageDPI: 600,
-    jpgQuality: 100,
+    imageDPI: exportSettings.imageDPI,
+    jpgQuality: exportSettings.jpgQuality,
     bleedOverrides: input.manualOverrides,
     scmMode: false,
     scmPaperSize: "letter",
@@ -154,10 +175,12 @@ export const buildDisplayPDFProps = (
 
 /** Live-state binding of `buildDisplayPDFProps`: reads the margin-profile / card-spacing /
  * project slices and the card-document map from Redux, leaving only `DisplayPage`'s own local
- * sheet settings to the caller (they are page-local state, not store state — see
- * `DisplayPage.tsx`'s own "known gap" note on why they never were persisted). */
+ * sheet settings and the export affordance's own local export settings to the caller (both are
+ * component-local state, not store state — see `DisplayPage.tsx`'s own "known gap" note on why
+ * sheet settings never were persisted; export settings follow the same precedent). */
 export const useDisplayPDFProps = (
-  sheetSettings: DisplaySheetExportSettings
+  sheetSettings: DisplaySheetExportSettings,
+  exportSettings: DisplayExportSettings
 ): Omit<PDFProps, "fileHandles"> => {
   const marginProfile = useAppSelector(selectMarginProfile).profile;
   const cardSpacing = useAppSelector(selectCardSpacing);
@@ -167,6 +190,7 @@ export const useDisplayPDFProps = (
   const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
   return buildDisplayPDFProps({
     sheetSettings,
+    exportSettings,
     marginProfile,
     cardSpacing,
     projectMembers,

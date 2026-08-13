@@ -353,10 +353,72 @@ already looking at makes one redundant, and rendering a second one live on
 this page would cost it the render budget it has to stay fast. The rail's
 "Guides" toggle (`DisplaySheetSettings.showCutLines`), which previously only
 drove `PagePreview`'s on-screen lime corner guides, now reaches the exported
-file's `drawCardCutLines` through this same adapter, with cut-line color/
-shape/placement defaults matching that on-screen guide style
-(`#8ae234`, `InsideOnly`, `Inside`) so the export looks like the sheet that
+file's `drawCardCutLines` through this same adapter, with cut-line
+placement/length/thickness/offset defaults matching that on-screen guide
+style (`InsideOnly`, `Inside`) so the export looks like the sheet that
 produced it.
+
+### Editor export controls (card selection, page range, quality, cut-line style)
+
+`displayPdfProps.ts`'s original defaults covered every `PDFProps` field the
+rail had no control for at all. Four of those are now real controls, owned
+by `DisplayExportPDF.tsx`'s own settings step (opened by clicking the
+Export ▾ menu's "PDF" item, shown before the actual download starts) rather
+than the right rail — these are choices about a given export RUN, not about
+the sheet's own layout, so they live with the export affordance itself. The
+`DisplayExportSettings` interface (`displayPdfProps.ts`) is this state's own
+shape; `buildDisplayPDFProps` maps it straight into the matching `PDFProps`
+fields, same as the rail's sheet settings.
+
+- **Card selection mode** — the four `CardSelectionMode` options
+  (`PDF.tsx`), each with a one-line explanation in the settings step, since
+  the names alone mislead ("Fronts + Distinct Backs" sounds like it emits
+  backs, and for a deck where every card uses the shared project cardback it
+  emits none). The starting value reads `DEFAULT_CARD_SELECTION_MODE`
+  (`PDF.tsx`) rather than a literal, so a change to that constant moves both
+  `/print` and `/editor` together.
+- **Page range** — `PDFProps.pageRangeStart`/`pageRangeEnd` (1-indexed,
+  inclusive, `undefined` on either bound meaning "no restriction on that
+  end"). `PDF.tsx`'s pagination itself is unchanged; a new `sliceToPageRange`
+  step slices the already-paginated `pages` array afterwards, clamped
+  defensively against the real count. That real count is what
+  `computePDFPageCount` (`PDF.tsx`, also exported) is for: pagination can
+  only run once page size, margins, spacing, bleed, and card selection mode
+  are all known, so the settings step calls this on its own live props to
+  show "N total" and bound the range inputs against a real number, rather
+  than letting a request outlive the actual page count.
+- **Image quality (DPI, JPG quality)** — `DisplayExportSettings.imageDPI`/
+  `jpgQuality`, sliders at the same 100–1500 DPI / 5–100% ranges `/print`'s
+  own `CardQualitySettings` panel uses, so output is comparable between the
+  two surfaces while both exist. A one-line note in the settings step names
+  the trade this makes explicit: higher DPI and quality print sharper but
+  cost a much larger file and a slower export.
+- **Cut-line colour and shape** — `DisplayExportSettings.cutLineColor`/
+  `cutLineShape`, shown only when the rail's Guides toggle is on (nothing to
+  style when no cut lines are drawn). These are the two settings that change
+  what a user actually SEES on the exported page; length, thickness, offset,
+  and placement are finer geometry adjustments that stay adapter defaults
+  for now — real controls for those are a later pass.
+
+### Bleed-normalization signal on the editor sheet
+
+`willLikelyGenerateBleed` (`bleedNormalize.ts`) — the cheap, preview-only
+hedge for whether export is expected to synthesize bleed for a given card —
+used to be reachable only from `PDFGenerator.tsx`'s own fast preview
+(`fastPreviewSlots`), so `/editor`'s sheet never showed the badge
+`PagePreview`'s `willGenerateBleed` slot flag already supports rendering.
+`DisplayPage.tsx` now resolves the same signal for its own sheet: bleed
+priors for every eligible card (`isBleedNormalizationEligible`, `PDF.tsx` —
+full-resolution Google Drive/local-file sources only, since this page always
+exports at full resolution) are fetched via `resolveBleedPriors`
+(`bleedPriorResolution.ts`) and debounced the same way the fast preview
+debounces its own identifier list, then combined with
+`projectSlice.manualOverrides` using the same "only render once there's a
+real signal to hedge on" gate the fast preview uses, so the badge never
+flickers wrong-then-right while a prior fetch is still in flight. This is a
+prerequisite for eventually retiring `/print`: once that page is deleted,
+`PDFGenerator.tsx`'s own copy of this wiring goes with it, and the editor
+sheet is the only place left that needs to show it.
 
 ## Key files
 
