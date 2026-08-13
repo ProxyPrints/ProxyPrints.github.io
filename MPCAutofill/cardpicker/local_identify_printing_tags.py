@@ -75,7 +75,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Optional, cast
+from typing import Any, Callable, Iterable, Literal, Optional, cast
 
 from PIL import Image
 
@@ -2328,6 +2328,36 @@ def verify_zero_resolutions(card_ids: list[int], batch_size: int = 2000) -> list
     return violations
 
 
+def run_fidelity_gate(
+    *,
+    run_id: str,
+    write: Callable[[str], None],
+    style_error: Optional[Callable[[str], str]] = None,
+) -> list[int]:
+    """
+    THE SHARED STAGE D FIDELITY GATE. Answers one question over every card a run_id cast a
+    CardPrintingTag vote for: did any of them reach a RESOLVED printing state on machine votes
+    alone? The answer must be zero. This is verify_zero_resolutions (above) plus the run-scoping
+    query that selects which cards to check it against, factored out so run_pipeline and
+    backfill_survivor_pks share ONE gate rather than each keeping its own copy that could drift.
+
+    Never rolls back, purges, or retracts anything - every row either command wrote stays written.
+    A violation is reported (via write, and returned so the caller can exit non-zero on it) - a
+    loud "read this run before trusting it", not an undo.
+    """
+    card_ids = list(CardPrintingTag.objects.filter(run_id=run_id).values_list("card_id", flat=True).distinct())
+    if not card_ids:
+        write("FIDELITY GATE: this run cast no printing votes - nothing to check.")
+        return []
+    violations = verify_zero_resolutions(card_ids)
+    if violations:
+        message = f"FIDELITY GATE VIOLATION: {len(violations)} card(s): {violations[:20]}"
+        write(style_error(message) if style_error is not None else message)
+    else:
+        write(f"FIDELITY GATE: clear over {len(card_ids)} cards.")
+    return violations
+
+
 __all__ = [
     "OCR_ANONYMOUS_ID",
     "UNFETCHABLE_IMAGE_SKIP_REASON",
@@ -2373,5 +2403,6 @@ __all__ = [
     "NameFrequencyResult",
     "run_name_frequency_elimination",
     "verify_zero_resolutions",
+    "run_fidelity_gate",
     "generate_run_id",
 ]
