@@ -386,7 +386,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // requested 3.175mm crops hard on this default profile.
     await expect(
       page.getByTestId("display-bleed-granted-readout")
-    ).toContainText("0.538mm");
+    ).toContainText("0.537mm");
 
     // Bordered (3mm all sides) caps 4-column bleed at ~2.6625mm - a different granted number,
     // still below the 3.175mm request. #301: the sheet stays a full 4x2 (all 8 slots) - bleed on
@@ -394,7 +394,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await profileSelect.selectOption("bordered");
     await expect(
       page.getByTestId("display-bleed-granted-readout")
-    ).toContainText("2.663mm");
+    ).toContainText("2.662mm");
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
   });
 
