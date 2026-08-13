@@ -14,6 +14,7 @@ import {
   localBackend,
   localBackendURL,
 } from "@/common/test-constants";
+import { AUTO_DERIVED_TAG_VOTE_SURFACE } from "@/features/attributeChips/attributeChips";
 import {
   questionFeedBorder,
   submitTagVoteResolvesToApply,
@@ -240,14 +241,23 @@ describe("QuestionFeed", () => {
         )
       )
     );
-    const autoTagCalls: Array<{ tagName: string; polarity: number }> = [];
+    const autoTagCalls: Array<{
+      tagName: string;
+      polarity: number;
+      voteSurface?: string;
+    }> = [];
     server.use(
       http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
         const body = (await request.json()) as {
           tagName: string;
           polarity: number;
+          voteSurface?: string;
         };
-        autoTagCalls.push({ tagName: body.tagName, polarity: body.polarity });
+        autoTagCalls.push({
+          tagName: body.tagName,
+          polarity: body.polarity,
+          voteSurface: body.voteSurface,
+        });
         return HttpResponse.json(
           {
             tagName: body.tagName,
@@ -277,6 +287,14 @@ describe("QuestionFeed", () => {
       "Black Border"
     );
     expect(autoTagCalls.every((call) => call.polarity === 1)).toBe(true);
+    // issue #790: a candidate-pick auto-tag carries its own surface, distinct from
+    // "question-feed" (which is reserved for a voter's own deliberate tag-question answer),
+    // so the backend can recast these as VoteSource.IMPLICIT.
+    expect(
+      autoTagCalls.every(
+        (call) => call.voteSurface === AUTO_DERIVED_TAG_VOTE_SURFACE
+      )
+    ).toBe(true);
   });
 
   it("selecting a candidate derives only its matched exclusion-group chips when every standalone attribute is false", async () => {
@@ -319,10 +337,15 @@ describe("QuestionFeed", () => {
       )
     );
     const autoTagCalls: string[] = [];
+    const autoTagVoteSurfaces: Array<string | undefined> = [];
     server.use(
       http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
-        const body = (await request.json()) as { tagName: string };
+        const body = (await request.json()) as {
+          tagName: string;
+          voteSurface?: string;
+        };
         autoTagCalls.push(body.tagName);
+        autoTagVoteSurfaces.push(body.voteSurface);
         return HttpResponse.json(
           {
             tagName: body.tagName,
@@ -353,6 +376,11 @@ describe("QuestionFeed", () => {
     expect(autoTagCalls.sort()).toEqual(
       ["Black Border", "Modern Border"].sort()
     );
+    expect(
+      autoTagVoteSurfaces.every(
+        (surface) => surface === AUTO_DERIVED_TAG_VOTE_SURFACE
+      )
+    ).toBe(true);
   });
 
   it("shows a distinct error state (not 'all caught up') on a fetch failure, with a working retry", async () => {

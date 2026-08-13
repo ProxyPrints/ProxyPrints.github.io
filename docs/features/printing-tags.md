@@ -404,6 +404,34 @@ printings, artists, tags, and moderation from one screen.
   — set by `tag_consensus.py`'s wrappers, never inferred from `source`
   inside the resolver itself (same "caller decides" convention
   `is_human_backed` already used).
+- **Question-feed candidate-pick auto-tag votes are also `VoteSource.IMPLICIT`**
+  (issue #790, fixed after being reopened once a narrower write-side fix
+  in #791 didn't reach the common untouched-chip-panel case): `QuestionFeed.tsx`'s `selectCandidate` derives one positive `CardTagVote`
+  per attribute the picked candidate's own Scryfall metadata carries true
+  (`attributeChips.ts`'s `getAutoTagChips`) and casts it on the voter's
+  behalf. The voter's click asserted "this is the printing," not "this
+  printing is black-bordered" — the second claim is a machine inference
+  read off the CANONICAL PRINTING, not an assertion about the physical
+  card, so it must not carry the voter's human-backed weight. Routed
+  through `views._cast_auto_derived_tag_vote_and_resolve` (shares its
+  guards with `_cast_implicit_vote_and_resolve` via the common
+  `_cast_implicit_sourced_vote_and_resolve`), stamped with
+  `vote_surface="question-feed-auto-tag"` (`views.AUTO_DERIVED_TAG_VOTE_SURFACE`) — deliberately distinct from `IMPLICIT_VOTE_SURFACE`
+  above even though both cast `VoteSource.IMPLICIT`, since the two are
+  different mechanisms (a filter-chip pick-under-active-filter signal vs.
+  a candidate pick's derived attribute chips) and must stay separable in
+  the vote history. `post_submit_tag_vote` decides the source
+  server-side from a fixed comparison against this constant — the client
+  can only ever downgrade its own vote to `IMPLICIT` by sending this exact
+  surface string, never claim a stronger source than `USER`. A voter's
+  own direct answer to a tag question (`BorderColorQuestion.tsx`, Level 3
+  exclusion-group picks, the "custom-art" no-match reason) is unaffected
+  and still casts `VoteSource.USER` under the existing `"question-feed"`
+  surface. Historical rows cast before this fix are `VoteSource.USER`
+  with `vote_surface="question-feed"`, indistinguishable from a genuine
+  tag-question answer — that contamination is not retroactively
+  correctable and is a known, unresolved consequence of the defect
+  window, not of this fix.
 - <a id="suggestedness-excludes-implicit"></a>**Suggested filter tags /
   suggestedness excludes implicit** (owner-ratified 2026-07-22, PR #325;
   formerly labeled decision _D6_ in this document; raw ratification

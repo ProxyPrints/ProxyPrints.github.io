@@ -1699,14 +1699,20 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
             f"Invalid polarity {req.polarity!r} - must be 1 (apply), -1 (not applicable), or 0 (retract)."
         )
 
-    _cast_tag_vote_and_resolve(
-        card=card,
-        tag=tag,
-        anonymous_id=req.anonymousId,
-        polarity=req.polarity,
-        user=_requesting_user(request),
-        vote_surface=req.voteSurface,
-    )
+    # A candidate-pick auto-tag carries VoteSource.IMPLICIT, not USER - see
+    # _cast_auto_derived_tag_vote_and_resolve. The source is decided here from a fixed
+    # server-side comparison, never taken from client input directly.
+    if req.voteSurface == AUTO_DERIVED_TAG_VOTE_SURFACE and req.polarity == VotePolarity.APPLY:
+        _cast_auto_derived_tag_vote_and_resolve(card=card, tag=tag, anonymous_id=req.anonymousId)
+    else:
+        _cast_tag_vote_and_resolve(
+            card=card,
+            tag=tag,
+            anonymous_id=req.anonymousId,
+            polarity=req.polarity,
+            user=_requesting_user(request),
+            vote_surface=req.voteSurface,
+        )
     return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
 
 
@@ -1756,6 +1762,13 @@ def _cast_tag_vote_and_resolve(
 # 2026-07-22 vote-weight scenario matrix).
 IMPLICIT_VOTE_SURFACE = "display-editor-filter"
 
+# `vote_surface` stamped on a positive CardTagVote auto-derived from a picked candidate's own
+# Scryfall printing metadata (QuestionFeed.tsx's selectCandidate -> getAutoTagChips, issue
+# #790). A distinct value from IMPLICIT_VOTE_SURFACE above - both are VoteSource.IMPLICIT, but
+# they are different mechanisms (a filter-chip pick-under-active-filter signal vs. a candidate
+# pick's derived attribute chips) and must stay separable in the vote history.
+AUTO_DERIVED_TAG_VOTE_SURFACE = "question-feed-auto-tag"
+
 # Persisted tag-vote statuses an implicit vote must never be cast against (owner-ratified
 # 2026-07-22 vote-weight scenario matrix, "write-side guards" / prior condition 8): a settled
 # or in-flight-for-moderation pair shouldn't accept a low-weight nudge in either direction.
@@ -1768,12 +1781,16 @@ _STATUSES_BLOCKING_IMPLICIT_VOTES = {
 }
 
 
-def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
+def _cast_implicit_sourced_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, vote_surface: str) -> None:
     """
-    Casts (or supersedes) one `VoteSource.IMPLICIT` vote for (card, tag, anonymous_id) - the
-    /editor filter-chip signal fired when a person picks a candidate card while that tag's
-    filter chip is active (docs/features/printing-tags.md's implicit-vote section). Silently a
-    no-op (never an error - a guarded tag is an entirely normal case, not a client mistake) when:
+    Casts (or supersedes) one positive `VoteSource.IMPLICIT` vote for (card, tag, anonymous_id),
+    stamped with the given `vote_surface` - the shared core behind `_cast_implicit_vote_and_resolve`
+    (the /editor filter-chip signal) and `_cast_auto_derived_tag_vote_and_resolve` (a question-feed
+    candidate pick's derived attribute chips, issue #790). Both mechanisms need the exact same
+    guards; only the surface differs, which is what keeps them separable in the vote history.
+
+    Silently a no-op (never an error - a guarded tag is an entirely normal case, not a client
+    mistake) when:
 
       - `tag` is SENSITIVE (docs/features/moderation.md's approval queue is the only path for
         those; never a passive selection signal);
@@ -1794,6 +1811,12 @@ def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> 
         vote at all yet - has nothing to lock; a true simultaneous double-create race there is a
         narrower, pre-existing gap shared with every other `update_or_create`/`get_or_create` call
         site in this module, not introduced by this function.)
+
+    `user` is always stamped `None`, never the requesting session's user: `moderation.
+    is_privileged_vote` grants privileged weight to a USER-sourced vote from a moderator's
+    account regardless of source, so a moderator's own implicit pick must not carry their user
+    FK through to an IMPLICIT row, or it would resolve at privileged weight instead of the
+    tiny implicit one.
 
     Re-runs `resolve_and_persist_tag_votes` in the same transaction as the write, same as
     `_cast_tag_vote_and_resolve`.
@@ -1819,10 +1842,32 @@ def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> 
                 "polarity": VotePolarity.APPLY,
                 "source": VoteSource.IMPLICIT,
                 "user": None,
-                "vote_surface": IMPLICIT_VOTE_SURFACE,
+                "vote_surface": vote_surface,
             },
         )
         resolve_and_persist_tag_votes(card)
+
+
+def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
+    """
+    The /editor filter-chip signal fired when a person picks a candidate card while a tag's
+    filter chip is active (docs/features/printing-tags.md's implicit-vote section). See
+    `_cast_implicit_sourced_vote_and_resolve` for the guards and write.
+    """
+    _cast_implicit_sourced_vote_and_resolve(card, tag, anonymous_id, vote_surface=IMPLICIT_VOTE_SURFACE)
+
+
+def _cast_auto_derived_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
+    """
+    A question-feed candidate pick's derived attribute chip (QuestionFeed.tsx's selectCandidate
+    -> getAutoTagChips, issue #790): the voter's click asserted "this is the printing", not
+    "this printing is black-bordered" - the second claim is a machine inference read off the
+    candidate's own Scryfall metadata, cast on the voter's behalf, and must not carry their
+    human-backed weight. Same guards as `_cast_implicit_vote_and_resolve` (see
+    `_cast_implicit_sourced_vote_and_resolve`), stamped with the distinct
+    `AUTO_DERIVED_TAG_VOTE_SURFACE` so the two mechanisms stay separable.
+    """
+    _cast_implicit_sourced_vote_and_resolve(card, tag, anonymous_id, vote_surface=AUTO_DERIVED_TAG_VOTE_SURFACE)
 
 
 def _retract_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
