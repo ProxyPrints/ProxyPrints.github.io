@@ -289,6 +289,132 @@ describe("PagePreview", () => {
   });
 });
 
+describe("PagePreview - page offset (registration compensation)", () => {
+  const slots = [
+    { imageUrl: "https://example.com/1.png", name: "Card 1" },
+    { imageUrl: "https://example.com/2.png", name: "Card 2" },
+  ];
+
+  it("omitting offsetXMM/offsetYMM leaves slot position identical to explicit 0/0 (default-unchanged)", () => {
+    const { rerender } = render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={slots}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const omittedLeft =
+      screen.getAllByTestId("page-preview-slot")[0].style.left;
+    const omittedTop = screen.getAllByTestId("page-preview-slot")[0].style.top;
+
+    rerender(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        offsetXMM={0}
+        offsetYMM={0}
+        slots={slots}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const explicitZeroSlot = screen.getAllByTestId("page-preview-slot")[0];
+    expect(explicitZeroSlot.style.left).toBe(omittedLeft);
+    expect(explicitZeroSlot.style.top).toBe(omittedTop);
+  });
+
+  it("shifts every slot's position by offsetXMM/offsetYMM without changing slot count", () => {
+    const { rerender } = render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={slots}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const baselineSlots = screen.getAllByTestId("page-preview-slot");
+    const baselineCount = baselineSlots.length;
+    const baselineLeft = parseFloat(baselineSlots[0].style.left);
+    const baselineTop = parseFloat(baselineSlots[0].style.top);
+
+    rerender(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        offsetXMM={7}
+        offsetYMM={-3}
+        slots={slots}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const offsetSlots = screen.getAllByTestId("page-preview-slot");
+    expect(offsetSlots).toHaveLength(baselineCount);
+    expect(parseFloat(offsetSlots[0].style.left)).toBeCloseTo(
+      baselineLeft + 7,
+      5
+    );
+    expect(parseFloat(offsetSlots[0].style.top)).toBeCloseTo(
+      baselineTop - 3,
+      5
+    );
+  });
+
+  it("does not clamp a large offset even when the layout's own slack is tiny", () => {
+    // A near-full-bleed card leaves almost no slack (~1mm) - a naive clamp-to-slack
+    // implementation would cap this offset at that tiny amount instead of applying it in full.
+    const tightMargins = { top: 3, bottom: 3, left: 3, right: 20 };
+    const { rerender } = render(
+      <PagePreview
+        pageWidthMM={279.4}
+        pageHeightMM={215.9}
+        bleedEdgeMM={3.175}
+        margins={tightMargins}
+        spacing={{ row: 14.5, col: 0 }}
+        slots={slots}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const baselineLeft = parseFloat(
+      screen.getAllByTestId("page-preview-slot")[0].style.left
+    );
+
+    rerender(
+      <PagePreview
+        pageWidthMM={279.4}
+        pageHeightMM={215.9}
+        bleedEdgeMM={3.175}
+        margins={tightMargins}
+        spacing={{ row: 14.5, col: 0 }}
+        offsetXMM={25}
+        slots={slots}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const offsetLeft = parseFloat(
+      screen.getAllByTestId("page-preview-slot")[0].style.left
+    );
+    expect(offsetLeft).toBeCloseTo(baselineLeft + 25, 5);
+  });
+});
+
 describe("PagePreview - bleed badge (Proposal B PR-3)", () => {
   it("renders the hedged badge when willGenerateBleed is true", () => {
     render(

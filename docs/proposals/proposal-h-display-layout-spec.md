@@ -1147,3 +1147,88 @@ prior-art/license grounding (§1, already independently captured in
 [`docs/upstreaming/license-provenance.md`](../upstreaming/license-provenance.md)
 and this file's own [Card-Spacing Control](#card-spacing-control) provenance
 note) — is superseded or duplicated and was not re-folded line-by-line.
+
+# ADDENDUM — bleed-granted readout, rear-feed default margin profile, and page offset
+
+Extends the base spec's [Margin Defaults](#margin-defaults-epson-et-8500)/
+[Default Bleed](#default-bleed-3175mm) sections and the polish round's
+[Card-Spacing Control](#card-spacing-control) precedent. Three related
+right-rail Page Setup changes, all in `DisplayPage.tsx`'s "Page Setup"
+section (§4.2).
+
+## B0. Granted-vs-requested bleed readout
+
+The Bleed edge (mm) input has always been a REQUEST — `computeLayout`
+(`features/pdf/layout.ts`) grants each axis up to that much bleed given the
+current page size, margin profile, and spacing, and crops to whatever the
+geometry actually affords when the request doesn't fit (see
+[Default Bleed](#default-bleed-3175mm)'s own table). Nothing on screen
+stated the granted number; a user could configure a bleed edge that renders
+at a fraction of what they asked for and never know it.
+
+`BleedGrantedReadout.tsx` reads `computeLayout`'s own returned
+`LayoutSlot.bleedMM` for the sheet's own live layout and states it
+directly, per axis (left/right and top/bottom — `fitAxisWithBleed`
+resolves bleed per axis, not per slot, so only two numbers ever apply). At
+US Letter landscape, 63×88mm cards, 3.175mm requested bleed, 0mm column /
+14.5mm row spacing:
+
+| Margin profile      | Granted horizontal (left/right)               | Granted vertical (top/bottom)     |
+| ------------------- | --------------------------------------------- | --------------------------------- |
+| Borderless          | 3.175mm (full request; 1.9mm slack covers it) | 3.175mm (full request)            |
+| Bordered            | 2.6625mm (cropped)                            | 3.175mm (full request)            |
+| Rear-feed (default) | 0.5375mm (cropped)                            | 3.175mm (cap binds; 19.3mm slack) |
+
+This replaces `MarginProfileControl.tsx`'s old boolean "bleed exceeds this
+profile's cap" warning — a number stating exactly how much bleed renders is
+strictly more useful than a flag stating only that it's less than
+requested. `marginProfiles.ts`'s `maxBleedForFourColumns` (the cap that
+warning used to compare against) still exists, unchanged in contract, but
+now reads `computeLayout`'s real output instead of re-deriving
+`fitAxisWithBleed`'s formula by hand — the two could never drift apart
+again even if the formula itself later changed.
+
+## B1. Rear-feed is now the default margin profile
+
+`DefaultMarginProfile` (`common/constants.ts`) changes from Borderless to
+Rear-feed. Borderless renders the largest bleed the printer's geometry can
+ever support, but the ET-8500/8550's rear tray — not borderless mode — is
+what this print run's paper stock actually feeds through; a fresh
+project's sheet should start showing the margins production really
+imposes, not the best case the hardware merely supports. Borderless stays
+fully selectable and its own numbers (B0's table) are unchanged — this only
+moves which option a NEW project, and a legacy saved deck with no
+`marginProfile` field at all, starts on.
+
+## B2. Page offset (registration compensation)
+
+A new "Page offset (mm)" control (`PageOffsetControl.tsx`) sits below Card
+Spacing in the same Page Setup section: independent Horizontal (X) /
+Vertical (Y) numeric inputs, mm, default 0. This is deliberately NOT a
+margin and is not fed into `computeLayout`'s fit math at all — it exists
+for a printer whose feed lands content off-centre on the physical sheet, so
+the whole grid needs nudging to land where it should. Unlike the margin
+profile (which changes how much of the page is printable) or card spacing
+(which changes the fit itself), the offset is applied to the container's
+position only AFTER the fit is resolved: card counts, granted bleed, and
+everything in B0's table are computed exactly as if the offset were zero,
+then the whole grid shifts.
+
+Consequently it is never clamped to the layout's own slack: on the default
+Rear-feed profile that slack is roughly 1mm per side (B0's table), while a
+real registration correction can be several times that — clamping to slack
+would silently make the control a no-op exactly when it's needed most.
+Content is allowed to move past the page's own nominal edges.
+
+`PDFProps` (`features/pdf/PDF.tsx`) gains `pageOffsetXMM`/`pageOffsetYMM` as
+additive optional fields (default 0), applied as a `marginLeft`/`marginTop`
+shift on the already-centered card grid container, so the export engine
+and the on-screen preview apply the same registration semantics.
+`PagePreview.tsx` gains matching `offsetXMM`/`offsetYMM` optional props,
+added to each slot's page-absolute position. As with every other Page
+Setup field on this page (paper size, bleed edge, margin profile — see
+§4.2's own component-relocation note), the /display screen preview is
+currently the only surface with a control for it; wiring it through to the
+classic PDFGenerator export panel shares the same pre-existing
+settings-portability gap that page's bleed edge and margin profile already
+have, not new scope here.

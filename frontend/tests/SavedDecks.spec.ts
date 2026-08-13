@@ -185,8 +185,9 @@ test.describe("saved decks", () => {
 
     await expect(page.getByTestId("display-empty-state")).toHaveCount(0);
     await expect(page.getByTestId("display-page")).toBeVisible();
-    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless
-    // margins + 3.175mm bleed + D18's spacing lands the spec's own 4x2 (8) grid.
+    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + the
+    // default Rear-feed margins + 3.175mm bleed + D18's spacing lands the spec's own 4x2 (8)
+    // grid.
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
   });
 

@@ -342,6 +342,13 @@ export interface PagePreviewProps {
    * `undefined` (every existing caller) renders with zero behavior change: no flip button at
    * all, same as before this round. */
   onSlotFlip?: (index: number) => void;
+  /** Registration compensation (PageOffsetControl.tsx) - added to every slot's page-absolute
+   * position AFTER `computeLayout` has already resolved the fit, never fed into `computeLayout`
+   * itself: it must never change card counts or granted bleed, and must never be clamped to the
+   * layout's own slack (a real correction can legitimately exceed it). Defaults to 0 so every
+   * existing caller renders at the exact position it always did. */
+  offsetXMM?: number;
+  offsetYMM?: number;
 }
 
 export function PagePreview({
@@ -358,6 +365,8 @@ export function PagePreview({
   screenPresentation = false,
   onSlotContextMenu,
   onSlotFlip,
+  offsetXMM = 0,
+  offsetYMM = 0,
 }: PagePreviewProps) {
   const layout = useMemo(
     () =>
@@ -423,8 +432,8 @@ export function PagePreview({
             key={index}
             index={index}
             content={slots[index]}
-            xMM={slot.xMM}
-            yMM={slot.yMM}
+            xMM={slot.xMM + offsetXMM}
+            yMM={slot.yMM + offsetYMM}
             slotWidthMM={slot.widthMM}
             slotHeightMM={slot.heightMM}
             bleedMM={slot.bleedMM}
