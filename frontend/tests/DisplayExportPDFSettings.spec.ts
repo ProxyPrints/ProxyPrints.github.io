@@ -90,6 +90,26 @@ const readNumPages = async (buffer: Buffer): Promise<number> => {
   return doc.numPages;
 };
 
+test.describe("DisplayExportPDF - Save PDF to Google Drive (rescued from /print's PDFGenerator.tsx)", () => {
+  test("the Drive button is absent when Drive isn't configured (this suite's own env), matching PDFGenerator.tsx's own isGoogleDriveAppConfigured() gate", async ({
+    page,
+    network,
+  }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    await openPDFSettings(page);
+    await expect(
+      page.getByTestId("display-export-pdf-drive-button")
+    ).toHaveCount(0);
+    // Absent rather than broken - Download PDF is still the sole, working action.
+    await expect(
+      page.getByTestId("display-export-pdf-download-button")
+    ).toBeVisible();
+  });
+});
+
 test.describe("DisplayExportPDF - editor export controls", () => {
   test("opens with a safe default selection mode and a real, non-guessed total page count", async ({
     page,
