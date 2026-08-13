@@ -202,6 +202,16 @@ export const CardSelectionMode = {
   backsOnly: "Backs Only",
 } as const;
 
+// The mode a fresh export starts in. Must be a mode that emits a back for every card:
+// "Fronts + Distinct Backs" deliberately omits the shared project cardback (it is meant to be
+// printed in bulk once, not once per card), so a deck whose cards all share the project
+// cardback would export fronts-only with no warning - exactly the scenario the pre-print
+// cardback reminder gate warns about. "Fronts + Backs" emits every card's back, so a
+// shared-cardback deck still gets a duplex-printable file. Users who want the paper-saving
+// behaviour can still select "Fronts + Distinct Backs" explicitly.
+export const DEFAULT_CARD_SELECTION_MODE: keyof typeof CardSelectionMode =
+  "frontsAndBacks";
+
 // Create styles
 const styles = StyleSheet.create({
   section: {
