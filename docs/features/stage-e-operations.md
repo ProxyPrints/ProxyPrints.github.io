@@ -446,17 +446,22 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    Phase 1's own review: no code path in `stage_e_dispatch.py` ever calls
    `acknowledge_trip` — resume is always `resolve_envelope_trip`'s own
    command, a fresh, explicit owner action (see the runbook above).
-3. **Load brake** (`cardpicker.stage_e_load_brake`, added 2026-08-05) —
-   before the fresh envelope sample below, re-samples `os.getloadavg()` on
-   its own account and, while the reading sits between
-   `settings.STAGE_E_HOST_LOAD_SOFT_CEILING` (default 6.0) and the hard
-   `operating_envelope.HOST_LOAD_CEILING` (7.0), sleeps and re-samples
-   rather than proceeding straight to the trip check. See "The host-load
-   soft brake" below for the full mechanism; the ordering guarantee that
-   matters here is that it runs after the no-self-resume gate (so it never
-   blocks a check of an already-open trip) and before both the fresh
-   envelope sample and the concurrency-cap slot acquire (so a braking
-   process holds no slot while it waits).
+3. **Load governor** (`cardpicker.stage_e_load_brake`, added 2026-08-05,
+   replaced with an AIMD control law 2026-08-13) — before the fresh
+   envelope sample below, re-samples `os.getloadavg()` on its own account
+   and adjusts this pass's own dispatch concurrency: below
+   `settings.STAGE_E_HOST_LOAD_SOFT_CEILING` (default 4.5) concurrency
+   climbs by one; between soft and the hard
+   `operating_envelope.HOST_LOAD_CEILING` (7.0) it holds, sleeping and
+   re-sampling; above hard it halves (floor 1) and backs off
+   proportionally to the overshoot, rather than proceeding straight to the
+   trip check. See "The host-load AIMD governor" below for the full
+   mechanism; the ordering guarantee that matters here is that it runs
+   after the no-self-resume gate (so it never blocks a check of an
+   already-open trip) and before both the fresh envelope sample and the
+   concurrency-cap slot acquire (so a governing process holds no slot
+   while it waits, and its chosen concurrency is what that slot acquire
+   below actually enforces).
 4. **Fresh envelope sample** — live host load (`os.getloadavg()`), this
    worker process's own RSS (`cardpicker.process_metrics.get_process_rss_mb`),
    and a rolling fetch-outcome window feed `check_envelope`. If THIS sample
@@ -472,11 +477,13 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
 6. **Concurrency-cap slot acquire** (companion change, 2026-07-24 —
    `cardpicker.stage_e_concurrency`) — refuses PROACTIVELY
    (`status="throttled-concurrency-cap"`, zero DB writes beyond the
-   advisory-lock check itself) once `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`
-   (default 2) dispatches are already running concurrently, anywhere across
-   this box's django-q2 worker processes. See "Concurrency cap" below for
-   the full mechanism and the incident that motivated it — distinct from,
-   and a proactive complement to, the envelope's own reactive host-load bar.
+   advisory-lock check itself) once step 3's own governor-chosen
+   concurrency (seeded from `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`,
+   default 2, then live-adjusted) worth of dispatches are already running
+   concurrently, anywhere across this box's django-q2 worker processes. See
+   "Concurrency cap" below for the full mechanism and the incident that
+   motivated it — distinct from, and a proactive complement to, the
+   envelope's own reactive host-load bar.
 7. **Stage C** (COMPUTE sequential, per-card, not pooled — a micro-batch is
    far too small for BULK mode's process-pool concurrency to help; FETCH
    overlapped with compute since 2026-07-25, issue #472 — see "Evidence
@@ -512,68 +519,119 @@ otherwise a card whose only sibling sits outside the batch silently loses it
 and nothing errors. PR #541's `run_d0_sibling_artist_propagation` scoping is
 the worked example of the second.
 
-### The host-load soft brake (2026-08-05)
+### The host-load AIMD governor (2026-08-05, replaced with an AIMD control law 2026-08-13)
 
 `operating_envelope.HOST_LOAD_CEILING` (7.0) is a binary cliff: the instant
 a fresh sample reads above it, the dispatch halts and demands a fresh owner
 action to resume (no self-resume, above). Two real passes tripped on narrow
 overshoots of that cliff a day apart (7.0796, then 7.17236328125 — 1.1% and
 2.5% over) despite the box otherwise running comfortably under load, each
-costing a stopped pipeline and a human interaction.
-`cardpicker.stage_e_load_brake` adds a throttle on approach, upstream of
-that cliff — it does not move the cliff itself, and every genuine breach
-still halts exactly as before.
+costing a stopped pipeline and a human interaction. A three-band soft brake
+shipped 2026-08-05 to throttle on approach, but it treated a two-second
+spike and an hour of real overload identically — any single reading above
+the cliff simply stopped braking and let the envelope trip, with no
+distinction between the two. That gap is what a 2026-08-13 incident hit: a
+9-hour backfill launched alongside several other host processes tripped on
+a momentary spike (load 7.0796-class overshoot; external sampling moments
+later already read 6.27) and halted permanently. `cardpicker.stage_e_load_brake`
+now implements additive-increase, multiplicative-decrease (AIMD) — the same
+control law TCP uses for congestion — with host load as the congestion
+signal and this pass's own dispatch concurrency as the throttle position.
+It still does not move the 7.0 cliff itself, and a genuinely sustained
+breach still halts.
 
 **Mechanism.** Step 3 of the ordering above re-samples `os.getloadavg()`
-independently of the envelope's own sample a moment later, and classifies
-the reading into a band:
+independently of the envelope's own sample a moment later, and responds
+according to the band the reading falls in:
 
-- `load < STAGE_E_HOST_LOAD_SOFT_CEILING` (default 6.0) — proceed
-  immediately. The common case; zero added cost.
-- `soft <= load <= HOST_LOAD_CEILING` — sleep, re-sample, repeat.
-- `load > HOST_LOAD_CEILING` — stop braking at once; the envelope's own
-  fresh sample, checked a moment later, trips honestly. The brake never
-  itself decides "trip" and never suppresses a genuine breach.
-- cumulative wait exceeds `STAGE_E_LOAD_BRAKE_MAX_WAIT_S` (default 240s) —
-  proceed anyway. Best-effort, and must never deadlock an unattended
-  multi-hour run.
+- `load < STAGE_E_HOST_LOAD_SOFT_CEILING` (default `4.5`) — ADDITIVE
+  INCREASE. Concurrency +1, bounded by `STAGE_E_GOVERNOR_CONCURRENCY_CAP`.
+  No sleep — a quiet box is used properly, not delayed on the way to using
+  it.
+- `soft <= load <= HOST_LOAD_CEILING` — HOLD, the intended equilibrium.
+  Concurrency unchanged; sleeps and re-samples (bounded by
+  `STAGE_E_LOAD_BRAKE_MAX_WAIT_S`, then proceeds anyway) exactly as the old
+  brake's own WAIT band did.
+- `load > HOST_LOAD_CEILING` — MULTIPLICATIVE DECREASE. If concurrency is
+  above its floor of 1, it halves and this call sleeps
+  `interval * (load - HOST_LOAD_CEILING)` (jittered) — proportional to the
+  overshoot, not a flat interval — then re-samples: a narrow, transient
+  spike recovers and returns without ever reaching the envelope's fresh
+  sample while load was still high, which is what makes a spike NOT trip.
+- **The new trip condition.** Concurrency is ALREADY at its floor of 1 and
+  load has stayed above the hard ceiling for
+  `STAGE_E_LOAD_GOVERNOR_SUSTAINED_TRIP_WINDOW_S` (default `120`, two of
+  `os.getloadavg()`'s own ~60s EWMA time constants) — the pass has
+  throttled as far as it can and the box is still overloaded, so that
+  overload is not this pass's own concurrency to shed. This state stops
+  governing at once (no further sleep) and lets the caller's own next
+  envelope sample — moments later, still reading above 7.0 — trip
+  honestly. The governor never itself persists a trip.
 
-**Why it reduces load rather than just delaying it.** The load a pass
-generates is mostly its own concurrency
-(`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`). When every resident
-dispatcher enters the band, each one pauses independently at its own next
-batch boundary — the resident process count falls, load decays, and they
-resume. The pass self-throttles down to whatever concurrency fits under the
-ceiling, continuously, instead of running at full concurrency until it hits
-the wall and halts.
+**Why concurrency, not just a delay.** The load a pass generates is mostly
+its own concurrency. Every resident dispatcher (django-q2 worker process,
+shakedown/pipeline driver) independently classifies the SAME shared
+`os.getloadavg()` reading and independently adjusts its own idea of how
+much concurrency to use, exactly as independent TCP flows sharing one
+bottleneck link converge on a fair split with no central coordinator — the
+shared signal IS the coordination. "Back off fast, recover slowly" (halve
+vs. +1) is the asymmetry that makes AIMD converge instead of oscillate.
+
+**Where the concurrency state lives.** A module-level global in
+`cardpicker.stage_e_load_brake`, seeded once per OS process from
+`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (now a SEED only, not an
+ongoing ceiling — `STAGE_E_GOVERNOR_CONCURRENCY_CAP` is the live ceiling).
+Safe with multiple resident dispatchers for the same reason a shared cache
+counter was already rejected for the concurrency cap itself (see
+"Concurrency cap" below): django-q2 workers are separate OS processes, so
+there is no shared memory to race over, and AIMD needs none — each process
+converges independently against the shared load signal. Within one
+process, dispatch calls are never concurrent with each other either (one
+task at a time per worker; every other caller drives `dispatch_micro_batch`
+synchronously in its own loop), so the module global needs no lock.
 
 **Jitter is load-bearing.** Every dispatcher reads the same global
 `os.getloadavg()`; without randomizing each sleep
-(`interval * uniform(0.75, 1.5)`), every braking process would back off and
-resume in lockstep — a sawtooth, and a thundering herd on every resume.
+(`interval * uniform(0.75, 1.5)`), every governing process would back off
+and resume in lockstep — a sawtooth, and a thundering herd on every resume.
 
-**Settings** (all default to values that make the brake active out of the
-box — no opt-in required):
+**Settings** (all default to values that make the governor active out of
+the box — no opt-in required):
 
-- `STAGE_E_HOST_LOAD_SOFT_CEILING` (default `6.0`) — the top of the band.
+- `STAGE_E_HOST_LOAD_SOFT_CEILING` (default `4.5`, moved down from the old
+  brake's `6.0`) — the top of the additive-increase band. Moved down to
+  leave room for concurrency to climb before load nears the ceiling at
+  all, not just room to notice the ceiling arriving.
 - `STAGE_E_LOAD_BRAKE_INTERVAL_S` (default `15`) — base sleep per
-  iteration, before jitter.
+  equilibrium-band iteration, before jitter, and the per-unit-of-overshoot
+  coefficient the above-ceiling backoff scales by.
 - `STAGE_E_LOAD_BRAKE_MAX_WAIT_S` (default `240`) — the absolute bound on
-  one dispatch call's cumulative brake time.
+  one dispatch call's cumulative time in the equilibrium band.
+- `STAGE_E_LOAD_GOVERNOR_SUSTAINED_TRIP_WINDOW_S` (default `120`) — how
+  long load must stay above the hard ceiling, with concurrency already at
+  its floor, before the governor stops backing off (the new trip
+  condition above).
+- `STAGE_E_GOVERNOR_CONCURRENCY_CAP` (default `os.cpu_count() - 1`, floored
+  at 1) — the live ceiling additive increase climbs to. Explicit and
+  configurable rather than left implicit: more concurrent dispatches means
+  more concurrent Postgres work, and Postgres also serves the live site —
+  one core held back is that reserve.
 
 **Seeing whether it engaged.** `DispatchOutcome.load_brake_waits`/
-`load_brake_seconds`, merged into `PilotRunLedger.counters` on every
-completed micro-batch (see "Observability" below) — both `0`/`0.0` when the
-brake never engaged, which is expected on a quiet box. A run showing
-non-zero values under contention and zero when the box is quiet is the
-brake behaving as designed, not a bug.
+`load_brake_seconds`, merged into `PilotRunLedger.counters` (alongside the
+new `load_governor_concurrency`) on every completed micro-batch (see
+"Observability" below) — waits/seconds are both `0`/`0.0` when the
+governor never slept, which is expected on a quiet box (additive increase
+never sleeps). A run showing non-zero wait values under contention and
+`load_governor_concurrency` tracking up on a quiet box, down under load, is
+the governor behaving as designed, not a bug.
 
-**Failure posture.** Wrapped in a bare `try`/`except` that proceeds as if
-unbraked on any error (a malformed setting, a transient `os.getloadavg`
-failure) — matching `stage_e_batch_sizing.resolve_micro_batch_size`'s own
-stated posture that a typo'd env var must not be able to take the run down.
-The brake is a convenience; the envelope's own hard ceiling does not depend
-on it.
+**Failure posture.** Wrapped in a bare `try`/`except` that proceeds
+unbraked at the LAST KNOWN GOOD concurrency on any error (a malformed
+setting, a transient `os.getloadavg` failure) — matching
+`stage_e_batch_sizing.resolve_micro_batch_size`'s own stated posture that a
+typo'd env var must not be able to take the run down. The governor is a
+convenience; the envelope's own hard ceiling does not depend on it.
 
 ### Evidence transfer and decoupled fetch-ahead (issues #473 PR-2 and #472, 2026-07-25)
 
@@ -1035,9 +1093,10 @@ streamed micro-batch" below; non-zero occasionally is healthy, not a bug),
 streaming conveyor), `stage_d_slow_path_routed`, `elapsed_s`, `peak_rss_mb` (via the same
 `process_metrics.get_process_rss_mb` Phase 1 wired in), `lockout_trip_id`
 (non-null only when a Google lockout tripped mid-batch), and
-`load_brake_waits`/`load_brake_seconds` (2026-08-05 — see "The host-load
-soft brake" below; both `0`/`0.0` whenever the brake never engaged for this
-batch, which is the common case). A halted call
+`load_brake_waits`/`load_brake_seconds`/`load_governor_concurrency`
+(2026-08-05, governor added 2026-08-13 — see "The host-load AIMD governor"
+below; waits/seconds are both `0`/`0.0` whenever the governor never slept
+for this batch, which is the common case on a quiet box). A halted call
 (`disabled`/`halted-open-trip`/`halted-new-trip`)
 writes NO ledger row at all — a halted dispatch never partially starts, so
 there's nothing to record beyond the `EnvelopeTrip` row `check_envelope`

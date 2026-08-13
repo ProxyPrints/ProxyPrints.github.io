@@ -179,18 +179,23 @@ def _open_dedicated_connection() -> "psycopg2.extensions.connection":
     return raw
 
 
-def _try_acquire_slot(conn: "psycopg2.extensions.connection") -> Optional[int]:
+def _try_acquire_slot(conn: "psycopg2.extensions.connection", max_slots: Optional[int] = None) -> Optional[int]:
     """
-    Tries every slot index in `[0, _slot_count())` in ascending order, on the given (dedicated)
-    connection, returning the first one whose `pg_try_advisory_lock` call succeeds, or `None` if
-    every slot is already held elsewhere. Never blocks - `pg_try_advisory_lock` is non-blocking by
-    design (unlike the plain `pg_advisory_lock`, which would queue), matching this primitive's own
-    "refuse immediately, never queue" posture - the same posture `operating_envelope.check_envelope`
-    already established for the envelope itself (a busy host should shed load, not build a backlog of
-    blocked dispatches waiting for a slot).
+    Tries every slot index in `[0, max_slots)` in ascending order, on the given (dedicated) connection,
+    returning the first one whose `pg_try_advisory_lock` call succeeds, or `None` if every slot is
+    already held elsewhere. `max_slots=None` (every existing caller before `cardpicker.stage_e_load_brake`'s
+    AIMD governor) falls back to `_slot_count()` - the static `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`
+    reading. A caller passing `max_slots` explicitly (the governor's own live-adjusted concurrency) has it
+    floored at 1, matching `_slot_count()`'s own "never let a misconfiguration make every dispatch
+    throttle forever" floor. Never blocks - `pg_try_advisory_lock` is non-blocking by design (unlike the
+    plain `pg_advisory_lock`, which would queue), matching this primitive's own "refuse immediately, never
+    queue" posture - the same posture `operating_envelope.check_envelope` already established for the
+    envelope itself (a busy host should shed load, not build a backlog of blocked dispatches waiting for
+    a slot).
     """
+    slot_count = _slot_count() if max_slots is None else max(1, max_slots)
     with conn.cursor() as cursor:
-        for slot in range(_slot_count()):
+        for slot in range(slot_count):
             cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", [_LOCK_NAMESPACE, slot])
             (acquired,) = cursor.fetchone()
             if acquired:
@@ -220,14 +225,21 @@ def _release_slot(conn: "psycopg2.extensions.connection", slot: int) -> None:
 
 
 @contextmanager
-def try_acquire_dispatch_slot() -> Iterator[Optional[int]]:
+def try_acquire_dispatch_slot(max_slots: Optional[int] = None) -> Iterator[Optional[int]]:
     """
     The primitive `stage_e_dispatch.dispatch_micro_batch` calls. Yields the acquired slot index (an
-    `int` in `[0, settings.STAGE_E_MAX_CONCURRENT_DISPATCHES)`), or `None` if every slot was already
-    held (or the dedicated connection itself couldn't be opened - see "FAIL-CLOSED ON
-    CONNECTION-CREATION FAILURE" in the module docstring) - the caller is expected to treat `None` as
-    "throttled, do no work this call", the same posture `current_trip() is not None` already gets in
+    `int` in `[0, max_slots)`, or `[0, settings.STAGE_E_MAX_CONCURRENT_DISPATCHES)` when `max_slots` is
+    omitted - see `_try_acquire_slot`'s own docstring), or `None` if every slot was already held (or
+    the dedicated connection itself couldn't be opened - see the FAIL-CLOSED ON CONNECTION-CREATION
+    FAILURE section in the module docstring) - the caller is expected to treat `None` as throttled, do
+    no work this call, the same posture `current_trip() is not None` already gets in
     `dispatch_micro_batch`'s own no-self-resume gate.
+
+    `max_slots` (`cardpicker.stage_e_load_brake.apply_load_governor`'s own live-adjusted concurrency,
+    added for the AIMD governor) overrides the static `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`
+    reading for this one call only - never persisted, never written back to settings. Every other
+    caller (every test in this module's own test file) keeps passing nothing, so the old
+    settings-driven behaviour is byte-identical when `max_slots` is omitted.
 
     Opens a DEDICATED connection for this call (`_open_dedicated_connection`) and ALWAYS closes it on
     exit, in a `finally`, whether the `with` block raises or not, and whether or not a slot was ever
@@ -249,7 +261,7 @@ def try_acquire_dispatch_slot() -> Iterator[Optional[int]]:
 
     slot: Optional[int] = None
     try:
-        slot = _try_acquire_slot(conn)
+        slot = _try_acquire_slot(conn, max_slots)
         yield slot
     finally:
         try:
