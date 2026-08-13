@@ -920,7 +920,11 @@ class TestConcurrencyCapIntegration:
         return raw
 
     @STREAMING_ON
-    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    # STAGE_E_GOVERNOR_CONCURRENCY_CAP=1 pins the AIMD governor's own ceiling to match this test's
+    # `cap=1` raw-connection setup - without it, `apply_load_governor`'s additive increase (the
+    # deterministically-pinned test load is always below the soft ceiling) would climb the seed
+    # of 1 straight to 2 on this call's own governor sample, before slot acquisition ever runs.
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1, STAGE_E_GOVERNOR_CONCURRENCY_CAP=1)
     def test_dispatch_is_throttled_when_the_only_slot_is_already_held(
         self, db: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1143,7 +1147,10 @@ class TestBackstopSweep:
         assert PilotRunLedger.objects.count() == 0  # halted before any batch ledger row was written
 
     @STREAMING_ON
-    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    # STAGE_E_GOVERNOR_CONCURRENCY_CAP=1 - same reasoning as TestConcurrencyCapIntegration's own
+    # identical override above: pins the governor's ceiling so its additive increase cannot climb
+    # past the single slot this test's raw connection holds.
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1, STAGE_E_GOVERNOR_CONCURRENCY_CAP=1)
     def test_sweep_stops_on_a_throttled_concurrency_cap_without_looping(
         self, db: Any, capsys: pytest.CaptureFixture
     ) -> None:

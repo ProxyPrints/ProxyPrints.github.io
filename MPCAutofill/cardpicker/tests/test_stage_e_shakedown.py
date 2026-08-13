@@ -418,7 +418,12 @@ class TestDriverStopsOnHaltOrThrottle:
         assert PilotRunLedger.objects.count() == 0
 
     @STREAMING_ON
-    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    # STAGE_E_GOVERNOR_CONCURRENCY_CAP=1 pins the AIMD governor's own ceiling to this test's
+    # single held slot - without it, `apply_load_governor`'s additive increase (test load is
+    # deterministically pinned below the soft ceiling) would climb concurrency past 1 before slot
+    # acquisition runs (see `test_stage_e_dispatch.py::TestConcurrencyCapIntegration`'s own
+    # identical fix for the full reasoning).
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1, STAGE_E_GOVERNOR_CONCURRENCY_CAP=1)
     def test_stops_on_a_throttled_concurrency_cap_without_looping(self, db: Any, capsys: pytest.CaptureFixture) -> None:
         cards = [CardFactory(content_phash=i) for i in range(1, 4)]
         for card in cards:
