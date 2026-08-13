@@ -22,37 +22,45 @@
  * swapped). Expressing that to `PDF.tsx` requires the `CUSTOM` page-size branch with the swapped
  * dimensions: `getPageSizeMM("CUSTOM", w, h)` returns exactly `{ width: w, height: h }`, so the
  * generated page carries the same landscape dimensions the rail's sheet shows. `pageSize` is
- * therefore always `"CUSTOM"` here; the rail's own selection (LETTER/A4/...) is what those
- * dimensions are computed FROM, via the same `getPageSizeMM` lookup the sheet itself uses.
+ * therefore always `"CUSTOM"` here; the rail's own selection (LETTER/A4/.../Custom) is what those
+ * dimensions are computed FROM, via the same `getPageSizeMM` lookup the sheet itself uses — for
+ * the rail's own `Custom` option, `getPageSizeMM` takes `sheetSettings.customPageWidthMM`/
+ * `customPageHeightMM` (portrait mm, same convention as every other table entry) straight through
+ * instead of looking them up.
  *
  * ## Named defaults
  *
- * Every `PDFProps` field with no editor equivalent yet — corner rounding, cut-line placement/
- * length/thickness/offset, SCM settings, and page cut lines — gets an explicit named default
- * HERE, the one place those defaults live. Each is named so a later PR can replace it with a
- * real rail control without touching any other file:
+ * `PDFProps` fields with no editor equivalent yet get an explicit named default HERE, the one
+ * place those defaults live, named so a later PR can replace one with a real rail control without
+ * touching any other file:
  *
  * - `imageQuality: "full-resolution"` — same full-res export pipeline `PDFGenerator.tsx`'s own
  *   download path uses (`fullResolutionPDFProps`). DPI and JPG quality themselves are real
- *   controls now (`DisplayExportSettings.imageDPI`/`jpgQuality`), not defaulted here.
- * - `roundCorners: false`.
- * - Cut-line placement/length/thickness/offset stay matched to the rail's own guide visual
- *   (`PagePreview.tsx`'s E19 lime corner-only guides: 3mm legs, 0.6mm stroke, inside placement)
- *   — `cutLinePlacement: "Inside"`, `cutLineLengthMM: 3`, `cutLineThicknessMM: 0.6`,
- *   `cutLineOffsetMM: 0`. Colour and shape are real controls now
- *   (`DisplayExportSettings.cutLineColor`/`cutLineShape`), not defaulted here.
+ *   controls (`DisplayExportSettings.imageDPI`/`jpgQuality`), not defaulted here.
  * - `drawPageCutLines: false` — the rail's single "Guides" toggle only ever drew the per-card
- *   corner guides (page cut lines were never part of this page's sheet).
- * - SCM mode is off: `scmMode: false` with the standard `scmPaperSize: "letter"`,
- *   `scmVariant: "default"`, `scmRegistration: 3`, `scmDuplex: true`,
- *   `scmOffsetXMM: 0`, `scmOffsetYMM: 0`, `scmOffsetAngleDeg: 0`.
+ *   corner guides (page cut lines were never part of this page's sheet); no editor control exists
+ *   for a second, page-level guide line.
  *
- * Card selection mode, page range, image DPI/JPG quality, and cut-line colour/shape all come
- * from `DisplayExportSettings` — the export affordance's own local state
- * (`DisplayExportPDF.tsx`), not the sheet's. The two fields that DO have editor equivalents
- * beyond the sheet settings — per-side page margins (the rail's margin profile,
- * `marginProfiles.ts`) and card spacing (`cardSpacingSlice`) — are mapped from live state,
- * never defaulted.
+ * Everything else `PDF.tsx`'s own `PDFProps` interface exposes is now a real control, sourced
+ * from either `DisplaySheetExportSettings` (the rail's own sheet state — page size including its
+ * `Custom` option, bleed edge, guides) or `DisplayExportSettings` (the export affordance's own
+ * settings step — card selection mode, page range, image DPI/JPG quality, cut-line colour/shape/
+ * placement/length/thickness/offset, corner rounding, SCM mode and its six sub-settings, and the
+ * per-side page-margin override described below).
+ *
+ * ## Margin-preset vs. per-side override
+ *
+ * The rail's margin PROFILE (`marginProfileSlice`, three named presets) still drives both the
+ * live sheet and, by default, the export — unchanged, and never silently overridden. The four
+ * independent per-side values a real print run sometimes needs are a genuinely finer model than
+ * a 3-option preset, so they're an OPT-IN advanced override scoped to a single export run:
+ * `DisplayExportSettings.marginOverride`, `undefined` by default (meaning "use the rail's current
+ * profile, exactly as before this field existed"). When the export settings step's own override
+ * toggle is on, `marginOverride` carries an explicit `{top,bottom,left,right}` that replaces the
+ * profile's margins for that export ONLY — the live sheet, the profile data, and every other
+ * export always keep reading the profile. Seeded from the current profile's own values when the
+ * toggle turns on (see `DisplayExportPDF.tsx`), so turning it on never starts from a jarring
+ * unrelated number.
  */
 import {
   CardDocument,
@@ -65,9 +73,15 @@ import { ManualOverride } from "@/features/pdf/bleedNormalize";
 import { getPageSizeMM, PageSize } from "@/features/pdf/pageSize";
 import type {
   CardSelectionMode,
+  CutLinePlacement,
   CutLineShape,
   PDFProps,
 } from "@/features/pdf/PDF";
+import type {
+  ScmPaperSize,
+  ScmRegistration,
+  ScmVariant,
+} from "@/features/pdf/scm/scmLayout";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import { selectCardSpacing } from "@/store/slices/cardSpacingSlice";
 import { selectMarginProfile } from "@/store/slices/marginProfileSlice";
@@ -85,10 +99,25 @@ import {
  */
 export interface DisplaySheetExportSettings {
   pageSize: keyof typeof PageSize;
+  /** Portrait mm, same convention as `pageSize.ts`'s own table — only read when `pageSize` is
+   * `"CUSTOM"`. The rail seeds both together (see `DisplayPage.tsx`'s paper-size `onChange`), so
+   * `pageSize === "CUSTOM"` always carries both values in practice; `getPageSizeMM` still handles
+   * either being absent by falling through to its own lookup, same as every other caller. */
+  customPageWidthMM?: number;
+  customPageHeightMM?: number;
   bleedEdgeMM: number;
   showCutLines: boolean;
   offsetXMM: number;
   offsetYMM: number;
+}
+
+/** An explicit per-side override for `DisplayExportSettings.marginOverride` — see the module
+ * comment's "Margin-preset vs. per-side override" section. */
+export interface PageMarginOverride {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
 }
 
 /** The export affordance's own settings (`DisplayExportPDF.tsx`) - export-time choices with no
@@ -103,6 +132,25 @@ export interface DisplayExportSettings {
   jpgQuality: number;
   cutLineColor: string;
   cutLineShape: keyof typeof CutLineShape;
+  cutLinePlacement: keyof typeof CutLinePlacement;
+  cutLineLengthMM: number;
+  cutLineThicknessMM: number;
+  cutLineOffsetMM: number;
+  roundCorners: boolean;
+  /** `undefined` = use the rail's current margin profile unchanged (the default). See the module
+   * comment's "Margin-preset vs. per-side override" section. */
+  marginOverride?: PageMarginOverride;
+  /** Switches the whole export to `SCMPDF.tsx`'s registration-mark layout - a genuinely different
+   * output format, not another flag on the standard grid. The six `scm*` fields below are only
+   * read by `PDF.tsx` when this is true. */
+  scmMode: boolean;
+  scmPaperSize: ScmPaperSize;
+  scmVariant: ScmVariant;
+  scmRegistration: ScmRegistration;
+  scmDuplex: boolean;
+  scmOffsetXMM: number;
+  scmOffsetYMM: number;
+  scmOffsetAngleDeg: number;
 }
 
 /** Everything `buildDisplayPDFProps` reads — every source the adapter maps, named explicitly so
@@ -122,28 +170,34 @@ export const buildDisplayPDFProps = (
   input: DisplayPDFPropsInput
 ): Omit<PDFProps, "fileHandles"> => {
   const { sheetSettings, exportSettings } = input;
-  const margins = MARGIN_PROFILES[input.marginProfile].margins;
+  // Margin-preset vs. per-side override - see the module comment. The override replaces the
+  // profile's margins for THIS export only; the profile itself, and every other consumer of
+  // `MARGIN_PROFILES`, are never touched.
+  const margins =
+    exportSettings.marginOverride ??
+    MARGIN_PROFILES[input.marginProfile].margins;
   // Landscape rule — see the module comment. Same portrait-table lookup + swap DisplayPage uses
-  // for its own sheet, so the exported page is exactly the size the rail shows.
+  // for its own sheet, so the exported page is exactly the size the rail shows, including its
+  // Custom option (customPageWidthMM/HeightMM pass straight through when pageSize is "CUSTOM").
   const portraitSize = getPageSizeMM(
     sheetSettings.pageSize,
-    undefined,
-    undefined
+    sheetSettings.customPageWidthMM,
+    sheetSettings.customPageHeightMM
   );
   return {
     cardSelectionMode: exportSettings.cardSelectionMode,
-    cutLinePlacement: "Inside",
+    cutLinePlacement: exportSettings.cutLinePlacement,
     cutLineShape: exportSettings.cutLineShape,
     pageSize: "CUSTOM",
     pageWidth: portraitSize.height,
     pageHeight: portraitSize.width,
     bleedEdgeMM: sheetSettings.bleedEdgeMM,
-    roundCorners: false,
+    roundCorners: exportSettings.roundCorners,
     drawCardCutLines: sheetSettings.showCutLines,
     drawPageCutLines: false,
-    cutLineLengthMM: 3,
-    cutLineOffsetMM: 0,
-    cutLineThicknessMM: 0.6,
+    cutLineLengthMM: exportSettings.cutLineLengthMM,
+    cutLineOffsetMM: exportSettings.cutLineOffsetMM,
+    cutLineThicknessMM: exportSettings.cutLineThicknessMM,
     cutLineColor: exportSettings.cutLineColor,
     cardSpacingRowMM: input.cardSpacing.row,
     cardSpacingColMM: input.cardSpacing.col,
@@ -162,14 +216,14 @@ export const buildDisplayPDFProps = (
     imageDPI: exportSettings.imageDPI,
     jpgQuality: exportSettings.jpgQuality,
     bleedOverrides: input.manualOverrides,
-    scmMode: false,
-    scmPaperSize: "letter",
-    scmVariant: "default",
-    scmRegistration: 3,
-    scmDuplex: true,
-    scmOffsetXMM: 0,
-    scmOffsetYMM: 0,
-    scmOffsetAngleDeg: 0,
+    scmMode: exportSettings.scmMode,
+    scmPaperSize: exportSettings.scmPaperSize,
+    scmVariant: exportSettings.scmVariant,
+    scmRegistration: exportSettings.scmRegistration,
+    scmDuplex: exportSettings.scmDuplex,
+    scmOffsetXMM: exportSettings.scmOffsetXMM,
+    scmOffsetYMM: exportSettings.scmOffsetYMM,
+    scmOffsetAngleDeg: exportSettings.scmOffsetAngleDeg,
   };
 };
 

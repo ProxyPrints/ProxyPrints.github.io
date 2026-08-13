@@ -395,10 +395,52 @@ fields, same as the rail's sheet settings.
   cost a much larger file and a slower export.
 - **Cut-line colour and shape** — `DisplayExportSettings.cutLineColor`/
   `cutLineShape`, shown only when the rail's Guides toggle is on (nothing to
-  style when no cut lines are drawn). These are the two settings that change
-  what a user actually SEES on the exported page; length, thickness, offset,
-  and placement are finer geometry adjustments that stay adapter defaults
-  for now — real controls for those are a later pass.
+  style when no cut lines are drawn).
+
+### Editor export controls, part 2 (SCM cutting mode, corner rounding, cut-line geometry, page margins, custom page size)
+
+The remaining `displayPdfProps.ts` named defaults from the first pass above are now real
+controls too, all in `DisplayExportPDF.tsx`'s own settings step — every default they replace is
+removed from the adapter's default block, not left shadowed (the same pattern the first pass
+established).
+
+- **Silhouette (SCM) cutting mode** — `DisplayExportSettings.scmMode` plus its six sub-settings
+  (`scmPaperSize`, `scmVariant`, `scmRegistration`, `scmDuplex`, `scmOffsetXMM`/`scmOffsetYMM`,
+  `scmOffsetAngleDeg`). `PDF.tsx`'s `PDF` component returns straight into `<SCMPDF>` for
+  `scmMode: true` and never touches card selection, cut-line geometry, corner rounding, or page
+  margins for that render — a genuinely different output format, not a style option on the
+  standard grid. The settings step reads this the same way: a switch at the top of the modal
+  swaps its ENTIRE body between the standard-grid panel and SCM's own six controls, rather than
+  appending SCM's settings to the existing list (where they'd be meaningless whenever SCM is
+  off, and the standard controls would be equally meaningless whenever SCM is on). Only image
+  quality (DPI/JPG) is genuinely shared — `SCMCard` reads it exactly like the standard grid's own
+  card image does — so it's the one group visible in both panels.
+- **Corner rounding** — `DisplayExportSettings.roundCorners`, a single Round/Square switch next
+  to the cut-line group below (standard-grid panel only; SCM's own template never reads
+  `roundCorners`).
+- **Cut-line geometry** — `cutLinePlacement`/`cutLineLengthMM`/`cutLineThicknessMM`/
+  `cutLineOffsetMM` extend the existing colour/shape group from the first pass above (same
+  `Form.Group`, same `showCutLines`-gated visibility) rather than starting a second one.
+- **Per-side page margins** — the rail's margin PROFILE (`marginProfileSlice`, three named
+  presets) still drives both the live sheet and, by default, the export, unchanged. The four
+  independent per-side values a real print run sometimes needs are a genuinely finer model than
+  a 3-option preset, so they're an opt-in ADVANCED OVERRIDE scoped to a single export run:
+  `DisplayExportSettings.marginOverride`, `undefined` by default. The settings step's own
+  checkbox seeds it from the current profile's own values the moment it's turned on (so the
+  numbers a user first sees are never a jarring unrelated default), and the four fields become
+  editable from there. Turning the override off restores `undefined` — back to reading the
+  profile exactly as before this field existed. The profile itself, the live sheet, and every
+  other export are never touched by an override scoped to one settings-step session.
+- **Custom page dimensions** — the rail's own paper-size `Form.Select` (`DisplayPage.tsx`'s Page
+  Setup section) gains a `Custom` option (`PageSize.CUSTOM`, already supported by `PDFProps`/
+  `getPageSizeMM` — the gap was only the rail's own option list), with two mm inputs (portrait
+  convention, same as every other table entry) that appear once selected. Chosen as a rail
+  control rather than an export-only one because page size already IS a rail-owned, shared field
+  — the live sheet and the export have read the exact same `pageSize` since the first "Editor
+  export controls" pass, and Custom is a straightforward additional value on that same field, not
+  a different model requiring a coexistence decision (unlike the page-margin override above).
+  Picking `Custom` seeds both mm fields together, in the same state update, from whatever paper
+  size was selected immediately before — never a transient undefined pair.
 
 ### Bleed-normalization signal on the editor sheet
 

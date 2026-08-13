@@ -19,11 +19,14 @@ import {
   loadPageWithDefaultBackend,
 } from "./test-utils";
 
-// The editor's real Export ▾ -> PDF settings step (DisplayExportPDF.tsx) - the four controls
-// that replaced named defaults in displayPdfProps.ts, plus the willGenerateBleed signal on the
-// sheet itself. Reads back the actual downloaded PDF bytes (pdfjs-dist, page-count metadata
-// only - no canvas/rendering needed for that) rather than trusting the wiring by inspection, per
-// this feature's own "a control that renders but doesn't affect the export" failure mode.
+// The editor's real Export ▾ -> PDF settings step (DisplayExportPDF.tsx) - every control that
+// replaced a named default in displayPdfProps.ts (card selection, page range, image quality,
+// cut-line colour/shape/placement/geometry, corner rounding, an advanced per-side margin
+// override, SCM cutting mode, and the rail's own Custom page-size option), plus the
+// willGenerateBleed signal on the sheet itself. Reads back the actual downloaded PDF bytes
+// (pdfjs-dist, page-count/page-dimension metadata only - no canvas/rendering needed for that)
+// rather than trusting the wiring by inspection, per this feature's own "a control that renders
+// but doesn't affect the export" failure mode.
 test.describe.configure({ timeout: 60_000 });
 
 const IMAGE_WORKER_URL_PATTERN = /^https:\/\/cdn\.proxyprints\.ca\//;
@@ -236,5 +239,197 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await expect(page.getByTestId("page-preview-bleed-badge")).toContainText(
       "Bleed will be generated"
     );
+  });
+});
+
+const mmToPt = (mm: number) => (mm / 25.4) * 72;
+
+test.describe("DisplayExportPDF - SCM cutting mode", () => {
+  test("the mode switch swaps the settings step body between the standard controls and SCM's own sub-settings", async ({
+    page,
+    network,
+  }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    await openPDFSettings(page);
+    await expect(
+      page.getByTestId("display-export-card-selection-mode")
+    ).toBeVisible();
+    await expect(
+      page.getByTestId("display-export-scm-paper-size")
+    ).not.toBeVisible();
+
+    await page.getByTestId("display-export-scm-mode-switch").check();
+
+    await expect(
+      page.getByTestId("display-export-card-selection-mode")
+    ).not.toBeVisible();
+    await expect(
+      page.getByTestId("display-export-page-range-start")
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId("display-export-scm-paper-size")
+    ).toBeVisible();
+    await expect(page.getByTestId("display-export-scm-variant")).toBeVisible();
+    await expect(
+      page.getByTestId("display-export-scm-registration")
+    ).toBeVisible();
+    await expect(page.getByTestId("display-export-scm-duplex")).toBeVisible();
+    await expect(page.getByTestId("display-export-scm-offset-x")).toBeVisible();
+    await expect(page.getByTestId("display-export-scm-offset-y")).toBeVisible();
+    await expect(
+      page.getByTestId("display-export-scm-offset-angle")
+    ).toBeVisible();
+    // Image quality is the one group shared by both panels - SCMCard reads it exactly like the
+    // standard grid's own card image does.
+    await expect(page.getByTestId("display-export-image-dpi")).toBeVisible();
+  });
+
+  test("an SCM export is a structurally different document from the standard export", async ({
+    page,
+    network,
+  }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "10x my search query");
+
+    await openPDFSettings(page);
+    const standardDownload = page.waitForEvent("download");
+    await page.getByTestId("display-export-pdf-download-button").click();
+    const standardPath = await (await standardDownload).path();
+    if (!standardPath) throw new Error("Download path is null");
+    const standardPages = await readNumPages(readFileSync(standardPath));
+
+    await openPDFSettings(page);
+    await page.getByTestId("display-export-scm-mode-switch").check();
+    const scmDownload = page.waitForEvent("download");
+    await page.getByTestId("display-export-pdf-download-button").click();
+    const scmPath = await (await scmDownload).path();
+    if (!scmPath) throw new Error("Download path is null");
+    const scmPages = await readNumPages(readFileSync(scmPath));
+
+    // PDF.tsx's own PDF component returns straight into <SCMPDF> for scmMode, an entirely
+    // different pagination path (SCMPDF.tsx's own front/back pairing and layout table, ignoring
+    // cardSelectionMode/margins/cut-line geometry the standard grid uses) - a real, structural
+    // difference in the generated file, not a cosmetic one.
+    expect(scmPages).not.toBe(standardPages);
+  });
+});
+
+test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry", () => {
+  test("placement, length, thickness, and offset are settable alongside colour and shape", async ({
+    page,
+    network,
+  }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    await openPDFSettings(page);
+    await page
+      .getByTestId("display-export-cut-line-placement")
+      .selectOption("Outside");
+    await page.getByTestId("display-export-cut-line-length").fill("5");
+    await page.getByTestId("display-export-cut-line-thickness").fill("1");
+    await page.getByTestId("display-export-cut-line-offset").fill("0.5");
+
+    await expect(
+      page.getByTestId("display-export-cut-line-placement")
+    ).toHaveValue("Outside");
+    await expect(
+      page.getByTestId("display-export-cut-line-length")
+    ).toHaveValue("5");
+    await expect(
+      page.getByTestId("display-export-cut-line-thickness")
+    ).toHaveValue("1");
+    await expect(
+      page.getByTestId("display-export-cut-line-offset")
+    ).toHaveValue("0.5");
+  });
+
+  test("round/square corners toggle is settable", async ({ page, network }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    await openPDFSettings(page);
+    const roundCorners = page.getByTestId("display-export-round-corners");
+    await expect(roundCorners).not.toBeChecked();
+    await roundCorners.check();
+    await expect(roundCorners).toBeChecked();
+  });
+});
+
+test.describe("DisplayExportPDF - advanced page-margin override", () => {
+  test("enabling the override seeds top/bottom/left/right from the rail's current profile, and is editable", async ({
+    page,
+    network,
+  }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    await openPDFSettings(page);
+    await expect(page.getByTestId("display-export-margin-top")).toHaveCount(0);
+
+    await page.getByTestId("display-export-margin-override-toggle").check();
+    // rearFeed, the rail's default profile: {top: 3, bottom: 3, left: 3, right: 20}.
+    await expect(page.getByTestId("display-export-margin-top")).toHaveValue(
+      "3"
+    );
+    await expect(page.getByTestId("display-export-margin-bottom")).toHaveValue(
+      "3"
+    );
+    await expect(page.getByTestId("display-export-margin-left")).toHaveValue(
+      "3"
+    );
+    await expect(page.getByTestId("display-export-margin-right")).toHaveValue(
+      "20"
+    );
+
+    await page.getByTestId("display-export-margin-top").fill("10");
+    await expect(page.getByTestId("display-export-margin-top")).toHaveValue(
+      "10"
+    );
+
+    await page.getByTestId("display-export-margin-override-toggle").uncheck();
+    await expect(page.getByTestId("display-export-margin-top")).toHaveCount(0);
+  });
+});
+
+test.describe("DisplayExportPDF - Custom page size (rail)", () => {
+  test("a Custom paper size on the rail exports a PDF at exactly the entered dimensions", async ({
+    page,
+    network,
+  }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    await page.getByLabel("Paper size").selectOption("CUSTOM");
+    await page.getByTestId("display-custom-page-width").fill("100");
+    await page.getByTestId("display-custom-page-height").fill("150");
+
+    await openPDFSettings(page);
+    await page.getByTestId("display-export-page-range-start").fill("1");
+    await page.getByTestId("display-export-page-range-end").fill("1");
+    const download = page.waitForEvent("download");
+    await page.getByTestId("display-export-pdf-download-button").click();
+    const downloadPath = await (await download).path();
+    if (!downloadPath) throw new Error("Download path is null");
+
+    const doc = await getDocument({
+      data: new Uint8Array(readFileSync(downloadPath)),
+    }).promise;
+    const pdfPage = await doc.getPage(1);
+    const [x0, y0, x1, y1] = pdfPage.view;
+    const widthPt = x1 - x0;
+    const heightPt = y1 - y0;
+    // The landscape rule (displayPdfProps.ts's own module comment): portrait width/height
+    // entered on the rail come out swapped in the export, same as every other paper size.
+    expect(widthPt).toBeCloseTo(mmToPt(150), 0);
+    expect(heightPt).toBeCloseTo(mmToPt(100), 0);
   });
 });

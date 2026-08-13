@@ -352,6 +352,12 @@ import {
 
 interface DisplaySheetSettings {
   pageSize: keyof typeof PageSize;
+  // Portrait mm, same convention as pageSize.ts's own table - only read when pageSize is
+  // "CUSTOM" (see the paper-size Form.Select's own onChange, which seeds both together from
+  // whatever paper size was previously selected the moment the user picks Custom, and
+  // displayPdfProps.ts's own DisplaySheetExportSettings, which this interface mirrors).
+  customPageWidthMM?: number;
+  customPageHeightMM?: number;
   bleedEdgeMM: number;
   showCutLines: boolean;
   // Registration compensation (PageOffsetControl.tsx) - plain, unpersisted component state, same
@@ -2173,7 +2179,11 @@ export function DisplayPage() {
   // export's own page-size semantics, unchanged there) - swapping width/height here is what
   // makes THIS page's sheet landscape, per the design doc's own default. See the design doc's
   // §1 for the computeLayout() math confirming this yields a 4x2 grid at A4 + realistic bleed.
-  const portraitSize = getPageSizeMM(settings.pageSize, undefined, undefined);
+  const portraitSize = getPageSizeMM(
+    settings.pageSize,
+    settings.customPageWidthMM,
+    settings.customPageHeightMM
+  );
   const sheetWidthMM = portraitSize.height;
   const sheetHeightMM = portraitSize.width;
 
@@ -3038,22 +3048,85 @@ export function DisplayPage() {
                   size="sm"
                   className="mb-2"
                   value={settings.pageSize}
-                  onChange={(event) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      pageSize: event.target.value as keyof typeof PageSize,
-                    }))
-                  }
+                  onChange={(event) => {
+                    const nextPageSize = event.target
+                      .value as keyof typeof PageSize;
+                    setSettings((previous) => {
+                      // Seed Custom's own width/height together, the moment it's picked, from
+                      // whatever paper size was selected before - never an undefined pair that
+                      // getPageSizeMM/the export adapter would have to fall back on.
+                      if (
+                        nextPageSize === "CUSTOM" &&
+                        previous.customPageWidthMM === undefined
+                      ) {
+                        const seed = getPageSizeMM(
+                          previous.pageSize,
+                          undefined,
+                          undefined
+                        );
+                        return {
+                          ...previous,
+                          pageSize: nextPageSize,
+                          customPageWidthMM: seed.width,
+                          customPageHeightMM: seed.height,
+                        };
+                      }
+                      return { ...previous, pageSize: nextPageSize };
+                    });
+                  }}
                   aria-label="Paper size"
                 >
-                  {Object.keys(PageSize)
-                    .filter((key) => key !== "CUSTOM")
-                    .map((key) => (
-                      <option key={key} value={key}>
-                        {key} (landscape)
-                      </option>
-                    ))}
+                  {Object.keys(PageSize).map((key) => (
+                    <option key={key} value={key}>
+                      {key === "CUSTOM"
+                        ? PageSize.CUSTOM
+                        : `${key} (landscape)`}
+                    </option>
+                  ))}
                 </Form.Select>
+
+                {settings.pageSize === "CUSTOM" && (
+                  <div className="d-flex gap-2 align-items-center mb-2">
+                    <Form.Control
+                      type="number"
+                      size="sm"
+                      min={1}
+                      step={0.1}
+                      aria-label="Custom paper width (mm, portrait)"
+                      data-testid="display-custom-page-width"
+                      value={settings.customPageWidthMM ?? ""}
+                      onChange={(event) => {
+                        const value = parseFloat(event.target.value);
+                        if (!Number.isNaN(value)) {
+                          setSettings((previous) => ({
+                            ...previous,
+                            customPageWidthMM: value,
+                          }));
+                        }
+                      }}
+                    />
+                    <span className="text-muted small">×</span>
+                    <Form.Control
+                      type="number"
+                      size="sm"
+                      min={1}
+                      step={0.1}
+                      aria-label="Custom paper height (mm, portrait)"
+                      data-testid="display-custom-page-height"
+                      value={settings.customPageHeightMM ?? ""}
+                      onChange={(event) => {
+                        const value = parseFloat(event.target.value);
+                        if (!Number.isNaN(value)) {
+                          setSettings((previous) => ({
+                            ...previous,
+                            customPageHeightMM: value,
+                          }));
+                        }
+                      }}
+                    />
+                    <span className="text-muted small">mm, portrait</span>
+                  </div>
+                )}
 
                 <Form.Group className="mb-2">
                   <Form.Label className="small mb-1">
