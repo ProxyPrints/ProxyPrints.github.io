@@ -52,9 +52,11 @@
  * features/export/postExportContributionPrompt.ts + usePostExportContributionPrompt.ts's
  * success-detection and show-once-per-session logic. Originally mounted from BOTH this page's
  * own inline export (item 2, below) and PDFGenerator.tsx itself; issue #275 removed this page's
- * inline export entirely (see that issue's own module comment further down), so PDFGenerator.tsx
- * - now the sole place PDF generation happens, reached via the Print page (D10, pages/print.tsx)
- * - is this feature's only remaining mount.
+ * inline export pipeline (see that issue's own module comment further down), so PDFGenerator.tsx
+ * - reached via the Print page (D10, pages/print.tsx) - remained its only mount. This page's own
+ * PDF export item (DisplayExportPDF.tsx, added alongside issue #275's module comment below) does
+ * not mount this prompt; it reuses only the download plumbing PDFGenerator.tsx already shares
+ * via pdfDownload.tsx, not the wider surface this prompt lives on.
  *
  * Issue #238 (deck-input landing, design doc §4.1) - the `isProjectEmpty` early return used to
  * render only a plain "head to /editor" link, meaning this page could never start a project
@@ -79,9 +81,10 @@
  * Issue #241 (Export ▾ toolbar parity, design doc §5's export-beyond-PDF row) - the last of the
  * three toolbar-parity findings from the same audit. DisplayExportMenu.tsx composes the same
  * unchanged ExportXML/ExportImages/ExportDecklist Dropdown.Items Export.tsx already mounts on the
- * classic editor's own "Download" dropdown - same hooks, same gating selectors. ExportPDF.tsx's
- * own item is deliberately excluded, since PDF generation itself lives on the Print page (D10,
- * pages/print.tsx) now, not this one - see issue #275's own module comment further down.
+ * classic editor's own "Download" dropdown - same hooks, same gating selectors - plus this page's
+ * own PDF item, DisplayExportPDF.tsx (not the classic editor's modal-opening ExportPDF.tsx; see
+ * issue #275's own module comment further down for how it downloads straight from this page's
+ * live sheet state instead).
  *
  * Issue #266 (mobile responsive shell - docs/proposals' /display layout spec, owner-approved
  * 2026-07-21, §2/§4/§6 rows R1/R2/R4/R5/R6) replaced the single always-rendered `RailWrapper`
@@ -183,24 +186,28 @@
  * addendum, tracked as its own follow-up): the Print page's tab REORDER/new PDF default, and the
  * PDF tab's own preview removal - see `pages/print.tsx`'s own module comment.
  *
- * Known, deliberately-out-of-scope gap this leaves (documented, not silently accepted): this
- * page's own Page Setup controls (paper size/bleed edge/guides - plain `DisplaySheetSettings`
- * component state, never persisted) don't carry over to the Print page's classic `PDFGenerator`,
- * which has always had its own separate settings and doesn't read this page's margin-profile/
- * card-spacing redux slices either. A user who configures those here and then prints lands on a
- * PDFGenerator with its own unrelated defaults - a genuine settings-parity gap, out of scope for
- * this issue (D9/D10 resolve the SAVE-vs-PRINT ordering and the route linkage, not settings
- * portability), left for a future issue.
+ * `DisplayExportMenu.tsx`'s PDF item (`DisplayExportPDF.tsx`) closes the settings-parity gap
+ * this page's Export ▾ used to leave for PDF specifically: `displayPdfProps.ts` is the one
+ * adapter from this page's live `DisplaySheetSettings` + margin-profile/card-spacing/project
+ * redux state to the same `PDFProps` `PDF.tsx` already consumes, so a rail configured here (page
+ * size, bleed, guides, spacing, margins, registration offset) exports exactly that sheet - no
+ * modal, no second settings panel, no preview beyond the sheet itself. It reuses
+ * `pdfDownload.tsx`'s `useDownloadPDF` (the same download plumbing `pages/print.tsx`'s
+ * `PDFGenerator` uses) rather than reintroducing the removed item-2 inline pipeline; Save PDF to
+ * Google Drive and the post-export contribution prompt remain Print-page-only, unchanged.
  *
- * Editor-completion package, E19/X19 (lime rounded corner-only cut guides) inherits this exact
- * same gap: PagePreview.tsx's screenPresentation variant now renders the reference's lime corner
- * guides on THIS page's own live sheet (screen-only, gated on screenPresentation - PDFGenerator's
- * own fast preview is unaffected), but the REAL exported PDF's guide style is drawn by
- * PDFGenerator.tsx/PDF.tsx's own independent cutLineColor/cutLineShape settings on the Print page -
- * upstream already carries the corner-only geometry this needs (`CutLineCorner`, `cutLineShape:
- * "InsideOnly"` - confirmed by reading `upstream/master`'s `PDF.tsx` directly, not assumed), so no
- * new PDF engine work is required, only wiring a lime preset through - genuine screen/print parity
- * for the guide COLOR is blocked on the same settings-portability gap above, not attempted here.
+ * Known, deliberately-out-of-scope gap that remains for the separate Print page: this page's own
+ * Page Setup controls don't carry over to the Print page's classic `PDFGenerator`, which has
+ * always had its own separate settings and doesn't read this page's margin-profile/card-spacing
+ * redux slices either. A user who configures those here and then follows "Print / Export →"
+ * lands on a PDFGenerator with its own unrelated defaults for that OTHER surface - this page's
+ * own Export ▾ PDF item does not have this gap, since it reads the same live state directly.
+ *
+ * Editor-completion package, E19/X19 (lime rounded corner-only cut guides): PagePreview.tsx's
+ * screenPresentation variant renders the reference's lime corner guides on this page's own live
+ * sheet, and `displayPdfProps.ts` carries that same lime corner-only geometry into this page's
+ * own PDF export, so the exported file's cut lines match what the rail showed. The Print page's
+ * separate `PDFGenerator.tsx`/`PDF.tsx` settings are untouched and still default independently.
  */
 import styled from "@emotion/styled";
 import React, {
@@ -3108,6 +3115,7 @@ export function DisplayPage() {
               <FinishFooter
                 hasBackedUpThisSession={draftBackup.hasBackedUpThisSession}
                 onPrintClick={prePrintSaveGate.startPrintFlow}
+                sheetSettings={settings}
               />
             </div>
           </Offcanvas.Body>

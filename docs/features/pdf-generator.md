@@ -285,9 +285,9 @@ because the two hooks return differently:
 
 This used to also be mounted from `DisplayPage.tsx`'s own inline export
 (Proposal H, item 2) — issue #275 retired that pipeline entirely (the
-memory-heavy Generate PDF/Save-to-Drive operations now live solely here,
-reached from `/display`'s Finish footer via a pre-print save gate; see
-`docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
+memory-heavy Generate PDF/Save-to-Drive operations moved solely to
+`/print`, reached from `/editor`'s Finish footer via a pre-print save gate;
+see `docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
 Footer](../proposals/proposal-h-display-layout-spec.md#finish-footer-save-before-print)
 and [Print-Page
 Funnel](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)
@@ -297,11 +297,66 @@ in-tree, deletion is a separate later decision) — this component's only
 LIVE mounts today are `FinishedMyProject.tsx`'s PDF tab (reached solely via
 the standalone `/print` route, `pages/print.tsx`) and `PDFGeneratorModal.tsx`
 (mounted globally via `Modals.tsx`, route-independent); one implementation
-either way, not a forked second copy. See `docs/features/printing-tags.md`'s
-own entry for the full detail (why `/whatsthat` and not a new route, the
-`sessionStorage`-backed "never repeats within a session" rule) and
-`docs/features/print-export-page.md` for the classic "Print!" tab's own
-(now unrouted) history.
+either way, not a forked second copy. `/editor`'s own PDF export item (see
+"Editor-native PDF export" below) reuses `useDownloadPDF` but does NOT mount
+this prompt, so `/whatsthat` promotion still only ever fires from the two
+mounts above. See `docs/features/printing-tags.md`'s own entry for the full
+detail (why `/whatsthat` and not a new route, the `sessionStorage`-backed
+"never repeats within a session" rule) and `docs/features/print-export-page.md`
+for the classic "Print!" tab's own (now unrouted) history.
+
+## Editor-native PDF export (`/editor`'s Export ▾ menu)
+
+`/editor` (`DisplayPage.tsx`) had no PDF export of its own after issue #275
+above retired its inline pipeline — its Export ▾ menu (`DisplayExportMenu.tsx`)
+offered only XML/Card Images/Decklist, and its own centre sheet (a real
+`computeLayout()`-driven `PagePreview`, not a preview of the PDF) had no
+export action at all. The only way to get a PDF was navigating to `/print`,
+whose `PDFGenerator.tsx` carries an entirely separate settings panel that
+never read `/editor`'s own `DisplaySheetSettings`/margin-profile/card-spacing
+state — a rail configured for LETTER landscape 4x2 could silently export an
+A4 3x3 PDF.
+
+Two pieces close that gap, without forking the render pipeline:
+
+- **`pdfDownload.tsx`** — `useDownloadPDF`/`useSaveToDrivePDF`/
+  `ImageFailureConfirmModal`/`ConfirmDespiteFailures`, moved out of
+  `PDFGenerator.tsx` verbatim (no logic changes) so `/editor`'s own PDF item
+  can reuse the exact download plumbing `/print` uses without statically
+  importing `PDFGenerator.tsx` itself — that module pulls in
+  `PDFCanvasPreview` (`pdfjs-dist`) and its whole settings panel, which
+  `/editor`'s page must not pay for (its sheet already IS the preview).
+  `PDFGenerator.tsx` now imports these same functions back from here.
+- **`displayPdfProps.ts`** — the one adapter from `/editor`'s live state
+  (`DisplaySheetSettings`, the margin-profile/card-spacing redux slices,
+  project members/cardback, and `projectSlice.manualOverrides`) to the
+  `PDFProps` shape `PDF.tsx` already consumes. `PDF.tsx`'s `PageSize` table
+  is portrait-oriented; `/editor`'s sheet is landscape by convention
+  (width/height swapped), so the adapter always emits `pageSize: "CUSTOM"`
+  with the swapped dimensions computed from the rail's own page-size
+  selection via the same `getPageSizeMM` lookup (now factored out into its
+  own `pageSize.ts` module so both `PDF.tsx` and this adapter share it,
+  rather than one importing the other's page-size table). Every `PDFProps`
+  field with no editor equivalent yet (quality/DPI, corner rounding, cut-line
+  geometry beyond the rail's single Guides toggle, SCM settings, per-side
+  page margins beyond the margin profile, card selection mode) gets an
+  explicit named default in this one module — see its own module comment for
+  the full list and reasoning, including why the rail's Fronts/Backs toggle
+  is deliberately NOT read as a card-selection filter.
+
+`DisplayExportPDF.tsx` (the new fourth `Dropdown.Item` in
+`DisplayExportMenu.tsx`) wires the two together: `useDisplayPDFProps` for
+props, `useDownloadPDF` to trigger the download, `ImageFailureConfirmModal`
+for the same blank-card safeguard bug 4 above added. It mounts no preview of
+its own (no `PDFCanvasPreview`, no fast DOM preview) — the sheet the user is
+already looking at makes one redundant, and rendering a second one live on
+this page would cost it the render budget it has to stay fast. The rail's
+"Guides" toggle (`DisplaySheetSettings.showCutLines`), which previously only
+drove `PagePreview`'s on-screen lime corner guides, now reaches the exported
+file's `drawCardCutLines` through this same adapter, with cut-line color/
+shape/placement defaults matching that on-screen guide style
+(`#8ae234`, `InsideOnly`, `Inside`) so the export looks like the sheet that
+produced it.
 
 ## Key files
 
@@ -330,6 +385,14 @@ own entry for the full detail (why `/whatsthat` and not a new route, the
   parked-spec port wave, issue #272 — the second, `/display`-inline-export
   surface this file used to also cover was already retired by issue #275,
   above)
+- `frontend/src/features/pdf/pdfDownload.tsx`, `frontend/src/features/pdf/pageSize.ts`
+  — shared download plumbing and page-size table, factored out of
+  `PDFGenerator.tsx`/`PDF.tsx` respectively so `/editor`'s own PDF export
+  item can reuse them (see "Editor-native PDF export" above)
+- `frontend/src/features/pdf/displayPdfProps.ts` (+ `displayPdfProps.test.ts`),
+  `frontend/src/features/export/DisplayExportPDF.tsx`,
+  `frontend/src/features/export/DisplayExportMenu.tsx` — `/editor`'s own PDF
+  export item and its editor-state-to-`PDFProps` adapter
 
 ## Status
 
