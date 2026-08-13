@@ -41,15 +41,17 @@ Proposal H route swap (2026-07-23, issues #231/#272) fully unrouted the
 classic grid `ProjectEditor.tsx` (component kept in-tree, deletion is a
 separate later decision), so `pages/print.tsx` is this tab's only live
 route today; `PDFGeneratorModal.tsx` remains a second, route-independent
-mount (via `Modals.tsx`). (Issue #275 also retired the unified
-`/display` page's OWN separate inline export pipeline and its own mount of
-this same prompt — PDF generation now lives solely here, reached from
-`/display`'s Finish footer via a pre-print save gate; see
+mount (via `Modals.tsx`). (Issue #275 also retired the unified `/display` page's OWN separate inline
+export pipeline and its own mount of this same prompt — `/editor`'s Finish
+footer reaches this tab's memory-heavy Generate PDF/Save-to-Drive operations
+via a pre-print save gate; see
 `docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
 Footer](../proposals/proposal-h-display-layout-spec.md#finish-footer-save-before-print)
 and [Print-Page
 Funnel](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)
-decisions.) See
+decisions. `/editor` later regained a lightweight PDF export of its own,
+directly off its Export ▾ menu — see `docs/features/pdf-generator.md`'s
+"Editor-native PDF export" section; it does not mount this prompt.) See
 `docs/features/printing-tags.md`'s own entry for the full detail (session-
 scoped `sessionStorage` flag, success-detection mechanism, why it's a
 funnel entry point rather than a parallel one) and
