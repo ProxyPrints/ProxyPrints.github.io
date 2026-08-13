@@ -1154,7 +1154,10 @@ Extends the base spec's [Margin Defaults](#margin-defaults-epson-et-8500)/
 [Default Bleed](#default-bleed-3175mm) sections and the polish round's
 [Card-Spacing Control](#card-spacing-control) precedent. Three related
 right-rail Page Setup changes, all in `DisplayPage.tsx`'s "Page Setup"
-section (§4.2).
+section (§4.2). This is the ratified-decision record — why each change
+was made and what it replaced; for the current, user-facing description
+of what these controls do, see
+[`user-guide.md`](../user-guide.md#exporting-a-print-ready-pdf).
 
 ## B0. Granted-vs-requested bleed readout
 

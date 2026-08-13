@@ -205,6 +205,14 @@ stay." `MarginProfileControl`'s warning copy was rewritten from a vague "see the
 the affected edge, with reduced cutting tolerance there - stated outright, not implied. Still
 never a hard clamp on the bleed input itself (unchanged from before this round).
 
+**Superseded**: `MarginProfileControl`'s boolean warning described above no longer exists.
+`BleedGrantedReadout.tsx` replaced it with a per-axis granted-vs-requested number, reading
+`computeLayout`'s own output directly rather than a separate cap comparison — see
+[`user-guide.md`](../user-guide.md#exporting-a-print-ready-pdf) for the current behaviour and
+[`proposals/proposal-h-display-layout-spec.md`](../proposals/proposal-h-display-layout-spec.md#b0-granted-vs-requested-bleed-readout)
+for the decision record. `maxBleedForFourColumns`'s formula is still what the readout's numbers
+converge to; only the disclaimer-copy warning it used to feed is gone.
+
 **Known limitation, not fixed here**: a #299-normalized card is ASSUMED to carry exactly
 `bleedEdgeMM` on every side for crop-window purposes (matching `normalizeCardBleed`'s own
 contract) - the rare case where a too-small source hit `bleedExtension.ts`'s own
