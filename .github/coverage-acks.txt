@@ -214,3 +214,27 @@ coverage-ack: frontend/tests/DisplayFinishFooter.spec.ts::/display Finish footer
 coverage-ack: frontend/tests/DisplayFinishFooter.spec.ts::/display Finish footer (issue #275) > authenticated + dirty: Print / Export shows the save gate; choosing Save unlocks, saves, and lands on the Print page — same removed Print/Export button. The save-gate-then-persist sequence (unlock, save, and only then proceed) is covered by the same file's renamed test "authenticated + dirty: PDF export shows the save gate; choosing Save unlocks, saves, and the export still runs", which asserts the download completes only after the save request resolves, in place of the old navigation to /print.
 coverage-ack: frontend/tests/DisplayFinishFooter.spec.ts::/display Finish footer (issue #275) > authenticated + dirty: Skip on the save gate navigates to the Print page without saving — same removed Print/Export button. The skip-without-saving path is covered by the same file's renamed test "authenticated + dirty: Skip on the save gate runs the export without saving", which asserts the download completes and zero save requests were made, in place of the old navigation to /print.
 coverage-ack: frontend/tests/UnsavedWorkGuard.spec.ts::Unsaved-work guard (priority bug fix) > editor -> /print with cards selected does not show any dialog, and the deck's cards are the ones sent to print — the test reached /print via the removed Print/Export button; that navigation no longer exists, so there is nothing left to navigate to. The false-positive-guard regression this test protected against is covered by the same describe block's renamed test "editor: exporting a PDF with cards selected does not show any dialog, and the export completes", which asserts no beforeunload dialog fires and the download completes with the deck's card via the export flow that replaced the navigation.
+
+# Editor export rescue, continued (PR #810 CI fix) - the same button/navigation removal above
+# also broke a second cluster this file's own earlier ack pass missed: every test below drives
+# PDFGenerator.tsx's dedicated wait-experience UI (the progress bar, the lazy-mounted QuestionFeed
+# minigame embed) or the standalone /print route itself, reached ONLY by navigating there from a
+# populated editor project. pages/print.tsx's own module comment states plainly that this page
+# "now has no in-app entry point at all - only a direct/bookmarked URL reaches it, always with
+# `isProjectEmpty` true" (a hard page.goto() is a real browser navigation, so it always loses the
+# in-memory Redux store a populated project lives in) - confirmed independently: no
+# router.push("/print")/<Link href="/print"> remains anywhere in src/. DisplayExportPDF.tsx (the
+# new in-place export entry, pdfDownload.tsx's shared render pipeline) never mounts
+# PDFWaitPanel.tsx - no progress bar, no game embed - so unlike the gate/save-prompt tests above
+# (same Modal components, reachable through the new dropdown instead), this cluster's own subject
+# UI has no reachable equivalent to port onto, in the app or in a test. Genuinely dropped, not
+# renamed - deleting the four now-entirely-unreachable files (PDFGenerator.spec.ts,
+# PagePreview.spec.ts, PostExportContributionPrompt.spec.ts, PDFWaitExperience.spec.ts) and this
+# one test out of CardbackPdfWaitFidelity.spec.ts (its sibling E.1/E.2 test in the same file DOES
+# stay - the reminder gate and apply-prompt Modals it covers are the same components, reached
+# through the new Export-dropdown flow, same file's own updated test).
+coverage-ack: frontend/tests/PDFGenerator.spec.ts::* — /print's own PDFGenerator.tsx (card-image-fetch-failure confirm, image-fetch progress, manual bleed override, bleed preview badge) has no reachable client path left once populated (see this section's header comment); dropped, not ported.
+coverage-ack: frontend/tests/PagePreview.spec.ts::* — same unreachable /print route (fast DOM preview vs. pdf.js canvas render, both /print-only surfaces); dropped, not ported.
+coverage-ack: frontend/tests/PostExportContributionPrompt.spec.ts::* — its one remaining test drove PDFGenerator.tsx's own /print mount, now unreachable; the prompt itself still gets exercised as part of the PDF-wait game embed's outro, which is also being dropped in this same pass (see PDFWaitExperience.spec.ts's own ack below) since that embed only ever mounted on /print too.
+coverage-ack: frontend/tests/PDFWaitExperience.spec.ts::* — the progress-bar phases and the lazy-mounted QuestionFeed game embed are PDFGenerator.tsx-only UI (PDFWaitPanel.tsx), never wired into DisplayExportPDF.tsx's in-place export; no reachable path, dropped rather than ported.
+coverage-ack: frontend/tests/CardbackPdfWaitFidelity.spec.ts::Cardback flow CSS fidelity (SPEC-cardback-pdfwait.md §E) - ${viewport.label} > E.3 progress bar + E.4 game embed tokens resolve real computed values at ${viewport.label} — same PDFWaitPanel.tsx tokens as the PDFWaitExperience.spec.ts ack above, reached the same now-unreachable way; this file's sibling E.1/E.2 test (same describe block) is fixed and kept, not dropped - it covers the reminder gate/apply-prompt Modals, which are reachable again through the new Export-dropdown flow.
