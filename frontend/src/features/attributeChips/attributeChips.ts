@@ -443,15 +443,13 @@ export function chipMembershipState(
 }
 
 /**
- * Whether a single candidate satisfies an active filter tag - resolved (`tags`) OR, only when
- * `votesOn`, suggested via the backend's own compliant `suggestedFilterTagNames` computation
- * (condition 6 - see `chipMembershipState`'s own comment for the full "why not tagVoteStatuses"
- * reasoning). The funnel's own per-axis survivor-narrowing filter (F1/F2) applies this per
- * active chip, ANDed across chips (same semantics `filterCandidatesByChipStates` already uses
- * for the QuestionFeed's tri-state chips, just sourced from Tag-consensus data rather than
- * `chip.matches`).
+ * Resolved (`tags`) OR, only when `votesOn`, suggested via the backend's own compliant
+ * `suggestedFilterTagNames` computation (condition 6 - see `chipMembershipState`'s own comment
+ * for the full "why not tagVoteStatuses" reasoning). This is the definite half of a tag's
+ * status for a candidate - true only when there is an actual positive signal, never merely
+ * because the tag happens to be absent.
  */
-export function candidateSatisfiesAttributeTag(
+export function candidateHasAttributeTag(
   candidate: ChipMembershipCandidate,
   tagName: string,
   votesOn: boolean
@@ -459,6 +457,61 @@ export function candidateSatisfiesAttributeTag(
   return (
     candidate.tags.includes(tagName) ||
     (votesOn && (candidate.suggestedFilterTagNames?.includes(tagName) ?? false))
+  );
+}
+
+/**
+ * Whether `tagName`'s own exclusion-group axis carries zero signal for `candidate`: no sibling
+ * tag in the group is resolved or suggested. This is a genuine unknown - the candidate has
+ * simply never been evaluated on this axis - as distinct from a candidate that resolves to a
+ * *different* value on the same axis, which is a real, known mismatch and stays one (a sibling
+ * tag being present is itself the disqualifying evidence).
+ *
+ * Scoped exactly like `getOpenExclusionGroups`: only Border Color and Frame Style qualify, since
+ * `borderColor`/`frame` are the two enum-like axes that can hold a value outside the taxonomy
+ * entirely (e.g. borderColor "gold"). A standalone chip (no exclusion group) or a
+ * `FRAME_TREATMENT_GROUP` member has no such taxonomy-gap case - "no tag" is a complete, definite
+ * answer for those (an ordinary card, no special treatment), same reasoning
+ * `getOpenExclusionGroups` already applies for its own read of the equivalent raw metadata.
+ */
+export function isAttributeAxisUnknownForCandidate(
+  candidate: ChipMembershipCandidate,
+  tagName: string,
+  votesOn: boolean
+): boolean {
+  const group = findExclusionGroup(tagName);
+  if (group == null || group === FRAME_TREATMENT_GROUP) {
+    return false;
+  }
+  return !group.chips.some((chip) =>
+    candidateHasAttributeTag(candidate, chip.tagName, votesOn)
+  );
+}
+
+/**
+ * Whether a single candidate satisfies an active filter tag - a definite match
+ * (`candidateHasAttributeTag`) OR a genuine unknown on that tag's own axis
+ * (`isAttributeAxisUnknownForCandidate`). Having no signal on an axis is a different claim from
+ * knowing the candidate does not match it, and only the latter should disqualify a candidate -
+ * so an untagged candidate is never filtered out purely for lacking a tag it was never
+ * evaluated on. The funnel's own per-axis survivor-narrowing filter (F1/F2) applies this per
+ * active chip, ANDed across chips (same semantics `filterCandidatesByChipStates` already uses
+ * for the QuestionFeed's tri-state chips, just sourced from Tag-consensus data rather than
+ * `chip.matches`).
+ *
+ * This is deliberately NOT the right predicate for a negative/exclude filter, which must drop a
+ * candidate only on a definite match - an axis-unknown candidate can't be confirmed to carry the
+ * excluded tag either, so excluding it here too would just move the same mistake in the other
+ * direction. Callers doing exclusion should use `candidateHasAttributeTag` instead.
+ */
+export function candidateSatisfiesAttributeTag(
+  candidate: ChipMembershipCandidate,
+  tagName: string,
+  votesOn: boolean
+): boolean {
+  return (
+    candidateHasAttributeTag(candidate, tagName, votesOn) ||
+    isAttributeAxisUnknownForCandidate(candidate, tagName, votesOn)
   );
 }
 

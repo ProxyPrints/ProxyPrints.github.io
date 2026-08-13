@@ -183,6 +183,47 @@ describe("SelectVersionResults funnel (funnel-spec.md F1-F7)", () => {
     expect(white).toHaveAttribute("data-active", "false");
   });
 
+  // The population an active border chip used to silently delete: a candidate with no border
+  // tag at all (e.g. a custom/gold border, outside the Black/White/Silver/Borderless taxonomy
+  // entirely) has no way to ever resolve any border chip - it must survive, and must stay
+  // visibly distinct from a real match rather than surviving silently.
+  it("an untagged candidate survives an active border chip and stays visibly distinct from a real match", async () => {
+    const user = userEvent.setup();
+    renderFunnel([
+      ...Array.from({ length: 3 }, (_, i) =>
+        makeCard(`black-${i}`, ["Black Border"])
+      ),
+      ...Array.from({ length: 3 }, (_, i) => makeCard(`gold-${i}`, [])),
+    ]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("funnel-count")).toHaveTextContent("6 versions")
+    );
+
+    const black = screen.getByTestId("funnel-chip-Black Border");
+    await user.click(black);
+    await waitFor(() => expect(black).toHaveAttribute("data-active", "true"));
+
+    // No silent deletion - both the real match and the untagged candidate stay in the grid.
+    await waitFor(() =>
+      expect(screen.getByTestId("funnel-count")).toHaveTextContent("6 versions")
+    );
+    expect(
+      screen.getByTestId("select-version-tile-black-0")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("select-version-tile-gold-0")
+    ).toBeInTheDocument();
+
+    // The untagged survivor is marked as unknown; the real match is not.
+    expect(
+      screen.getByTestId("select-version-unknown-attribute-badge-gold-0")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("select-version-unknown-attribute-badge-black-0")
+    ).not.toBeInTheDocument();
+  });
+
   it("F3 - only axes with >=1 surviving candidate render (Frame stays hidden with no Frame-tagged survivor)", () => {
     renderFunnel([
       makeCard("card-1", ["Black Border"]),
