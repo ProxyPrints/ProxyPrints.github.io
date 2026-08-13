@@ -46,6 +46,7 @@ import {
   chunk,
   CutLinePlacement,
   CutLineShape,
+  DEFAULT_CARD_SELECTION_MODE,
   getPageSizeMM,
   isBleedNormalizationEligible,
   PageSize,
@@ -934,7 +935,7 @@ export const PDFGenerator = ({ heightDelta = 0 }: { heightDelta?: number }) => {
 
   const [cardSelectionMode, setCardSelectionMode] = useState<
     keyof typeof CardSelectionMode
-  >("frontsAndDistinctBacks");
+  >(DEFAULT_CARD_SELECTION_MODE);
   const [cutLineShape, setCutLineShape] =
     useState<keyof typeof CutLineShape>("InsideOnly");
   const [cutLinePlacement, setCutLinePlacement] =

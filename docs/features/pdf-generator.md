@@ -259,6 +259,31 @@ same hook. Both call sites read the same per-project `sessionStorage` suppressio
 enough for the rest of that session - see `docs/features/printing-tags.md`'s neighbour,
 `SPEC-cardback-pdfwait.md` §C.1, for the gate's own full design.
 
+## Card selection modes and the default
+
+`PDFGenerator.tsx`'s "Card Selection" settings offer four modes
+(`CardSelectionMode` in `frontend/src/features/pdf/PDF.tsx`, each backed by a
+paginator in `CardSelectionModeToPaginator`):
+
+- **Fronts + Backs** — every card's front and back, front pages interleaved
+  with their corresponding back pages (F1, B1, F2, B2, …), so duplex output
+  collates correctly.
+- **Fronts + Distinct Backs** — every front, plus only the backs that differ
+  from the project's shared cardback. The shared cardback is deliberately
+  omitted: it is meant to be printed in bulk once (a "Backs Only" export of
+  the cardback, or cardback sheets the user already has), not once per card.
+- **Fronts Only** / **Backs Only** — one side only.
+
+The default is **Fronts + Backs**. It used to be Fronts + Distinct Backs,
+which silently produced a fronts-only file for the ordinary deck whose cards
+all share the project cardback — exactly the scenario the pre-print cardback
+reminder gate warns about — with no warning that backs were missing. A deck
+that relies on a single shared cardback must still export a duplex-printable
+file by default; users who want the paper-saving behaviour select Fronts +
+Distinct Backs explicitly. The default lives in
+`DEFAULT_CARD_SELECTION_MODE` (same file), consumed by `PDFGenerator.tsx`'s
+`useState` initialiser and asserted by `pagination.test.ts`.
+
 ## Post-export contribution prompt (issue #166)
 
 `useDownloadPDF`/`useSaveToDrivePDF` (this file) are the shared success
