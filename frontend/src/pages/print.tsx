@@ -24,14 +24,16 @@ require("bootstrap-icons/font/bootstrap-icons.css");
  * thin route wrapper mounting `FinishedMyProject` (the MakePlayingCards/NotMPC/PringlePrints
  * supplier tabs + the PDF sub-tab), mirroring `pages/myDecks.tsx`'s own
  * `MyDecksPage`/`pages/shared.tsx`'s `SharedDeckPage` wrapper pattern - compose, don't fork.
- * `FinishedMyProject.tsx` itself is UNCHANGED; this file only gives it a standalone route so the
- * Finish footer's "Print / Export →" button (FinishFooter.tsx, via PrePrintSaveGate.tsx) has
- * somewhere to client-side-navigate to (D9's pre-print persist step runs BEFORE this navigation,
- * never after). Originally, the classic /editor "Print!" tab (ProjectEditor.tsx's own
- * `PrintPanel`) mounted the same component too, so both /display and /editor funneled here; the
- * Proposal H route swap (2026-07-23, issues #231/#272) unrouted that classic page entirely, so
- * this route's only live entry point today is the unified editor's own Finish footer (mounted at
- * /editor - see pages/editor.tsx).
+ * `FinishedMyProject.tsx` itself is UNCHANGED; this file only gives it a standalone route.
+ * Originally, the classic /editor "Print!" tab (ProjectEditor.tsx's own `PrintPanel`) mounted the
+ * same component too, so both /display and /editor funneled here; the Proposal H route swap
+ * (2026-07-23, issues #231/#272) unrouted that classic page entirely, and the unified editor's
+ * own Finish footer became this route's only live entry point. That button was itself folded into
+ * the editor's Export dropdown once Drive save landed there too (`DisplayExportPDF.tsx` - see
+ * docs/features/pdf-generator.md's "Editor-native PDF export" section and FinishFooter.tsx's own
+ * module comment), so this page now has no in-app entry point at all - only a direct/bookmarked
+ * URL reaches it, always with `isProjectEmpty` true below. Kept in-tree rather than deleted since
+ * removing it entirely is its own follow-up, not part of the change that retired its funnel.
  *
  * Deliberately NOT built here (D10's own owner addendum, explicitly out of THIS issue's scope per
  * the task that shipped this file): the tab REORDER (owner order: PDF · MakePlayingCards ·

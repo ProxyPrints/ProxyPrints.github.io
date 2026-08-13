@@ -70,6 +70,21 @@ const openPDFSettings = async (page: import("@playwright/test").Page) => {
   ).toBeVisible();
 };
 
+// Editor export rescue (docs/features/pdf-generator.md's "Page cut guide lines, Google Drive
+// save, and retiring the Finish footer's own print route") - the Download button now runs
+// through `runExportGate`, so a fresh project (still riding the untouched default cardback) shows
+// the cardback reminder gate on the FIRST export attempt each test. CB1 suppresses it for the
+// rest of that session, so later calls in the same test see no gate - `.click()`'s own auto-wait
+// (bounded here) absorbs both cases without a race.
+const clickDownload = async (page: import("@playwright/test").Page) => {
+  await page.getByTestId("display-export-pdf-download-button").click();
+  await page
+    .getByTestId("pre-print-cardback-gate")
+    .getByTestId("cardback-gate-use-current")
+    .click({ timeout: 3_000 })
+    .catch(() => {});
+};
+
 const readNumPages = async (buffer: Buffer): Promise<number> => {
   const doc = await getDocument({ data: new Uint8Array(buffer) }).promise;
   return doc.numPages;
@@ -106,7 +121,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await page.getByTestId("display-export-page-range-start").fill("1");
     await page.getByTestId("display-export-page-range-end").fill("1");
     const download1 = page.waitForEvent("download");
-    await page.getByTestId("display-export-pdf-download-button").click();
+    await clickDownload(page);
     const path1 = await (await download1).path();
     if (!path1) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(path1))).toBe(1);
@@ -115,7 +130,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await page.getByTestId("display-export-page-range-start").fill("");
     await page.getByTestId("display-export-page-range-end").fill("");
     const download2 = page.waitForEvent("download");
-    await page.getByTestId("display-export-pdf-download-button").click();
+    await clickDownload(page);
     const path2 = await (await download2).path();
     if (!path2) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(path2))).toBe(2);
@@ -133,7 +148,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
 
     await openPDFSettings(page);
     const defaultDownload = page.waitForEvent("download");
-    await page.getByTestId("display-export-pdf-download-button").click();
+    await clickDownload(page);
     const defaultPath = await (await defaultDownload).path();
     if (!defaultPath) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(defaultPath))).toBe(2);
@@ -143,7 +158,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
       .getByTestId("display-export-card-selection-mode")
       .selectOption("backsOnly");
     const backsOnlyDownload = page.waitForEvent("download");
-    await page.getByTestId("display-export-pdf-download-button").click();
+    await clickDownload(page);
     const backsOnlyPath = await (await backsOnlyDownload).path();
     if (!backsOnlyPath) throw new Error("Download path is null");
     // PDF.tsx's own fallback for zero paginated pages ([[]]) - a single essentially-empty page,
@@ -176,7 +191,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
         request.url().includes("/full/")
     );
     const downloadPromise = page.waitForEvent("download");
-    await page.getByTestId("display-export-pdf-download-button").click();
+    await clickDownload(page);
     const [request] = await Promise.all([requestPromise, downloadPromise]);
 
     const requestUrl = new URL(request.url());
@@ -242,6 +257,51 @@ test.describe("DisplayExportPDF - editor export controls", () => {
   });
 });
 
+// Total draw-op count for page 1, via pdfjs-dist's real operator list - a content-level signal,
+// not a byte-size proxy, so a compression-size fluke can't produce a false pass either way.
+const countPageOneDrawOps = async (buffer: Buffer): Promise<number> => {
+  const doc = await getDocument({ data: new Uint8Array(buffer) }).promise;
+  const pdfPage = await doc.getPage(1);
+  const operatorList = await pdfPage.getOperatorList();
+  return operatorList.fnArray.length;
+};
+
+test.describe("DisplayExportPDF - page cut guide lines (rescued from /print's PDFGenerator.tsx)", () => {
+  test("drawPageCutLines reaches the rendered PDF: turning the toggle off removes real draw operations, not just UI state", async ({
+    page,
+    network,
+  }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    await openPDFSettings(page);
+    const pageCutLines = page.getByTestId("display-export-page-cut-lines");
+    // Matches /print's PDFGenerator.tsx own default.
+    await expect(pageCutLines).toBeChecked();
+
+    const onDownload = page.waitForEvent("download");
+    await clickDownload(page);
+    const onPath = await (await onDownload).path();
+    if (!onPath) throw new Error("Download path is null");
+    const onOps = await countPageOneDrawOps(readFileSync(onPath));
+
+    await openPDFSettings(page);
+    await page.getByTestId("display-export-page-cut-lines").uncheck();
+    const offDownload = page.waitForEvent("download");
+    await clickDownload(page);
+    const offPath = await (await offDownload).path();
+    if (!offPath) throw new Error("Download path is null");
+    const offOps = await countPageOneDrawOps(readFileSync(offPath));
+
+    // A control that renders in the settings step but never reaches PDFProps.drawPageCutLines is
+    // exactly the failure this rescue exists to fix - assert on the actual rendered content
+    // (real draw ops), not the settings-step UI state, which the two `toBeChecked` assertions
+    // above already covered.
+    expect(onOps).toBeGreaterThan(offOps);
+  });
+});
+
 const mmToPt = (mm: number) => (mm / 25.4) * 72;
 
 test.describe("DisplayExportPDF - SCM cutting mode", () => {
@@ -297,7 +357,7 @@ test.describe("DisplayExportPDF - SCM cutting mode", () => {
 
     await openPDFSettings(page);
     const standardDownload = page.waitForEvent("download");
-    await page.getByTestId("display-export-pdf-download-button").click();
+    await clickDownload(page);
     const standardPath = await (await standardDownload).path();
     if (!standardPath) throw new Error("Download path is null");
     const standardPages = await readNumPages(readFileSync(standardPath));
@@ -305,7 +365,7 @@ test.describe("DisplayExportPDF - SCM cutting mode", () => {
     await openPDFSettings(page);
     await page.getByTestId("display-export-scm-mode-switch").check();
     const scmDownload = page.waitForEvent("download");
-    await page.getByTestId("display-export-pdf-download-button").click();
+    await clickDownload(page);
     const scmPath = await (await scmDownload).path();
     if (!scmPath) throw new Error("Download path is null");
     const scmPages = await readNumPages(readFileSync(scmPath));
@@ -416,7 +476,7 @@ test.describe("DisplayExportPDF - Custom page size (rail)", () => {
     await page.getByTestId("display-export-page-range-start").fill("1");
     await page.getByTestId("display-export-page-range-end").fill("1");
     const download = page.waitForEvent("download");
-    await page.getByTestId("display-export-pdf-download-button").click();
+    await clickDownload(page);
     const downloadPath = await (await download).path();
     if (!downloadPath) throw new Error("Download path is null");
 

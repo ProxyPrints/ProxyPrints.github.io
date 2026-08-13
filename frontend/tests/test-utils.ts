@@ -246,13 +246,20 @@ export const openSelectVersionSection = async (page: Page) => {
 // Parked-spec port wave (2026-07-24, issue #272; PDFGenerator/PagePreview/PostExportContribution-
 // Prompt specs). PDF generation now lives solely on the standalone /print route (D10,
 // pages/print.tsx) - the classic grid's own "Print!" tab this helper used to click through
-// (ProjectEditor.tsx's own PrintPanel) no longer exists anywhere reachable. The unified page's
-// Finish footer button is the one live entry point (mirrors UnsavedWorkGuard.spec.ts's and
-// DisplayFinishFooter.spec.ts's own precedent for this exact transition) - `whoamiAnonymous` is
-// part of `defaultHandlers`, so this always lands straight on /print with no pre-print save gate
-// to dismiss first. FinishedMyProject's default tab is "pringleprints", not "pdf"
-// (FinishedMyProject.tsx) - the PDF tab always needs an explicit click even though its own nav
-// item is already visible immediately.
+// (ProjectEditor.tsx's own PrintPanel) no longer exists anywhere reachable.
+//
+// KNOWN BROKEN (editor export rescue, docs/features/pdf-generator.md's "Page cut guide lines,
+// Google Drive save, and retiring the Finish footer's own print route") - this helper's own
+// `finish-footer-print-export` click below no longer has anything to click: that button, the
+// Finish footer's only in-app route to /print, was folded into the editor's own Export dropdown
+// (PDF export now runs in place via DisplayExportPDF.tsx, no navigation). /print itself is
+// unchanged and still in-tree (its own deletion is a separate follow-up, gated on this landing),
+// but there is no remaining client-side path to reach it with a populated project - only a
+// direct/bookmarked URL, which loses the in-memory Redux store this helper's callers rely on.
+// Left as-is (not reworked to some other seeding mechanism) since fixing every caller's
+// reachability is that follow-up's job, alongside deleting /print's own dedicated specs
+// (PDFGenerator.spec.ts, PagePreview.spec.ts, PostExportContributionPrompt.spec.ts) - not this
+// PR's, which only had to make the editor itself self-sufficient for export.
 //
 // The click+waitForURL step is wrapped in a `toPass` retry (same resilience pattern
 // `openAddCardsDropdown` above already established for this suite) rather than a single

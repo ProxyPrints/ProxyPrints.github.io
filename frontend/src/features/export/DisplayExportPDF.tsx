@@ -7,10 +7,15 @@
  * already looking at makes redundant.
  *
  * Props come from `displayPdfProps.ts`'s `useDisplayPDFProps` - the one adapter from this page's
- * live sheet settings to the `PDFProps` shape `PDF.tsx` already consumes - and the actual
- * download is `pdfDownload.tsx`'s `useDownloadPDF`, the exact same hook `/print`'s
- * `PDFGenerator.tsx` uses for its own Download button. Nothing about the render pipeline is
- * forked; only the source of its props and the trigger UI differ.
+ * live sheet settings to the `PDFProps` shape `PDF.tsx` already consumes. The actual download and
+ * Google Drive save are `pdfDownload.tsx`'s `useDownloadPDF`/`useSaveToDrivePDF`, the exact same
+ * hooks `/print`'s `PDFGenerator.tsx` uses for its own Download/Save-to-Drive buttons (the Drive
+ * button is gated behind the same `isGoogleDriveAppConfigured()` check that file uses). Nothing
+ * about the render pipeline is forked; only the source of its props and the trigger UI differ.
+ * Both buttons run through `runExportGate` (`usePrePrintSaveGate.startPrintFlow`, threaded down
+ * from `DisplayPage.tsx` via `FinishFooter`/`DisplayExportMenu`) before the actual export starts -
+ * the draft-flush, cardback-reminder, and save-before-export gate that used to run only ahead of
+ * a `/print` navigation.
  *
  * Export-time settings (card selection mode, page range, image quality, cut-line geometry,
  * corner rounding, an advanced page-margin override, and Silhouette/SCM cutting mode) are choices
@@ -42,6 +47,7 @@ import { RightPaddedIcon } from "@/components/icon";
 import { Spinner } from "@/components/Spinner";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
+import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import {
   DisplayExportSettings,
   DisplaySheetExportSettings,
@@ -59,6 +65,7 @@ import {
   ConfirmDespiteFailures,
   ImageFailureConfirmModal,
   useDownloadPDF,
+  useSaveToDrivePDF,
 } from "@/features/pdf/pdfDownload";
 import { ImageFetchFailure } from "@/features/pdf/pdfImage";
 import {
@@ -72,6 +79,11 @@ import { selectIsProjectEmpty } from "@/store/slices/projectSlice";
 
 export interface DisplayExportPDFProps {
   sheetSettings: DisplaySheetExportSettings;
+  /** `usePrePrintSaveGate.startPrintFlow` - runs the draft-flush/cardback-reminder/save-before-
+   * export gate sequence, then calls the proceed callback given to it. Wraps this component's own
+   * Download/Save-to-Drive buttons so that sequence still runs on every export, now that the
+   * Finish footer no longer routes anywhere to reach it (see FinishFooter.tsx's own comment). */
+  runExportGate: (proceed: () => void) => void;
 }
 
 // The mode names alone mislead ("Distinct Backs" sounds like it emits backs, and for a
@@ -107,6 +119,9 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
   roundCorners: false,
+  // Matches /print's PDFGenerator.tsx's own default - a guillotine cutting a printed stack
+  // relies on these, independent of whether per-card cut lines are also on.
+  drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,
   scmPaperSize: "letter",
@@ -118,7 +133,10 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   scmOffsetAngleDeg: 0,
 };
 
-export function DisplayExportPDF({ sheetSettings }: DisplayExportPDFProps) {
+export function DisplayExportPDF({
+  sheetSettings,
+  runExportGate,
+}: DisplayExportPDFProps) {
   const dispatch = useAppDispatch();
   const isProjectEmpty = useAppSelector(selectIsProjectEmpty);
   const backendURL = useAppSelector(selectRemoteBackendURL);
@@ -143,6 +161,7 @@ export function DisplayExportPDF({ sheetSettings }: DisplayExportPDFProps) {
   const totalPages = useMemo(() => computePDFPageCount(pdfProps), [pdfProps]);
 
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
+  const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
   const [, setImageFetchProgress] = useState<{
     completed: number;
     total: number;
@@ -159,6 +178,18 @@ export function DisplayExportPDF({ sheetSettings }: DisplayExportPDFProps) {
     clientSearchService,
     dispatch,
     setIsDownloading,
+    backendURL,
+    setImageFetchProgress,
+    confirmDespiteFailures
+  );
+
+  // Reuses the exact same shared hook /print's PDFGenerator.tsx uses for its own "Save PDF to
+  // Google Drive" button - no forked upload logic, see pdfDownload.tsx's own module comment.
+  const saveToDrive = useSaveToDrivePDF(
+    pdfProps,
+    clientSearchService,
+    dispatch,
+    setIsSavingToDrive,
     backendURL,
     setImageFetchProgress,
     confirmDespiteFailures
@@ -445,6 +476,26 @@ export function DisplayExportPDF({ sheetSettings }: DisplayExportPDFProps) {
 
           {!exportSettings.scmMode && (
             <>
+              <Form.Check
+                type="switch"
+                id="display-export-page-cut-lines"
+                className="mb-3"
+                data-testid="display-export-page-cut-lines"
+                label={
+                  exportSettings.drawPageCutLines
+                    ? "Page cut guide lines: On"
+                    : "Page cut guide lines: Off"
+                }
+                checked={exportSettings.drawPageCutLines}
+                onChange={(event) =>
+                  setField("drawPageCutLines", event.target.checked)
+                }
+              />
+              <Form.Text className="text-muted d-block mb-3">
+                Guide lines across the whole sheet for cutting a printed stack
+                with a guillotine - independent of the per-card cut lines below.
+              </Form.Text>
+
               {sheetSettings.showCutLines && (
                 <Form.Group className="mb-3">
                   <Form.Label>Cut line</Form.Label>
@@ -652,13 +703,34 @@ export function DisplayExportPDF({ sheetSettings }: DisplayExportPDFProps) {
           <Button variant="secondary" onClick={() => setShowSettings(false)}>
             Cancel
           </Button>
+          {isGoogleDriveAppConfigured() && (
+            <Button
+              variant="outline-primary"
+              disabled={isDownloading || isSavingToDrive}
+              data-testid="display-export-pdf-drive-button"
+              onClick={() => {
+                setShowSettings(false);
+                runExportGate(() => {
+                  saveToDrive();
+                });
+              }}
+            >
+              {isSavingToDrive ? (
+                <Spinner size={1} />
+              ) : (
+                "Save PDF to Google Drive"
+              )}
+            </Button>
+          )}
           <Button
             variant="primary"
-            disabled={isDownloading}
+            disabled={isDownloading || isSavingToDrive}
             data-testid="display-export-pdf-download-button"
             onClick={() => {
               setShowSettings(false);
-              downloadPDF();
+              runExportGate(() => {
+                downloadPDF();
+              });
             }}
           >
             {isDownloading ? <Spinner size={1} /> : "Download PDF"}
