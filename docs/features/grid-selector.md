@@ -345,6 +345,38 @@ a completely separate code path, also unaffected.
     a card whose `tagVoteStatuses` says `"suggested"` but whose
     `suggestedFilterTagNames` excludes the tag renders no suggested
     chip and casts no implicit vote for it.
+- <a id="unknown-axis-survives-filter"></a>**A candidate with no signal on
+  a chip's axis survives that chip, marked distinct from a real match**
+  (issue #789). `candidateSatisfiesAttributeTag` used to read only as
+  "resolved OR suggested," so a candidate carrying neither was treated as
+  a _known_ non-match and dropped by the funnel's AND-across-chips
+  survivor filter — indistinguishable from a candidate that genuinely
+  resolves to a different value on the same axis. Those are different
+  claims: having no vote data for an axis says nothing about what the
+  axis actually is. This mattered most for exactly the population the
+  taxonomy already admits it can't classify — a custom/altered/gold
+  border falls outside Black/White/Silver/Borderless entirely, so no
+  amount of future voting could ever resolve it, and every border chip
+  silently deleted it (and the illustration on it) from the grid.
+  Fixed by splitting the definite-match check
+  (`candidateHasAttributeTag`) from a new genuine-unknown check
+  (`isAttributeAxisUnknownForCandidate`): unknown when no tag sharing the
+  chip's own exclusion group is resolved or suggested; a _resolved_
+  sibling (a candidate that genuinely IS a different value on the same
+  axis) still disqualifies as before. Scoped exactly like
+  `getOpenExclusionGroups` — Border Color and Frame Style qualify (the
+  two enum-like axes that can hold a value outside the taxonomy); a
+  standalone chip (Full Art, Etched) or `FRAME_TREATMENT_GROUP`
+  (Showcase/Extended) does not, since "no tag" is already a complete,
+  definite answer for a plain boolean with no taxonomy-gap case. An
+  unknown survivor renders a small `?` corner marker
+  (`select-version-unknown-attribute-badge-*`) distinct from the
+  `SuggestedMarker` glyph, so surviving the filter never reads as a
+  confirmed match. Since the filter operates per-candidate (this surface
+  has no illustration-level grouping the way `filterCandidatesByChipStates`
+  does), an unknown candidate simply isn't removed at all — filtering on
+  a border axis can't narrow the illustration axis for it, because
+  nothing here ever removes it on that axis's account.
 - <a id="count-proportional-disclosure"></a>**Count-proportional disclosure
   tiers ship as named constants** (F1; locked 2026-07-22, PR #329;
   formerly labeled _D21_ in this document), refining the editor-completion
@@ -588,7 +620,8 @@ a completely separate code path, also unaffected.
   (+ `selectVersionGrouping.test.ts`) — the `/display`-only Select
   Version section (issue #167) and its FUNNEL round (F1-F7)
 - `frontend/src/features/attributeChips/attributeChips.ts` —
-  `FUNNEL_AXES`, `chipMembershipState`, `candidateSatisfiesAttributeTag`
+  `FUNNEL_AXES`, `chipMembershipState`, `candidateSatisfiesAttributeTag`,
+  `candidateHasAttributeTag`, `isAttributeAxisUnknownForCandidate`
   (funnel round, additive to the existing chip taxonomy)
 - `frontend/src/features/pdf/PagePreview.tsx` — `onSlotContextMenu`,
   the extracted `PagePreviewSlotEl`, the `⋯` menu cue (funnel round F6)

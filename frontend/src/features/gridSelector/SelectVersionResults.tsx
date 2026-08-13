@@ -70,12 +70,14 @@ import { Spinner } from "@/components/Spinner";
 import {
   ALL_ATTRIBUTE_CHIPS,
   AttributeChipDef,
+  candidateHasAttributeTag,
   candidateSatisfiesAttributeTag,
   ChipMembershipState,
   chipMembershipState,
   ChipVoteState,
   FUNNEL_AXES,
   FunnelAxis,
+  isAttributeAxisUnknownForCandidate,
   nextChipState,
 } from "@/features/attributeChips/attributeChips";
 import { MemoizedEditorCard } from "@/features/card/Card";
@@ -156,6 +158,11 @@ function filterByChipsVotesGated(
  * are untouched by this function entirely - this only ever narrows further by DROPPING any
  * candidate that satisfies an excluded tag, additive to whatever the positive filter already
  * kept. Stacked (funnel) layout only, same `votesOn` gating as the positive filter.
+ *
+ * Uses `candidateHasAttributeTag`, not `candidateSatisfiesAttributeTag` - excluding a candidate
+ * needs a definite positive match on the excluded tag; a candidate with no signal on that tag's
+ * axis can't be confirmed to carry it, so it survives an exclude filter the same way it
+ * survives the positive one.
  */
 function filterOutExcludedChipsVotesGated(
   identifiers: Array<string>,
@@ -172,7 +179,7 @@ function filterOutExcludedChipsVotesGated(
       return true;
     }
     return !Array.from(excludedTagNames).some((tagName) =>
-      candidateSatisfiesAttributeTag(card, tagName, votesOn)
+      candidateHasAttributeTag(card, tagName, votesOn)
     );
   });
 }
@@ -665,17 +672,39 @@ const ReqBadge = styled.span`
   padding: 0 3px;
 `;
 
-/** F3's "survived only via a suggested/unconfirmed tag" signal - used to be a standalone
- * "⌇ suggested" text row under the tile; folded into a small corner marker instead (bottom-left,
- * the one corner `CornerTag`/`ReqBadge`/the confirm ribbon below don't already use). Tokyo-11:
- * accent, matching the "suggested" semantics FUNNEL_SUGGESTED_STYLE/D14's suggested pill share. */
-const SuggestedMarker = styled.span`
+/** Bottom-left corner - the one `CornerTag`/`ReqBadge`/the confirm ribbon below don't already
+ * use - holds whichever of `SuggestedMarker`/`UnknownAttributeMarker` apply to this tile,
+ * stacked rather than each independently positioned, since both can apply at once (a candidate
+ * can satisfy one active axis via a suggested tag and another via no signal at all). */
+const AttributeSignalStack = styled.div`
   position: absolute;
   bottom: 0;
   left: 0;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+`;
+
+/** F3's "survived only via a suggested/unconfirmed tag" signal - used to be a standalone
+ * "⌇ suggested" text row under the tile; folded into a small corner marker instead. Tokyo-11:
+ * accent, matching the "suggested" semantics FUNNEL_SUGGESTED_STYLE/D14's suggested pill share. */
+const SuggestedMarker = styled.span`
   font-size: 0.55rem;
   color: var(--theme-accent);
+  background: rgba(0, 0, 0, 0.55);
+  padding: 0 3px;
+`;
+
+/** A candidate has zero signal, positive or negative, on an active filter tag's own axis - it
+ * survives the filter (piece 1: absence of signal is not evidence of mismatch), but must stay
+ * visibly distinct from an actual match, or the filter would silently claim knowledge it
+ * doesn't have. Muted rather than accent-colored (Tokyo-11) so it doesn't read as a positive
+ * signal the way `SuggestedMarker` does. */
+const UnknownAttributeMarker = styled.span`
+  font-size: 0.55rem;
+  color: var(--theme-light);
   background: rgba(0, 0, 0, 0.55);
   padding: 0 3px;
 `;
@@ -991,6 +1020,7 @@ interface SelectVersionTileProps {
   onMoreLikeThis: (identifier: string) => void;
   backendURL: string;
   showSuggestedBadge: boolean;
+  showUnknownAttributeBadge: boolean;
   /** Addendum item 2 (continuous grid) - everything below is stacked-layout-only annotation
    * data; the sidebar/modal layout never sets any of it and renders exactly as before (see each
    * prop's own render-site comment for the byte-for-byte-preserved branch). */
@@ -1016,6 +1046,7 @@ function SelectVersionTile({
   onMoreLikeThis,
   backendURL,
   showSuggestedBadge,
+  showUnknownAttributeBadge,
   layout,
   cornerTag,
   requested,
@@ -1107,13 +1138,26 @@ function SelectVersionTile({
             REQ
           </ReqBadge>
         )}
-        {stacked && showSuggestedBadge && (
-          <SuggestedMarker
-            aria-hidden="true"
-            data-testid={`select-version-suggested-badge-${identifier}`}
-          >
-            ⌇
-          </SuggestedMarker>
+        {stacked && (showSuggestedBadge || showUnknownAttributeBadge) && (
+          <AttributeSignalStack>
+            {showUnknownAttributeBadge && (
+              <UnknownAttributeMarker
+                aria-label="No data for one or more active attribute filters on this candidate"
+                title="No data for one or more active attribute filters on this candidate"
+                data-testid={`select-version-unknown-attribute-badge-${identifier}`}
+              >
+                ?
+              </UnknownAttributeMarker>
+            )}
+            {showSuggestedBadge && (
+              <SuggestedMarker
+                aria-hidden="true"
+                data-testid={`select-version-suggested-badge-${identifier}`}
+              >
+                ⌇
+              </SuggestedMarker>
+            )}
+          </AttributeSignalStack>
         )}
         {stacked && hasConfirmAffordance && (
           <ConfirmRibbonWrap
@@ -1619,6 +1663,15 @@ export function SelectVersionResults({
       card != null &&
       voteLayer != null &&
       voteLayer.suggestedTagNames(card).length > 0;
+    // Piece 1 fix - a candidate that only survived an active chip because its axis is a
+    // genuine unknown (never evaluated), not because it actually matches, must stay visibly
+    // distinct from a real match. See `isAttributeAxisUnknownForCandidate`'s own comment.
+    const showUnknownAttributeBadge =
+      layout === "stacked" &&
+      card != null &&
+      Array.from(activeAttributeTags).some((tagName) =>
+        isAttributeAxisUnknownForCandidate(card, tagName, votesOn)
+      );
     return {
       identifier,
       headerLabel,
@@ -1635,6 +1688,7 @@ export function SelectVersionResults({
       onMoreLikeThis: applyMoreLikeThis,
       backendURL,
       showSuggestedBadge,
+      showUnknownAttributeBadge,
       layout,
     };
   };

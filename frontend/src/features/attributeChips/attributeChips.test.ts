@@ -6,10 +6,14 @@ import {
 
 import {
   ALL_ATTRIBUTE_CHIPS,
+  candidateHasAttributeTag,
+  candidateSatisfiesAttributeTag,
+  ChipMembershipCandidate,
   filterCandidatesByChipStates,
   findExclusionGroup,
   getAutoTagChips,
   getOpenExclusionGroups,
+  isAttributeAxisUnknownForCandidate,
   isChipContradicted,
   nextChipState,
 } from "./attributeChips";
@@ -299,5 +303,187 @@ describe("isChipContradicted", () => {
   it("is true for Showcase once Extended Art is explicitly positive, and vice versa", () => {
     expect(isChipContradicted("Showcase", { Extended: "positive" })).toBe(true);
     expect(isChipContradicted("Extended", { Showcase: "positive" })).toBe(true);
+  });
+});
+
+describe("isAttributeAxisUnknownForCandidate", () => {
+  const untagged: ChipMembershipCandidate = { tags: [] };
+
+  it("is true for a border-color chip when the candidate carries no border signal at all", () => {
+    expect(
+      isAttributeAxisUnknownForCandidate(untagged, "Black Border", true)
+    ).toBe(true);
+  });
+
+  // The population the fix exists for: a border value (e.g. gold) outside the Black/White/
+  // Silver/Borderless taxonomy has no chip that could ever resolve it, so it stays unknown no
+  // matter how complete the vote ledger becomes - not just on today's empty one.
+  it("stays true regardless of votesOn - there is no tag this candidate could ever carry", () => {
+    expect(
+      isAttributeAxisUnknownForCandidate(untagged, "Black Border", false)
+    ).toBe(true);
+  });
+
+  it("is false once a sibling in the same group resolves to a different value", () => {
+    const resolvedWhite: ChipMembershipCandidate = { tags: ["White Border"] };
+    expect(
+      isAttributeAxisUnknownForCandidate(resolvedWhite, "Black Border", true)
+    ).toBe(false);
+  });
+
+  it("is false once a sibling in the same group is only suggested, with votes on", () => {
+    const suggestedWhite: ChipMembershipCandidate = {
+      tags: [],
+      suggestedFilterTagNames: ["White Border"],
+    };
+    expect(
+      isAttributeAxisUnknownForCandidate(suggestedWhite, "Black Border", true)
+    ).toBe(false);
+  });
+
+  it("is true for a frame-style chip when the candidate carries no frame signal at all", () => {
+    expect(
+      isAttributeAxisUnknownForCandidate(untagged, "Old Border", true)
+    ).toBe(true);
+  });
+
+  // Scoped exactly like getOpenExclusionGroups: a standalone chip has no sibling and no
+  // taxonomy-gap case, so "no tag" stays a definite non-match, not an unknown.
+  it("is false for a standalone chip - it has no exclusion group to be unknown within", () => {
+    expect(isAttributeAxisUnknownForCandidate(untagged, "Etched", true)).toBe(
+      false
+    );
+    expect(isAttributeAxisUnknownForCandidate(untagged, "Full Art", true)).toBe(
+      false
+    );
+  });
+
+  // Scoped exactly like getOpenExclusionGroups' own FRAME_TREATMENT_GROUP carve-out: Showcase/
+  // Extended Art are plain booleans, so neither being present is itself a complete answer.
+  it("is false for Frame Treatment chips - two false booleans are a complete answer, not a gap", () => {
+    expect(isAttributeAxisUnknownForCandidate(untagged, "Showcase", true)).toBe(
+      false
+    );
+    expect(isAttributeAxisUnknownForCandidate(untagged, "Extended", true)).toBe(
+      false
+    );
+  });
+});
+
+describe("candidateHasAttributeTag", () => {
+  it("is true for a resolved tag", () => {
+    expect(candidateHasAttributeTag({ tags: ["Etched"] }, "Etched", true)).toBe(
+      true
+    );
+  });
+
+  it("is true for a suggested tag only when votes are on", () => {
+    const suggested: ChipMembershipCandidate = {
+      tags: [],
+      suggestedFilterTagNames: ["Etched"],
+    };
+    expect(candidateHasAttributeTag(suggested, "Etched", true)).toBe(true);
+    expect(candidateHasAttributeTag(suggested, "Etched", false)).toBe(false);
+  });
+
+  // The definite-signal half candidateSatisfiesAttributeTag is built from - never true for a
+  // candidate the tag was simply never evaluated on.
+  it("is false for a candidate with no signal at all - never true merely from absence", () => {
+    expect(candidateHasAttributeTag({ tags: [] }, "Black Border", true)).toBe(
+      false
+    );
+  });
+});
+
+describe("candidateSatisfiesAttributeTag", () => {
+  it("is true when the candidate resolves the tag", () => {
+    expect(
+      candidateSatisfiesAttributeTag(
+        { tags: ["Black Border"] },
+        "Black Border",
+        true
+      )
+    ).toBe(true);
+  });
+
+  it("is true when the candidate only suggests the tag and votes are on", () => {
+    const suggested: ChipMembershipCandidate = {
+      tags: [],
+      suggestedFilterTagNames: ["Black Border"],
+    };
+    expect(
+      candidateSatisfiesAttributeTag(suggested, "Black Border", true)
+    ).toBe(true);
+  });
+
+  // votesOn only gates the suggested signal, not the unknown-axis carve-out below - a
+  // suggested-only candidate still survives with votes off, just via "unknown", not "matches".
+  it("does not count a suggested-only tag as a match once votes are off", () => {
+    const suggested: ChipMembershipCandidate = {
+      tags: [],
+      suggestedFilterTagNames: ["Black Border"],
+    };
+    expect(candidateHasAttributeTag(suggested, "Black Border", false)).toBe(
+      false
+    );
+  });
+
+  it("stays false for a resolved mismatch regardless of votesOn", () => {
+    const whiteBordered: ChipMembershipCandidate = { tags: ["White Border"] };
+    expect(
+      candidateSatisfiesAttributeTag(whiteBordered, "Black Border", false)
+    ).toBe(false);
+  });
+
+  // The defect this closes: an untagged candidate used to fail every AND-ed chip check and
+  // disappear from the grid. It must now survive an active chip on an axis it carries no
+  // signal for, since absence of signal is not evidence of mismatch.
+  it("survives an active border chip when the candidate has no tags at all", () => {
+    expect(
+      candidateSatisfiesAttributeTag({ tags: [] }, "Black Border", true)
+    ).toBe(true);
+  });
+
+  it("survives with votes off too - correct on an empty ledger, not only a full one", () => {
+    expect(
+      candidateSatisfiesAttributeTag({ tags: [] }, "Black Border", false)
+    ).toBe(true);
+  });
+
+  // The gold-border population: a border color entirely outside the Black/White/Silver/
+  // Borderless taxonomy has no tag that could ever resolve it, so every border chip must
+  // survive it regardless of which one is active.
+  it("survives every border chip for a candidate whose border falls entirely outside the taxonomy", () => {
+    const goldBordered: ChipMembershipCandidate = { tags: [] };
+    expect(
+      candidateSatisfiesAttributeTag(goldBordered, "Black Border", true)
+    ).toBe(true);
+    expect(
+      candidateSatisfiesAttributeTag(goldBordered, "White Border", true)
+    ).toBe(true);
+    expect(
+      candidateSatisfiesAttributeTag(goldBordered, "Silver Border", true)
+    ).toBe(true);
+  });
+
+  // A resolved sibling in the same exclusion group is real, known information - this must still
+  // disqualify the other members, or the border filter would do nothing at all.
+  it("is false when a sibling in the same exclusion group resolves to a different value", () => {
+    const whiteBordered: ChipMembershipCandidate = { tags: ["White Border"] };
+    expect(
+      candidateSatisfiesAttributeTag(whiteBordered, "Black Border", true)
+    ).toBe(false);
+  });
+
+  // Standalone chips and Frame Treatment are unaffected by this fix - see
+  // isAttributeAxisUnknownForCandidate's own tests for why "no tag" stays a definite non-match
+  // for those.
+  it("stays false for an untagged candidate on a standalone or Frame Treatment chip", () => {
+    expect(candidateSatisfiesAttributeTag({ tags: [] }, "Etched", true)).toBe(
+      false
+    );
+    expect(candidateSatisfiesAttributeTag({ tags: [] }, "Showcase", true)).toBe(
+      false
+    );
   });
 });
