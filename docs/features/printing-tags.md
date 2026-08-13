@@ -786,7 +786,8 @@ printings, artists, tags, and moderation from one screen.
   `CardScanLog` — never read by any consensus computation.
 - **Evidence-gated confirmation policy** (2026-08-11, `cardpicker/ question_feed.py`, `_evidence_justifies_confirmation`, issue #766,
   replaces the 2026-08-10 remainder mix rotation described in the git
-  history of this section): [`wtc-question-model.md`](wtc-question-model.md)
+  history of this section; tightened to read the vote itself by issue #797,
+  2026-08-13): [`wtc-question-model.md`](wtc-question-model.md)
   §2/§3 (ratified 2026-08-11) holds there is no lane RATIO to tune for
   confirm/contested/cold — a printing confirmation is either justified by
   the machine's own recorded evidence for that specific card, or it isn't,
@@ -794,30 +795,46 @@ printings, artists, tags, and moderation from one screen.
   `_COLD_MIX_WEIGHT` (defaults `3`/`2`/`1`, never measured — see that
   ratified doc's §3) are deleted rather than retuned. **Mechanism**: the
   gate sits at `confirm_suggestion`'s one construction site,
-  `_confirm_suggestion_item` — a card is built as a confirmation only when
-  its own most recent `CardScanLog.evidence_types_used` covers every type
-  the fallback calculator can record (`border`/`artist`/`symbol` — the
-  ratified doc's own text names a fourth, "collector line", that the
-  calculator never actually produces; see `_KNOWN_EVIDENCE_TYPES`'s own
-  comment and that doc's correction note). Every other card, including one
-  the machine already suggested a printing for, is simply not constructible
-  as `confirm_suggestion` and falls through to whichever of tier 2 or
-  tier 4 already claims it, served as `identify_printing` instead — the
-  question that presupposes nothing, safe to ask regardless of which
-  element (if any) the evidence check failed on. **Measured effect**
-  (2026-08-11): 0 of 110,130 confirm-eligible cards clear the gate today —
-  a MATCHING fallback-calculator run never writes a `CardScanLog` row at
-  all (only a SKIP does), so the population this gate governs has almost
-  nothing to read. Before this change, `QuestionFeedServedLog` showed
-  confirm_suggestion at 507 of 516 remainder-pool serves (98.3%); after,
-  that population is absorbed by tier 4's non-contested printing pool
-  (222,105 cards) as `identify_printing` instead — no starvation, a
-  question-type shift only. The now-gated tier 1 no longer needs a
-  per-session rebalancing policy, so the remainder waterfall
-  (`_REMAINDER_LANE_ORDER`) is a plain, fixed confirm → contested → cold
-  order — restored, not reinvented; see this module's own docstring for
-  the full mechanism. **Soundness**: SELECTION-LAYER only, same boundary
-  the mix-composition and information-gain policies state for
+  `_confirm_suggestion_item` — a `CardPrintingTag` vote is offered as a
+  confirmation only when its own `evidence_types_used` (a field on the vote
+  itself, not on `CardScanLog` — see below) covers every type the fallback
+  calculator can record (`border`/`artist`/`symbol` — the ratified doc's
+  own text names a fourth, "collector line", that the calculator never
+  actually produces; see `_KNOWN_EVIDENCE_TYPES`'s own comment and that
+  doc's correction note). A card with several machine votes filters to only
+  the gate-admitted ones before elimination consensus is applied, so
+  different votes on the same card can pass or fail independently. Every
+  card with no gate-admitted vote, including one the machine already
+  suggested a printing for, is simply not constructible as
+  `confirm_suggestion` and falls through to whichever of tier 2 or tier 4
+  already claims it, served as `identify_printing` instead — the question
+  that presupposes nothing, safe to ask regardless of which element (if
+  any) the evidence check failed on. **Issue #797 (2026-08-13):** at
+  ratification the gate read `CardScanLog.evidence_types_used` instead,
+  scoped to the fallback calculator's own writer id — but a MATCH (the
+  fallback calculator's own outcome that produces the `CardPrintingTag`
+  vote this gate exists to judge) never writes a `CardScanLog` row at all
+  (only a SKIP does), so that reader was structurally unreachable for the
+  population it governed: measured 2026-08-11, 0 of 110,130
+  confirm-eligible cards cleared the gate. The fix moved
+  `evidence_types_used` onto `CardPrintingTag` itself, populated by
+  `run_fallback_calculator` on a match exactly as the skip branch already
+  populated the sibling `CardScanLog` field, and pointed the gate at that
+  column — the skip path's own `CardScanLog` write is unchanged. Historical
+  votes (cast before this field existed, and every join-key/deductive-
+  backfill vote, which share no evidence vocabulary with the fallback
+  calculator) carry `evidence_types_used=null` and fail the gate exactly
+  like an empty list does, until a future backfill pass populates them.
+  Before the #797 fix, `QuestionFeedServedLog` showed confirm_suggestion at
+  507 of 516 remainder-pool serves (98.3%); after the #766 gate landed
+  (before #797's correction), that population was absorbed by tier 4's
+  non-contested printing pool (222,105 cards) as `identify_printing`
+  instead — no starvation, a question-type shift only. The now-gated tier 1
+  no longer needs a per-session rebalancing policy, so the remainder
+  waterfall (`_REMAINDER_LANE_ORDER`) is a plain, fixed confirm → contested
+  → cold order — restored, not reinvented; see this module's own docstring
+  for the full mechanism. **Soundness**: SELECTION-LAYER only, same
+  boundary the mix-composition and information-gain policies state for
   themselves — it decides whether tier 1 is even constructible for a
   given card, never how any lane's candidate set is built, how a vote
   resolves, or the LIKELY-RESOLVE pool's own precedence above it.

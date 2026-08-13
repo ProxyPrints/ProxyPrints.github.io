@@ -2181,6 +2181,11 @@ def run_fallback_calculator(
                     source=VoteSource.OCR,
                     confidence=verdict.confidence,
                     run_id=run_id,
+                    # Issue #797 - the skip branch above already carries this same
+                    # verdict.evidence_types_used out to CardScanLog; a match discarded it
+                    # entirely until now, which is what left every matched card unable to reach
+                    # question_feed._evidence_justifies_confirmation (that gate's only reader).
+                    evidence_types_used=list(verdict.evidence_types_used),
                 )
             )
             touched_card_ids.append(card.pk)

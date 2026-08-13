@@ -66,16 +66,18 @@ holds there is no lane RATIO to tune in the first place: a printing confirmation
 it is not, and no target share fixes an unjustified claim being asked too often. `confirm_
 suggestion` is the expensive question (see this module's own opening paragraph and the ratified
 doc's §1): it asks the user to vouch for border, artist credit and set symbol (§2's fourth named
-element, collector line, has no corresponding entry in `CardScanLog.evidence_types_used` -
-see `_KNOWN_EVIDENCE_TYPES`'s own comment for why this PR gates on the three that actually exist
+element, collector line, has no corresponding entry in `evidence_types_used` - see
+`_KNOWN_EVIDENCE_TYPES`'s own comment for why this PR gates on the three that actually exist
 rather than a fourth the calculator never produces) all at once, so it is gated at its one
 construction site, `_confirm_suggestion_item` (see `_evidence_justifies_confirmation` below): a
-card is only ever built as a `confirm_suggestion` item when its own most recent `CardScanLog` row
-covers every evidence type the fallback calculator can record. Every other card that would
-previously have been offered a confirmation - including every card with NO recorded evidence at
-all, which is the overwhelming majority today (measured 2026-08-11: 0 of 110,130 confirm-eligible
-cards clear this gate, since a MATCHING fallback-calculator run never writes a `CardScanLog` row
-in the first place - only a SKIP does; see `local_calculate_verdicts.calculate_fallback_verdict`)
+`CardPrintingTag` vote is only ever offered as a `confirm_suggestion` suggestion when its own
+`evidence_types_used` (issue #797 - carried onto the vote itself, not a separate `CardScanLog`
+row a MATCH never writes) covers every evidence type the fallback calculator can record. Every
+other card that would previously have been offered a confirmation - including every card with NO
+recorded evidence at all, which was the overwhelming majority pre-#797 (measured 2026-08-11: 0 of
+110,130 confirm-eligible cards cleared this gate, since a MATCHING fallback-calculator run
+discarded its own computed evidence list instead of persisting it anywhere the gate could reach -
+see `local_calculate_verdicts.calculate_fallback_verdict`)
 - is simply not constructible as `confirm_suggestion`, and falls through to whichever of tier 2
 (contested) or tier 4 (cold) already claims it: tier 4's own printing branch, in particular,
 already includes every non-contested unresolved card regardless of vote count and already orders
@@ -241,7 +243,8 @@ QUICK_NEGATIVE_SKIP_REASONS = frozenset(
 # or run_id.
 _HYPOTHETICAL_VOTE_ANONYMOUS_ID = "question-feed-hypothetical-vote"
 
-# The full vocabulary `CardScanLog.evidence_types_used` can ever contain - read off
+# The full vocabulary `evidence_types_used` can ever contain, on either the `CardScanLog` row a
+# skip writes or the `CardPrintingTag` vote a match writes (issue #797) - read off
 # `local_calculate_verdicts.calculate_fallback_verdict`'s own three sub-checks (border/artist/
 # symbol intersection), not restated as a fourth "collector line" element: the ratified question
 # model (docs/features/wtc-question-model.md §2) names border, artist credit, set symbol AND
@@ -261,49 +264,32 @@ _KNOWN_EVIDENCE_TYPES = frozenset({"border", "artist", "symbol"})
 _BORDER_COLOR_TAG_NAMES = frozenset(BORDER_COLOR_TO_TAG.values())
 
 
-def _card_recorded_evidence_types(card: Card) -> frozenset[str]:
-    """`evidence_types_used` off `card`'s own most recent `CardScanLog` row written by the
-    fallback calculator (STAGE_D_FALLBACK_ANONYMOUS_ID), or an empty set if no such row exists.
-    `evidence_types_used` is ONLY ever written by the fallback calculator, and ONLY on a SKIP
-    outcome ("eliminated"/"ambiguous") - a MATCH never writes a `CardScanLog` row at all (see
-    `local_calculate_verdicts.run_fallback_calculator`). The read is scoped to this single writer
-    because `CardScanLog` is an append-only audit trail with many writers - slow-path router,
-    attribute casters, per-extractor skip rows in `persist_evidence`, pilot stages - and most of
-    them leave `evidence_types_used` at its default empty value (models.py:2298, migration 0072).
-    The fallback calculator itself appends legitimately empty rows for no-evidence and
-    no-sub-check-evidence skip reasons (local_calculate_verdicts.py:2133-2140, 1942-1948), so the
-    read also excludes those rows - "which row is newest" is decided by creation order among
-    non-empty fallback rows, never by a transient empty skip row from any writer. That is the
-    expected state of the data today (measured 2026-08-12: before this fix, 422 of 422 cards
-    carrying evidence had an empty LATEST row and zero cards cleared this gate, masking compounded
-    on genuine absence) - see `_evidence_justifies_confirmation`'s own docstring."""
-    latest_evidence_types_used = (
-        CardScanLog.objects.filter(
-            card_id=card.pk,
-            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
-        )
-        .exclude(evidence_types_used=[])
-        .order_by("-scanned_at")
-        .values_list("evidence_types_used", flat=True)
-        .first()
-    )
-    return frozenset(latest_evidence_types_used or [])
+def _evidence_justifies_confirmation(vote: CardPrintingTag) -> bool:
+    """True only when `vote`'s own recorded `evidence_types_used` covers every type the pipeline
+    can record (`_KNOWN_EVIDENCE_TYPES`) - the operational form of docs/features/
+    wtc-question-model.md §2's "all four matched" gate, applied to the vocabulary that actually
+    exists (see `_KNOWN_EVIDENCE_TYPES`'s own comment). False for a vote with partial evidence
+    (one or two of the three types recorded) and False for a vote with none recorded at all
+    (`evidence_types_used` is null on every vote no writer has populated it for - every vote cast
+    before this field existed, every human vote, every join-key/deductive-backfill vote) - both
+    cases are routed identically here, to the SAME fallback (tier 2/4's existing
+    `identify_printing` machinery), because there is no per-element question type in `TypeEnum`
+    to route a specific gap to (`artist`/`tag`/`identify_printing`/`confirm_suggestion` are the
+    only four - see `schema_types.TypeEnum`); the finer-grained "ask about specifically the
+    missing element" routing the ratified doc's §3 describes is not implementable at the
+    backend-selection layer without a new question type, which is out of this change's scope
+    (backend serving/selection only - no frontend, no new calculator work).
 
-
-def _evidence_justifies_confirmation(card: Card) -> bool:
-    """True only when `card`'s own recorded evidence covers every type the pipeline can record
-    (`_KNOWN_EVIDENCE_TYPES`) - the operational form of docs/features/wtc-question-model.md §2's
-    "all four matched" gate, applied to the vocabulary that actually exists (see
-    `_KNOWN_EVIDENCE_TYPES`'s own comment). False for a card with partial evidence (one or two of
-    the three types recorded) and False for a card with none recorded at all - both cases are
-    routed identically here, to the SAME fallback (tier 2/4's existing `identify_printing`
-    machinery), because there is no per-element question type in `TypeEnum` to route a specific
-    gap to (`artist`/`tag`/`identify_printing`/`confirm_suggestion` are the only four - see
-    `schema_types.TypeEnum`); the finer-grained "ask about specifically the missing element"
-    routing the ratified doc's §3 describes is not implementable at the backend-selection layer
-    without a new question type, which is out of this change's scope (backend serving/selection
-    only - no frontend, no new calculator work)."""
-    return _KNOWN_EVIDENCE_TYPES.issubset(_card_recorded_evidence_types(card))
+    Reads the field directly off the vote being confirmed, not off `CardScanLog` (issue #797):
+    the only outcome that can ever reach this gate is a MATCH (`_confirm_suggestion_item` only
+    calls this once a `CardPrintingTag` already exists to confirm), and a MATCH never writes a
+    `CardScanLog` row at all (`local_calculate_verdicts.run_fallback_calculator`'s skip-only scan-
+    log write) - so a scan-log read here was always structurally unreachable for the population
+    this gate serves (measured 2026-08-11, pre-fix: 0 of 110,130 confirm-eligible cards cleared
+    it). `CardPrintingTag.evidence_types_used`'s own docstring is the single source of truth this
+    reads; `CardScanLog.evidence_types_used` remains the skip path's own unchanged record and has
+    no reader here."""
+    return _KNOWN_EVIDENCE_TYPES.issubset(frozenset(vote.evidence_types_used or []))
 
 
 def _tag_confidence(card: Card) -> dict[str, float]:
@@ -317,10 +303,12 @@ def _tag_confidence(card: Card) -> dict[str, float]:
 def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
     # Two independent gates compose here, in the order that keeps the expensive read lazy.
     #
-    # 1. The EVIDENCE GATE (#775, `_evidence_justifies_confirmation` below): a CARD-level
-    #    property - does `card`'s own recorded `CardScanLog.evidence_types_used` cover every
-    #    type the pipeline can record? Decides whether a printing confirmation may be offered
-    #    for this card AT ALL.
+    # 1. The EVIDENCE GATE (#775, tightened to per-VOTE by #797's `_evidence_justifies_
+    #    confirmation` below): does the specific vote a candidate would suggest carry its own
+    #    recorded `evidence_types_used` covering every type the pipeline can record? Decides
+    #    whether THAT vote may be offered as a confirmation AT ALL - a card with several machine
+    #    votes can have some pass and others fail, so this filters `ai_votes` rather than
+    #    short-circuiting on the card as a whole.
     # 2. ELIMINATION CONSENSUS - "Not this art" (docs/features/wtc-question-model.md §7.1): a
     #    candidate-SET-level filter. A suggestion whose artwork the group has already reached
     #    elimination consensus on (`illustration_consensus.eliminated_illustration_ids`) must
@@ -329,14 +317,14 @@ def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
     #    evidence" failure this whole feature exists to close.
     #
     # The two commute semantically (both must hold; neither reads the other's output), so the
-    # ordering is a COST decision, not a correctness one: the gate is one cheap indexed read of
-    # the card's most recent `CardScanLog` row, while `eliminated_illustration_ids(card)` is a
-    # group-scoped consensus query - so the gate runs first, and the elimination read is paid
-    # only for a card the gate has already admitted. Measured 2026-08-11, the gate rejects
-    # 0-for-110,130 confirm-eligible cards, so keeping the elimination read inside the
-    # candidate loop (its laziness is untouched: still computed only once a candidate with a
-    # non-null illustration_id is actually seen) would have paid that consensus query for every
-    # sampled confirm-shaped card at pool-warm time for zero served items - see
+    # ordering is a COST decision, not a correctness one: the gate is a field access on rows
+    # already fetched by the one query below, while `eliminated_illustration_ids(card)` is a
+    # separate group-scoped consensus query - so the gate runs first, and the elimination read is
+    # paid only for a card that still has a gate-admitted candidate left. Measured 2026-08-11
+    # (pre-#797 fix), the gate rejected every confirm-eligible card, so keeping the elimination
+    # read inside the candidate loop (its laziness is untouched: still computed only once a
+    # candidate with a non-null illustration_id is actually seen) would have paid that consensus
+    # query for every sampled confirm-shaped card at pool-warm time for zero served items - see
     # `question_feed_pools._build_pool_confirm`, which calls this per card. Only a card that
     # could actually be served as confirm_suggestion ever touches the elimination machinery.
     ai_votes = list(
@@ -348,7 +336,8 @@ def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
     # confirm-shaped, so neither the gate nor the elimination read is paid for it.
     if not ai_votes:
         return None
-    if not _evidence_justifies_confirmation(card):
+    ai_votes = [vote for vote in ai_votes if _evidence_justifies_confirmation(vote)]
+    if not ai_votes:
         return None
     eliminated_ids: Optional[set[uuid.UUID]] = None
     ai_vote = None
