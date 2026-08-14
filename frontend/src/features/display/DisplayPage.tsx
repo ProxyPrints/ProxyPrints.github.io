@@ -231,6 +231,7 @@ import { useDebounce } from "use-debounce";
 import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
+import { getSheetImageURL } from "@/common/image";
 import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
 import { SourceType } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
@@ -805,6 +806,14 @@ const PromotedZone = ({
 // the 380px rail, "Jump to Version" wrapping vertically, bottom controls clipping at the rail
 // edge) - see those two files' own prop comments.
 
+/* A slot whose query has no results yet resolves to this shared reference rather than a fresh
+   `[]`. A new array each render misses `selectCardDocumentsByIdentifiers`' size-1 memo, which
+   returns a new object, which re-fires useGridSelectorSearch's filter effect, which setStates
+   and re-renders - an unbreakable loop ("Maximum update depth exceeded") that pegs the main
+   thread so no image on either rail ever loads. Large decks hit it because their search results
+   arrive slowly enough for a slot to be clicked while still empty. */
+const EMPTY_SEARCH_RESULTS: Array<string> = [];
+
 interface SelectVersionSectionProps {
   face: Faces;
   slot: number;
@@ -885,7 +894,7 @@ const SelectVersionSection = ({
         query?.collectorNumber,
         face
       )
-    ) ?? [];
+    ) ?? EMPTY_SEARCH_RESULTS;
   const focusRef = useRef<HTMLInputElement>(null);
   // E3/X2 (Bkg 5) - the rail always starts with Filters collapsed, regardless of viewport width
   // (the modal's own GridSelectorModal caller doesn't pass this, so its width-based default is
@@ -2450,7 +2459,8 @@ export function DisplayPage() {
                 : "failed"
               : undefined;
           const content: PagePreviewSlotContent = {
-            imageUrl: cardDocument?.mediumThumbnailUrl,
+            imageUrl:
+              cardDocument != null ? getSheetImageURL(cardDocument) : undefined,
             name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
             queryText,
             loadState,
