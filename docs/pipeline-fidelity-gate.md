@@ -1193,12 +1193,26 @@ buckets:
   `frame-style-cast-v1` precisely because of that — under one shared
   identity a card's frame vote would read as "already handled" and
   permanently strand its bleed chip. Derivable population 2026-07-29: 2,786.
+- **`bleed-calculator-cast-v1`** (`local_bleed_calculator`, NEW, stacked on
+  #819/canvas-padding-stage-c-extractor, **0 rows — not yet mergeable**) —
+  a second, independent channel onto the same `appropriate-bleed` tag as
+  `bleed-edge-cast-v1` above. Cross-checks a closed-form aspect-ratio bleed
+  (reads the already-persisted `ImageEvidence.bleed_diff_mm`) against a
+  per-edge pinline-ruler bleed (`local_pinline_inset`, calibrated by border
+  colour + frame era from `CanonicalPrintingMetadata`, so selectable on
+  roughly a tenth of the catalogue) and withholds a vote when the two
+  disagree by more than 2mm rather than picking a side. Same NEGATIVE-ONLY
+  convention as `bleed-edge-cast-v1` — votes only when its own reading
+  agrees the card is `trimmed`. Cannot go live until `local_pinline_inset`'s
+  own branch merges and its extractor actually runs against production, so
+  0 rows here is expected, not a coverage gap, until that lands.
 
-Both were created because the 2026-07-29 composition audit found the only
-casters for these two chips inside the live-fetch pilot and inside
-`image_evidence.extract_card_evidence`, which had zero production callers —
-so both chips sat at zero rows with nothing able to re-derive them. See
-`docs/features/printing-tags.md`, "Who actually casts the attribute chips".
+Both `frame-style-cast-v1`/`bleed-edge-cast-v1` were created because the
+2026-07-29 composition audit found the only casters for these two chips
+inside the live-fetch pilot and inside `image_evidence.extract_card_evidence`,
+which had zero production callers — so both chips sat at zero rows with
+nothing able to re-derive them. See `docs/features/printing-tags.md`, "Who
+actually casts the attribute chips".
 
 ### Wiring status — the streaming conveyor's `_run_stage_d` (2026-08-05)
 
