@@ -266,6 +266,43 @@ judging upload quality. Human votes are more reliable for image quality
 assessment than any single automated metric, so no threshold calibration is
 planned until real rater data justifies one.
 
+**Canvas padding: measured, not yet corrected.** Every fixed-fraction crop box
+Stage C computes (the collector line, artist credit, art region, set-symbol
+strip, legal line) is a fraction of the WHOLE fetched image. Some uploads place
+the card on a larger canvas, leaving a band of flat colour around it — on such
+an upload every one of those boxes lands inside the padding band rather than on
+the card, since none of them account for it. Measured over 348 padded cards,
+the collector-line crop misses the collector line entirely on 72.1% of them and
+achieves adequate overlap on none; the median displacement is 8.0% of image
+height. `local_canvas_padding.detect_canvas_padding` scans inward from each of
+the four edges, along several sample lines per edge, for the first sustained
+colour departure from that edge's own colour, and stores the result on
+`ImageEvidence` (four per-edge padding fractions, four per-edge calls, one
+whole-image verdict) — it does not change what any of the five boxes above crop.
+A later change is what will consume these fields; until then they are dormant.
+
+Two guards keep the measurement honest:
+
+- **The uniformity gate.** A colour departure only counts as the canvas/card
+  boundary if the zone between the image's own edge and that departure is
+  itself internally uniform. Without this, a scan walking inward through a
+  borderless card's own artwork would report the first colour change IN THE
+  ART as though it were a canvas boundary — the difference between measuring
+  padding and measuring the picture.
+- **Black-on-black abstention.** When no colour departure is found within the
+  search window AND the edge's own colour is itself near-black, that edge is
+  recorded as INDETERMINATE, never as zero padding — a black canvas around a
+  black-bordered card produces no colour departure a scan can see at all. On
+  the validation sample, 4 of 352 otherwise-padded rows had exactly this
+  failure on their top edge; defaulting an indeterminate edge to zero would
+  under-crop those cards by the full padding band width.
+
+A card's whole-image verdict is `padded`, `not_padded`, `ambiguous`, or
+`abstain_black` (3 or more indeterminate edges). What this detector does NOT
+do: it never remaps or corrects a crop box itself, and it cannot see a black
+canvas behind a black-bordered card — that case abstains, it does not read as
+unpadded.
+
 ## Stage D — the join-key calculator (`local_calculate_verdicts`)
 
 Eligible cards: current evidence exists, no prior vote from this machine

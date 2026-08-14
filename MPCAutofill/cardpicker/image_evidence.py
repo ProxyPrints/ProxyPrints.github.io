@@ -259,6 +259,7 @@ from cardpicker.collector_line_artist import (
 )
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
+from cardpicker.local_canvas_padding import detect_canvas_padding
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     SYMBOL_STRIP_BOX,
@@ -337,6 +338,10 @@ LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v2"
 # engine-independent by construction, same reasoning as symbol_region above.
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
 ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v1"
+# NOT bumped: canvas_padding (local_canvas_padding.detect_canvas_padding) is a pure colour-
+# distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
+# quality_signals above.
+CANVAS_PADDING_EXTRACTOR_VERSION = "canvas-padding-v1"
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
 # _hash_to_int/_HASH_BITS exactly (imagehash's default hash_size=8 -> a 64-bit hash), reproduced
@@ -1456,6 +1461,34 @@ def compute_card_evidence(
             fields["image_entropy"] = compute_entropy(image)
     extractor_versions["quality_signals"] = QUALITY_SIGNALS_EXTRACTOR_VERSION
 
+    # canvas_padding: see local_canvas_padding.py's own module docstring for the algorithm.
+    # MEASURES AND PERSISTS ONLY - no existing crop box computation above reads these fields,
+    # and this block changes none of them. Shares quality_signals' own degenerate width/height
+    # guard immediately above (the same real, mechanical sub-floor condition, not a new one).
+    if image is None:
+        skip_reasons["canvas_padding"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+    elif width <= 0 or height <= 0:
+        skip_reasons["canvas_padding"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+    else:
+        padding = detect_canvas_padding(image)
+        if padding is None:
+            # detect_canvas_padding's own degenerate-input guard - unreachable here in practice
+            # (width/height already confirmed positive above), kept for the same defense-in-depth
+            # reason artbox_phash's degenerate-crop-box guard is kept even though real fetched
+            # images essentially never hit it.
+            skip_reasons["canvas_padding"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        else:
+            fields["canvas_padding_frac_top"] = padding.top.pad_frac
+            fields["canvas_padding_frac_bottom"] = padding.bottom.pad_frac
+            fields["canvas_padding_frac_left"] = padding.left.pad_frac
+            fields["canvas_padding_frac_right"] = padding.right.pad_frac
+            fields["canvas_padding_call_top"] = padding.top.call
+            fields["canvas_padding_call_bottom"] = padding.bottom.call
+            fields["canvas_padding_call_left"] = padding.left.call
+            fields["canvas_padding_call_right"] = padding.right.call
+            fields["canvas_padding_verdict"] = padding.verdict
+    extractor_versions["canvas_padding"] = CANVAS_PADDING_EXTRACTOR_VERSION
+
     if profile is not None:
         profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000
         profile["other_ms"] = (
@@ -1652,4 +1685,5 @@ __all__ = [
     "ARTBOX_PHASH_EXTRACTOR_VERSION",
     "ARTBOX_MODERN_CROP_BOX",
     "ARTBOX_OLD_CROP_BOX",
+    "CANVAS_PADDING_EXTRACTOR_VERSION",
 ]
