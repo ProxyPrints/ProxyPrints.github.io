@@ -389,6 +389,16 @@ export class ClientSearchService {
     searchSettings: SearchSettings,
     searchQueries: Array<SearchQuery>
   ): SearchResults {
+    // editorSearch only ever resolves an already-imported project slot's fixed query, never a
+    // fresh discovery search - fuzzy/precise is an add-cards-time preference, so it's forced
+    // precise here regardless of the caller's global setting.
+    const preciseSearchSettings: SearchSettings = {
+      ...searchSettings,
+      searchTypeSettings: {
+        ...searchSettings.searchTypeSettings,
+        fuzzySearch: false,
+      },
+    };
     const localResults: SearchResults = {};
     for (const searchQuery of searchQueries) {
       if (searchQuery.query) {
@@ -398,7 +408,7 @@ export class ClientSearchService {
         }
 
         const localResultsForQuery = this.retrieveCardIdentifiers(
-          searchSettings,
+          preciseSearchSettings,
           searchQuery.query,
           [searchQuery.cardType]
         );

@@ -224,7 +224,11 @@ class TestPostEditorSearchResults:
         assert response.status_code == 200
         assert response.json()["results"]["key1"] == []
 
-    def test_fuzzy_search(self, client, snapshot):
+    def test_fuzzy_search_preference_is_ignored_editor_search_stays_precise(self, client, snapshot):
+        # editor search resolves an already-imported project slot's fixed query, never a fresh
+        # discovery search, so a client-supplied fuzzySearch=True must not smuggle forgiving
+        # partial-name matching in here - "past in" only ever matches "Past in Flames" under
+        # fuzzy search's own forgiving semantics, so this must come back empty regardless.
         search_settings = deepcopy(BASE_SEARCH_SETTINGS)
         search_settings["searchTypeSettings"]["fuzzySearch"] = True
         response = client.post(
@@ -237,10 +241,7 @@ class TestPostEditorSearchResults:
         )
         snapshot_response(response, snapshot)
         assert response.status_code == 200
-        assert response.json()["results"]["key1"] == [
-            Cards.PAST_IN_FLAMES_1.value.identifier,
-            Cards.PAST_IN_FLAMES_2.value.identifier,
-        ]
+        assert response.json()["results"]["key1"] == []
 
     def test_minimum_dpi_yielding_no_search_results(self, client, snapshot):
         search_settings = deepcopy(BASE_SEARCH_SETTINGS)
