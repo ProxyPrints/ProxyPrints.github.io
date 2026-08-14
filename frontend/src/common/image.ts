@@ -58,3 +58,18 @@ export const getWorkerImageURL = (
       ).toString()
     : undefined;
 };
+
+// Sheet slots render far below native card resolution, so `small` suffices here.
+export const getSheetImageURL = (
+  cardDocument: CardDocument
+): string | undefined => {
+  const bucketURL = getBucketImageURL(cardDocument, "small");
+  if (bucketURL != null) {
+    return bucketURL;
+  }
+  const workerURL = getWorkerImageURL(cardDocument, "small");
+  if (workerURL != null) {
+    return workerURL;
+  }
+  return cardDocument.mediumThumbnailUrl;
+};
