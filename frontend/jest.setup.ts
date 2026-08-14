@@ -90,15 +90,38 @@ beforeAll(() => {
     });
 });
 
-beforeEach(() => {
-  // IntersectionObserver isn't available in test environment
-  const mockIntersectionObserver = jest.fn();
-  mockIntersectionObserver.mockReturnValue({
-    observe: () => null,
-    unobserve: () => null,
-    disconnect: () => null,
-  });
-});
+// jsdom has no IntersectionObserver, and RenderIfVisible.tsx constructs one in an effect the
+// moment it mounts - so any suite rendering a virtualized list (SelectVersionResults.test.tsx's
+// candidate grid) threw "IntersectionObserver is not defined" outright. This replaces a
+// `beforeEach` that built such a mock and then never assigned it anywhere, so nothing was ever
+// polyfilled. `isIntersecting: true` is deliberate: it reports every observed element as on
+// screen, so a virtualized list renders all of its children under Jest exactly as the
+// unvirtualized one did, and assertions stay about filtering/grouping rather than scroll
+// position, which jsdom cannot model (it has no layout).
+if (typeof global.IntersectionObserver === "undefined") {
+  global.IntersectionObserver = class {
+    private readonly callback: IntersectionObserverCallback;
+
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback;
+    }
+    observe(target: Element) {
+      this.callback(
+        [{ isIntersecting: true, target } as IntersectionObserverEntry],
+        this as unknown as IntersectionObserver
+      );
+    }
+    unobserve() {
+      return undefined;
+    }
+    disconnect() {
+      return undefined;
+    }
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  } as unknown as typeof IntersectionObserver;
+}
 
 // Reset any request handlers that we may add during the tests,
 // so they don't affect other tests.

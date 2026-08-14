@@ -66,6 +66,7 @@ import {
 } from "@/common/cookies";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { CardDocument, useAppDispatch, useAppSelector } from "@/common/types";
+import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { Spinner } from "@/components/Spinner";
 import {
   ALL_ATTRIBUTE_CHIPS,
@@ -1839,44 +1840,74 @@ export function SelectVersionResults({
       aria-label="Candidate printings"
       data-testid="select-version-continuous-grid"
     >
-      {continuousGridEntries.map((entry) =>
+      {continuousGridEntries.map((entry, visualIndex) =>
         entry.kind === "tile" ? (
-          <SelectVersionTile
+          <div
             key={entry.key}
-            {...entry.props}
-            cornerTag={entry.cornerTag}
-            requested={entry.requested}
-            ariaLabel={entry.ariaLabel}
-          />
-        ) : (
-          <GhostTile
-            key={entry.key}
-            type="button"
-            className="vtile ghost"
-            $widthRem={tileWidthRem ?? 4.5}
-            aria-label={entry.ariaLabel}
-            onClick={entry.onClick}
-            data-testid={`select-version-ghost-${entry.key}`}
+            role="none"
+            style={{
+              width: `${tileWidthRem ?? 4.5}rem`,
+              flex: "0 0 auto",
+            }}
           >
-            {entry.thumbnailUrl != null ? (
-              <>
-                <GhostThumb
-                  src={entry.thumbnailUrl}
-                  alt=""
-                  aria-hidden="true"
-                />
-                <GhostDim aria-hidden="true" />
-                <GhostPlus
-                  data-testid={`select-version-ghost-plus-${entry.key}`}
-                >
-                  {entry.label}
-                </GhostPlus>
-                <GhostCap>more copies</GhostCap>
-              </>
-            ) : (
-              entry.label
-            )}
-          </GhostTile>
+            <RenderIfVisible
+              defaultHeight={compressed ? 197 : 300}
+              initialVisible={visualIndex < 20}
+              visibleOffset={500}
+              stayRendered
+            >
+              <SelectVersionTile
+                {...entry.props}
+                cornerTag={entry.cornerTag}
+                requested={entry.requested}
+                ariaLabel={entry.ariaLabel}
+              />
+            </RenderIfVisible>
+          </div>
+        ) : (
+          <div
+            key={entry.key}
+            role="none"
+            style={{
+              width: `${tileWidthRem ?? 4.5}rem`,
+              flex: "0 0 auto",
+            }}
+          >
+            <RenderIfVisible
+              defaultHeight={compressed ? 197 : 300}
+              initialVisible={visualIndex < 20}
+              visibleOffset={500}
+              stayRendered
+            >
+              <GhostTile
+                type="button"
+                className="vtile ghost"
+                $widthRem={tileWidthRem ?? 4.5}
+                aria-label={entry.ariaLabel}
+                onClick={entry.onClick}
+                data-testid={`select-version-ghost-${entry.key}`}
+              >
+                {entry.thumbnailUrl != null ? (
+                  <>
+                    <GhostThumb
+                      src={entry.thumbnailUrl}
+                      alt=""
+                      aria-hidden="true"
+                    />
+                    <GhostDim aria-hidden="true" />
+                    <GhostPlus
+                      data-testid={`select-version-ghost-plus-${entry.key}`}
+                    >
+                      {entry.label}
+                    </GhostPlus>
+                    <GhostCap>more copies</GhostCap>
+                  </>
+                ) : (
+                  entry.label
+                )}
+              </GhostTile>
+            </RenderIfVisible>
+          </div>
         )
       )}
     </div>

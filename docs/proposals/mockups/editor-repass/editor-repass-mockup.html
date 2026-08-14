@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ProxyPrints — /editor design repass (rails carry the work)</title>
+<style>
+/* ============================================================================
+   THEME TOKENS — verbatim from frontend/src/styles/_theme-tokens.scss
+   ("Tokyo-11", 2026-07-24). Same names as the runtime :root bridge that file
+   emits, so what is drawn here is what would ship. No invented values.
+   ============================================================================ */
+:root{
+  --theme-body-bg:#1a1b26;
+  --theme-raised-bg:#24283b;
+  --theme-panel-bg:#2f3549;
+  --theme-card-header-bg:#2f3548;
+  --theme-band-bg:#222234;
+  --theme-divider:#16161e;
+  --theme-text:#c0caf5;
+  --theme-muted:#a3aad0;
+  --theme-light:#c0caf5;
+  --theme-primary:#ff9e64;
+  --theme-primary-hover:#ff8433;
+  --theme-success:#9ece6a;
+  --theme-danger:#f7768e;
+  --theme-warning:#e0af68;
+  --theme-info:#7dcfff;
+  --theme-btn-ink:#1a1b26;
+  --theme-accent:#bb9af7;
+  --theme-accent-rgb:187,154,247;
+  --theme-radius-sm:6px;
+  --theme-radius-base:6px;
+  --theme-radius-card:8px;
+  --theme-radius-pill:10px;
+  --theme-space-1:4px;
+  --theme-space-2:8px;
+  --theme-space-3:12px;
+  --theme-space-4:16px;
+  --theme-space-5:24px;
+  --theme-space-6:32px;
+  /* mockup-only annotation colour, never a shipped token */
+  --annotate:#e0af68;
+  /* R1: resting tile width. AFTER = 3-up in a 380px rail; BEFORE = shipped 72px dense. */
+  --tile:112px;
+}
+body[data-mode="before"]{ --tile:72px; }
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#101019;color:var(--theme-text);
+  font-family:Lato,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  font-size:16px;line-height:1.5}
+
+/* ---------- demo strip: forces Desktop/Tablet/Phone at any window width ---------- */
+.demo{position:fixed;top:0;left:0;right:0;z-index:9000;display:flex;flex-wrap:wrap;
+  align-items:center;gap:6px;padding:7px 12px;background:#000;
+  border-bottom:2px solid var(--theme-primary);font-size:12px}
+.demo b{color:var(--theme-primary);letter-spacing:.04em;text-transform:uppercase;font-size:10px}
+.demo .grp{display:flex;gap:3px;align-items:center;padding:0 7px;border-right:1px solid #333}
+.demo button{background:var(--theme-raised-bg);color:var(--theme-text);border:1px solid #3d425c;
+  padding:3px 8px;cursor:pointer;font-size:11px;font-family:inherit;border-radius:var(--theme-radius-sm)}
+.demo button.on{background:var(--theme-primary);border-color:var(--theme-primary);
+  color:var(--theme-btn-ink);font-weight:700}
+.demo button:focus-visible{outline:2px solid var(--annotate);outline-offset:1px}
+.demo .hint{color:var(--theme-muted);font-size:11px;max-width:330px}
+
+/* ---------- scaled frames ---------- */
+#stage{padding:0 12px 40px}
+.framewrap{overflow:hidden}
+.frame{transform-origin:top left;background:var(--theme-body-bg);position:relative;overflow:hidden;
+  border:1px solid #2c3050}
+/* Sits ABOVE the frame, never over it — an absolutely-positioned tag landed on top of the
+   action bar's own controls and made them unreadable. */
+.frame-tag{display:block;color:var(--annotate);font-size:10px;letter-spacing:.06em;
+  text-transform:uppercase;padding:4px 2px 3px}
+
+/* ============================ shared page chrome ============================ */
+.page{display:flex;flex-direction:column;height:100%;font-size:14px}
+
+/* R4/R11 — action bar: search FIRST, py-1, 32px controls */
+.bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:4px 12px;
+  background:var(--theme-raised-bg);border-bottom:1px solid var(--theme-divider);flex:0 0 auto}
+/* R4 — the group leads the bar but is width-capped: an uncapped flex:1 grew the "Add cards…"
+   input to ~900px on desktop, which reads as a text area rather than a search field. */
+.searchgrp{display:flex;align-items:center;gap:6px;flex:1 1 240px;min-width:0;max-width:560px}
+.seg{display:inline-flex;border-radius:var(--theme-radius-base);overflow:hidden;flex:0 0 auto}
+.seg button{height:32px;padding:0 10px;font-size:12px;font-family:inherit;cursor:pointer;
+  background:transparent;color:var(--theme-light);border:1px solid var(--theme-light);
+  border-right-width:0}
+.seg button:first-child{border-radius:var(--theme-radius-base) 0 0 var(--theme-radius-base)}
+.seg button:last-child{border-right-width:1px;border-radius:0 var(--theme-radius-base) var(--theme-radius-base) 0}
+.seg button.on{background:var(--theme-accent);border-color:var(--theme-accent);color:var(--theme-btn-ink);font-weight:700}
+.sfield{position:relative;flex:1 1 auto;min-width:0}
+.sfield input{width:100%;height:32px;padding:0 8px 0 28px;font-size:13px;font-family:inherit;
+  background:var(--theme-body-bg);color:var(--theme-text);border:1px solid var(--theme-panel-bg);
+  border-radius:var(--theme-radius-base)}
+.sfield .mag{position:absolute;left:8px;top:50%;transform:translateY(-50%);
+  color:var(--theme-muted);font-size:13px;pointer-events:none}
+.btn{height:32px;padding:0 10px;font-size:12px;font-family:inherit;cursor:pointer;
+  background:transparent;color:var(--theme-light);border:1px solid var(--theme-light);
+  border-radius:var(--theme-radius-base);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.btn.primary{background:var(--theme-primary);border-color:var(--theme-primary);
+  color:var(--theme-btn-ink);font-weight:700}
+.btn.outprimary{color:var(--theme-primary);border-color:var(--theme-primary)}
+.btn.danger{color:var(--theme-danger);border-color:var(--theme-danger)}
+.btn.sm{height:26px;padding:0 8px;font-size:11px}
+.deckname{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--theme-muted);
+  flex:0 0 auto;max-width:190px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.deckname b{color:var(--theme-text);font-weight:600}
+.gear{margin-left:auto}
+
+.body{display:flex;flex:1 1 auto;min-height:0;position:relative}
+
+/* ============================ LEFT RAIL ============================ */
+.rail{width:380px;flex:0 0 380px;background:var(--theme-raised-bg);
+  border-right:1px solid var(--theme-divider);display:flex;flex-direction:column;
+  overflow:hidden}
+.railscroll{overflow-y:auto;display:flex;flex-direction:column;flex:1 1 auto}
+.blk{border-bottom:1px solid var(--theme-divider);padding:8px 10px;flex:0 0 auto}
+.legend{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--theme-muted);
+  margin-bottom:5px}
+
+/* R3 — merged identity head */
+.head{display:flex;gap:10px;align-items:flex-start}
+.subject{flex:0 0 68px;width:68px;aspect-ratio:63/88;border-radius:var(--theme-radius-sm);
+  background:linear-gradient(150deg,#3d2a1e,#6c4a2e 45%,#241d19);position:relative;overflow:hidden;
+  border:1px solid var(--theme-divider)}
+.subject .ttl{position:absolute;left:3px;right:3px;top:4px;font-size:6px;color:#f4e2c9;
+  background:rgba(0,0,0,.45);border-radius:2px;padding:1px 2px;text-align:center}
+.headmeta{min-width:0;flex:1 1 auto}
+.slotline{font-size:11px;color:var(--theme-muted)}
+.cardname{font-size:15px;font-weight:600;margin-top:1px;line-height:1.2}
+/* R3 — confidence, merged into the head as one row (AFTER) */
+.confrow{display:flex;align-items:center;gap:6px;margin-top:5px;flex-wrap:wrap}
+.seticon{width:22px;height:22px;border-radius:var(--theme-radius-sm);background:var(--theme-panel-bg);
+  display:inline-flex;align-items:center;justify-content:center;font-size:11px;position:relative;
+  color:var(--theme-text)}
+.seticon .badge{position:absolute;right:-3px;bottom:-3px;width:11px;height:11px;border-radius:50%;
+  background:var(--theme-success);color:var(--theme-btn-ink);font-size:7px;line-height:11px;text-align:center}
+.statepill{font-size:10px;padding:1px 7px;border-radius:var(--theme-radius-pill);
+  background:rgba(var(--theme-accent-rgb),.18);color:var(--theme-accent);border:1px solid var(--theme-accent)}
+.notthis{font-size:10px;color:var(--theme-danger);border:1px solid var(--theme-danger);
+  border-radius:var(--theme-radius-base);padding:1px 6px;background:transparent;cursor:pointer;
+  font-family:inherit;opacity:.62}
+.iacts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.iact{width:32px;height:30px;display:inline-flex;align-items:center;justify-content:center;
+  font-size:14px;background:transparent;color:var(--theme-light);border:1px solid var(--theme-light);
+  border-radius:var(--theme-radius-base);cursor:pointer;font-family:inherit}
+.iact.danger{color:var(--theme-danger);border-color:var(--theme-danger)}
+.iact.hl{border-color:var(--annotate);color:var(--annotate)}
+
+/* separate confidence band — only rendered in BEFORE */
+.confband{background:var(--theme-band-bg)}
+
+/* ---- funnel ---- */
+.fhead{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--theme-muted)}
+.fhead .cnt{color:var(--theme-text);font-weight:600}
+.chippill{font-size:10px;padding:1px 6px;border-radius:var(--theme-radius-pill);
+  background:rgba(var(--theme-accent-rgb),.2);color:var(--theme-accent)}
+.axis{display:flex;align-items:center;gap:8px;margin-top:7px}
+.axis .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--theme-muted);
+  flex:0 0 62px}
+.axis .seg button{height:26px;font-size:11px;padding:0 8px}
+.uni{border:1px solid var(--theme-divider);border-radius:var(--theme-radius-base);padding:6px;margin-top:7px;
+  display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.chip{height:26px;padding:0 8px;font-size:11px;border-radius:var(--theme-radius-base);
+  background:transparent;color:var(--theme-light);border:1px solid var(--theme-light);
+  cursor:pointer;font-family:inherit;display:inline-flex;align-items:center}
+.chip.on{background:var(--theme-accent);border-color:var(--theme-accent);color:var(--theme-btn-ink);font-weight:700}
+.chip.sug{border-style:dashed;border-color:var(--theme-accent);color:var(--theme-accent)}
+.aware{border-left:2px solid var(--theme-primary);padding-left:8px;margin-top:8px;
+  font-size:11px;color:var(--theme-muted)}
+
+/* R1/R2 — survivor grid */
+.vgrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tile{width:var(--tile);position:relative;cursor:pointer}
+body[data-results="few"] .tile{width:170px}
+.tile .art{width:100%;aspect-ratio:63/88;border-radius:var(--theme-radius-sm);overflow:hidden;
+  position:relative;border:1px solid var(--theme-divider)}
+.tile.sel .art{outline:2px solid var(--theme-accent);outline-offset:1px}
+.tile .art .ttl{position:absolute;left:4px;right:4px;top:6%;font-size:calc(var(--tile)/16);
+  color:#f6e7d2;background:rgba(0,0,0,.42);border-radius:2px;padding:1px 2px;text-align:center;
+  line-height:1.15}
+.tile .cap{font-size:9px;color:var(--theme-muted);margin-top:2px;text-align:center;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .ctag{position:absolute;top:3px;left:3px;font-size:7px;line-height:1;padding:2px 3px;
+  border-radius:2px;background:rgba(26,27,38,.92);color:var(--theme-success)}
+.tile .ctag.alt{color:var(--theme-muted)}
+.tile .req{position:absolute;top:3px;right:3px;font-size:7px;line-height:1;padding:2px 3px;
+  border-radius:2px;background:rgba(26,27,38,.92);color:var(--theme-primary)}
+.ghost{width:var(--tile);border:1px dashed var(--theme-light);border-radius:var(--theme-radius-sm);
+  background:transparent;color:var(--theme-light);font-family:inherit;font-size:11px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;text-align:center;padding:6px;
+  aspect-ratio:63/88}
+.empty{margin-top:10px;font-size:12px;color:var(--theme-muted);text-align:center;
+  border:1px dashed var(--theme-divider);border-radius:var(--theme-radius-base);padding:14px 8px}
+
+/* ---- artist + demoted disclosures ---- */
+.artist{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+.disc{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  background:var(--theme-card-header-bg);border:1px solid var(--theme-divider);
+  border-radius:var(--theme-radius-base);padding:6px 9px;font-size:12px;cursor:pointer;margin-bottom:6px}
+.disc:last-child{margin-bottom:0}
+.disc .r{color:var(--theme-muted);font-size:11px}
+
+/* ============================ CENTRE ============================ */
+.centre{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;align-items:center;
+  padding:12px;overflow:auto;position:relative}
+.npill{position:sticky;top:0;align-self:flex-end;font-size:11px;font-variant-numeric:tabular-nums;
+  background:rgba(36,40,59,.85);color:var(--theme-text);border-radius:var(--theme-radius-pill);
+  padding:2px 9px;pointer-events:none;z-index:5}
+.sheet{width:100%;max-width:660px;aspect-ratio:279.4/215.9;border:1px solid rgba(192,202,245,.18);
+  border-radius:7px;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);
+  column-gap:2.27%;row-gap:7.46%;padding:1.5%;margin-bottom:4px;flex:0 0 auto}
+.slot{position:relative;border-radius:3px;overflow:hidden;
+  background:linear-gradient(160deg,#33261c,#5d4230 50%,#241c17);border:1px solid rgba(0,0,0,.35)}
+.slot .ttl{position:absolute;left:4%;right:4%;top:7%;font-size:7px;color:#f6e7d2;
+  background:rgba(0,0,0,.42);border-radius:2px;padding:1px;text-align:center}
+.slot .cb{position:absolute;top:3px;left:3px;width:12px;height:12px;border-radius:2px;
+  border:1px solid rgba(192,202,245,.6);background:rgba(26,27,38,.7)}
+.slot .flip,.slot .cue{position:absolute;width:16px;height:16px;border-radius:3px;
+  background:rgba(36,40,59,.85);color:var(--theme-text);font-size:10px;line-height:16px;
+  text-align:center;border:0;font-family:inherit;cursor:pointer}
+.slot .flip{top:3px;right:3px}
+.slot .cue{bottom:3px;right:3px}
+.slot .dot{position:absolute;top:1px;right:1px;width:5px;height:5px;border-radius:50%;
+  background:var(--theme-warning)}
+.slot.empty2{background:transparent;border:1px dashed rgba(192,202,245,.16)}
+
+/* ============================ RIGHT RAIL ============================ */
+.settings{width:300px;flex:0 0 300px;background:var(--theme-raised-bg);
+  border-left:1px solid var(--theme-divider);display:flex;flex-direction:column;overflow:hidden}
+.setscroll{flex:1 1 auto;overflow-y:auto}
+.field{margin-bottom:7px}
+.field label{display:block;font-size:11px;color:var(--theme-muted);margin-bottom:2px}
+.field .row2{display:flex;gap:6px;align-items:center}
+select,input[type=number],input[type=text].ctl{width:100%;height:28px;font-size:12px;font-family:inherit;
+  background:var(--theme-body-bg);color:var(--theme-text);border:1px solid var(--theme-panel-bg);
+  border-radius:var(--theme-radius-base);padding:0 7px}
+.readout{font-size:11px;color:var(--theme-muted);background:var(--theme-panel-bg);
+  border-radius:var(--theme-radius-base);padding:5px 7px;margin-bottom:7px}
+.readout b{color:var(--theme-text);font-weight:600}
+.info{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+  border-radius:50%;border:1px solid var(--theme-info);color:var(--theme-info);font-size:9px;
+  margin-left:5px;cursor:help;background:transparent;font-family:inherit;vertical-align:middle}
+.sw{display:flex;align-items:center;gap:6px;font-size:12px;margin-bottom:7px}
+.sw .track{width:32px;height:18px;border-radius:var(--theme-radius-pill);background:var(--theme-primary);
+  position:relative}
+.sw .track::after{content:"";position:absolute;top:2px;right:2px;width:14px;height:14px;border-radius:50%;
+  background:var(--theme-btn-ink)}
+/* R9 — cardback swatch strip */
+.swatches{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px}
+.swatch{width:52px;aspect-ratio:63/88;border-radius:var(--theme-radius-sm);
+  background:linear-gradient(150deg,#2a2033,#4a3560 55%,#1d1a28);border:1px solid var(--theme-divider);
+  cursor:pointer;position:relative}
+.swatch.on{outline:2px solid var(--theme-accent);outline-offset:1px}
+.swatch.more{background:transparent;border-style:dashed;color:var(--theme-muted);font-size:10px;
+  display:flex;align-items:center;justify-content:center}
+/* R7 — footer */
+.foot{flex:0 0 auto;border-top:1px solid var(--theme-divider);padding:8px 10px;
+  background:var(--theme-raised-bg)}
+.prog{height:6px;border-radius:var(--theme-radius-pill);background:var(--theme-panel-bg);overflow:hidden;
+  margin-bottom:7px}
+.prog i{display:block;height:100%;width:44%;background:var(--theme-primary)}
+.proglbl{font-size:10px;color:var(--theme-muted);margin-bottom:5px;display:flex;justify-content:space-between}
+.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:stretch}
+.pair .btn{height:34px;justify-content:center;width:100%;font-size:13px}
+.pair .dl{width:34px;padding:0;justify-content:center}
+.draft{font-size:11px;color:var(--theme-muted);text-align:center;margin-top:6px}
+.draft .ok{color:var(--theme-success)}
+
+/* ============================ drawers (tablet / phone) ============================ */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.5);z-index:40;display:none}
+.frame[data-tier="tablet"] .rail,.frame[data-tier="phone"] .rail,
+.frame[data-tier="tablet"] .settings,.frame[data-tier="phone"] .settings{position:absolute;z-index:50}
+.frame[data-tier="tablet"] .rail{top:0;bottom:0;left:0;width:380px;flex-basis:380px;
+  box-shadow:6px 0 22px rgba(0,0,0,.5)}
+.frame[data-tier="phone"] .rail{left:0;right:0;bottom:0;top:auto;width:auto;flex-basis:auto;height:72%;
+  border-right:0;border-top:1px solid var(--theme-divider);
+  border-radius:var(--theme-radius-card) var(--theme-radius-card) 0 0;box-shadow:0 -6px 22px rgba(0,0,0,.5)}
+.frame[data-tier="tablet"] .settings,.frame[data-tier="phone"] .settings{top:0;bottom:0;right:0;
+  width:min(92%,320px);flex-basis:auto;box-shadow:-6px 0 22px rgba(0,0,0,.5)}
+.drawerhead{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;
+  border-bottom:1px solid var(--theme-divider);font-size:13px;font-weight:600;flex:0 0 auto}
+.grabber{width:44px;height:5px;border-radius:3px;background:var(--theme-panel-bg);margin:8px auto 2px}
+.frame[data-tier="desktop"] .drawerhead,.frame[data-tier="desktop"] .grabber{display:none}
+.frame[data-tier="tablet"] .grabber{display:none}
+.frame[data-tier="desktop"] .gear{display:none}
+
+/* which drawer is open, per demo state */
+.frame[data-tier="tablet"] .settings,.frame[data-tier="phone"] .settings{display:none}
+body[data-drawer="right"] .frame[data-tier="tablet"] .settings,
+body[data-drawer="right"] .frame[data-tier="phone"] .settings{display:flex}
+body[data-drawer="right"] .frame[data-tier="tablet"] .rail,
+body[data-drawer="right"] .frame[data-tier="phone"] .rail{display:none}
+body[data-drawer="right"] .frame[data-tier="tablet"] .scrim,
+body[data-drawer="right"] .frame[data-tier="phone"] .scrim{display:block}
+body[data-drawer="left"] .frame[data-tier="tablet"] .scrim,
+body[data-drawer="left"] .frame[data-tier="phone"] .scrim{display:block}
+
+/* ---- BEFORE/AFTER block ordering (R3) ---- */
+.railscroll > *{order:50}
+.b-head{order:1}
+.b-sv{order:2}       .b-artist{order:3}
+.b-more{order:8}     .b-identify{order:9}  .b-sources{order:10}
+.b-cbslot{order:7}   .b-stack{order:11}
+.b-conf{display:none}
+body[data-mode="before"] .b-head{order:1}
+body[data-mode="before"] .b-cbslot{order:2}
+body[data-mode="before"] .b-conf{order:3;display:block}
+body[data-mode="before"] .b-more{order:4}
+body[data-mode="before"] .b-identify{order:5}
+body[data-mode="before"] .b-artist{order:6}
+body[data-mode="before"] .b-sources{order:7}
+body[data-mode="before"] .b-sv{order:8}
+body[data-mode="before"] .b-stack{order:9}
+body[data-mode="before"] .head .confrow{display:none}
+body[data-mode="before"] .b-cbslot .cbexpanded{display:block}
+.b-cbslot .cbexpanded{display:none}
+body[data-mode="before"] .demoted-note{display:none}
+
+/* results states */
+body[data-results="none"] .vgrid,body[data-results="none"] .aware{display:none}
+body:not([data-results="none"]) .empty{display:none}
+body:not([data-results="many"]) .ghost{display:none}
+/* D21: axes stay visible while narrowing is still useful (many + some) and collapse to the
+   head's active-pill summary at few/none. */
+body[data-results="few"] .axis,body[data-results="few"] .uni,
+body[data-results="none"] .axis,body[data-results="none"] .uni{display:none}
+body[data-results="few"] .fewnote,body[data-results="none"] .fewnote{display:block}
+.fewnote{display:none;font-size:11px;color:var(--theme-muted);margin-top:6px}
+
+.ann{color:var(--annotate);font-size:10px;letter-spacing:.03em}
+.demoted-note{font-size:10px;color:var(--theme-muted);margin-bottom:6px}
+</style>
+</head>
+<body data-view="auto" data-mode="after" data-results="many" data-drawer="left">
+
+<div class="demo">
+  <div class="grp"><b>View</b>
+    <button data-view="auto" class="on">Auto</button>
+    <button data-view="desktop">Desktop</button>
+    <button data-view="tablet">Tablet</button>
+    <button data-view="phone">Phone</button>
+  </div>
+  <div class="grp"><b>Rail</b>
+    <button data-mode="before">Before (shipped)</button>
+    <button data-mode="after" class="on">After (R1+R3)</button>
+  </div>
+  <div class="grp"><b>Results</b>
+    <button data-results="many" class="on">many</button>
+    <button data-results="some">some</button>
+    <button data-results="few">few</button>
+    <button data-results="none">none</button>
+  </div>
+  <div class="grp"><b>Drawer</b>
+    <button data-drawer="left" class="on">Card</button>
+    <button data-drawer="right">Print &amp; Settings</button>
+  </div>
+  <span class="hint">/editor repass — rails carry the work. Frames are transform-scaled, so the
+  full desktop composition (both rails) is reviewable on a phone.</span>
+</div>
+
+<div id="stage"></div>
+
+<script>
+/* ------------------------------------------------------------------ data */
+const W={desktop:1400,tablet:820,phone:390};
+const H={desktop:900,tablet:940,phone:844};
+
+const ART=[
+  ["Lightning Bolt","#3d2a1e","#8a5a2e"],["Lightning Bolt","#2b2436","#5b4a86"],
+  ["Lightning Bolt","#1e2c33","#2e6c74"],["Lightning Bolt","#33201f","#8c3630"],
+  ["Lightning Bolt","#232a1e","#4f7a34"],["Lightning Bolt","#2e2436","#7a4a86"],
+  ["Lightning Bolt","#2a2a2a","#6d6d6d"],["Lightning Bolt","#331f2b","#8a3a63"],
+  ["Lightning Bolt","#1f2833","#3a5f8c"],["Lightning Bolt","#332b1f","#8c7130"],
+  ["Lightning Bolt","#26331f","#5c8c30"],["Lightning Bolt","#331f1f","#8c3030"]
+];
+const SETS=["LEA 161","2X2 117","M10 146","MM2 127","A25 141","CLB 195",
+            "STA 042","4ED 209","6ED 200","BRC 138","PLST 233","JMP 342"];
+const COUNTS={many:12,some:5,few:2,none:0};
+
+function tile(i,sel){
+  const [n,c1,c2]=ART[i%ART.length];
+  const tag = i===0 ? '<span class="req">REQ</span>' : '';
+  const ct  = i<4 ? '<span class="ctag">&#10003;</span>'
+                  : (i<9 ? '<span class="ctag alt">Alt</span>' : '<span class="ctag alt">?</span>');
+  return `<div class="tile${sel?' sel':''}" role="listitem">
+    <div class="art" style="background:linear-gradient(155deg,${c1},${c2} 55%,${c1})">
+      <span class="ttl">${n}</span>${ct}${tag}</div>
+    <div class="cap">${SETS[i%SETS.length]}</div></div>`;
+}
+function vgrid(){
+  const n=COUNTS[document.body.dataset.results];
+  let out='';
+  for(let i=0;i<n;i++) out+=tile(i,i===0);
+  out+=`<button class="ghost" aria-label="Show 60 more versions">+ Show 60<br>more</button>`;
+  return out;
+}
+
+/* ------------------------------------------------------------------ pieces */
+function actionBar(){return `
+<div class="bar">
+  <!-- R4: search group is the FIRST child at every width (was after the deck panel;
+       on phone it carried order:9 and dropped below everything). -->
+  <div class="searchgrp">
+    <div class="seg">
+      <button class="on">Add</button><button>Browse</button>
+    </div>
+    <div class="sfield">
+      <span class="mag">&#9906;</span>
+      <input type="text" placeholder="Add cards&hellip; e.g. 3x Lightning Bolt" />
+    </div>
+    <button class="btn">Import &#9662;</button>
+  </div>
+  <div class="deckname"><span>Deck</span><b>Burn (modern)</b></div>
+  <button class="btn gear">&#9881; Print &amp; Settings</button>
+</div>`;}
+
+function railInner(){return `
+  <div class="grabber"></div>
+  <div class="drawerhead"><span>Card</span><button class="btn sm">&#10005;</button></div>
+  <div class="railscroll">
+
+    <!-- R3 (1) identity head — RailHeader + ConfidenceElement merged into ONE band -->
+    <div class="blk b-head">
+      <div class="head">
+        <div class="subject"><span class="ttl">Lightning Bolt</span></div>
+        <div class="headmeta">
+          <div class="slotline">Slot 3 &middot; Front</div>
+          <div class="cardname">Lightning Bolt</div>
+          <div class="confrow">
+            <span class="seticon">&#9733;<span class="badge">&#10003;</span></span>
+            <span class="statepill">Confirmed</span>
+            <span style="font-size:11px;color:var(--theme-muted)">LEA &middot; 161</span>
+            <button class="notthis">&#10007; not this printing</button>
+          </div>
+          <div class="seg" style="margin-top:7px">
+            <button class="on">Front</button><button>Back</button>
+          </div>
+        </div>
+      </div>
+      <div class="iacts">
+        <!-- R8: change-query glyph arrow-repeat (&#8635;) -> magnifier (&#9906;) -->
+        <button class="iact hl" title="Change query (find a different printing)">&#9906;</button>
+        <button class="iact" title="Duplicate">&#128459;</button>
+        <button class="iact" title="Unfilter printing">&#9776;</button>
+        <button class="iact danger" title="Delete">&#10005;</button>
+      </div>
+    </div>
+
+    <!-- BEFORE only: the confidence band as its own block -->
+    <div class="blk b-conf confband">
+      <div class="confrow">
+        <span class="seticon">&#9733;<span class="badge">&#10003;</span></span>
+        <span class="statepill">Confirmed</span>
+        <span style="font-size:11px;color:var(--theme-muted)">LEA &middot; 161</span>
+        <button class="notthis">&#10007; not this printing</button>
+      </div>
+    </div>
+
+    <!-- R3 (2) the funnel, directly under the head -->
+    <div class="blk b-sv">
+      <div class="legend">Select version</div>
+      <div class="fhead">
+        <span class="cnt">12 versions</span>
+        <span class="chippill">Black &#10005;</span>
+        <button class="btn sm" style="margin-left:auto">&#9656; Filters</button>
+      </div>
+      <div class="axis"><span class="lbl">Border</span>
+        <div class="seg"><button class="on">Black</button><button>White</button><button>Borderless</button></div>
+      </div>
+      <div class="uni">
+        <div class="axis" style="margin:0"><span class="lbl">Frame</span>
+          <div class="seg"><button>Old</button><button>Modern</button><button>Future</button></div>
+        </div>
+        <div style="width:1px;height:24px;flex:0 0 1px;background:var(--theme-divider)"></div>
+        <button class="chip">Full Art</button>
+        <button class="chip sug">Showcase &#9135;</button>
+        <button class="chip">Extended</button>
+      </div>
+      <div class="aware">&#9432; Picking a card here <b>supports</b> &ldquo;Black&rdquo; for it.
+        Undo by re-picking.</div>
+      <div class="fewnote">Axes collapsed to the active-pill line &mdash; nothing left to partition.</div>
+      <div class="vgrid" role="list" id="vgrid"></div>
+      <div class="empty">No versions match &mdash; relax a filter.<br>
+        <span class="ann">Find this card &#8599;</span></div>
+    </div>
+
+    <!-- R3 (3) artist -->
+    <div class="blk b-artist">
+      <div class="artist"><span>Art by <b>Christopher Rush</b></span>
+        <button class="btn sm outprimary">Support on MTG Artist Connection &#8599;</button></div>
+    </div>
+
+    <!-- R3 (4) demoted group, all collapsed -->
+    <div class="blk b-more">
+      <div class="demoted-note ann">R3 &mdash; everything below is collapsed by default, reachable, never deleted.</div>
+      <div class="disc"><span>More details</span><span class="r">&#9662;</span></div>
+    </div>
+    <div class="blk b-identify"><div class="disc"><span>Identify this card</span><span class="r">&#9662;</span></div></div>
+    <div class="blk b-sources"><div class="disc"><span>Sources</span><span class="r">12 of 247 enabled &#9662;</span></div></div>
+    <div class="blk b-cbslot">
+      <div class="disc"><span>Cardback (this slot)</span><span class="r">follows deck &#9662;</span></div>
+      <!-- BEFORE only: what the expanded shipped control renders in a 380px column -->
+      <div class="cbexpanded" style="margin-top:6px">
+        <div style="display:flex;gap:8px;align-items:flex-start">
+          <div class="swatch" style="width:54px"></div>
+          <div style="font-size:12px">Deck default back<br>
+            <span style="font-size:11px;color:var(--theme-muted)">follows project cardback</span><br>
+            <button class="btn sm" style="margin-top:4px">Cancel</button></div>
+        </div>
+        <div style="border:1px solid var(--theme-divider);border-radius:var(--theme-radius-base);
+                    padding:6px;margin-top:6px">
+          <div style="font-size:10px;color:var(--annotate);margin-bottom:4px">
+            GridSelectorResults variant="embedded" &mdash; the modal's results body in a 380px column</div>
+          <input type="text" class="ctl" placeholder="Search cardbacks&hellip;" style="margin-bottom:5px" />
+          <div style="display:flex;gap:5px;margin-bottom:5px">
+            <select style="flex:1"><option>Sort: relevance</option></select>
+            <button class="btn sm">Filters</button>
+          </div>
+          <div class="swatches">
+            <div class="swatch on"></div><div class="swatch"></div><div class="swatch"></div>
+            <div class="swatch"></div><div class="swatch"></div>
+          </div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap">
+            <button class="btn sm">Apply to all card backs</button>
+            <button class="btn sm">Set as my default cardback</button>
+          </div>
+          <div style="font-size:10px;color:var(--annotate);margin-top:4px">
+            &#8593; two project-wide actions inside a per-slot control (R9)</div>
+        </div>
+      </div>
+    </div>
+    <div class="blk b-stack">
+      <div class="disc"><span>Print options</span><span class="r">&#9662;</span></div>
+      <div class="disc"><span>Report this card</span><span class="r">&#9662;</span></div>
+    </div>
+  </div>`;}
+
+function sheet(withEmpty){
+  let s='';
+  for(let i=0;i<8;i++){
+    if(withEmpty && i>5){ s+='<div class="slot empty2"></div>'; continue; }
+    const [n,c1,c2]=ART[i%ART.length];
+    s+=`<div class="slot" style="background:linear-gradient(160deg,${c1},${c2} 50%,${c1})">
+      <span class="ttl">${n}</span>
+      <span class="cb"></span>
+      <button class="flip" title="Flip">&#8634;${i===2?'<span class="dot"></span>':''}</button>
+      <button class="cue" title="Actions">&#8943;</button></div>`;
+  }
+  return `<div class="sheet">${s}</div>`;
+}
+function centre(){return `
+<div class="centre">
+  <span class="npill">1 / 2</span>
+  ${sheet(false)}
+  ${sheet(true)}
+</div>`;}
+
+function settingsInner(){return `
+  <div class="drawerhead"><span>Print &amp; Settings</span><button class="btn sm">&#10005;</button></div>
+  <div class="setscroll">
+
+    <div class="blk">
+      <div class="legend">Page setup</div>
+      <div class="field"><label>Paper size</label><select><option>LETTER (landscape)</option></select></div>
+      <div class="field"><label>Bleed edge (mm)</label><input type="number" value="3.175" /></div>
+      <div class="field">
+        <!-- R5: the persistent description paragraph is gone; the trade-off rides the option
+             label and an info popover, and the granted readout below does the real work. -->
+        <label>Margin profile <button class="info" title="Rear feed adds a 20mm unprintable zone at the trailing edge; borderless is the only profile that fits the full 3.175mm bleed at 4 across.">i</button></label>
+        <select>
+          <option>Rear-feed &mdash; 3mm + 20mm trailing</option>
+          <option>Bordered &mdash; 3mm all edges</option>
+          <option>Borderless &mdash; 0mm</option>
+        </select>
+      </div>
+      <div class="readout">Granted bleed &mdash; left/right <b>0.54mm</b> of 3.175 requested &middot;
+        top/bottom <b>3.175mm</b> (full)</div>
+      <div class="sw"><span class="track"></span><span>Guides</span></div>
+      <div class="field"><label>Card spacing (mm)</label>
+        <div class="row2"><input type="number" value="0" /><button class="btn sm">&#128279;</button><input type="number" value="14.5" /></div></div>
+      <div class="field"><label>Page offset (mm)</label>
+        <div class="row2"><input type="number" value="0" /><input type="number" value="0" /></div></div>
+    </div>
+
+    <!-- R6: the 753-line DisplayExportPDF modal, unwrapped into the rail -->
+    <div class="blk">
+      <div class="legend">Export</div>
+      <div class="seg" style="width:100%;margin-bottom:7px">
+        <button class="on" style="flex:1">Standard grid</button><button style="flex:1">Silhouette (SCM)</button>
+      </div>
+      <div class="field"><label>Cards to include</label><select><option>All slots</option></select></div>
+      <div class="field"><label>Page range</label><div class="row2"><input type="number" value="1" /><input type="number" value="2" /></div></div>
+      <div class="field"><label>Image quality</label><div class="row2"><select><option>800 DPI</option></select><input type="number" value="100" /></div></div>
+      <div class="field"><label>Cut lines</label><select><option>At trim line, both axes</option></select></div>
+      <div class="field"><label>Corner rounding (mm)</label><input type="number" value="3" /></div>
+      <div class="disc"><span>Advanced page margin override</span><span class="r">&#9662;</span></div>
+    </div>
+
+    <div class="blk">
+      <div class="legend">View</div>
+      <!-- R10: was a plain Button whose label flipped ("Showing: Fronts") -->
+      <div class="seg" style="width:100%"><button class="on" style="flex:1">Fronts</button><button style="flex:1">Backs</button></div>
+    </div>
+
+    <!-- R9: the swatch strip, and the two project-wide actions in the project-wide home -->
+    <div class="blk">
+      <div class="legend">Cardback (project)</div>
+      <div class="swatches">
+        <div class="swatch on"></div><div class="swatch"></div><div class="swatch"></div>
+        <div class="swatch"></div><div class="swatch more">More&hellip;</div>
+      </div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">
+        <button class="btn sm">Apply to all card backs</button>
+        <button class="btn sm">Set as default</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- R6 progress bar + R7 sibling pair -->
+  <div class="foot">
+    <div class="proglbl"><span>Fetching images&hellip;</span><span>6 / 14</span></div>
+    <div class="prog"><i></i></div>
+    <div class="pair">
+      <button class="btn primary">Save Deck</button>
+      <button class="btn outprimary">Export &#9662;</button>
+      <button class="btn dl" title="Downloads">&#8681;</button>
+    </div>
+    <div class="draft"><span class="ok">&#10003;</span> Draft backed up locally</div>
+  </div>`;}
+
+/* ------------------------------------------------------------------ frames */
+function desktopFrame(){return `<div class="page">
+  ${actionBar()}
+  <div class="body">
+    <div class="rail">${railInner()}</div>
+    ${centre()}
+    <div class="settings">${settingsInner()}</div>
+  </div></div>`;}
+function tabletFrame(){return `<div class="page">
+  ${actionBar()}
+  <div class="body">
+    ${centre()}
+    <div class="scrim"></div>
+    <div class="rail">${railInner()}</div>
+    <div class="settings">${settingsInner()}</div>
+  </div></div>`;}
+function phoneFrame(){return tabletFrame();}
+
+/* ------------------------------------------------------------------ render */
+function syncDemoOffset(){
+  const demo=document.querySelector('.demo');
+  document.getElementById('stage').style.paddingTop=(demo.offsetHeight+8)+'px';
+}
+function render(){
+  const view=document.body.dataset.view||'auto';
+  const stage=document.getElementById('stage');
+  const avail=window.innerWidth;
+  syncDemoOffset();
+  const build={desktop:desktopFrame,tablet:tabletFrame,phone:phoneFrame};
+
+  if(view==='auto'){
+    const tier = avail>=1200?'desktop':avail>=768?'tablet':'phone';
+    stage.innerHTML=`<span class="frame-tag">AUTO &mdash; ${avail}px &rarr; ${tier}</span>
+      <div class="frame" data-tier="${tier}" style="width:100%;height:${H[tier]}px">
+      ${build[tier]()}</div>`;
+  }else{
+    const fw=W[view], fh=H[view];
+    const scale=Math.min(1,(avail-28)/fw);
+    stage.innerHTML=`<span class="frame-tag">${view.toUpperCase()} &mdash; ${fw}px, scaled ${(scale*100).toFixed(0)}%</span>
+      <div class="framewrap" style="height:${Math.ceil(fh*scale)+4}px">
+      <div class="frame" data-tier="${view}" style="width:${fw}px;height:${fh}px;transform:scale(${scale})">
+        ${build[view]()}</div></div>`;
+  }
+  document.querySelectorAll('#vgrid').forEach(g=>{g.innerHTML=vgrid();});
+}
+
+document.querySelector('.demo').addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  ['view','mode','results','drawer'].forEach(k=>{
+    if(b.dataset[k]!==undefined){
+      document.body.dataset[k]=b.dataset[k];
+      b.parentNode.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+      render();
+    }
+  });
+});
+window.addEventListener('resize',()=>{clearTimeout(window._t);window._t=setTimeout(render,120);});
+render();
+window.addEventListener('load',syncDemoOffset);
+</script>
+</body>
+</html>
