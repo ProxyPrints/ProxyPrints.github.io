@@ -76,7 +76,7 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     ...defaultHandlers,
   ];
 
-  test("rail-head (rev #1/#2/#3), D14, Select Version header, and the desktop/tablet float Filters panel resolve the spec's literal §D values, not Bootstrap defaults", async ({
+  test("rail-head (rev #1/#2/#3), D14, Select Version header, and the rail-anchored Filters panel resolve the spec's literal §D values, not Bootstrap defaults", async ({
     page,
     network,
   }) => {
@@ -177,40 +177,40 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     expect(await filtersToggle.evaluate((el) => el.tagName)).toBe("BUTTON");
     await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
 
-    // Item 2/3/5 (RD4/O3) - at the default (desktop) viewport, opening Filters renders the FLOAT
-    // panel (fixed-positioned toward the viewport centre, with a backdrop) - not the phone-only
-    // in-rail Collapse.
-    await expect(page.getByTestId("filters-panel-inline")).toHaveCount(0);
+    // Rail-anchored filters round - opening Filters at the default (desktop) viewport expands the
+    // SAME in-rail panel the phone tier already used (`.fpanel.inline`) - there is no separate
+    // float/scrim variant any more, and no page-darkening backdrop appears anywhere.
+    const inlinePanel = page.getByTestId("filters-panel-inline");
+    await expect(inlinePanel).not.toBeVisible();
     await filtersToggle.click();
     await expect(filtersToggle).toHaveAttribute("aria-expanded", "true");
-    const floatPanel = page.getByTestId("filters-panel-float");
-    await expect(floatPanel).toBeVisible();
-    await expect(floatPanel).toHaveCSS("position", "fixed");
-    await expect(floatPanel).toHaveCSS("width", "440px");
-    await expect(floatPanel).toHaveCSS(
-      "border",
-      "1px solid rgb(127, 143, 160)"
-    );
-    await expect(page.getByTestId("filters-panel-scrim")).toBeVisible();
+    await expect(inlinePanel).toBeVisible();
+    await expect(inlinePanel).not.toHaveCSS("position", "fixed");
+    await expect(page.getByTestId("filters-panel-float")).toHaveCount(0);
+    await expect(page.getByTestId("filters-panel-scrim")).toHaveCount(0);
 
     // O1/RD1 - ONE chip surface inside the panel: the "Filter versions" fieldset (`.fset`, 10px
     // uppercase legend `#8fa0b0`) carries the funnel's own Border/Frame/Treatment chips - no
     // separate `.achip` attribute-vote fieldset exists any more.
-    const fieldset = floatPanel.getByTestId("funnel-unified-filter");
+    const fieldset = inlinePanel.getByTestId("funnel-unified-filter");
     await expect(fieldset).toBeVisible();
     await expect(fieldset.locator(".lg")).toHaveCSS("font-size", "10px");
     await expect(fieldset.locator(".lg")).toHaveText("Filter versions");
     await expect(
-      floatPanel.getByTestId("funnel-frame-treatment-row")
+      inlinePanel.getByTestId("funnel-frame-treatment-row")
     ).toHaveCSS("gap", "6px");
 
-    // The float panel closes via the backdrop click (O3's own "escapes... no stacking hazard"
-    // affordance) - clicked at a corner offset since the scrim's own default centre point falls
-    // inside the (also roughly-centred) panel itself at this viewport.
-    await page
-      .getByTestId("filters-panel-scrim")
-      .click({ position: { x: 5, y: 5 } });
-    await expect(page.getByTestId("filters-panel-float")).toHaveCount(0);
+    // Rail-anchored filters round - the candidate grid stays visible while the panel is open (the
+    // whole point of a rail-drawn panel over a covering dialog): nothing overlays it.
+    await expect(
+      page.getByTestId("select-version-continuous-grid")
+    ).toBeVisible();
+
+    // The panel closes via its own Close button, same as it always could - it just no longer has
+    // a backdrop to also close it via.
+    await page.getByTestId("filters-panel-close").click();
+    await expect(inlinePanel).not.toBeVisible();
+    await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
 
     // Machine-diff-precedent tile styling (§D.1, inherited) - unchanged by this round except
     // colour. Tokyo-11: $theme-success #5cb85c -> #9ece6a, rgba(92, 184, 92, .92) ->
@@ -386,9 +386,9 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     }
   });
 
-  // RD4/O3 - the desktop/tablet float panel node isn't even RENDERED at phone width (the mockup's
-  // own verified claim, "display:none-el" - here, absent from the DOM entirely, not just hidden).
-  test("at phone width (390px) the Filters panel expands IN PLACE inline - the desktop/tablet float node and its backdrop are never mounted", async ({
+  // Rail-anchored filters round - the float/scrim node no longer exists at ANY viewport, phone
+  // included; this pins that the phone bottom sheet still gets the same in-rail panel.
+  test("at phone width (390px) the Filters panel expands IN PLACE inline - the retired float node and its backdrop are never mounted", async ({
     page,
     network,
   }) => {
