@@ -395,6 +395,19 @@ def test_local_fallback_skip_reasons_are_not_re_mirrored_elsewhere():
     deliberate-decision gate for the roster, AND it must survive the prefix check
     below, which rejects the `LOCAL_FALLBACK_` family being re-declared anywhere
     else regardless of value.
+
+    Scanned names are filtered to the `*_SKIP_REASON` convention this whole file is
+    built on (the same boundary `_declared()`/`SKIP_REASON_DECL_RE` above use to
+    define "a declared skip reason" in the first place, and the one
+    `EXPECTED_SKIP_REASONS` itself is held to by `test_every_declared_constant_name_
+    is_accounted_for`). Without that filter, an unrelated module's own constant that
+    happens to share one of these three short, common English words as its STRING
+    VALUE - `local_canvas_padding.CALL_AMBIGUOUS`/`VERDICT_AMBIGUOUS`, an edge-call
+    and a whole-image verdict that never reach `CardScanLog` at all - would trip
+    this check, and adding either to `EXPECTED_SKIP_REASONS` to silence it would
+    fail that OTHER test, which asserts the dict contains only `_SKIP_REASON`
+    declarations. The two tests must therefore agree on what counts as "declared"
+    here; this filter is that agreement, not a narrowing of what a mirror is.
     """
     tracked = set(LOCAL_FALLBACK_ORIGIN_SKIP_REASONS.values())
     allowed_cotenants = {
@@ -410,7 +423,7 @@ def test_local_fallback_skip_reasons_are_not_re_mirrored_elsewhere():
                     f"produces it. Import it from cardpicker.local_fallback instead — two "
                     f"declarations of one value can drift."
                 )
-            if py.name == "local_fallback.py" or value not in tracked:
+            if py.name == "local_fallback.py" or value not in tracked or not name.endswith("_SKIP_REASON"):
                 continue
             assert name in allowed_cotenants[value], (
                 f"{py.name} declares {name}={value!r}, which is not one of the calculators "
