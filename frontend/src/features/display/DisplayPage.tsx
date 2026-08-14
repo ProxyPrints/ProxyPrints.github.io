@@ -231,7 +231,7 @@ import { useDebounce } from "use-debounce";
 import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
-import { getSheetImageURL } from "@/common/image";
+import { getSheetImageURLs } from "@/common/image";
 import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
 import { SourceType } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
@@ -2458,9 +2458,11 @@ export function DisplayPage() {
                 ? "loading"
                 : "failed"
               : undefined;
+          const sheetImageURLs =
+            cardDocument != null ? getSheetImageURLs(cardDocument) : [];
           const content: PagePreviewSlotContent = {
-            imageUrl:
-              cardDocument != null ? getSheetImageURL(cardDocument) : undefined,
+            imageUrl: sheetImageURLs[0],
+            imageUrls: sheetImageURLs,
             name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
             queryText,
             loadState,
