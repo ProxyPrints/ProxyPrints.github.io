@@ -31,8 +31,9 @@ calibrated span in mm). Once that scale exists, each individual edge's bleed is 
 its OWN frac and OWN constant alone, so an edge whose partner is abstained (2015-frame bottom,
 paired with a perfectly usable top) still reports - see `_pinline_edge_bleed_mm`.
 
-WHY UNKNOWN-ERA CARDS FALL BACK TO METHOD A ALONE (directive step 1's pooled-constant question).
-`border_color` is available on every resolved canonical (`local_fallback.classify_border_color`,
+WHY UNKNOWN-ERA CARDS FALL BACK TO METHOD A ALONE - the per-era constants differ by more than the
+cross-method agreement does, so guessing the era would inject more error than the measurement it
+feeds. `border_color` is available on every resolved canonical (`local_fallback.classify_border_color`,
 93.75% measured accuracy) but `frame` (the era) is only meaningful together with it for selecting
 a Method B constant, and both live on the same 10.08%-covered `CanonicalPrintingMetadata` row -
 so "unknown era" here really means "no CanonicalPrintingMetadata resolved at all" in the overwhelming
@@ -52,7 +53,7 @@ selectable instead. So: no pooled cross-era entry exists in `CALIBRATED_PINLINE_
 to Method A alone, full stop, rather than trading Method B's whole reason for existing (finer
 precision than Method A) for slightly wider coverage.
 
-THE ABSTAIN GATE (directive step 3). When both methods produce a number and they disagree by more
+THE ABSTAIN GATE. When both methods produce a number and they disagree by more
 than `METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM`, this calculator emits no vote and records
 `BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON` instead - the two methods fail in DIFFERENT ways
 (Method B is fooled by an unusually thick printed border reading as extra bleed; Method A is not,
@@ -137,8 +138,9 @@ BLEED_MARGIN_MM = 3.175
 CARD_TRIM_WIDTH_MM = 63.0
 CARD_TRIM_HEIGHT_MM = 88.0
 
-# Named per the directive - never a bare literal at either call site (the abstain gate and the
-# unit test that exercises it both reference this constant).
+# Named rather than a bare literal - the abstain gate and the unit test that exercises it both
+# reference this constant, and a bare literal at either call site would let them drift apart
+# silently.
 METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM = 2.0
 
 _EDGE_NAMES = ("top", "bottom", "left", "right")
@@ -315,7 +317,7 @@ BLEED_CALC_INCOMPLETE_EVIDENCE_SKIP_REASON = "incomplete-evidence"
 # Neither method produced a number at all (Method A's own aspect-ratio classification abstained,
 # AND Method B never applied) - genuinely nothing to vote from.
 BLEED_CALC_AMBIGUOUS_SKIP_REASON = "ambiguous"
-# The abstain gate itself (module docstring, directive step 3): both methods produced a number
+# The abstain gate itself (module docstring): both methods produced a number
 # and they disagree by more than METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM.
 BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON = "method-disagreement"
 # A bleed value WAS produced (by one or both methods, agreeing where both applied) but this
