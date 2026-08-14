@@ -739,14 +739,13 @@ const IdentifyPanel = ({
   );
 };
 
-// Fix round (SPEC-display-left-rail.md §3): ConfidenceElement now renders FIRST - it's identity
-// (directly under the header's name/RequestedPrintingBadge), not demoted metadata, per the
-// spec's explicit placement call. ArtistSection follows, still promoted/always-visible (D3),
-// just no longer ahead of D14. ConfidenceElement owns its own full-width band styling
-// (`.d14` - background/border-bottom/padding all live in its own markup now, RailRoot's CSS
-// below), so it no longer needs an outer padded wrapper here; ArtistSection still does
-// (`.artist-line`) - density (§2): `px-2 py-1` (8/4) -> explicit `8px 10px`. Rail-delegacy round
-// adds the IdentifyPanel directly below ConfidenceElement (item 6 - "hangs off D14", same subject).
+// Rail restructure ruling 2 (docs/proposals/mockups/editor-repass round, owner directive): the
+// rail orders by distance from the subject - things ABOUT this card sit adjacent to the
+// reference image, things that PROPOSE a different card sit further down. ArtistSection is
+// "about this card," so it moves directly under ConfidenceElement now (previously fifth block
+// down, behind More details/Identify). ConfidenceElement owns its own full-width band styling
+// (`.d14`, RailRoot's CSS below), so it needs no outer padded wrapper here; ArtistSection still
+// does (`.artist-line`).
 const PromotedZone = ({
   cardDocument,
   backendURL,
@@ -768,7 +767,20 @@ const PromotedZone = ({
       onCompareShow={onCompareShow}
       onCompareHide={onCompareHide}
     />
-    {/* Amendment 1 - directly under the D14 band, ahead of the identify panel. */}
+    <div
+      // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - see RailHeader's
+      // own identical comment for why the Bootstrap `.border-bottom` utility is retired here too.
+      // Machine-diff fix round: the `small` Bootstrap utility (0.875em -> 14px off a 16px parent)
+      // was CLOSE to the spec's own literal `.artist-line` binding value but not exact - replaced
+      // with an explicit `13px` inline style (component-scoped, this exact node only) matching
+      // §D.1 precisely.
+      className="artist-line"
+      style={{ padding: "8px 8px", fontSize: "13px" }}
+    >
+      <ArtistSection cardDocument={cardDocument} />
+    </div>
+    {/* Amendment 1 - directly under the artist line now (see this component's own module
+        comment on the ruling-2 reorder above). */}
     <MoreDetailsSection
       cardDocument={cardDocument}
       open={detailsOpen}
@@ -779,18 +791,6 @@ const PromotedZone = ({
       open={identifyOpen}
       onToggle={onToggleIdentify}
     />
-    <div
-      // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - see RailHeader's
-      // own identical comment for why the Bootstrap `.border-bottom` utility is retired here too.
-      // Machine-diff fix round: the `small` Bootstrap utility (0.875em -> 14px off a 16px parent)
-      // was CLOSE to the spec's own literal `.artist-line` binding value but not exact - replaced
-      // with an explicit `13px` inline style (component-scoped, this exact node only) matching
-      // §D.1 precisely.
-      className="artist-line"
-      style={{ padding: "8px 10px", fontSize: "13px" }}
-    >
-      <ArtistSection cardDocument={cardDocument} />
-    </div>
   </>
 );
 
@@ -1306,7 +1306,7 @@ const RailRoot = styled.div`
   .rail-head {
     background: var(--theme-raised-bg);
     border-bottom: 1px solid var(--theme-divider);
-    padding: 8px 10px;
+    padding: 8px 8px;
   }
   .artist-line {
     background: var(--theme-raised-bg);
@@ -1338,7 +1338,7 @@ const RailRoot = styled.div`
     gap: 8px;
     flex-wrap: wrap;
     margin: 0;
-    padding: 8px 10px;
+    padding: 8px 8px;
     background: var(--theme-band-bg);
     border-bottom: 1px solid var(--theme-divider);
     font-size: 12px;
@@ -1496,9 +1496,14 @@ const RailRoot = styled.div`
     gap: 10px;
     align-items: flex-start;
   }
+  /* Rail restructure ruling 1 (docs/proposals/mockups/editor-repass round, owner directive):
+     the reference card is the LARGEST element on the rail - grown from 116px (smaller than a
+     "large"-density candidate tile) to 200px (bigger than every candidate density, including
+     "large" at 170px). Ruling 3 pays for this: the rail is now a scrolling column, not a
+     fixed-height one, so the extra height has somewhere to go. */
   .subject {
-    flex: 0 0 116px;
-    width: 116px;
+    flex: 0 0 200px;
+    width: 200px;
     aspect-ratio: 63 / 88;
     position: relative;
     overflow: hidden;
@@ -1605,7 +1610,7 @@ const RailRoot = styled.div`
   .detmore-wrap {
     background: var(--theme-band-bg);
     border-bottom: 1px solid var(--theme-divider);
-    padding: 8px 10px;
+    padding: 8px 8px;
   }
   .detmore {
     background: transparent;
@@ -1628,8 +1633,10 @@ const RailRoot = styled.div`
     border-top: 1px solid var(--theme-divider);
     font-size: 11px;
   }
-  /* EP9 (N, §D.1 '.compare') - the Scryfall reference reveal, anchored beside the 116px subject
-     image (116 + the '.rhead-row' 10px gap = 126). 'pointer-events: none' is load-bearing, not
+  /* EP9 (N, §D.1 '.compare') - the Scryfall reference reveal, anchored beside the subject image
+     (subject width + the '.rhead-row' 10px gap - see ruling 1's own comment on '.subject' for
+     why that width grew from 116px to 200px, moving this offset from 126px to 210px in step).
+     'pointer-events: none' is load-bearing, not
      decorative: at z-index 40 this panel paints ABOVE later DOM siblings (the D14 band sits
      right after the rail head, and the panel's own aspect-ratio height easily reaches down far
      enough to visually cover the very pill that triggered it) - without this, the panel would
@@ -1641,7 +1648,7 @@ const RailRoot = styled.div`
      exactly as the mockup's own hover-reveal (not a second interactive layer) intends. */
   .compare {
     position: absolute;
-    left: 126px;
+    left: 210px;
     top: 0;
     z-index: 40;
     width: 150px;
@@ -1805,7 +1812,7 @@ const RailRoot = styled.div`
 
   /* control stack (item 7) - Print Options + Slot Actions + Report */
   .cstack {
-    padding: 8px 10px;
+    padding: 8px 8px;
   }
   .cs-group {
     margin-bottom: 10px;
@@ -2011,31 +2018,11 @@ const Rail = ({
         compareOpen={compareOpen}
         comparePrinting={comparePrinting}
       />
-      <div className="railsec">
-        <div
-          className="lg"
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-            color: "var(--theme-muted)",
-            marginBottom: 5,
-          }}
-        >
-          Cardback (this slot)
-        </div>
-        <SlotCardbackControl
-          slot={selectedSlotRef.slot}
-          backImage={backProjectMember?.selectedImage}
-          projectCardback={projectCardback}
-        />
-      </div>
-      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + "More details"
-          (amendment 1) + the identify panel that hangs off it (item 6) + artist support line,
-          none of which are collapsible accordion sections (D3). Fix round
-          (SPEC-display-left-rail.md §3): ConfidenceElement renders BEFORE ArtistSection - it is
-          identity, not demoted metadata; see PromotedZone's own comment for the full ordering
-          rationale. */}
+      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + artist support
+          line + "More details" (amendment 1) + the identify panel that hangs off it (item 6),
+          none of which are collapsible accordion sections (D3). Rail restructure ruling 2 - this
+          whole zone is "about this card," so it sits directly under the header's reference
+          image; see PromotedZone's own comment for the full ordering rationale. */}
       <PromotedZone
         cardDocument={selectedCardDocument}
         backendURL={backendURL}
@@ -2056,15 +2043,8 @@ const Rail = ({
           the nine removed grey sections (SPEC-rail-delegacy.md §B/RD - owner answer #3).*/}
       <SourcesAccordion />
       {/* E2/E3/L4 - Select Version, promoted + always open (renamed from "Choose Image", no
-          collapse chrome at all - the primary art surface, not one accordion among several).
-          Density (§2): `px-2 pt-2` (8/8-top) -> explicit `8px 10px`. O1 fix round
-          (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this wrapper gains a
-          `select-version-wrapper` class carrying the normalized `#16202b` bottom hairline (see
-          RailRoot's own rule below) - it had no block-boundary divider of its own before. */}
-      <div
-        className="select-version-wrapper sv"
-        style={{ padding: "8px 10px" }}
-      >
+          collapse chrome at all - the primary art surface, not one accordion among several). */}
+      <div className="select-version-wrapper sv" style={{ padding: "8px 8px" }}>
         <h6 className="select-version-heading">Select Version</h6>
         <SelectVersionSection
           face={selectedSlotRef.face}
@@ -2073,6 +2053,28 @@ const Rail = ({
           selectedImage={selectedImage}
           backendURL={backendURL}
           onImplicitSupport={onImplicitSupport}
+        />
+      </div>
+      {/* Rail restructure ruling 2 - the per-slot cardback control proposes a DIFFERENT card
+          (a different back face), so it moves past the identity zone and the candidate grid
+          rather than sitting above both, as it did before this round. */}
+      <div className="railsec">
+        <div
+          className="lg"
+          style={{
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            color: "var(--theme-muted)",
+            marginBottom: 5,
+          }}
+        >
+          Cardback (this slot)
+        </div>
+        <SlotCardbackControl
+          slot={selectedSlotRef.slot}
+          backImage={backProjectMember?.selectedImage}
+          projectCardback={projectCardback}
         />
       </div>
       {/* Rail-delegacy round (item 7, RD5)/editor-polish item 4 (REV RD5) - Print Options +
@@ -3053,7 +3055,9 @@ export function DisplayPage() {
             <Offcanvas.Title>Print &amp; Settings</Offcanvas.Title>
           </Offcanvas.Header>
           <Offcanvas.Body className="d-flex flex-column p-0">
-            <div className="flex-grow-1 overflow-auto p-3">
+            {/* Rail restructure ruling 7 - both rails move to 8px interior padding (the 4/8
+                token scale); this was Bootstrap's stock p-3 (16px). */}
+            <div className="flex-grow-1 overflow-auto p-2">
               <div className="mb-3">
                 <h6>Page Setup</h6>
                 <Form.Select
@@ -3276,7 +3280,7 @@ export function DisplayPage() {
                 the separate Print/Export button was later folded into the Export dropdown's own
                 PDF item once Drive save landed there too - see FinishFooter.tsx's own module
                 comment for the full rationale. */}
-            <div className="border-top p-3">
+            <div className="border-top p-2">
               <FinishFooter
                 hasBackedUpThisSession={draftBackup.hasBackedUpThisSession}
                 runExportGate={prePrintSaveGate.startPrintFlow}
