@@ -84,26 +84,30 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await openSelectVersionSection(page);
     await expect(page.getByTestId("display-rail-content")).toBeVisible();
 
-    // `.rail-head` (§D.1, inherited verbatim) - padding:8px 10px, divider hairline. Tokyo-11:
-    // $theme-divider #16202b -> #16161e, rgb(22, 32, 43) -> rgb(22, 22, 30).
+    // `.rail-head` (rail restructure ruling 7, density pass) - authored `padding:8px 8px` (REV,
+    // was `8px 10px`); computed style collapses a uniform four-side value to the single-token
+    // form `8px`, not `8px 8px`. Divider hairline unchanged. Tokyo-11: $theme-divider #16202b ->
+    // #16161e, rgb(22, 32, 43) -> rgb(22, 22, 30).
     await expect(page.getByTestId("display-rail-header")).toHaveCSS(
       "padding",
-      "8px 10px"
+      "8px"
     );
     await expect(page.getByTestId("display-rail-header")).toHaveCSS(
       "border-bottom",
       "1px solid rgb(22, 22, 30)"
     );
 
-    // Rev #3 (RD8), EP5 (SPEC-editor-polish.md §D.1 `.subject`, REV - `66px` -> `116px`) - the
-    // subject-card preview, aspect 63/88, a text-tinted `.15`-alpha border (unchanged shape by
-    // EP5). Tokyo-11: this border is `rgba(var(--bs-body-color-rgb),.15)`, so it moved with
+    // Rail restructure ruling 1 (docs/proposals/mockups/editor-repass round) - the subject-card
+    // preview grows again, `116px` -> `200px` (REV EP5's own `66px` -> `116px`): the reference
+    // card must be the LARGEST element on the rail, bigger than every candidate density
+    // including "large" (170px) - aspect 63/88, a text-tinted `.15`-alpha border (unchanged
+    // shape). Tokyo-11: this border is `rgba(var(--bs-body-color-rgb),.15)`, so it moved with
     // $theme-text #ebebeb -> #c0caf5, rgba(235, 235, 235, .15) -> rgba(192, 202, 245, .15). This
     // fixture's slot has a real selected image, so the ART variant renders (not the dashed empty
     // state).
     const subject = page.getByTestId("display-rail-subject");
     await expect(subject).toBeVisible();
-    await expect(subject).toHaveCSS("width", "116px");
+    await expect(subject).toHaveCSS("width", "200px");
     await expect(subject).toHaveCSS(
       "border",
       "1px solid rgba(192, 202, 245, 0.15)"
@@ -144,12 +148,12 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     // Tokyo-11: $theme-band-bg #2b3e50 -> #222234, rgb(43, 62, 80) -> rgb(34, 34, 52).
     const d14 = page.getByTestId("display-confidence-element");
     await expect(d14).toBeVisible();
-    await expect(d14).toHaveCSS("padding", "8px 10px");
+    await expect(d14).toHaveCSS("padding", "8px");
     await expect(d14).toHaveCSS("background-color", "rgb(34, 34, 52)");
 
-    // `.artist-line` (§D.1, inherited) - unchanged.
+    // `.artist-line` (ruling 7 density pass, REV 8px 10px -> 8px 8px).
     const artistLine = page.getByTestId("display-artist-section").locator("..");
-    await expect(artistLine).toHaveCSS("padding", "8px 10px");
+    await expect(artistLine).toHaveCSS("padding", "8px");
     await expect(artistLine).toHaveCSS("font-size", "13px");
 
     // Item 2 (RD2) - the Select Version header row `.svhead`: count, Sort `Form.Select`, Filters
@@ -259,7 +263,7 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     // (10px uppercase `#8fa0b0`), not two.
     const controlStack = page.getByTestId("display-control-stack");
     await expect(controlStack).toBeVisible();
-    await expect(controlStack).toHaveCSS("padding", "8px 10px");
+    await expect(controlStack).toHaveCSS("padding", "8px");
     const legends = controlStack.locator(".cs-legend");
     await expect(legends).toHaveCount(1);
     await expect(legends.first()).toHaveCSS("font-size", "10px");
@@ -524,7 +528,9 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     const compare = page.getByTestId("display-rail-compare");
     await expect(compare).toBeVisible();
     await expect(compare).toHaveCSS("position", "absolute");
-    await expect(compare).toHaveCSS("left", "126px");
+    // Ruling 1 moved the subject from 116px -> 200px, so this offset (subject width + the
+    // `.rhead-row` 10px gap) moves from 126px -> 210px in step.
+    await expect(compare).toHaveCSS("left", "210px");
 
     // Moving away hides it again (mouseleave).
     await page.mouse.move(0, 0);
