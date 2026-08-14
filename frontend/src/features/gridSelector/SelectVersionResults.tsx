@@ -399,6 +399,72 @@ const FUNNEL_TIER_TILE_WIDTH_REM: Record<
   hero: 7,
 };
 
+// Rail restructure ruling 5 (docs/proposals/mockups/editor-repass round, owner directive on
+// /editor rail layout) - the spec's own R1 asked a fixed resting choice ("3-up at 112px or
+// 2-up at 170px"); the owner declined that question and asked for USER control over candidate
+// density instead. `FUNNEL_TIER_TILE_WIDTH_REM` above stays exactly as-is (it still drives the
+// funnel's AUTO default, keyed off survivor count via `funnelDisclosureTier`) - this is an
+// independent, optional override the user can dial up/down, persisted per-browser (same
+// localStorage-preference precedent as `getLocalStoragePinnedSourcePks` - a narrow, low-stakes
+// UI preference, not server-authoritative state).
+export type CandidateDensity = "compact" | "comfortable" | "large";
+
+const CANDIDATE_DENSITY_ORDER: CandidateDensity[] = [
+  "compact",
+  "comfortable",
+  "large",
+];
+
+// "comfortable" (112px) matches R1's own "resting 3-up" recommendation; "large" (170px) matches
+// its "2-up" alternative; "compact" keeps today's auto-dense value (72px) reachable for anyone
+// who prefers more tiles on screen over bigger ones.
+const CANDIDATE_DENSITY_WIDTH_REM: Record<CandidateDensity, number> = {
+  compact: 4.5,
+  comfortable: 7,
+  large: 10.625,
+};
+
+const CANDIDATE_DENSITY_LABEL: Record<CandidateDensity, string> = {
+  compact: "Compact",
+  comfortable: "Comfortable",
+  large: "Large",
+};
+
+const CANDIDATE_DENSITY_STORAGE_KEY = "displayCandidateDensity";
+
+function isCandidateDensity(value: unknown): value is CandidateDensity {
+  return value === "compact" || value === "comfortable" || value === "large";
+}
+
+function getStoredCandidateDensity(): CandidateDensity | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const stored = window.localStorage.getItem(CANDIDATE_DENSITY_STORAGE_KEY);
+  return isCandidateDensity(stored) ? stored : null;
+}
+
+function setStoredCandidateDensity(density: CandidateDensity): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(CANDIDATE_DENSITY_STORAGE_KEY, density);
+}
+
+function nextCandidateDensity(current: CandidateDensity): CandidateDensity {
+  const index = CANDIDATE_DENSITY_ORDER.indexOf(current);
+  return CANDIDATE_DENSITY_ORDER[(index + 1) % CANDIDATE_DENSITY_ORDER.length];
+}
+
+// The tier's own pre-existing auto behaviour, restated in density terms - only consulted until
+// the user picks an explicit preference (then the stored preference always wins, regardless of
+// survivor count).
+function densityForTier(tier: FunnelDisclosureTier): CandidateDensity {
+  if (tier === "hero") return "large";
+  if (tier === "dense") return "compact";
+  return "comfortable";
+}
+
 // F3 - dashed accent border + trailing glyph for a SUGGESTED chip; solid/plain otherwise. Tokyo-11
 // (2026-07-24): reuses `$theme-accent`, not `$theme-primary` -- the study names "selection/active
 // chip" as an accent surface, and this chip's own "suggested" semantics match the D14 suggested
@@ -1351,6 +1417,10 @@ export function SelectVersionResults({
   // EP7 - the stacked/funnel layout's own client-side Sort (see this file's own "item 7" region
   // comment above). `"default"` leaves selectVersionGrouping.ts's own ordering untouched.
   const [clientSort, setClientSort] = useState<ClientSortKey>("default");
+  // Ruling 5 - explicit user preference, once set, always wins over the count-derived default
+  // (`densityForTier`); `null` means "no preference saved yet."
+  const [candidateDensity, setCandidateDensity] =
+    useState<CandidateDensity | null>(getStoredCandidateDensity);
   const [dismissedConfirmChipKeys, setDismissedConfirmChipKeys] = useState<
     Set<string>
   >(new Set());
@@ -1647,10 +1717,20 @@ export function SelectVersionResults({
   };
 
   const compressed = tier !== "hero";
+  const effectiveDensity = candidateDensity ?? densityForTier(tier);
   const tileWidthRem =
     layout === "stacked" && tier !== "none"
-      ? FUNNEL_TIER_TILE_WIDTH_REM[tier]
+      ? CANDIDATE_DENSITY_WIDTH_REM[effectiveDensity]
       : undefined;
+  // Placeholder height for a not-yet-mounted `RenderIfVisible` tile - must track the density's
+  // own width (63:88 card aspect ratio, +label/corner-chrome allowance) or scrolling into an
+  // unmounted large tile jumps the page once it swaps in at its real height.
+  const tileDefaultHeightPx =
+    tileWidthRem != null
+      ? Math.round(tileWidthRem * 16 * (88 / 63)) + (compressed ? 97 : 144)
+      : compressed
+      ? 197
+      : 300;
 
   const tileProps = (
     identifier: string,
@@ -1851,7 +1931,7 @@ export function SelectVersionResults({
             }}
           >
             <RenderIfVisible
-              defaultHeight={compressed ? 197 : 300}
+              defaultHeight={tileDefaultHeightPx}
               initialVisible={visualIndex < 20}
               visibleOffset={500}
               stayRendered
@@ -1874,7 +1954,7 @@ export function SelectVersionResults({
             }}
           >
             <RenderIfVisible
-              defaultHeight={compressed ? 197 : 300}
+              defaultHeight={tileDefaultHeightPx}
               initialVisible={visualIndex < 20}
               visibleOffset={500}
               stayRendered
@@ -2200,6 +2280,24 @@ export function SelectVersionResults({
               </option>
             ))}
           </Form.Select>
+          {/* Ruling 5 - one control, cycling compact/comfortable/large; each click both resizes
+              tiles AND (since nothing unmounts, only re-flows) reveals more of what was already
+              rendered below the fold, without resetting scroll position. */}
+          <CompactButton
+            variant="outline-light"
+            size="sm"
+            className="filtersbtn densitybtn"
+            onClick={() => {
+              const next = nextCandidateDensity(effectiveDensity);
+              setCandidateDensity(next);
+              setStoredCandidateDensity(next);
+            }}
+            aria-label={`Candidate tile size: ${CANDIDATE_DENSITY_LABEL[effectiveDensity]}. Click to change.`}
+            data-testid="funnel-density-toggle"
+          >
+            <i className="bi bi-grid-3x3-gap" />{" "}
+            {CANDIDATE_DENSITY_LABEL[effectiveDensity]}
+          </CompactButton>
           {/* Owner fix round (2026-07-23, SPEC-display-left-rail.md §8 "buttons-look-like-
               buttons" audit) - a real button, not underlined text (this performs an action). */}
           <CompactButton
