@@ -126,7 +126,7 @@ from cardpicker.vote_write import purge_and_write_votes
 
 # "=s800" tier addendum (task #130's tier-routing idea, applied here first): OCR only needs to
 # read small collector-line/artist-credit text, not print resolution - fetching at the normal
-# DEFAULT_FETCH_DPI=250 (~925px tall, image-cdn/src/url.ts's height = dpi * 1110 / 300) spends
+# DEFAULT_FETCH_DPI=460 (~1702px tall, image-cdn/src/url.ts's height = dpi * 1110 / 300) spends
 # real bandwidth against the shared CDN rate limiter for detail OCR never uses. 800px is the
 # target; solving the same formula for dpi (dpi = height * 300 / 1110) gives ~216, rounded up to
 # the nearest 10 (the Worker's own hard requirement - see get_worker_image_url's docstring) to

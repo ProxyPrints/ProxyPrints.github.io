@@ -470,12 +470,12 @@ class TestManagementCommandExclusionDefaults:
         assert "--exclude-sources-ocr=[]" in printed
         assert "--exclude-sources-phash=[2, 3]" in printed
 
-    def test_bare_invocation_defaults_fetch_dpi_to_250(self, db, capsys):
+    def test_bare_invocation_defaults_fetch_dpi_to_460(self, db, capsys):
         from django.core.management import call_command
 
         call_command("local_identify_printing_tags", "--dry-run", "--limit", "0")
         printed = capsys.readouterr().out
-        assert "--fetch-dpi=250" in printed
+        assert "--fetch-dpi=460" in printed
 
     def test_fetch_dpi_zero_means_native_resolution(self, db, capsys):
         from django.core.management import call_command
@@ -2126,7 +2126,7 @@ class TestFetchDpi:
         card = CardFactory()
         url = get_worker_image_url(card)
         assert url is not None
-        assert "dpi=250" in url
+        assert "dpi=460" in url
 
     def test_explicit_dpi_overrides_the_default(self, db):
         card = CardFactory()
