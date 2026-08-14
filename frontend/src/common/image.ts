@@ -60,16 +60,32 @@ export const getWorkerImageURL = (
 };
 
 // Sheet slots render far below native card resolution, so `small` suffices here.
-export const getSheetImageURL = (
+//
+// `getBucketImageURL` only checks that the bucket is *configured*, never that the object
+// actually exists there - most Google Drive cards resolve to a bucket URL, but any card whose
+// image isn't actually in the bucket yields a URL that 404s. Unlike `useImageSrc` (Card.tsx),
+// this module has no React state to step through candidates on load failure, so it exposes the
+// full ordered chain instead of picking one URL and hoping it loads - callers with a recovery
+// path (PagePreview's sheet slots) can fall through it the same way Card.tsx's own `onError`
+// handler falls through bucket -> worker -> thumbnail.
+export const getSheetImageURLs = (
   cardDocument: CardDocument
-): string | undefined => {
+): Array<string> => {
+  const urls: Array<string> = [];
   const bucketURL = getBucketImageURL(cardDocument, "small");
   if (bucketURL != null) {
-    return bucketURL;
+    urls.push(bucketURL);
   }
   const workerURL = getWorkerImageURL(cardDocument, "small");
   if (workerURL != null) {
-    return workerURL;
+    urls.push(workerURL);
   }
-  return cardDocument.mediumThumbnailUrl;
+  if (cardDocument.mediumThumbnailUrl != null) {
+    urls.push(cardDocument.mediumThumbnailUrl);
+  }
+  return urls;
 };
+
+export const getSheetImageURL = (
+  cardDocument: CardDocument
+): string | undefined => getSheetImageURLs(cardDocument)[0];
