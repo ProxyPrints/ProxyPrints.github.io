@@ -39,7 +39,6 @@ from cardpicker.local_calculate_verdicts import (
     FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS,
     JOIN_KEY_ANONYMOUS_ID,
     JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON,
-    JOIN_KEY_BORDER_MISMATCH_SKIP_REASON,
     JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT,
     JOIN_KEY_CONFIDENCE_BOTH,
     JOIN_KEY_CONFIDENCE_COLLECTOR_ONLY,
@@ -1254,7 +1253,7 @@ class TestAgreementChecks:
     uses, with a REAL backing `CanonicalCard`/`CanonicalPrintingMetadata` row where a check needs
     one to compare against."""
 
-    def test_border_mismatch_withholds_the_match(self, db):
+    def test_border_mismatch_weakens_the_match_confidence(self, db):
         printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
         CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="white")
         card = CardFactory(name="Test Card")
@@ -1268,8 +1267,29 @@ class TestAgreementChecks:
 
         verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
 
-        assert verdict.skip_reason == "border-mismatch"
-        assert verdict.printing_pk is None
+        assert verdict.skip_reason == ""
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT
+
+    def test_border_and_artist_ocr_disagreement_lands_on_the_lowest_tier(self, db):
+        printing = CanonicalCardFactory(
+            name="Test Card", expansion__code="mom", collector_number="158", artist__name="Rebecca Guay"
+        )
+        CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="white")
+        card = CardFactory(name="Test Card")
+        candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
+        evidence = _evidence(
+            card,
+            collector_line_set_code="mom",
+            collector_line_collector_number="158",
+            layout_class="black",  # disagrees with the printing's real "white" border_color
+            artist_ocr_name="Someone Totally Different",  # disagrees with "Rebecca Guay"
+        )
+
+        verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
+
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT
 
     def test_border_agreement_does_not_veto_the_match(self, db):
         printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
@@ -1723,10 +1743,11 @@ class TestAgreementChecks:
         assert verdict.is_no_match is True
         assert verdict.skip_reason == ""
 
-    def test_border_mismatch_writes_a_scan_log_row_via_the_full_runner(self, db):
-        """Integration check (module docstring's rescannability deviation): a border/frame
-        mismatch is a permanent skip, not added to JOIN_KEY_RESCANNABLE_SKIP_REASONS - confirmed
-        here via the real batch runner rather than only the pure-function unit tests above."""
+    def test_border_mismatch_writes_a_downgraded_vote_via_the_full_runner(self, db):
+        """Integration check: a border disagreement casts a real vote at the downgraded
+        confidence via the real batch runner, confirmed here rather than only the pure-function
+        unit tests above - `JOIN_KEY_BORDER_MISMATCH_SKIP_REASON` is retired as a write value, so
+        this path no longer produces a CardScanLog row at all."""
         card = CardFactory(name="Test Card", content_phash=42)
         printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")
         CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="white")
@@ -1734,22 +1755,11 @@ class TestAgreementChecks:
 
         result = run_join_key_calculator(dry_run=False)
 
-        assert result.votes_written == 0
-        log = CardScanLog.objects.get(card=card)
-        assert log.skip_reason == "border-mismatch"
-
-        # Non-rescannable WITHIN A RUN (2026-07-29 run-scoping): re-running under the SAME run_id
-        # does not re-select the card, which is what makes a killed run resume. A NEW run DOES
-        # re-select it - a prior run's abstention is history, not a permanent verdict - and
-        # reaches the same conclusion again, which is the point: a repaired engine can now
-        # revisit what a broken one skipped, without the version bump `stage-d-illustration-v2`
-        # needed for exactly this reason.
-        same_run = run_join_key_calculator(run_id=result.run_id, dry_run=False)
-        assert same_run.cards_considered == 0
-
-        second = run_join_key_calculator(run_id="a-later-run", dry_run=False)
-        assert second.cards_considered == 1
-        assert second.skip_counts.get("border-mismatch") == 1
+        assert result.votes_written == 1
+        assert CardScanLog.objects.filter(card=card).exists() is False
+        vote = CardPrintingTag.objects.get(card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID)
+        assert vote.printing_id == printing.pk
+        assert vote.confidence == JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT
 
 
 class TestCopyrightYearEraCheck:
@@ -3782,13 +3792,14 @@ class TestFrameVetoRequiresArtistOcr:
         assert verdict.printing_pk == printing.pk
         assert verdict.confidence == JOIN_KEY_CONFIDENCE_BOTH
 
-    def test_the_border_veto_is_unaffected_by_the_frame_gate(self, db):
+    def test_the_border_check_is_unaffected_by_the_frame_gate(self, db):
         """The gate is scoped to the frame check alone. A border mismatch on a card with no
-        `artist_ocr` must still withhold - `layout_class` comes from a different extractor and its
-        own degradation is permissive, which is a separate question this PR does not touch."""
-        printing = CanonicalCardFactory(name="Border Still Vetoes", expansion__code="mom", collector_number="158")
+        `artist_ocr` must still weaken the match - `layout_class` comes from a different
+        extractor and its own degradation is permissive, which is a separate question this PR
+        does not touch."""
+        printing = CanonicalCardFactory(name="Border Still Weakens", expansion__code="mom", collector_number="158")
         CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="white", frame="2015")
-        card = CardFactory(name="Border Still Vetoes")
+        card = CardFactory(name="Border Still Weakens")
         candidates = [CandidatePrinting(pk=printing.pk, expansion_code="mom", collector_number="158")]
         evidence = _evidence(
             card,
@@ -3800,4 +3811,6 @@ class TestFrameVetoRequiresArtistOcr:
 
         verdict = calculate_join_key_verdict(card.pk, evidence, candidates)
 
-        assert verdict.skip_reason == JOIN_KEY_BORDER_MISMATCH_SKIP_REASON
+        assert verdict.skip_reason == ""
+        assert verdict.printing_pk == printing.pk
+        assert verdict.confidence == JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT
