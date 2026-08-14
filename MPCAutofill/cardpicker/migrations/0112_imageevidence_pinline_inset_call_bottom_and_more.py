@@ -12,47 +12,47 @@ class Migration(migrations.Migration):
     operations = [
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_call_bottom",
+            name="pinline_inset_call_bottom",
             field=models.CharField(blank=True, default="", max_length=24),
         ),
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_call_left",
+            name="pinline_inset_call_left",
             field=models.CharField(blank=True, default="", max_length=24),
         ),
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_call_right",
+            name="pinline_inset_call_right",
             field=models.CharField(blank=True, default="", max_length=24),
         ),
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_call_top",
+            name="pinline_inset_call_top",
             field=models.CharField(blank=True, default="", max_length=24),
         ),
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_frac_bottom",
+            name="pinline_inset_frac_bottom",
             field=models.FloatField(blank=True, null=True),
         ),
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_frac_left",
+            name="pinline_inset_frac_left",
             field=models.FloatField(blank=True, null=True),
         ),
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_frac_right",
+            name="pinline_inset_frac_right",
             field=models.FloatField(blank=True, null=True),
         ),
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_frac_top",
+            name="pinline_inset_frac_top",
             field=models.FloatField(blank=True, null=True),
         ),
         migrations.AddField(
             model_name="imageevidence",
-            name="canvas_padding_verdict",
+            name="pinline_inset_verdict",
             field=models.CharField(blank=True, default="", max_length=16),
         ),
     ]

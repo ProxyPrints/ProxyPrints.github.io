@@ -259,7 +259,6 @@ from cardpicker.collector_line_artist import (
 )
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
-from cardpicker.local_canvas_padding import detect_canvas_padding
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     SYMBOL_STRIP_BOX,
@@ -287,6 +286,7 @@ from cardpicker.local_ocr import (
     run_tesseract_text_and_words,
 )
 from cardpicker.local_phash import ART_CROP_BOX
+from cardpicker.local_pinline_inset import measure_pinline_inset
 from cardpicker.models import Card, CardScanLog, ImageEvidence
 from cardpicker.modern_artist_credit import LexiconIndex, recognize_artist_credit
 from cardpicker.utils import twos_complement
@@ -338,10 +338,10 @@ LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v2"
 # engine-independent by construction, same reasoning as symbol_region above.
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
 ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v1"
-# NOT bumped: canvas_padding (local_canvas_padding.detect_canvas_padding) is a pure colour-
+# NOT bumped: pinline_inset (local_pinline_inset.measure_pinline_inset) is a pure colour-
 # distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
 # quality_signals above.
-CANVAS_PADDING_EXTRACTOR_VERSION = "canvas-padding-v1"
+PINLINE_INSET_EXTRACTOR_VERSION = "pinline-inset-v1"
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
 # _hash_to_int/_HASH_BITS exactly (imagehash's default hash_size=8 -> a 64-bit hash), reproduced
@@ -1461,33 +1461,33 @@ def compute_card_evidence(
             fields["image_entropy"] = compute_entropy(image)
     extractor_versions["quality_signals"] = QUALITY_SIGNALS_EXTRACTOR_VERSION
 
-    # canvas_padding: see local_canvas_padding.py's own module docstring for the algorithm.
+    # pinline_inset: see local_pinline_inset.py's own module docstring for the algorithm.
     # MEASURES AND PERSISTS ONLY - no existing crop box computation above reads these fields,
     # and this block changes none of them. Shares quality_signals' own degenerate width/height
     # guard immediately above (the same real, mechanical sub-floor condition, not a new one).
     if image is None:
-        skip_reasons["canvas_padding"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        skip_reasons["pinline_inset"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     elif width <= 0 or height <= 0:
-        skip_reasons["canvas_padding"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        skip_reasons["pinline_inset"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
     else:
-        padding = detect_canvas_padding(image)
-        if padding is None:
-            # detect_canvas_padding's own degenerate-input guard - unreachable here in practice
+        pinline_inset = measure_pinline_inset(image)
+        if pinline_inset is None:
+            # measure_pinline_inset's own degenerate-input guard - unreachable here in practice
             # (width/height already confirmed positive above), kept for the same defense-in-depth
             # reason artbox_phash's degenerate-crop-box guard is kept even though real fetched
             # images essentially never hit it.
-            skip_reasons["canvas_padding"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+            skip_reasons["pinline_inset"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
         else:
-            fields["canvas_padding_frac_top"] = padding.top.pad_frac
-            fields["canvas_padding_frac_bottom"] = padding.bottom.pad_frac
-            fields["canvas_padding_frac_left"] = padding.left.pad_frac
-            fields["canvas_padding_frac_right"] = padding.right.pad_frac
-            fields["canvas_padding_call_top"] = padding.top.call
-            fields["canvas_padding_call_bottom"] = padding.bottom.call
-            fields["canvas_padding_call_left"] = padding.left.call
-            fields["canvas_padding_call_right"] = padding.right.call
-            fields["canvas_padding_verdict"] = padding.verdict
-    extractor_versions["canvas_padding"] = CANVAS_PADDING_EXTRACTOR_VERSION
+            fields["pinline_inset_frac_top"] = pinline_inset.top.inset_frac
+            fields["pinline_inset_frac_bottom"] = pinline_inset.bottom.inset_frac
+            fields["pinline_inset_frac_left"] = pinline_inset.left.inset_frac
+            fields["pinline_inset_frac_right"] = pinline_inset.right.inset_frac
+            fields["pinline_inset_call_top"] = pinline_inset.top.call
+            fields["pinline_inset_call_bottom"] = pinline_inset.bottom.call
+            fields["pinline_inset_call_left"] = pinline_inset.left.call
+            fields["pinline_inset_call_right"] = pinline_inset.right.call
+            fields["pinline_inset_verdict"] = pinline_inset.verdict
+    extractor_versions["pinline_inset"] = PINLINE_INSET_EXTRACTOR_VERSION
 
     if profile is not None:
         profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000
@@ -1685,5 +1685,5 @@ __all__ = [
     "ARTBOX_PHASH_EXTRACTOR_VERSION",
     "ARTBOX_MODERN_CROP_BOX",
     "ARTBOX_OLD_CROP_BOX",
-    "CANVAS_PADDING_EXTRACTOR_VERSION",
+    "PINLINE_INSET_EXTRACTOR_VERSION",
 ]

@@ -402,8 +402,8 @@ def test_local_fallback_skip_reasons_are_not_re_mirrored_elsewhere():
     `EXPECTED_SKIP_REASONS` itself is held to by `test_every_declared_constant_name_
     is_accounted_for`). Without that filter, an unrelated module's own constant that
     happens to share one of these three short, common English words as its STRING
-    VALUE - `local_canvas_padding.CALL_AMBIGUOUS`/`VERDICT_AMBIGUOUS`, an edge-call
-    and a whole-image verdict that never reach `CardScanLog` at all - would trip
+    VALUE - `local_pinline_inset.VERDICT_AMBIGUOUS`, a whole-image verdict that
+    never reaches `CardScanLog` at all - would trip
     this check, and adding either to `EXPECTED_SKIP_REASONS` to silence it would
     fail that OTHER test, which asserts the dict contains only `_SKIP_REASON`
     declarations. The two tests must therefore agree on what counts as "declared"

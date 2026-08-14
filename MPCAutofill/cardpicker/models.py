@@ -2733,14 +2733,14 @@ class ImageEvidence(models.Model):
     region, stored the same signed-64-bit-int way.     Null when not yet computed (fetch failure, an
     unclassifiable frame, or a degenerate crop box - see `image_evidence.py`'s module docstring).
 
-    canvas_padding (Stage C canvas-padding detector, MEASURE-AND-PERSIST-ONLY - no consumer of
-    any kind is built or wired in this PR): four per-edge padding-fraction measurements
-    (`canvas_padding_frac_*`), four per-edge calls (`canvas_padding_call_*`, `local_canvas_
-    padding.CALL_*`), and one whole-image verdict (`canvas_padding_verdict`, `local_canvas_
-    padding.VERDICT_*`) - see `local_canvas_padding.py`'s own module docstring for the algorithm,
-    its two guards (the uniformity gate against measuring a borderless card's own artwork, and the
-    black-on-black abstention that keeps an indeterminate edge from ever reading as a measured
-    zero), and what this detector deliberately does not do. Every `*_frac` field is a fraction of
+    pinline_inset (Stage C pinline-inset measurement, MEASURE-AND-PERSIST-ONLY - no consumer of
+    any kind is built or wired in this PR): four per-edge inset-fraction measurements
+    (`pinline_inset_frac_*`), four per-edge calls (`pinline_inset_call_*`, `local_pinline_
+    inset.CALL_*`), and one whole-image verdict (`pinline_inset_verdict`, `local_pinline_
+    inset.VERDICT_*`) - see `local_pinline_inset.py`'s own module docstring for what the number
+    means, its two guards (the uniformity gate against measuring a borderless card's own artwork,
+    and the black-on-black abstention that keeps an unreadable edge from ever reading as a
+    measured zero), and what it deliberately does not do. Every `*_frac` field is a fraction of
     the relevant dimension, not a pixel count - `width`/`height` already on this row make pixels
     trivially derivable, while a fraction stays valid even if a later extraction pass fetches the
     same upload at a different resolution.
@@ -2870,13 +2870,12 @@ class ImageEvidence(models.Model):
     artbox_frame_class = models.CharField(max_length=16, blank=True, default="")
     artbox_phash = models.BigIntegerField(null=True, blank=True)
 
-    # canvas_padding (local_canvas_padding.detect_canvas_padding, MEASURE-AND-PERSIST-ONLY - no
+    # pinline_inset (local_pinline_inset.measure_pinline_inset, MEASURE-AND-PERSIST-ONLY - no
     # existing crop box computation above reads these fields yet): four per-edge measurements of
-    # how far the card's own printed content sits from this image's outer boundary, catching the
-    # case where an upload places the card on a larger canvas surrounded by a band of flat
-    # colour - every *_crop_px field above is a fraction of the WHOLE image, so it lands inside
-    # that band rather than on the card when one is present. See local_canvas_padding.py's own
-    # module docstring for the full algorithm and its two guards.
+    # how far the first sustained colour transition inward from this image's own edge sits - on a
+    # bordered card, the pinline where the border's ink meets the frame/art, not a canvas
+    # boundary. See local_pinline_inset.py's own module docstring for what the number means and
+    # how it was validated, and its two guards.
     #
     # Stored as FRACTIONS of the relevant dimension, not pixels: width/height are already on this
     # row, so a pixel value stays trivially derivable, while a fraction is a property of the
@@ -2884,25 +2883,24 @@ class ImageEvidence(models.Model):
     # different resolution.
     #
     # Each *_frac field is null when that edge's own reading is INDETERMINATE, never zero -
-    # distinguishing "not measured" from "measured no padding" matters most exactly where it's
-    # easy to get wrong: a black canvas around a black-bordered card produces no colour departure
-    # at all, so the null is the honest reading, and the paired *_call field (local_canvas_padding.
-    # CALL_*) says why. A consumer that defaulted a null fraction to zero would silently under-crop
-    # a black padded card by the full band width instead of correctly declining to correct it.
-    canvas_padding_frac_top = models.FloatField(null=True, blank=True)
-    canvas_padding_frac_bottom = models.FloatField(null=True, blank=True)
-    canvas_padding_frac_left = models.FloatField(null=True, blank=True)
-    canvas_padding_frac_right = models.FloatField(null=True, blank=True)
-    # local_canvas_padding.CALL_* - confident_nopad/confident_padded/ambiguous/
-    # black_indeterminate/no_transition_nonblack. Blank-string-as-sentinel for "not yet computed",
-    # same convention as bleed_class/layout_class above.
-    canvas_padding_call_top = models.CharField(max_length=24, blank=True, default="")
-    canvas_padding_call_bottom = models.CharField(max_length=24, blank=True, default="")
-    canvas_padding_call_left = models.CharField(max_length=24, blank=True, default="")
-    canvas_padding_call_right = models.CharField(max_length=24, blank=True, default="")
-    # local_canvas_padding.VERDICT_* - padded/not_padded/ambiguous/abstain_black. Blank-string-
-    # as-sentinel for "not yet computed", same convention as the per-edge calls above.
-    canvas_padding_verdict = models.CharField(max_length=16, blank=True, default="")
+    # distinguishing "not measured" from "measured a zero-distance inset" matters most exactly
+    # where it's easy to get wrong: a black canvas around a black-bordered card produces no colour
+    # departure at all, so the null is the honest reading, and the paired *_call field (local_
+    # pinline_inset.CALL_*) says why. A consumer that defaulted a null fraction to zero would
+    # silently mislocate a black-on-black card's pinline instead of correctly declining to.
+    pinline_inset_frac_top = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_bottom = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_left = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_right = models.FloatField(null=True, blank=True)
+    # local_pinline_inset.CALL_* - measured/indeterminate_black/no_transition. Blank-string-as-
+    # sentinel for "not yet computed", same convention as bleed_class/layout_class above.
+    pinline_inset_call_top = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_bottom = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_left = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_right = models.CharField(max_length=24, blank=True, default="")
+    # local_pinline_inset.VERDICT_* - measured/ambiguous/indeterminate. Blank-string-as-sentinel
+    # for "not yet computed", same convention as the per-edge calls above.
+    pinline_inset_verdict = models.CharField(max_length=16, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

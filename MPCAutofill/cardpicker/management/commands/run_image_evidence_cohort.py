@@ -160,7 +160,7 @@ identity-scoped predicate. See `already_extracted_card_ids`' own docstring for t
 and for the `bleed_diff_mm` case that made the old predicate a permanent blind spot.
     `MANIFEST_EXTRACTOR_KEYS` and `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` are kept in sync with
     `image_evidence.compute_card_evidence`'s own `extractor_versions` assignments (12 keys as of
-    canvas_padding's addition, see below) - stale here would silently under-count "already done"
+    pinline_inset's addition, see below) - stale here would silently under-count "already done"
     and re-pay fetch+OCR cost this resume filter exists specifically to avoid.
 
 That sync is now ENFORCED, not merely requested: `.github/scripts/check_extractor_manifest_sync.py`
@@ -177,11 +177,11 @@ hand-written anchor drifts exactly like a hand-written list.
     `#473`/`#472`'s own deploy first, per that comment) - never a standalone `artbox_phash`-only
     backfill, which would duplicate ~218k fetches the combined pass already needs to make anyway.
 
-    `canvas_padding` (added alongside the canvas-padding detector, 2026-08-14) has the identical
+    `pinline_inset` (added alongside the pinline-inset measurement, 2026-08-14) has the identical
     consequence: every one of the ~220k existing `ImageEvidence` rows now fails `has_keys` for
     lacking this key and becomes eligible for re-extraction, and the resulting whole-catalog Stage C
     pass does not run until the owner schedules it - same posture as `artbox_phash` above, not a
-    standalone `canvas_padding`-only backfill.
+    standalone `pinline_inset`-only backfill.
 
 EVIDENCE TRANSFER (2026-07-25, issue #473 PR-2, folded with issue #472): `_fetch_one_card` checks
 `evidence_transfer.find_transfer_source(card)` BEFORE the network fetch call below - a card with a
@@ -298,7 +298,7 @@ from cardpicker.utils import get_baked_git_sha, read_card_ids_file
 logger = logging.getLogger(__name__)
 
 # The full Stage C manifest as of 2026-08-14 (fetch_health + geometry-bleed + geometry-group +
-# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals + canvas-padding;
+# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals + pinline-inset;
 # color_profile retired 2026-07-27, never consumed downstream) - matches
 # image_evidence.compute_card_evidence's own extractor_versions keys exactly. Keep this set in
 # sync with that function whenever a new extractor group lands (see module docstring) - and note
@@ -317,7 +317,7 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
         "symbol_region",
         "legal_line",
         "quality_signals",
-        "canvas_padding",
+        "pinline_inset",
     }
 )
 
@@ -343,7 +343,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "symbol_region": "symbol-region-v1",
     "legal_line": "legal-line-v2",
     "quality_signals": "quality-signals-v1",
-    "canvas_padding": "canvas-padding-v1",
+    "pinline_inset": "pinline-inset-v1",
 }
 
 
