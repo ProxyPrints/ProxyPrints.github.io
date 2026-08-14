@@ -2852,11 +2852,12 @@ border colour, frame style, bleed edge — are cast by **evidence-reading
 casters that fetch no images**, and both modules are wired into the
 streaming conveyor (`stage_e_dispatch._run_stage_d`):
 
-| chip family                           | module                      | identity               |
-| ------------------------------------- | --------------------------- | ---------------------- |
-| Black/White/Silver Border, Borderless | `local_layout_class_cast`   | `layout-class-cast-v1` |
-| Old Border, Modern Border             | `local_attribute_chip_cast` | `frame-style-cast-v1`  |
-| appropriate-bleed                     | `local_attribute_chip_cast` | `bleed-edge-cast-v1`   |
+| chip family                           | module                      | identity                   |
+| ------------------------------------- | --------------------------- | -------------------------- |
+| Black/White/Silver Border, Borderless | `local_layout_class_cast`   | `layout-class-cast-v1`     |
+| Old Border, Modern Border             | `local_attribute_chip_cast` | `frame-style-cast-v1`      |
+| appropriate-bleed                     | `local_attribute_chip_cast` | `bleed-edge-cast-v1`       |
+| appropriate-bleed (cross-checked)     | `local_bleed_calculator`    | `bleed-calculator-cast-v1` |
 
 Each also has a standalone `--write`-gated management command of the same
 name. Frame style and bleed edge get **separate identities** because the
@@ -2892,6 +2893,74 @@ without that gate every card missing `artist_ocr` would read `modern`.
 That is a manufactured vote from evidence that does not exist, and it is
 the same failure mode that lets a genuine old-frame card be vetoed
 `frame-mismatch` in Stage D.
+
+### The bleed calculator: two independent methods, cross-checked (`local_bleed_calculator`)
+
+`bleed-edge-cast-v1` (above) classifies bleed from a single signal - the image's own aspect ratio
+against the two known reference ratios. `local_bleed_calculator` adds a second, independent way to
+measure the same physical quantity and votes only when the two agree, giving `appropriate-bleed` a
+cross-checked channel alongside the single-signal one rather than replacing it.
+
+**Method A - closed form from aspect ratio.** For symmetric bleed `b` on a 63x88mm card, the
+image's own aspect `a = width/height` satisfies `a = (63 + 2b) / (88 + 2b)`, so `b = (88a - 63) / (2 - 2a)`. This is exactly `local_fallback.compute_bleed_diff_mm`'s own formula, already computed
+and stored on every card's `ImageEvidence.bleed_diff_mm` at Stage C - this module reads that stored
+value back into a bleed figure (`3.175mm - bleed_diff_mm`) rather than deriving the formula a
+second time. It needs only the image's own pixel dimensions, so it applies to every card with a
+fetched, non-degenerate image - no canonical, no metadata, no frame class. Its blind spot: it
+assumes bleed is symmetric on all four edges, so it can't see an off-centre crop or one edge
+trimmed more than another.
+
+**Method B - the pinline ruler.** `local_pinline_inset.measure_pinline_inset` measures, per edge,
+the distance from the image's own edge inward to the first sustained colour transition - on a
+bordered card, that transition is the pinline where the printed border gives way to the card
+frame, not the upload's own canvas boundary (see that module's own docstring for the colour-scan
+mechanics and the two guards - the uniformity gate and the black-on-black abstention - that keep it
+from mistaking a borderless card's artwork, or a black margin against a black border, for a
+transition). Subtracting a calibrated trim-to-pinline constant (this module's
+`CALIBRATED_PINLINE_INSET_MM`, keyed by the card's `border_color`/`frame` era from
+`CanonicalPrintingMetadata`) from that pinline position yields a per-edge bleed. Because the
+constant is keyed by frame era and border colour is only resolvable together with era on a
+canonical-linked card, Method B is available on roughly a tenth of the catalogue - the cards with a
+resolved canonical printing - not on every card the way Method A is. Its blind spot is the mirror
+image of Method A's: a border printed thicker than the calibration expects reads as extra bleed,
+because the scan cannot tell "long border" from "border, then more bleed."
+
+**No pooled constant across frame eras.** A card whose border colour is known but whose era isn't
+(the common case - both live on the same canonical-linked 10% of the catalogue) could in principle
+use a constant pooled across eras for that colour. Measured: `black_2003`'s and `black_2015`'s
+per-edge medians differ by 0.42-0.51mm on top/left/right - technically under the calibration's own
+usability ceiling (~1.5mm spread), but 2-3x the ~0.24mm agreement floor every genuinely usable class
+in the calibration table sits at. Pooling would spend most of Method B's whole reason for existing
+
+- finer precision than Method A - on a case where the era-split constant is directly selectable
+  instead. So no pooled entry exists: an unresolved or era-unknown card falls back to Method A alone.
+
+**The abstain gate.** When both methods produce a number and they disagree by more than
+`METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM` (2.0mm, a named constant, not a literal at either call
+site), this module votes nothing and records `method-disagreement` instead of picking a side. The
+two methods fail in different, uncorrelated ways - a thick border fools Method B but not Method A -
+so a gap this large means at least one of them is wrong for this specific card, and the honest
+output is "this needs a human," which is exactly what a machine vote on a SENSITIVE tag exists to
+request, not to resolve. Measured cost, re-run against the 68-card catalogue geometry sample: 1
+card triggered the gate.
+
+**Confidence tiers, not a consensus-weight input.** `vote_consensus.resolve_vote_weight`'s own
+docstring is explicit that a vote's weight comes from `source` (who cast it, by what method), never
+from its self-reported `confidence` - so this module does not invent a number to express "the two
+methods agreed." It reuses the same two-tier split `local_fallback.py` already draws for its own
+multi-evidence-vs-single-evidence distinction: `FALLBACK_CONFIDENCE_MULTI_EVIDENCE` (0.8) when both
+methods produced a number within the gate, `FALLBACK_CONFIDENCE_SINGLE_EVIDENCE` (0.7) when only
+Method A was available (Method B unresolved, structurally abstained for borderless, or flagged
+unusable for this card's specific frame/edge combination). The value is stored on the vote row, the
+same as every other machine caster here - informational, not read by consensus weighting.
+
+**Negative-only, same convention as `bleed-edge-cast-v1`**: a vote fires only when this module's own
+reading agrees the card's Stage C `bleed_class` is `trimmed`, `NOT_APPLICABLE` polarity, own
+identity `bleed-calculator-cast-v1` so it stays independently purgeable/re-runnable and can never
+read a plain frame-chip vote as "handled" for its own eligibility. Its value over the existing
+single-signal caster is narrow and specific: withholding the vote on the ~1.5% of cases where
+Method B's independent, per-edge geometry contradicts the aspect-ratio-only "trimmed" call past the
+gate. Zero image fetches - every input is already in the database.
 
 ### DPI-tag audit (2026-07-15, addendum item 8 - report only)
 

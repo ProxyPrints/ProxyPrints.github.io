@@ -310,6 +310,23 @@ sat at zero rows.
 | `ambiguous`            | `CHIP_ABSTAINED_SKIP_REASON`           | Frame: neither signal fired. Bleed: the reading was not `trimmed` — which includes the ordinary ~97.5% `bleed` case, since this chip is negative-only and absence of a vote IS the "normal bleed" convention. | Live, no rows yet |
 | `unmapped-frame-class` | `CHIP_UNMAPPED_SKIP_REASON`            | A frame class WAS read but has no tag mapped to it. Unreachable against the current closed taxonomy; exercised in tests only.                                                                                 | Live, no rows yet |
 
+## Bleed calculator — `MPCAutofill/cardpicker/local_bleed_calculator.py`
+
+`anonymous_id` is `bleed-calculator-cast-v1` (`BLEED_CALCULATOR_CAST_ANONYMOUS_ID`) — a
+cross-checked, independent second channel onto `appropriate-bleed`, alongside
+`bleed-edge-cast-v1` above. Combines a closed-form aspect-ratio bleed
+(Method A) with a pinline-ruler per-edge bleed (Method B, only where a
+calibrated constant is selectable), and withholds a vote when the two
+disagree by more than 2mm rather than picking a side.
+
+| Reason                | Constant                                     | Means                                                                                                                                                                            | Status            |
+| --------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `no-evidence`         | `BLEED_CALC_NO_EVIDENCE_SKIP_REASON`         | No current `ImageEvidence` row. **Rescannable**.                                                                                                                                 | Live, no rows yet |
+| `incomplete-evidence` | `BLEED_CALC_INCOMPLETE_EVIDENCE_SKIP_REASON` | The `geometry_bleed` extractor (Method A's own dependency) has not run for this content_hash. **Rescannable**.                                                                   | Live, no rows yet |
+| `ambiguous`           | `BLEED_CALC_AMBIGUOUS_SKIP_REASON`           | Neither method produced a number at all — Method A's own aspect-ratio classification abstained, and Method B never applied.                                                      | Live, no rows yet |
+| `method-disagreement` | `BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON` | Both methods produced a number and they disagree by more than the 2mm gate — routed to human review instead of a guess.                                                          | Live, no rows yet |
+| `not-trimmed`         | `BLEED_CALC_NOT_TRIMMED_SKIP_REASON`         | A bleed value WAS produced but this card's `bleed_class` is not `trimmed` — the ordinary ~97.5% case. Negative-only convention, same as `ambiguous` above on the sibling caster. | Live, no rows yet |
+
 ## Evidence transfer — `MPCAutofill/cardpicker/evidence_transfer.py`
 
 `anonymous_id` is `evidence-transfer-v1` (`EVIDENCE_TRANSFER_ANONYMOUS_ID`).

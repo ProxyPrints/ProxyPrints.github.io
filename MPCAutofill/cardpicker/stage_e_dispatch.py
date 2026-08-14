@@ -279,6 +279,12 @@ class DispatchOutcome:
     stage_d_border_chip_votes: int = 0
     stage_d_frame_chip_votes: int = 0
     stage_d_bleed_chip_votes: int = 0
+    # BLEED CALCULATOR (cardpicker.local_bleed_calculator, bleed-calculator-cast-v1) - a fourth,
+    # independently-derived channel onto the same `appropriate-bleed` tag as
+    # `stage_d_bleed_chip_votes` above, cross-checking the closed-form aspect-ratio bleed against
+    # the pinline-ruler per-edge bleed and withholding a vote on disagreement past a 2mm gate.
+    # Also reads stored `ImageEvidence`/`CanonicalPrintingMetadata` and fetches nothing.
+    stage_d_bleed_calculator_votes: int = 0
     # EVIDENCE-ONLY CALCULATORS (2026-08-05, closing the "10 of ~28 channels" wiring audit - see
     # `_run_evidence_only_calculators`' own docstring for the FREE/EXPENSIVE classification of
     # every channel this closes and every one it deliberately leaves open). All four read only
@@ -1221,6 +1227,7 @@ def _run_attribute_chip_casters(
     already do.
     """
     from cardpicker.local_attribute_chip_cast import run_attribute_chip_cast
+    from cardpicker.local_bleed_calculator import run_bleed_calculator_cast
     from cardpicker.local_layout_class_cast import run_layout_class_cast
 
     try:
@@ -1230,6 +1237,9 @@ def _run_attribute_chip_casters(
         chip_result = run_attribute_chip_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
         outcome.stage_d_frame_chip_votes = chip_result.frame_votes_written
         outcome.stage_d_bleed_chip_votes = chip_result.bleed_votes_written
+
+        bleed_calc_result = run_bleed_calculator_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_bleed_calculator_votes = bleed_calc_result.votes_written
     except RuntimeError as exc:
         logger.error(
             "Attribute-chip casters skipped for run_id=%s: %s Stage D's printing votes for this "
@@ -1787,6 +1797,7 @@ def dispatch_micro_batch(
                     "stage_d_border_chip_votes": outcome.stage_d_border_chip_votes,
                     "stage_d_frame_chip_votes": outcome.stage_d_frame_chip_votes,
                     "stage_d_bleed_chip_votes": outcome.stage_d_bleed_chip_votes,
+                    "stage_d_bleed_calculator_votes": outcome.stage_d_bleed_calculator_votes,
                     "stage_d_ai_art_votes": outcome.stage_d_ai_art_votes,
                     "stage_d_art_hash_artist_votes": outcome.stage_d_art_hash_artist_votes,
                     "stage_d_lands_votes": outcome.stage_d_lands_votes,
