@@ -3260,13 +3260,14 @@ export function DisplayPage() {
 
             {/* Design doc §4.2's "Prepare Print footer - pinned, always visible at the rail's
                 bottom (flex column: body scrolls, footer doesn't)". Issue #275 (ADDENDUM D9/F2)
-                replaces the old three-button stack with FinishFooter's own co-equal Save
-                Deck/Print - Export pair + the unchanged Export dropdown - see this file's own
-                module comment for the full rationale. */}
+                introduced FinishFooter's own Save Deck/Print-Export pair + the Export dropdown;
+                the separate Print/Export button was later folded into the Export dropdown's own
+                PDF item once Drive save landed there too - see FinishFooter.tsx's own module
+                comment for the full rationale. */}
             <div className="border-top p-3">
               <FinishFooter
                 hasBackedUpThisSession={draftBackup.hasBackedUpThisSession}
-                onPrintClick={prePrintSaveGate.startPrintFlow}
+                runExportGate={prePrintSaveGate.startPrintFlow}
                 sheetSettings={settings}
               />
             </div>

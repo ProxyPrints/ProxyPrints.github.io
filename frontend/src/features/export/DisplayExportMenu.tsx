@@ -10,6 +10,9 @@ import { DisplaySheetExportSettings } from "@/features/pdf/displayPdfProps";
 
 export interface DisplayExportMenuProps {
   sheetSettings: DisplaySheetExportSettings;
+  /** Forwarded to `DisplayExportPDF`'s own `runExportGate` prop - see that component's own
+   * comment. */
+  runExportGate: (proceed: () => void) => void;
 }
 
 // Issue #241 (design doc §5's export-beyond-PDF row) - the last of the three toolbar-parity
@@ -22,7 +25,10 @@ export interface DisplayExportMenuProps {
 // export modal - not what this page wants. This page's own PDF item is DisplayExportPDF.tsx
 // instead: it downloads straight from the sheet's own live settings via displayPdfProps.ts,
 // with no modal and no preview of its own (see that component's own module comment).
-export function DisplayExportMenu({ sheetSettings }: DisplayExportMenuProps) {
+export function DisplayExportMenu({
+  sheetSettings,
+  runExportGate,
+}: DisplayExportMenuProps) {
   return (
     <Dropdown>
       <Dropdown.Toggle
@@ -37,7 +43,10 @@ export function DisplayExportMenu({ sheetSettings }: DisplayExportMenuProps) {
         <ExportXML />
         <ExportImages />
         <ExportDecklist />
-        <DisplayExportPDF sheetSettings={sheetSettings} />
+        <DisplayExportPDF
+          sheetSettings={sheetSettings}
+          runExportGate={runExportGate}
+        />
       </Dropdown.Menu>
     </Dropdown>
   );

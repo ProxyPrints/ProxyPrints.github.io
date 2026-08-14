@@ -475,6 +475,43 @@ established).
   Picking `Custom` seeds both mm fields together, in the same state update, from whatever paper
   size was selected immediately before — never a transient undefined pair.
 
+### Page cut guide lines, Google Drive save, and retiring the Finish footer's own print route
+
+A rescue-inventory pass against `/print`'s `PDFGenerator.tsx` found two capabilities still missing
+from the editor after the passes above: the page-level cut guide toggle, and Save PDF to Google
+Drive. Both are now real controls on `/editor`, and with Drive save no longer print-page-only, the
+Finish footer's separate "Print / Export →" button — the last thing routing the editor anywhere to
+export — was retired in the same pass.
+
+- **Page cut guide lines** — `DisplayExportSettings.drawPageCutLines`, a switch in
+  `DisplayExportPDF.tsx`'s settings step alongside the existing cut-line group, mapped straight
+  through the adapter to `PDFProps.drawPageCutLines` (previously a hardcoded `false` in
+  `displayPdfProps.ts`'s own default block — removed from that block entirely, not left shadowed,
+  the same pattern the two "Editor export controls" passes above established). This is a genuinely
+  different guide from `sheetSettings.showCutLines`/`drawCardCutLines`: that toggle marks each
+  card's own trim boundary, while page cut lines mark guides across the whole sheet for a
+  guillotine cutting a printed stack — the two are independent, and the settings step's own switch
+  is never gated on the card cut-line toggle. Defaults to `true`, matching `/print`'s own
+  `PDFGenerator.tsx` default, so a workflow that depended on page guides keeps them on the editor.
+- **Save PDF to Google Drive** — `DisplayExportPDF.tsx`'s Modal footer now offers a "Save PDF to
+  Google Drive" button beside Download PDF, reusing `pdfDownload.tsx`'s `useSaveToDrivePDF`
+  unchanged (no forked upload logic) and gated behind the same `isGoogleDriveAppConfigured()`
+  check `PDFGenerator.tsx`'s own Drive button uses — absent when Drive isn't configured, rather
+  than present-but-broken.
+- **Finish footer collapse** — `FinishFooter.tsx`'s separate `Print / Export →` button (the last
+  in-app route to `/print`) is gone; `Save Deck` is now the footer's sole primary button, and PDF
+  export lives solely in the Export ▾ dropdown's existing "PDF" item. The two behaviours that
+  button used to gate before navigating away — `usePrePrintSaveGate`'s draft-flush and
+  save-before-export prompt, and its composed `useCardbackReminderGate` — still run, just wrapped
+  around `DisplayExportPDF`'s own Download/Save-to-Drive clicks instead of a navigation:
+  `usePrePrintSaveGate.startPrintFlow` now takes the actual export action as a `proceed` parameter
+  rather than hardcoding a `router.push("/print")`, and that gate function (`runExportGate`) is
+  threaded down from `DisplayPage.tsx`'s one shared `usePrePrintSaveGate` instance through
+  `FinishFooter`/`DisplayExportMenu` to `DisplayExportPDF`'s two buttons. `/print`,
+  `PDFGenerator.tsx`, and `FinishedMyProject.tsx` are unchanged and still in-tree — deleting them
+  is a separate follow-up, now that this was the last thing depending on them from the editor;
+  `pages/print.tsx` has no in-app entry point left, reachable only by a direct/bookmarked URL.
+
 ### Bleed-normalization signal on the editor sheet
 
 `willLikelyGenerateBleed` (`bleedNormalize.ts`) — the cheap, preview-only
@@ -513,15 +550,19 @@ sheet is the only place left that needs to show it.
   `frontend/src/features/export/usePostExportContributionPrompt.ts`,
   `frontend/src/features/export/PostExportContributionPrompt.tsx` — issue
   #166's post-export contribution prompt
-- `frontend/tests/PDFGenerator.spec.ts` — mocked-CDN Playwright coverage for
-  bug 4 (preview warning, confirm-gated download/cancel, and a real-image
-  success-path regression check)
-- `frontend/tests/PostExportContributionPrompt.spec.ts` — issue #166
-  coverage against this component's one remaining live mount, `/print`'s
-  PDF tab (re-homed there from the classic "Print!" tab in the 2026-07-24
-  parked-spec port wave, issue #272 — the second, `/display`-inline-export
-  surface this file used to also cover was already retired by issue #275,
-  above)
+- Editor export rescue (docs' own "Editor-native PDF export" section, below):
+  once `Print / Export` stopped navigating anywhere, `/print` lost its last
+  in-app entry point (`pages/print.tsx`'s own comment — only a direct/
+  bookmarked URL reaches it, always with an empty project), so
+  `PDFGenerator.tsx`'s bug-4 (image-fetch failures) and issue #166
+  (post-export contribution prompt) Playwright coverage — `PDFGenerator.spec.ts`,
+  `PagePreview.spec.ts`, `PostExportContributionPrompt.spec.ts`,
+  `PDFWaitExperience.spec.ts` — was dropped rather than ported: none of it
+  has a reachable equivalent on `/editor`'s own inline export
+  (`DisplayExportPDF.tsx`/`pdfDownload.tsx` never mount `PDFWaitPanel.tsx`,
+  the component these files' progress-bar/game-embed assertions targeted).
+  See `.github/coverage-acks.txt`'s "Editor export rescue, continued" entry
+  for the full reasoning.
 - `frontend/src/features/pdf/pdfDownload.tsx`, `frontend/src/features/pdf/pageSize.ts`
   — shared download plumbing and page-size table, factored out of
   `PDFGenerator.tsx`/`PDF.tsx` respectively so `/editor`'s own PDF export

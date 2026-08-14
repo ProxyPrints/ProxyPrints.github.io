@@ -1,16 +1,10 @@
 import { expect } from "@playwright/test";
-import { readFileSync } from "fs";
-import { http, HttpResponse } from "msw";
-import path from "path";
-import { fileURLToPath } from "url";
 
 import { cardDocument2 } from "@/common/test-constants";
 import {
   cardbacksThreeResults,
   cardDocumentsThreeResults,
   defaultHandlers,
-  questionFeedConfirmSuggestionSingleton,
-  searchResultsOneResult,
   searchResultsThreeResults,
   sourceDocumentsOneResult,
   tagConsensusTwoUnresolvedTags,
@@ -21,6 +15,7 @@ import {
   ensureDisplayRightRailOpen,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openPDFExportSettingsAndClickDownload,
 } from "./test-utils";
 
 /**
@@ -33,9 +28,14 @@ import {
  * not duplicated per-viewport tables.
  *
  * Not exhaustive against every row in §E - a representative, binding sample of the round's N
- * (introduced-this-round) elements across all four subsections (E.1 gate / E.2 grid+prompt /
- * E.3 progress bar / E.4 game embed+outro), covering every DISTINCT colour token the round
- * introduces at least once.
+ * (introduced-this-round) elements across the two subsections still reachable from a populated
+ * project (E.1 gate / E.2 grid+prompt), covering every DISTINCT colour token they introduce.
+ * E.3 (progress bar) / E.4 (game embed) covered PDFGenerator.tsx's own /print wait experience,
+ * reached by navigating there with a populated project - the editor export rescue retired that
+ * navigation (DisplayExportPDF.tsx's Download button runs the export in place, no wait-panel
+ * UI of its own) and left no other client path to a populated /print, so that pair was dropped
+ * rather than ported; see .github/coverage-acks.txt for the same-shaped ack this file's own
+ * E.1/E.2 companion (CardbackFlow.spec.ts) already recorded for its own removed-navigation tests.
  *
  * Tokyo-11 re-theme (2026-07-24, owner ruling - see docs/features/theming.md): this file's own
  * colour literals were re-derived from the #302 palette to Tokyo-11 in the same pass that
@@ -54,27 +54,6 @@ const threeCardHandlers = [
   tagConsensusTwoUnresolvedTags,
   ...defaultHandlers,
 ];
-
-const IMAGE_WORKER_URL_PATTERN = /^https:\/\/cdn\.proxyprints\.ca\//;
-const IMAGE_BUCKET_URL_PATTERN = /^https:\/\/img\.proxyprints\.ca\//;
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const validImageBytes = readFileSync(
-  path.join(__dirname, "..", "public", "blank.png")
-);
-const imageBucketFailure = http.get(
-  IMAGE_BUCKET_URL_PATTERN,
-  () => new HttpResponse(null, { status: 404 })
-);
-const delayedImageWorkerSuccess = http.get(
-  IMAGE_WORKER_URL_PATTERN,
-  async () => {
-    await new Promise((resolve) => setTimeout(resolve, 4_000));
-    return new HttpResponse(validImageBytes, {
-      status: 200,
-      headers: { "Content-Type": "image/png" },
-    });
-  }
-);
 
 for (const viewport of [
   { width: 1400, height: 900, label: "1400px" },
@@ -97,8 +76,7 @@ for (const viewport of [
       await loadPageWithDefaultBackend(page);
       await importTextOnEditorLanding(page, "my search query");
 
-      await ensureDisplayRightRailOpen(page);
-      await page.getByTestId("finish-footer-print-export").click();
+      await openPDFExportSettingsAndClickDownload(page);
       const gate = page.getByTestId("pre-print-cardback-gate");
       await expect(gate).toBeVisible();
 
@@ -124,8 +102,11 @@ for (const viewport of [
         "rgb(255, 158, 100)"
       );
 
-      await gate.getByTestId("cardback-gate-use-current").click();
-      await page.waitForURL(/\/print/, { timeout: 30_000 });
+      const [download] = await Promise.all([
+        page.waitForEvent("download", { timeout: 30_000 }),
+        gate.getByTestId("cardback-gate-use-current").click(),
+      ]);
+      expect(download.suggestedFilename()).toBe("cards.pdf");
 
       // --- E.2, both entries: reopen the editor and drive the toolbar apply prompt. ---
       await page.goto("/editor?server=http://127.0.0.1:8000", {
@@ -183,70 +164,6 @@ for (const viewport of [
         "1px solid rgb(158, 206, 106)"
       );
       await expect(applyButton).toHaveCSS("color", "rgb(158, 206, 106)");
-    });
-
-    test(`E.3 progress bar + E.4 game embed tokens resolve real computed values at ${viewport.label}`, async ({
-      page,
-      network,
-    }) => {
-      network.use(
-        ...threeCardHandlers.filter(
-          (handler) => handler !== searchResultsThreeResults
-        ),
-        searchResultsOneResult,
-        imageBucketFailure,
-        delayedImageWorkerSuccess,
-        questionFeedConfirmSuggestionSingleton
-      );
-      await loadPageWithDefaultBackend(page);
-      await importTextOnEditorLanding(page, "my search query");
-      await ensureDisplayRightRailOpen(page);
-      await page.getByTestId("finish-footer-print-export").click();
-      await page
-        .getByTestId("pre-print-cardback-gate")
-        .getByTestId("cardback-gate-use-current")
-        .click();
-      await page.waitForURL(/\/print/, { timeout: 30_000 });
-      await page.getByRole("tab", { name: "PDF" }).click();
-
-      await page.getByRole("button", { name: "Generate PDF" }).click();
-
-      // E.3 `.progressbox` - $theme-raised-bg bg, 1px $theme-divider border. Tokyo-11: raised-bg
-      // rgb(34, 48, 63) -> rgb(36, 40, 59); divider rgb(22, 32, 43) -> rgb(22, 22, 30).
-      const progressBox = page.getByTestId("pdf-progress");
-      await expect(progressBox).toBeVisible({ timeout: 15_000 });
-      await expect(progressBox).toHaveCSS(
-        "background-color",
-        "rgb(36, 40, 59)"
-      );
-      await expect(progressBox).toHaveCSS(
-        "border",
-        "1px solid rgb(22, 22, 30)"
-      );
-
-      // E.4 `.gameembed` frame - $theme-raised-bg bg, 1px $theme-divider border (same Tokyo-11
-      // remapping as `.progressbox` above).
-      const embed = page.getByTestId("pdf-wait-game");
-      await expect(embed).toBeVisible({ timeout: 15_000 });
-      await expect(embed).toHaveCSS("background-color", "rgb(36, 40, 59)");
-      await expect(embed).toHaveCSS("border", "1px solid rgb(22, 22, 30)");
-
-      // E.4 `.geband` build ribbon - #0b1520 bg. NOT a theme token (a bespoke near-black literal,
-      // out of the Tokyo-11 sweep's scope - same as PagePreview.tsx's `.compare` panel
-      // background) - unchanged by this re-theme.
-      await expect(page.getByTestId("pdf-wait-game-ribbon")).toHaveCSS(
-        "background-color",
-        "rgb(11, 21, 32)"
-      );
-
-      // E.4 `.tbtn.yes` equivalent (the suggestion slot's primary Yes button, QuestionFeed's
-      // own shipped idiom, reproduced verbatim) - min-height 44px floor.
-      const yesButton = embed.getByTestId("question-feed-suggestion-yes");
-      await expect(yesButton).toBeVisible({ timeout: 15_000 });
-      const yesHeight = await yesButton.evaluate(
-        (el) => el.getBoundingClientRect().height
-      );
-      expect(yesHeight).toBeGreaterThanOrEqual(44);
     });
   });
 }
