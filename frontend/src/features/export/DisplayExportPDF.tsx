@@ -41,12 +41,16 @@ import Button from "react-bootstrap/Button";
 import Dropdown from "react-bootstrap/Dropdown";
 import Form from "react-bootstrap/Form";
 import Modal from "react-bootstrap/Modal";
+import { createPortal } from "react-dom";
 
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { RightPaddedIcon } from "@/components/icon";
 import { Spinner } from "@/components/Spinner";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
+import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
+import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
+import { usePostExportContributionPrompt } from "@/features/export/usePostExportContributionPrompt";
 import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveConfig";
 import {
   DisplayExportSettings,
@@ -68,6 +72,11 @@ import {
   useSaveToDrivePDF,
 } from "@/features/pdf/pdfDownload";
 import { ImageFetchFailure } from "@/features/pdf/pdfImage";
+import {
+  derivePDFWaitPhase,
+  PDFProgressBox,
+  PDFWaitGameEmbed,
+} from "@/features/pdf/PDFWaitPanel";
 import {
   ScmPaperLabels,
   ScmPaperSize,
@@ -162,7 +171,7 @@ export function DisplayExportPDF({
 
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
-  const [, setImageFetchProgress] = useState<{
+  const [imageFetchProgress, setImageFetchProgress] = useState<{
     completed: number;
     total: number;
   } | null>(null);
@@ -172,6 +181,10 @@ export function DisplayExportPDF({
   } | null>(null);
   const confirmDespiteFailures: ConfirmDespiteFailures = (failures) =>
     new Promise((resolve) => setPendingFailureConfirm({ failures, resolve }));
+
+  const generating = isDownloading || isSavingToDrive;
+  const waitPhase = derivePDFWaitPhase(generating, imageFetchProgress);
+  const contributionPrompt = usePostExportContributionPrompt();
 
   const downloadPDF = useDownloadPDF(
     pdfProps,
@@ -711,7 +724,11 @@ export function DisplayExportPDF({
               onClick={() => {
                 setShowSettings(false);
                 runExportGate(() => {
-                  saveToDrive();
+                  saveToDrive().then((succeeded) => {
+                    if (succeeded === true) {
+                      contributionPrompt.notifyExportSucceeded();
+                    }
+                  });
                 });
               }}
             >
@@ -729,13 +746,44 @@ export function DisplayExportPDF({
             onClick={() => {
               setShowSettings(false);
               runExportGate(() => {
-                downloadPDF();
+                downloadPDF().then(() => {
+                  if (wasLatestCardsPdfDownloadSuccessful()) {
+                    contributionPrompt.notifyExportSucceeded();
+                  }
+                });
               });
             }}
           >
             {isDownloading ? <Spinner size={1} /> : "Download PDF"}
           </Button>
         </Modal.Footer>
+      </Modal>
+      {/* Blocks interaction (static backdrop, no keyboard/close dismiss) for the render's actual
+          duration - the same click-again impulse issue #811 describes has nowhere to land while
+          this is up. Shown purely off `generating`, so it clears itself the instant the render
+          settles (success, cancellation, or error) with no separate "done" state to dismiss. */}
+      <Modal
+        show={generating}
+        backdrop="static"
+        keyboard={false}
+        onHide={() => undefined}
+        data-testid="display-export-pdf-progress-modal"
+      >
+        <Modal.Header>
+          <Modal.Title>Generating your PDF</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <PDFProgressBox
+            phase={waitPhase}
+            imageFetchProgress={imageFetchProgress}
+          />
+          {(waitPhase === "fetching" || waitPhase === "assembling") && (
+            <PDFWaitGameEmbed
+              phase={waitPhase}
+              imageFetchProgress={imageFetchProgress}
+            />
+          )}
+        </Modal.Body>
       </Modal>
       <ImageFailureConfirmModal
         failures={pendingFailureConfirm?.failures ?? null}
@@ -748,6 +796,29 @@ export function DisplayExportPDF({
           setPendingFailureConfirm(null);
         }}
       />
+      {/* Portalled to document.body, not rendered in place: this component lives inside
+          <Dropdown.Menu>, which Bootstrap sets to `display:none` the moment the dropdown itself
+          closes (react-bootstrap auto-closes it on item selection) - a plain in-tree node would
+          be invisible the instant the user picked "PDF", same class of bug SelectVersionResults
+          .tsx's own FloatFiltersPortalRoot comment documents for a sibling case. Bottom-LEFT
+          (`start`), matching Toasts.tsx's own sitewide `position="bottom-start"` convention -
+          the editor's own Export controls live in the right rail, so a bottom-right placement
+          would sit on top of them for the rest of the session (the prompt has no auto-hide). */}
+      {contributionPrompt.visible &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="position-fixed bottom-0 start-0 p-3"
+            style={{ zIndex: 1080, maxWidth: 380 }}
+            data-testid="post-export-contribution-prompt-container"
+          >
+            <PostExportContributionPrompt
+              show={contributionPrompt.visible}
+              onDismiss={contributionPrompt.dismiss}
+            />
+          </div>,
+          document.body
+        )}
     </>
   );
 }
