@@ -332,13 +332,26 @@ def retrieve_card_identifiers(
     `cardpicker.search.operator_parser`) are carried through unchanged into BOTH the primary and
     the degraded-retry search - the degraded retry only ever drops the expansion_code/
     collector_number term filter, never a user-typed operator.
+
+    Every caller of this function (`post_editor_search`, `old_post_editor_search`) resolves a
+    project slot's already-set query - i.e. an already-imported card - never a fresh discovery
+    search (that's `post_explore_search`, which calls `get_search` directly and isn't routed
+    through here). Fuzzy vs precise is an add-cards-time discovery preference, not something an
+    already-identified card's own name lookup should keep re-litigating against, so the caller's
+    `fuzzySearch` preference is overridden to precise here, once, regardless of what the client
+    sent.
     """
+    precise_search_settings = search_settings.model_copy(
+        update={"searchTypeSettings": search_settings.searchTypeSettings.model_copy(update={"fuzzySearch": False})}
+    )
     identifiers = _retrieve_card_identifiers_once(
-        search_settings, query, card_type, expansion_code, collector_number, operator_filters
+        precise_search_settings, query, card_type, expansion_code, collector_number, operator_filters
     )
     degraded = False
     if not identifiers and (expansion_code or collector_number):
-        identifiers = _retrieve_card_identifiers_once(search_settings, query, card_type, None, None, operator_filters)
+        identifiers = _retrieve_card_identifiers_once(
+            precise_search_settings, query, card_type, None, None, operator_filters
+        )
         degraded = True
     return identifiers, degraded
 
