@@ -639,44 +639,61 @@ interface PromotedZoneProps {
   onCompareHide: () => void;
 }
 
-// Editor-polish round, owner amendment 1 (2026-07-24, BINDING) - "More details" RELOCATES from
-// the rail head to directly under the D14 band; this is the exact JSX `RailHeader` used to own
-// (same `CardMetaTable`/`CardDownloadFavorite`, same testids - `display-rail-more-details-*` -
-// so every existing behavior assertion querying those testids keeps working unchanged), just
-// moved into `PromotedZone`, between `ConfidenceElement` and `IdentifyPanel` per the amendment's
-// own "renders directly under the D14 confidence band" instruction.
-interface MoreDetailsSectionProps {
+// Rail restructure ruling 3 (docs/proposals/mockups/editor-repass round, owner directive, item
+// 3) - REV: "More details" and "Wrong printing? Search the right one" merge into ONE band with
+// ONE shared toggle row, instead of two full-width bands each paying for its own background,
+// border-bottom and 8px8px padding. Supersedes editor-polish's own amendment 1 (which moved
+// "More details" to its own standalone band directly under D14) only insofar as that band now
+// shares its wrapper with the identify toggle - amendment 1's actual placement instruction
+// ("directly under the D14 confidence band") is unchanged, and every testid amendment 1 named
+// (`display-rail-more-details-*`) survives unchanged below, so every prior behavior assertion
+// against those testids still exercises the same real DOM node, just inside a merged wrapper.
+// `PrintingTagsBlock`/`CardMetaTable`/`CardDownloadFavorite` are reused verbatim, same as before
+// (item 6/RD1/RD6/RD7's own reasoning, restated by reference rather than duplicated here).
+interface DetailsAndIdentifyRowProps {
   cardDocument: CardDocument | undefined;
-  open: boolean;
-  onToggle: () => void;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+  identifyOpen: boolean;
+  onToggleIdentify: () => void;
 }
 
-const MoreDetailsSection = ({
+const DetailsAndIdentifyRow = ({
   cardDocument,
-  open,
-  onToggle,
-}: MoreDetailsSectionProps) => (
-  <div className="detmore-wrap">
-    <button
-      type="button"
-      className="detmore"
-      aria-expanded={open}
-      onClick={onToggle}
-      data-testid="display-rail-more-details-toggle"
-    >
-      More details <span className="chev">{open ? "⌄" : "›"}</span>
-    </button>
-    <Collapse in={open}>
+  detailsOpen,
+  onToggleDetails,
+  identifyOpen,
+  onToggleIdentify,
+}: DetailsAndIdentifyRowProps) => (
+  <div className="detid-row" data-testid="display-details-identify-row">
+    <div className="detid-toggles">
+      <button
+        type="button"
+        className="detmore"
+        aria-expanded={detailsOpen}
+        onClick={onToggleDetails}
+        data-testid="display-rail-more-details-toggle"
+      >
+        More details <span className="chev">{detailsOpen ? "⌄" : "›"}</span>
+      </button>
+      {cardDocument != null && (
+        <button
+          type="button"
+          className="idtoggle"
+          aria-expanded={identifyOpen}
+          onClick={onToggleIdentify}
+          data-testid="display-identify-toggle"
+        >
+          Wrong printing? Search the right one{" "}
+          <span className="chev">{identifyOpen ? "⌄" : "›"}</span>
+        </button>
+      )}
+    </div>
+    <Collapse in={detailsOpen}>
       <div>
-        {/* RD6 (O2 answered) - the WHOLE Card-Details metadata block (Resolution/DPI, File
-            size, Source, Source type, Class, Identifier, Language, Tags, dates) plus Download +
-            Favourite lives ONLY here now - one of the nine removed grey AutofillCollapse
-            sections, folded in place. */}
         <div className="detbody" data-testid="display-rail-more-details-body">
           {cardDocument != null ? (
             <>
-              {/* RD7 - the printing id lives ONCE, in D14; drop CardMetaTable's own
-                  "Canonical Card" row here so it's never a static second copy. */}
               <CardMetaTable
                 cardDocument={cardDocument}
                 showCanonicalCard={false}
@@ -691,53 +708,17 @@ const MoreDetailsSection = ({
         </div>
       </div>
     </Collapse>
-  </div>
-);
-
-// Rail-delegacy round (item 6, SPEC-rail-delegacy.md §B/§F) - the "Printing Tags" grey accordion
-// (PrintingTagPicker consensus/search/candidate-grid + the AttributeVotingPanel follow-up) is
-// REMOVED as a standalone section and rehung directly off the D14 band it's ABOUT ("what printing
-// is this"), opened on demand - never a grey accordion. `PrintingTagsBlock` is reused verbatim
-// (CardDetailedViewBody.tsx) - it already owns the exact PrintingTagPicker + conditional
-// AttributeVotingPanel-when-unresolved composition item 6/RD1 call for; the ONE explicit
-// attribute-vote surface stays here (RD1/O1) - the funnel's own chips (SelectVersionResults.tsx)
-// are implicit-only.
-interface IdentifyPanelProps {
-  cardDocument: CardDocument | undefined;
-  open: boolean;
-  onToggle: () => void;
-}
-
-const IdentifyPanel = ({
-  cardDocument,
-  open,
-  onToggle,
-}: IdentifyPanelProps) => {
-  if (cardDocument == null) {
-    return null;
-  }
-  return (
-    <div className="idhang" data-testid="display-identify-panel">
-      <button
-        type="button"
-        className="idtoggle"
-        aria-expanded={open}
-        onClick={onToggle}
-        data-testid="display-identify-toggle"
-      >
-        Wrong printing? Search the right one{" "}
-        <span className="chev">{open ? "⌄" : "›"}</span>
-      </button>
-      <Collapse in={open}>
+    {cardDocument != null && (
+      <Collapse in={identifyOpen}>
         <div>
           <div className="idbody" data-testid="display-identify-body">
             <PrintingTagsBlock cardDocument={cardDocument} />
           </div>
         </div>
       </Collapse>
-    </div>
-  );
-};
+    )}
+  </div>
+);
 
 // Rail restructure ruling 2 (docs/proposals/mockups/editor-repass round, owner directive): the
 // rail orders by distance from the subject - things ABOUT this card sit adjacent to the
@@ -780,16 +761,14 @@ const PromotedZone = ({
       <ArtistSection cardDocument={cardDocument} />
     </div>
     {/* Amendment 1 - directly under the artist line now (see this component's own module
-        comment on the ruling-2 reorder above). */}
-    <MoreDetailsSection
+        comment on the ruling-2 reorder above); ruling 3 merges the two toggles this used to be
+        into one row (see DetailsAndIdentifyRow's own comment). */}
+    <DetailsAndIdentifyRow
       cardDocument={cardDocument}
-      open={detailsOpen}
-      onToggle={onToggleDetails}
-    />
-    <IdentifyPanel
-      cardDocument={cardDocument}
-      open={identifyOpen}
-      onToggle={onToggleIdentify}
+      detailsOpen={detailsOpen}
+      onToggleDetails={onToggleDetails}
+      identifyOpen={identifyOpen}
+      onToggleIdentify={onToggleIdentify}
     />
   </>
 );
@@ -1604,13 +1583,22 @@ const RailRoot = styled.div`
     margin-top: 8px;
   }
   /* Amendment 1 (owner, 2026-07-24, BINDING) - "More details" moved out of the rail head to
-     directly under the D14 band; same padded/divider rhythm as its new neighbours ('.d14'/
-     '.idhang', both '#2b3e50') rather than the rail-head's own '#22303f', since it's still
-     "about the currently-identified printing," the same subject D14 covers. */
-  .detmore-wrap {
+     directly under the D14 band; same padded/divider rhythm as its new neighbours ('.d14', both
+     '#2b3e50') rather than the rail-head's own '#22303f', since it's still "about the
+     currently-identified printing," the same subject D14 covers. Ruling 3 (editor-repass round,
+     item 3) - REV: '.detmore-wrap'/'.idhang' (formerly two separate bands, each paying for its
+     own background/border/padding) merge into this ONE band; '.detid-toggles' lays the two
+     toggle buttons out side by side inside it instead of stacking two full-width rows. */
+  .detid-row {
     background: var(--theme-band-bg);
     border-bottom: 1px solid var(--theme-divider);
     padding: 8px 8px;
+  }
+  .detid-toggles {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
   }
   .detmore {
     background: transparent;
@@ -1674,12 +1662,8 @@ const RailRoot = styled.div`
     font-weight: 700;
   }
 
-  /* identify panel band (item 6) - hangs off D14, same surface (§2/band-bg) */
-  .idhang {
-    background: var(--theme-band-bg);
-    border-bottom: 1px solid var(--theme-divider);
-    padding: 0 10px 8px;
-  }
+  /* identify toggle (item 6) - lives inside '.detid-toggles' now (ruling 3); no wrapper of its
+     own left to style, '.detid-row' above owns the shared background/border/padding. */
   .idtoggle {
     background: transparent;
     border: 1px solid #6b7d8e;
@@ -2813,7 +2797,14 @@ export function DisplayPage() {
           <Offcanvas.Header closeButton>
             <Offcanvas.Title>Card details</Offcanvas.Title>
           </Offcanvas.Header>
-          <Offcanvas.Body>
+          {/* Rail restructure ruling 6 (editor-repass round, item 1/4) - REV: Bootstrap's stock
+              Offcanvas.Body padding (p-3, 16px) was stacking with every RailRoot section's OWN
+              8px-scale padding underneath it, so the rail was carrying 24px of horizontal inset
+              per side instead of the 8px every other rail block already uses (the right rail's
+              own Offcanvas.Body already made this exact move under ruling 7 - see its own
+              comment below). Removing it both tightens the rail generally AND frees the ~32px
+              of width the "large" candidate density needs to show two tiles per row. */}
+          <Offcanvas.Body className="p-0">
             {/* `key` here (not inside Rail itself) is what actually forces a remount on slot
                 change - a key set on an element INSIDE a component's own render output has no
                 effect on that same component's hooks; only the key the PARENT assigns to the

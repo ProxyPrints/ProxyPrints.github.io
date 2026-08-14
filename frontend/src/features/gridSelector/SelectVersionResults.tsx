@@ -415,13 +415,21 @@ const CANDIDATE_DENSITY_ORDER: CandidateDensity[] = [
   "large",
 ];
 
-// "comfortable" (112px) matches R1's own "resting 3-up" recommendation; "large" (170px) matches
-// its "2-up" alternative; "compact" keeps today's auto-dense value (72px) reachable for anyone
-// who prefers more tiles on screen over bigger ones.
+// "comfortable" (112px) matches R1's own "resting 3-up" recommendation; "large" matches its
+// "2-up" alternative; "compact" keeps today's auto-dense value (72px) reachable for anyone who
+// prefers more tiles on screen over bigger ones.
+//
+// Rail restructure ruling 4 (editor-repass round, item 1) - REV: "large" shrinks 170px (10.625)
+// -> 160px (10) so two tiles actually FIT side by side. 170px was sized for 2-up in principle but
+// never actually achieved it in practice - the rail's own Offcanvas.Body was carrying an extra
+// 32px of unaccounted padding (see DisplayPage.tsx's Offcanvas.Body comment, item 4), so two
+// 170px tiles plus the grid's 6px gap (346px) came within single digits of the rail's real
+// content width once a scrollbar was present, too fragile to ship. Two 160px tiles + 6px gap
+// (326px) clears the corrected ~347-364px content width with real margin.
 const CANDIDATE_DENSITY_WIDTH_REM: Record<CandidateDensity, number> = {
   compact: 4.5,
   comfortable: 7,
-  large: 10.625,
+  large: 10,
 };
 
 const CANDIDATE_DENSITY_LABEL: Record<CandidateDensity, string> = {
