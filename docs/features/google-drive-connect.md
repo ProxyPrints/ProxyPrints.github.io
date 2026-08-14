@@ -92,16 +92,19 @@ proposal to reuse it was wrong on that premise).
   retry/semaphore machinery is tailored to GET-based browsing endpoints;
   upload is a one-shot POST with a FormData body).
 - `frontend/src/features/googleDrive/googleDriveConfig.ts` — extracted
-  `isGoogleDriveAppConfigured()` out of `BackendConfig.tsx` so
-  `PDFGenerator.tsx` can reuse the same env-var gate.
-- `PDFGenerator.tsx` — "Save PDF to Google Drive" button below "Generate
-  PDF" (only rendered when configured), requests a fresh write-scoped
-  token on each click (not cached across clicks), renders the PDF via the
-  same `pdfRenderService.renderPDF` the download path uses, uploads it as
+  `isGoogleDriveAppConfigured()` out of `BackendConfig.tsx` so the
+  editor's PDF export can reuse the same env-var gate.
+- `frontend/src/features/export/DisplayExportPDF.tsx` — "Save PDF to
+  Google Drive" button below "Download PDF" (only rendered when
+  configured), requests a fresh write-scoped token on each click (not
+  cached across clicks), renders the PDF via the same
+  `pdfRenderService.renderPDF` the download path uses, uploads it as
   `cards.pdf`. Deliberately does **not** route through the navbar's
   download-manager queue/tray — that queue's semantics are for local
   downloads, not uploads; has its own local `isSavingToDrive` loading state
-  instead, mirroring the existing `isDownloading` pattern.
+  instead, mirroring the existing `isDownloading` pattern. (Rescued here
+  from `/print`'s `PDFGenerator.tsx` when that page was retired
+  2026-08-14.)
 
 **Verified only that the client-side request pipeline is wired correctly**
 — a fake client ID correctly produced Google's `invalid_client` rejection,
@@ -115,7 +118,9 @@ real upload, no confirmation a file actually lands in Drive.
   `LocalFolderBackendConfig.tsx`, `BackendConfig.tsx`
 - `frontend/src/features/googleDrive/` (`googleDriveAuth.ts`,
   `googleDriveConfig.ts`, `GoogleDriveService.ts`)
-- `frontend/src/features/pdf/PDFGenerator.tsx`
+- `frontend/src/features/export/DisplayExportPDF.tsx` (the editor's PDF
+  export — rescued from `/print`'s `PDFGenerator.tsx` when that page was
+  retired 2026-08-14)
 
 ## Known gaps
 
