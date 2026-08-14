@@ -14,7 +14,6 @@
 
 import React, { useEffect, useState } from "react";
 import { Accordion } from "react-bootstrap";
-import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 import Tab from "react-bootstrap/Tab";
@@ -31,8 +30,6 @@ import { Ribbon } from "@/components/Ribbon";
 import { SelectedImagesRibbon } from "@/features/bulkManagement/SelectedImagesRibbon";
 import { CardGrid } from "@/features/card/CardGrid";
 import { CommonCardback } from "@/features/card/CommonCardback";
-import { Export } from "@/features/export/Export";
-import { FinishedMyProject } from "@/features/export/FinishedMyProject";
 import { FinishSettings } from "@/features/finishSettings/FinishSettings";
 import { Import } from "@/features/import/Import";
 import { ImportCSV } from "@/features/import/ImportCSV";
@@ -50,7 +47,7 @@ import {
 import { RightPaddedIcon } from "./icon";
 import { NavBanner, NavBannerItem } from "./NavBanner";
 
-type EditorPanel = "import" | "editor" | "finished";
+type EditorPanel = "import" | "editor";
 
 const AddCardsPanel = ({
   onImportComplete,
@@ -100,13 +97,8 @@ const AddCardsPanel = ({
   </OverflowCol>
 );
 
-const ChooseArtPanel = ({
-  setEditorPanel,
-}: {
-  setEditorPanel: (value: EditorPanel) => void;
-}) => {
+const ChooseArtPanel = () => {
   const cardback = useAppSelector(selectProjectCardback);
-  const isProjectEmpty = useAppSelector(selectIsProjectEmpty);
   return (
     <>
       <Ribbon position="top" className="g-0">
@@ -132,9 +124,9 @@ const ChooseArtPanel = ({
             splitting the screen 50/50 with it - at that width the settings sidebar was
             squeezing every control (e.g. the cardstock dropdown) into an unreadably narrow
             column. sm/md/lg keep the existing side-by-side split unchanged. chainScroll here
-            too: this panel holds "I've Finished My Project", the only way to reach the
-            Print/Save-to-Drive flow, so it must itself remain reachable via scroll chaining
-            from whatever's stacked above it (matters if this component is ever reordered). */}
+            too: this panel holds the Import/Export/Save controls, so it must itself remain
+            reachable via scroll chaining from whatever's stacked above it (matters if this
+            component is ever reordered). */}
         <OverflowCol
           data-testid="right-panel"
           lg={4}
@@ -158,19 +150,6 @@ const ChooseArtPanel = ({
             <Col lg={7} md={12} sm={12} xs={12}>
               <Import />
             </Col>
-            <Col lg={5} md={12} sm={12} xs={12}>
-              <Export />
-            </Col>
-            {!isProjectEmpty && (
-              <Button
-                variant="success"
-                id="dropdown-basic"
-                onClick={() => setEditorPanel("finished")}
-              >
-                <RightPaddedIcon bootstrapIconName="bag-check" /> I&apos;ve
-                Finished My Project
-              </Button>
-            )}
           </Row>
           <Col className="g-0 pt-2" lg={{ span: 8, offset: 2 }} md={12}>
             <CommonCardback selectedImage={cardback} />
@@ -180,12 +159,6 @@ const ChooseArtPanel = ({
     </>
   );
 };
-
-const PrintPanel = () => (
-  <OverflowCol heightDelta={NavPillButtonHeight + NavbarHeight}>
-    <FinishedMyProject />
-  </OverflowCol>
-);
 
 function ProjectEditor() {
   // TODO: should we periodically ping the backend to make sure it's still alive?
@@ -221,7 +194,6 @@ function ProjectEditor() {
   const navBannerItems: Array<NavBannerItem<EditorPanel>> = [
     { key: "import", label: "Add Cards", disabled: false },
     { key: "editor", label: "Choose Art", disabled: false },
-    { key: "finished", label: "Print!", disabled: isProjectEmpty },
   ];
 
   return (
@@ -237,10 +209,7 @@ function ProjectEditor() {
             <AddCardsPanel onImportComplete={() => setEditorPanel("editor")} />
           </Tab.Pane>
           <Tab.Pane eventKey="editor">
-            <ChooseArtPanel setEditorPanel={setEditorPanel} />
-          </Tab.Pane>
-          <Tab.Pane eventKey="finished" mountOnEnter>
-            <PrintPanel />
+            <ChooseArtPanel />
           </Tab.Pane>
         </Tab.Content>
       </Row>

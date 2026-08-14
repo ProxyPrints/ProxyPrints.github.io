@@ -13,8 +13,9 @@ its own entry below for what that leaves unverified.
    PDF tab. `@react-pdf/renderer` eagerly instantiates a Yoga WASM binary at
    _import_ time, not render time, and `PDFGenerator` was statically
    imported. Fixed via `next/dynamic({ssr: false})` + `mountOnEnter` on the
-   `Tab.Pane`s that mount it (`PDFGeneratorModal.tsx`,
-   `FinishedMyProject.tsx`, `ProjectEditor.tsx`).
+   `Tab.Pane`s that mounted it (`PDFGeneratorModal.tsx` — and, before the
+   `/print` retirement below, `FinishedMyProject.tsx` and
+   `ProjectEditor.tsx`).
 2. **Live preview auto-downloading in Firefox / eating too much space in
    Chrome**. The native `<iframe>`/`<object>` embed either triggers
    Firefox's "download instead of render" behavior for blob PDFs, or (once
@@ -232,6 +233,13 @@ behavior - old title ack'd in `.github/coverage-acks.txt`).
 
 ## PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG2)
 
+> **Retired 2026-08-14 with `/print`** — `PDFWaitPanel.tsx` was the PDF tab's own wait UI, and
+> the PDF tab (with its host `PDFGenerator.tsx`, `FinishedMyProject.tsx`, `pages/print.tsx`)
+> was deleted in the `/print` retirement (see "Printshop ordering guides" below). `/editor`'s own
+> PDF export (`DisplayExportPDF.tsx`/`pdfDownload.tsx`) never mounted this panel — it downloads
+> straight from a button press, so its export wait is the download manager's own progress, not
+> this. The section below is kept as history.
+
 `PDFGenerator.tsx` derives a `waitPhase` (`"idle" | "fetching" | "assembling" | "done"`) from the
 existing `isDownloading`/`isSavingToDrive` + `imageFetchProgress` state, rather than tracking it as
 independent state - fewer places that can drift out of sync. `imageFetchProgress == null` reads as
@@ -258,6 +266,12 @@ Playwright coverage: treating the brief pre-first-callback window as null-means-
   already showing the same prompt in the right column).
 
 ## Cardback reminder gate on the classic direct "Generate PDF"/"Save PDF to Google Drive" buttons
+
+> **Historical** — this section describes the gate's original `/print`-side call sites. The
+> `/print` page and `PDFGenerator.tsx` were retired 2026-08-14; the gate itself still runs,
+> composed inside `usePrePrintSaveGate.startPrintFlow` wrapping `DisplayExportPDF`'s own
+> Download/Save-to-Drive buttons (see "Editor-native PDF export" and "Printshop ordering guides"
+> below). One call site instead of two now, but the same hook, key, and session semantics.
 
 A user can reach `/print` directly (bookmark, refresh, any entry that skips the editor's Finish
 footer/`usePrePrintSaveGate` entirely) - so `PDFGenerator.tsx`'s own Generate/Save-to-Drive click
@@ -324,19 +338,19 @@ see `docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
 Footer](../proposals/proposal-h-display-layout-spec.md#finish-footer-save-before-print)
 and [Print-Page
 Funnel](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)
-decisions). The later Proposal H route swap (2026-07-23, issues #231/#272)
-fully unrouted the classic grid `ProjectEditor.tsx` as well (component kept
-in-tree, deletion is a separate later decision) — this component's only
-LIVE mounts today are `FinishedMyProject.tsx`'s PDF tab (reached solely via
-the standalone `/print` route, `pages/print.tsx`) and `PDFGeneratorModal.tsx`
-(mounted globally via `Modals.tsx`, route-independent); one implementation
-either way, not a forked second copy. `/editor`'s own PDF export item (see
-"Editor-native PDF export" below) reuses `useDownloadPDF` but does NOT mount
-this prompt, so `/whatsthat` promotion still only ever fires from the two
-mounts above. See `docs/features/printing-tags.md`'s own entry for the full
-detail (why `/whatsthat` and not a new route, the `sessionStorage`-backed
+decisions). After the `/print` retirement (below), this prompt has **no live
+mount at all**: `PDFGenerator.tsx` was its only mount, and that file (with
+`FinishedMyProject.tsx`, `pages/print.tsx`, and `PDFGeneratorModal.tsx`) is
+deleted; the implementation files
+(`postExportContributionPrompt.ts` + `usePostExportContributionPrompt.ts` +
+`PostExportContributionPrompt.tsx`) and their test remain in-tree as
+unmounted dead code, kept because the `/whatsthat` funnel they promote is
+still live. `/editor`'s own PDF export item (see "Editor-native PDF export"
+below) reuses `useDownloadPDF` but never mounted this prompt. See
+`docs/features/printing-tags.md`'s own entry for the full detail (why
+`/whatsthat` and not a new route, the `sessionStorage`-backed
 "never repeats within a session" rule) and `docs/features/print-export-page.md`
-for the classic "Print!" tab's own (now unrouted) history.
+for the classic "Print!" tab's own (now retired) history.
 
 ## Editor-native PDF export (`/editor`'s Export ▾ menu)
 
@@ -507,10 +521,11 @@ export — was retired in the same pass.
   `usePrePrintSaveGate.startPrintFlow` now takes the actual export action as a `proceed` parameter
   rather than hardcoding a `router.push("/print")`, and that gate function (`runExportGate`) is
   threaded down from `DisplayPage.tsx`'s one shared `usePrePrintSaveGate` instance through
-  `FinishFooter`/`DisplayExportMenu` to `DisplayExportPDF`'s two buttons. `/print`,
-  `PDFGenerator.tsx`, and `FinishedMyProject.tsx` are unchanged and still in-tree — deleting them
-  is a separate follow-up, now that this was the last thing depending on them from the editor;
-  `pages/print.tsx` has no in-app entry point left, reachable only by a direct/bookmarked URL.
+  `FinishFooter`/`DisplayExportMenu` to `DisplayExportPDF`'s two buttons. With that, `/print` had
+  no in-app entry point left, and the page itself — `pages/print.tsx`, `PDFGenerator.tsx`,
+  `FinishedMyProject.tsx`, `Export.tsx`, `ExportPDF.tsx`, `PDFCanvasPreview.tsx`,
+  `PDFWaitPanel.tsx`, and `PDFGeneratorModal.tsx` — was deleted in the same retirement that moved
+  the printshop ordering guides into the Export menu (see "Printshop ordering guides" below).
 
 ### Bleed-normalization signal on the editor sheet
 
@@ -527,29 +542,52 @@ exports at full resolution) are fetched via `resolveBleedPriors`
 debounces its own identifier list, then combined with
 `projectSlice.manualOverrides` using the same "only render once there's a
 real signal to hedge on" gate the fast preview uses, so the badge never
-flickers wrong-then-right while a prior fetch is still in flight. This is a
-prerequisite for eventually retiring `/print`: once that page is deleted,
-`PDFGenerator.tsx`'s own copy of this wiring goes with it, and the editor
-sheet is the only place left that needs to show it.
+flickers wrong-then-right while a prior fetch is still in flight. This was a
+prerequisite for retiring `/print`: with that page deleted, `PDFGenerator.tsx`'s
+own copy of this wiring went with it, and the editor sheet is the only place
+left that shows it.
+
+## Printshop ordering guides (the retired `/print` "Print!" tab)
+
+The three printshop ordering instructions that used to live on `/print`'s "Print!" tab
+(`FinishedMyProject.tsx`) — PringlePrints, MakePlayingCards, and NotMPC — now live in
+`frontend/src/features/export/DisplayExportPrintshops.tsx`, opened from `/editor`'s Export ▾
+menu as a "Printshops" item (`data-testid="export-printshops-button"`) that shows a modal with
+one tab per printshop, each titled with its flag (`@/components/flags.tsx` — the same vendored
+static SVGs the old tab bar used; deliberately not unicode emoji flags, which Windows browsers
+render as plain letter pairs, see `print-export-page.md`'s retirement note for the full history).
+
+The instructions are ported verbatim from the retired tab, including the "steps current as of
+July 2026 — confirm before ordering" caveats and the TODO comments flagging the NotMPC and
+PringlePrints flows as site-read-derived rather than manually walked through. Two step-1
+rewrites for the new home: the MakePlayingCards tab's first step now points at the Export menu's
+own XML item (the old in-tab "Download Project as XML" button is gone — the Export menu's XML
+item is the same `useDownloadXML`-driven download), and the PringlePrints tab's first step now
+points at the Export menu's own PDF item instead of the old "PDF" tab. The MakePlayingCards tab
+keeps the desktop-tool download buttons, `MobileStatus`, and `Coffee` tip jar.
+
+The modal opens with a home-printing guidance `Alert` (this is the export affordance's single
+placement for it, deliberately not duplicated on the PDF item): print at 100% / Actual Size
+rather than "Fit to Page", and use borderless printing with Expansion at its minimum — a scaling
+driver enlarges the whole sheet, which no page-layout setting can compensate for.
 
 ## Key files
 
-- `frontend/src/features/pdf/PDFGenerator.tsx`,
-  `frontend/src/features/pdf/pdfImage.ts` (+ `pdfImage.test.ts`)
+- `frontend/src/features/pdf/pdfImage.ts` (+ `pdfImage.test.ts`)
 - `frontend/src/features/pdf/PDF.tsx`, `frontend/src/features/pdf/scm/SCMPDF.tsx`
   (both thread `reportImageFailure` down to their per-card `<Image>`)
 - `frontend/src/features/pdf/pdf.worker.ts` (owns the per-render
   `failures` array — see bug 4), `pdfRenderService.ts`, `useRenderPDF.ts`
-- `frontend/src/features/pdf/PDFCanvasPreview.tsx`
 - `frontend/scripts/copy-pdf-worker.js`
-- `frontend/src/features/pdf/PDFGeneratorModal.tsx`,
-  `frontend/src/features/export/FinishedMyProject.tsx`,
-  `frontend/src/components/ProjectEditor.tsx`
+- `frontend/src/components/ProjectEditor.tsx` (kept in-tree, unrouted since
+  the Proposal H switchover — its "Print!" tab and Export/FinishedMyProject
+  mounts were removed with the `/print` retirement)
 - `frontend/src/features/export/postExportContributionPrompt.ts` (+
   `postExportContributionPrompt.test.ts`),
   `frontend/src/features/export/usePostExportContributionPrompt.ts`,
   `frontend/src/features/export/PostExportContributionPrompt.tsx` — issue
-  #166's post-export contribution prompt
+  #166's post-export contribution prompt (kept in-tree, unmounted dead code
+  since the `/print` retirement — see its section above)
 - Editor export rescue (docs' own "Editor-native PDF export" section, below):
   once `Print / Export` stopped navigating anywhere, `/print` lost its last
   in-app entry point (`pages/print.tsx`'s own comment — only a direct/
@@ -569,8 +607,10 @@ sheet is the only place left that needs to show it.
   item can reuse them (see "Editor-native PDF export" above)
 - `frontend/src/features/pdf/displayPdfProps.ts` (+ `displayPdfProps.test.ts`),
   `frontend/src/features/export/DisplayExportPDF.tsx`,
-  `frontend/src/features/export/DisplayExportMenu.tsx` — `/editor`'s own PDF
-  export item and its editor-state-to-`PDFProps` adapter
+  `frontend/src/features/export/DisplayExportMenu.tsx`,
+  `frontend/src/features/export/DisplayExportPrintshops.tsx` — `/editor`'s own PDF
+  export item, its editor-state-to-`PDFProps` adapter, and the printshop
+  ordering guides (see "Printshop ordering guides" above)
 
 ## Status
 
