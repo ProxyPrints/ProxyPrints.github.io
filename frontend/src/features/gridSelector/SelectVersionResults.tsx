@@ -57,7 +57,6 @@ import Form from "react-bootstrap/Form";
 import Row from "react-bootstrap/Row";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
-import { createPortal } from "react-dom";
 
 import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import {
@@ -83,7 +82,6 @@ import {
 } from "@/features/attributeChips/attributeChips";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
-import { useViewportTier } from "@/features/display/useViewportTier";
 import { GridSelectorFilters } from "@/features/gridSelector/GridSelectorFilters";
 import {
   groupSelectVersionCandidates,
@@ -415,13 +413,21 @@ const CANDIDATE_DENSITY_ORDER: CandidateDensity[] = [
   "large",
 ];
 
-// "comfortable" (112px) matches R1's own "resting 3-up" recommendation; "large" (170px) matches
-// its "2-up" alternative; "compact" keeps today's auto-dense value (72px) reachable for anyone
-// who prefers more tiles on screen over bigger ones.
+// "comfortable" (112px) matches R1's own "resting 3-up" recommendation; "large" matches its
+// "2-up" alternative; "compact" keeps today's auto-dense value (72px) reachable for anyone who
+// prefers more tiles on screen over bigger ones.
+//
+// Rail restructure ruling 4 (editor-repass round, item 1) - REV: "large" shrinks 170px (10.625)
+// -> 160px (10) so two tiles actually FIT side by side. 170px was sized for 2-up in principle but
+// never actually achieved it in practice - the rail's own Offcanvas.Body was carrying an extra
+// 32px of unaccounted padding (see DisplayPage.tsx's Offcanvas.Body comment, item 4), so two
+// 170px tiles plus the grid's 6px gap (346px) came within single digits of the rail's real
+// content width once a scrollbar was present, too fragile to ship. Two 160px tiles + 6px gap
+// (326px) clears the corrected ~347-364px content width with real margin.
 const CANDIDATE_DENSITY_WIDTH_REM: Record<CandidateDensity, number> = {
   compact: 4.5,
   comfortable: 7,
-  large: 10.625,
+  large: 10,
 };
 
 const CANDIDATE_DENSITY_LABEL: Record<CandidateDensity, string> = {
@@ -590,102 +596,16 @@ const UnifiedFilterDivider = styled.span`
 `;
 
 /**
- * Rail-delegacy round (RD4/O3, SPEC-rail-delegacy.md) - the desktop/tablet Filters float panel is
- * rendered via `ReactDOM.createPortal(..., document.body)`, not a plain in-tree `position:fixed`
- * node: `LeftRailOffcanvas` (DisplayPage.tsx) is `position:sticky` at the inline `lg`+ breakpoint,
- * which unconditionally establishes its own stacking context (CSS spec - sticky positioning
- * always does, regardless of its own `z-index`) - any `position:fixed` descendant's `z-index`
- * would only be compared against ITS siblings inside that local context, not the page-level sheet
- * region, so a plain fixed node stayed BEHIND the sheet's own card tiles (caught live: Playwright
- * couldn't click through to the backdrop, the tile intercepted the click). A real portal escapes
- * every ancestor stacking context entirely, matching the spec's own "frame-level Overlay, escaping
- * the 380px rail column and the tablet drawer's own clipping" requirement literally, not just in
- * effect. Every class name below duplicates the same tokens `RailRoot`'s own `.fpanel.inline`
- * (phone, still in-tree) rule carries in DisplayPage.tsx - see `SPEC-rail-delegacy.md` §D.2, kept
- * in lockstep the same way any other two-container "shared body" pairing in this codebase is.
+ * Rail-anchored filters round - the desktop/tablet Filters panel used to be a `ReactDOM.
+ * createPortal(..., document.body)` node with its own page-darkening `.fscrim` backdrop (a
+ * de-facto modal the owner rejected live: "I don't want a massive background darkening box").
+ * The panel is now drawn from the rail itself at every viewport tier: one in-tree `Collapse`
+ * (below, in the render body), reusing the SAME `.fpanel.inline`/`.fset`/`.fsep`/`.implicit-note`
+ * classes `RailRoot` (DisplayPage.tsx) already defined for the phone tier - there is no longer a
+ * float/scrim variant to keep in lockstep with. `LeftRailOffcanvas` widens itself while the panel
+ * is open (DisplayPage.tsx's own `$filtersOpen` prop) so the funnel's chips and the candidate
+ * grid both stay visible without one covering the other.
  */
-const FloatFiltersPortalRoot = styled.div`
-  .fscrim {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 1050;
-  }
-  .fpanel.float {
-    position: fixed;
-    left: 50%;
-    top: 64px;
-    transform: translateX(-50%);
-    width: 440px;
-    max-width: calc(100% - 32px);
-    max-height: calc(100% - 96px);
-    overflow-y: auto;
-    z-index: 1051;
-    background: var(--theme-raised-bg);
-    border: 1px solid #7f8fa0;
-    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.6);
-    padding: 0;
-  }
-  .fpanel.float .fpwrap {
-    padding: 12px;
-  }
-  .fptitle {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: var(--theme-card-header-bg);
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    position: sticky;
-    top: 0;
-  }
-  .fptitle button {
-    background: transparent;
-    border: 1px solid rgba(var(--bs-body-color-rgb), 0.2);
-    color: var(--bs-body-color);
-    padding: 2px 8px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 12px;
-  }
-  .fset {
-    border: none;
-    margin: 0 0 9px;
-    padding: 0;
-  }
-  .fset:last-child {
-    margin-bottom: 0;
-  }
-  .fset > .lg {
-    display: block;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--theme-muted);
-    margin-bottom: 4px;
-  }
-  .fsep {
-    height: 1px;
-    background: var(--theme-divider);
-    margin: 9px -8px;
-  }
-  .implicit-note {
-    font-size: 10px;
-    color: var(--theme-muted);
-    margin-top: 7px;
-    display: flex;
-    gap: 5px;
-    align-items: flex-start;
-    line-height: 1.4;
-  }
-  .implicit-note .ic {
-    color: var(--bs-info);
-    flex: 0 0 auto;
-  }
-`;
 
 //# endregion
 
@@ -1373,6 +1293,10 @@ interface SelectVersionResultsProps {
    * the sidebar/modal layout (which never had a voteLayer concept - moment (c)'s ConfirmChip is
    * its own, separate, unchanged vote path). */
   voteLayer?: VoteLayerProps;
+  /** Rail-anchored filters round - only meaningful on `layout==="stacked"`. Lets the caller
+   * (DisplayPage.tsx) widen the rail itself while this component's own Filters panel is open, so
+   * the panel reads as the rail expanding rather than something floating over it. */
+  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 export function SelectVersionResults({
@@ -1385,13 +1309,9 @@ export function SelectVersionResults({
   backendURL,
   layout = "sidebar",
   voteLayer,
+  onFiltersOpenChange,
 }: SelectVersionResultsProps) {
   const getTagDisplayName = useTagDisplayName();
-  // Rail-delegacy round (RD4/O3, SPEC-rail-delegacy.md) - tier-conditional Filters panel
-  // placement: phone = in-rail Collapse; desktop/tablet = a fixed-positioned panel toward the
-  // viewport centre (stacked/rail layout only - the sidebar/modal layout's own GridSelectorFilters
-  // AutofillCollapse is untouched).
-  const viewportTier = useViewportTier();
   // Editor-completion package, E4/L9 (Bkg 4) - this component's one caller is the /display rail
   // (see this file's own module comment), which the redline pins to always-compressed tiles at
   // the dense/medium disclosure tiers; F1/D21 relaxes this to expanded (compressed=false) tiles
@@ -1438,6 +1358,9 @@ export function SelectVersionResults({
     },
     []
   );
+  useEffect(() => {
+    onFiltersOpenChange?.(search.settingsVisible);
+  }, [search.settingsVisible, onFiltersOpenChange]);
 
   const toggleAttributeTag = (tagName: string) =>
     setActiveAttributeTags((previous) => {
@@ -2173,64 +2096,87 @@ export function SelectVersionResults({
     // Border/Frame/Treatment chips are no longer a separate always-visible block above the grid;
     // they're now ONE fieldset inside the SAME Filters panel as the advanced fieldsets (DPI/
     // size/languages/tags/NSFW), all gated behind the ONE `svhead` "Filters" toggle
-    // (`search.settingsVisible`). `FunnelAxisRow` still self-hides an axis with no surviving
-    // chips (F3, unchanged).
+    // (`search.settingsVisible`). `FunnelAxisRow`/`TreatmentChipRow` still self-hide an axis with
+    // no surviving chips (F3, unchanged); the flags below additionally collapse the row/divider/
+    // fieldset WRAPPERS around them, so a data gap (issue #789 - e.g. Border rendering one chip
+    // with Frame empty) never leaves an empty "Filter versions" heading or an orphaned divider.
+    const borderHasChips = FUNNEL_AXES[0].chips.some(
+      (chip) => membershipByTagName[chip.tagName] != null
+    );
+    const frameHasChips = FUNNEL_AXES[1].chips.some(
+      (chip) => membershipByTagName[chip.tagName] != null
+    );
+    const treatmentHasChips = FUNNEL_AXES[2].chips.some(
+      (chip) => membershipByTagName[chip.tagName] != null
+    );
+    const hasAnyFunnelChips =
+      borderHasChips || frameHasChips || treatmentHasChips;
+
     const filterFieldsetsBody = (
       <>
-        <fieldset
-          className="fset"
-          style={{ marginBottom: 0 }}
-          data-testid="funnel-unified-filter"
-        >
-          <span className="lg">Filter versions</span>
-          <legend className="visually-hidden">
-            Border, frame, and treatment filters
-          </legend>
-          <FunnelAxisRow
-            axis={FUNNEL_AXES[0]}
-            activeTagNames={activeAttributeTags}
-            membershipByTagName={membershipByTagName}
-            onAxisChange={handleAxisChange}
-            getTagDisplayName={getTagDisplayName}
-            rowStyle={{ marginBottom: "5px" }}
-          />
-          <div
-            className="d-flex align-items-center flex-wrap"
-            style={{ gap: "6px" }}
-            data-testid="funnel-frame-treatment-row"
+        {hasAnyFunnelChips && (
+          <fieldset
+            className="fset"
+            style={{ marginBottom: 0 }}
+            data-testid="funnel-unified-filter"
           >
+            <span className="lg">Filter versions</span>
+            <legend className="visually-hidden">
+              Border, frame, and treatment filters
+            </legend>
             <FunnelAxisRow
-              axis={FUNNEL_AXES[1]}
+              axis={FUNNEL_AXES[0]}
               activeTagNames={activeAttributeTags}
               membershipByTagName={membershipByTagName}
               onAxisChange={handleAxisChange}
               getTagDisplayName={getTagDisplayName}
+              rowStyle={{ marginBottom: "5px" }}
             />
-            <UnifiedFilterDivider aria-hidden="true" />
-            <TreatmentChipRow
-              axis={FUNNEL_AXES[2]}
-              activeTagNames={activeAttributeTags}
-              excludedTagNames={excludedAttributeTags}
-              membershipByTagName={membershipByTagName}
-              onCycle={toggleTreatmentChip}
-              getTagDisplayName={getTagDisplayName}
-            />
-          </div>
-          {/* O1/RD1 - the implicit-vote awareness line, kept gated on >=1 active chip (unlike the
-              mockup's decorative always-on demo copy): `voteLayer.awarenessCopy` names the tags
-              actually at stake, which has nothing to describe with zero active chips. */}
-          {votesOn && voteLayer != null && activeAttributeTags.size > 0 && (
-            <div className="implicit-note" data-testid="funnel-awareness-line">
-              <span className="ic" aria-hidden="true">
-                ⓘ
-              </span>
-              <span>
-                {voteLayer.awarenessCopy(Array.from(activeAttributeTags))}
-              </span>
-            </div>
-          )}
-        </fieldset>
-        <div className="fsep" />
+            {(frameHasChips || treatmentHasChips) && (
+              <div
+                className="d-flex align-items-center flex-wrap"
+                style={{ gap: "6px" }}
+                data-testid="funnel-frame-treatment-row"
+              >
+                <FunnelAxisRow
+                  axis={FUNNEL_AXES[1]}
+                  activeTagNames={activeAttributeTags}
+                  membershipByTagName={membershipByTagName}
+                  onAxisChange={handleAxisChange}
+                  getTagDisplayName={getTagDisplayName}
+                />
+                {frameHasChips && treatmentHasChips && (
+                  <UnifiedFilterDivider aria-hidden="true" />
+                )}
+                <TreatmentChipRow
+                  axis={FUNNEL_AXES[2]}
+                  activeTagNames={activeAttributeTags}
+                  excludedTagNames={excludedAttributeTags}
+                  membershipByTagName={membershipByTagName}
+                  onCycle={toggleTreatmentChip}
+                  getTagDisplayName={getTagDisplayName}
+                />
+              </div>
+            )}
+            {/* O1/RD1 - the implicit-vote awareness line, kept gated on >=1 active chip (unlike the
+                mockup's decorative always-on demo copy): `voteLayer.awarenessCopy` names the tags
+                actually at stake, which has nothing to describe with zero active chips. */}
+            {votesOn && voteLayer != null && activeAttributeTags.size > 0 && (
+              <div
+                className="implicit-note"
+                data-testid="funnel-awareness-line"
+              >
+                <span className="ic" aria-hidden="true">
+                  ⓘ
+                </span>
+                <span>
+                  {voteLayer.awarenessCopy(Array.from(activeAttributeTags))}
+                </span>
+              </div>
+            )}
+          </fieldset>
+        )}
+        {hasAnyFunnelChips && <div className="fsep" />}
         <FilterSettingsElement
           filterSettings={search.filterSettings}
           setFilterSettings={search.setFilterSettings}
@@ -2244,7 +2190,6 @@ export function SelectVersionResults({
     );
 
     const closeFilters = () => search.setSettingsVisible(false);
-    const isPhoneTier = viewportTier === "phone";
 
     return (
       <div data-testid="select-version-section" data-funnel-tier={tier}>
@@ -2317,60 +2262,34 @@ export function SelectVersionResults({
           </CompactButton>
         </div>
 
-        {/* item 2/3/5 (RD4/O3) - ONE shared fieldset body, rendered tier-conditionally: phone =
-            in-rail Collapse expanding IN PLACE (no overlay-over-overlay in the bottom-sheet);
-            desktop inline rail + tablet drawer = a panel portaled to `document.body` and fixed-
-            positioned toward the viewport centre - see `FloatFiltersPortalRoot`'s own comment for
-            why a plain in-tree `position:fixed` node isn't enough (LeftRailOffcanvas's own
-            `position:sticky` traps it inside a local stacking context). Only ONE of the two
-            containers is ever mounted for a given `viewportTier`, so the fieldsets' own state
-            (all lifted into `search`) can never drift between two simultaneously-rendered
-            copies. */}
-        {isPhoneTier ? (
-          <Collapse in={search.settingsVisible}>
-            <div>
-              <div
-                className="fpanel inline"
-                role="group"
-                aria-label="Version filters"
-                data-testid="filters-panel-inline"
-              >
-                {filterFieldsetsBody}
+        {/* Rail-anchored filters round - ONE in-tree panel, every viewport tier: an in-rail
+            `Collapse` that expands the SAME `.fpanel.inline` (RailRoot's own rules, DisplayPage.tsx)
+            phone already used, no page-darkening scrim and no `document.body` portal any more.
+            `onFiltersOpenChange` (above) tells DisplayPage to widen the rail itself while this is
+            open, so the panel reads as the rail expanding rather than something floating over the
+            page - the candidate grid below stays fully in-flow, never covered. */}
+        <Collapse in={search.settingsVisible}>
+          <div>
+            <div
+              className="fpanel inline"
+              role="group"
+              aria-label="Version filters"
+              data-testid="filters-panel-inline"
+            >
+              <div className="fptitle">
+                <span>Filters — refine versions</span>
+                <button
+                  type="button"
+                  onClick={closeFilters}
+                  data-testid="filters-panel-close"
+                >
+                  Close ✕
+                </button>
               </div>
+              <div className="fpwrap">{filterFieldsetsBody}</div>
             </div>
-          </Collapse>
-        ) : (
-          search.settingsVisible &&
-          typeof document !== "undefined" &&
-          createPortal(
-            <FloatFiltersPortalRoot>
-              <div
-                className="fscrim"
-                onClick={closeFilters}
-                data-testid="filters-panel-scrim"
-              />
-              <div
-                className="fpanel float"
-                role="group"
-                aria-label="Version filters"
-                data-testid="filters-panel-float"
-              >
-                <div className="fptitle">
-                  <span>Filters — refine versions</span>
-                  <button
-                    type="button"
-                    onClick={closeFilters}
-                    data-testid="filters-panel-close"
-                  >
-                    Close ✕
-                  </button>
-                </div>
-                <div className="fpwrap">{filterFieldsetsBody}</div>
-              </div>
-            </FloatFiltersPortalRoot>,
-            document.body
-          )
-        )}
+          </div>
+        </Collapse>
 
         {/* post-pick ack (F4c). */}
         {votesOn && justSupportedTags != null && (

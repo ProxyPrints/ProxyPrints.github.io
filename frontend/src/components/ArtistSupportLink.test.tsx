@@ -55,7 +55,7 @@ describe("buildArtistSupportURL", () => {
 });
 
 describe("ArtistSupportLink applet", () => {
-  it("never renders as an empty box: the MTGAC page link is present before any network response resolves, collapsed to a single line by default", () => {
+  it("never renders as an empty box: the MTGAC page link AND credit line are present before any network response resolves, collapsed to two lines by default with the commerce/badge panel closed", () => {
     // no server.use(...) at all - the request is in flight (or, with noBackend below, never
     // even fires) - the applet's base shape must already be there, not a spinner/empty state.
     renderApplet("Harold McNeill");
@@ -66,9 +66,9 @@ describe("ArtistSupportLink applet", () => {
       buildArtistSupportURL("Harold McNeill")
     );
     expect(screen.getByTestId("artist-support-toggle")).toBeInTheDocument();
-    expect(
-      screen.queryByTestId("artist-support-credit")
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("artist-support-credit")).toHaveTextContent(
+      "MTG Artist Connection"
+    );
     expect(
       screen.queryByTestId("artist-support-commerce-links")
     ).not.toBeInTheDocument();
@@ -77,33 +77,27 @@ describe("ArtistSupportLink applet", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("expanding the collapsed applet reveals the credit line, even with nothing else to show", () => {
+  it("the credit line stays visible across both toggle states - expanding/collapsing the commerce panel never mounts or unmounts it", () => {
     renderApplet("Harold McNeill");
 
-    expandApplet();
-
-    expect(screen.getByTestId("artist-support-credit")).toHaveTextContent(
-      "MTG Artist Connection"
-    );
-  });
-
-  it("collapsing again after expanding hides the credit line without unmounting the applet", () => {
-    renderApplet("Harold McNeill");
+    expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
 
     expandApplet();
     expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
 
     expandApplet();
-    expect(
-      screen.queryByTestId("artist-support-credit")
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
     expect(screen.getByTestId("artist-support-applet")).toBeInTheDocument();
   });
 
-  it("defaultExpanded starts the applet open, with the credit line visible without any interaction (the /editor rail's usage)", () => {
+  it("defaultExpanded starts the commerce/badge panel open (the credit line is already visible either way)", () => {
     renderApplet("Harold McNeill", localBackend, true);
 
     expect(screen.getByTestId("artist-support-credit")).toBeInTheDocument();
+    expect(screen.getByTestId("artist-support-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
   });
 
   it("with no remote backend configured, still renders the fallback link and makes no request at all", () => {
