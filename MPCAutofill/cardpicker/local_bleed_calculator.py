@@ -41,7 +41,9 @@ majority of cases, not a card whose border colour is known but era genuinely amb
 anyway, because the question is well-posed independent of that: pooling `black_2003` (top/left/
 right medians 2.960-2.962mm) with `black_2015` (2.454-2.537mm) gives an era-to-era GAP of
 0.42-0.51mm per edge. That number passes the calibration's own raw usability rule (n>=5,
-spread<~1.5mm - see `inset_constants.json`'s `_meta.usability_rule`) with room to spare. It does
+spread<~1.5mm - a floor-and-ceiling sanity check: enough distinct cards for a per-class median
+to be meaningful, and per-class spread narrow enough that the constant is stable card-to-card)
+with room to spare. It does
 NOT pass the standard the calibration was actually held to everywhere else: every class this
 module marks usable has WITHIN-class spread at or below the ~0.24mm cross-method agreement floor
 (pinline-ruler report's own median agreement against the independent NCC/closed-form checks -
@@ -155,13 +157,16 @@ _EDGE_NAMES = ("top", "bottom", "left", "right")
 # for why no pooled cross-era entry is offered instead of splitting further.
 CALIBRATED_PINLINE_INSET_MM: dict[tuple[str, str], dict[str, Optional[float]]] = {
     ("black", "2003"): {"top": 2.962, "bottom": 2.962, "left": 2.960, "right": 2.960},
-    # bottom ABSTAIN: n=34, spread 3.334mm - a per-card artifact of the 2015 frame's
-    # collector-info text line, not a class-level constant (calib-expand report Phase 3).
-    # top/left/right remain tight (spread 0.085-0.241mm) and usable.
+    # bottom ABSTAIN: n=34, spread 3.334mm - far wider than the other edges' 0.085-0.241mm,
+    # and no era/release-date/frame-effect split reduced it; the 2015 frame's collector-info
+    # text line reads as a pinline overrun on some cards but not others. A constant varying
+    # that much card-to-card is not a class constant.
+    # top/left/right remain tight and usable.
     ("black", "2015"): {"top": 2.454, "bottom": None, "left": 2.496, "right": 2.537},
-    # top has a 12% (5/43) outlier rate read as detector mis-fires on specific artwork, not
-    # genuine border-geometry variation (calib-expand report Phase 3) - shipped anyway since
-    # the full-sample median equals the filtered core median at this precision.
+    # top: a 12% (5/43) sharp-outlier rate - individual extreme single-edge readings on
+    # specific artwork, not class-wide spread, and no era/release-date/frame-effect split
+    # explains them - read as detector mis-fires, not genuine border-geometry variation.
+    # Shipped anyway: the full-sample median equals the filtered core median at this precision.
     ("black", "1993"): {"top": 2.623, "bottom": 3.131, "left": 2.833, "right": 2.283},
     # coverage caveat: 37-44% of edges are CALL_NO_TRANSITION/CALL_INDETERMINATE_BLACK on this
     # frame era (not modelled here - _pinline_edge_bleed_mm's own CALL_MEASURED gate already
@@ -169,20 +174,27 @@ CALIBRATED_PINLINE_INSET_MM: dict[tuple[str, str], dict[str, Optional[float]]] =
     # this class, not silently wrong).
     ("black", "1997"): {"top": 3.385, "bottom": 3.469, "left": 2.964, "right": 2.879},
     ("white", "2003"): {"top": 2.877, "bottom": 2.877, "left": 2.875, "right": 2.960},
-    # ABSTAIN all 4 edges: spread 1.6-1.8mm on top/left/right; bottom's own n=6 (11/17
-    # black-indeterminate) is additionally below a trustworthy floor (calib-expand Phase 2).
+    # ABSTAIN all 4 edges: spread 1.6-1.8mm on top/left/right is over the ~1.5mm usability
+    # ceiling; bottom's usable n=6 comes from 11/17 edges returning no detectable transition
+    # at all (black-indeterminate), an effective-coverage sliver too thin to anchor a constant.
     ("white", "2015"): {"top": None, "bottom": None, "left": None, "right": None},
     # n=2, below the 5-card floor - reported for completeness in the calibration sessions, never
     # usable here.
     ("white", "1993"): {"top": None, "bottom": None, "left": None, "right": None},
 }
 
-# Borderless is a STRUCTURAL abstention, not a per-era gap in the table above: borderless cards
-# have no fixed printed frame element for the pinline scan to lock onto AT ANY ERA (n=97 across
-# two independently-fetched calibration pulls, spread 2.9-4.5mm on every edge both times -
-# calib-expand report Phase 2/3, "recommend permanent abstention, not needs more data"). Checked
-# before any (border_color, frame) lookup so a future calibration entry for one specific
-# borderless era could never accidentally re-enable it for the others.
+# Borderless is a STRUCTURAL abstention, not a per-era gap in the table above: an inward scan
+# has nothing to stop at on a card whose art runs to the edge, so it halts at whatever artwork
+# it meets first - not a frame feature (n=97 across two independently-fetched pulls; spread
+# stayed 2.9-4.5mm on every edge both times). A second, independent method - fitting the known
+# frame geometry (title plate, type-line band, rules and P/T boxes) for scale and offset -
+# failed the same way: on trim-exact borderless images, whose own bounds ARE the trim, its
+# median absolute edge error was 5.4mm and the optimizer settled on a wrong solution scoring
+# roughly 3x the correct one, because artwork gradients outweigh the frame's own. Two unrelated
+# methods failing is stronger grounds for permanent abstention than one - Method A's
+# aspect-ratio closed form still covers these cards; only per-edge pinline detail is
+# unavailable. Checked before any (border_color, frame) lookup so a future calibration entry
+# for one specific borderless era could never accidentally re-enable it for the others.
 _STRUCTURALLY_UNUSABLE_BORDER_COLORS = frozenset({"borderless"})
 
 
