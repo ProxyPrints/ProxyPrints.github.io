@@ -1,52 +1,59 @@
+/**
+ * The editor's printshop ordering guides - `DisplayExportMenu.tsx`'s fifth entry, alongside
+ * XML/Card Images/Decklist/PDF. These are the three ordering instructions that used to live on
+ * the retired `/print` page's "Print!" tab (`FinishedMyProject.tsx`): PringlePrints,
+ * MakePlayingCards, and NotMPC, each behind a flag icon in its own tab. The instructions
+ * themselves are ported verbatim from that page (including their "steps current as of July
+ * 2026 — confirm before ordering" caveats and the TODO comments flagging them as site-read
+ * derived, not manually walked through) with two step-1 rewrites for the new home: the
+ * PringlePrints tab now points at the Export menu's own PDF item instead of the old "PDF" tab,
+ * and the MakePlayingCards tab's first step now points at the Export menu's XML item instead of
+ * an in-place "Download Project as XML" button (the Export menu's XML item is the same
+ * `useDownloadXML`-driven download that button used).
+ *
+ * Rather than a route (the retired page) or a full-height panel, these guides open in a modal
+ * from the Export menu - they are reference material for an ordering run, not a workspace, and
+ * a modal keeps them out of the way until wanted.
+ *
+ * The tab bar uses plain `react-bootstrap/Tabs` with flag icons in the titles, matching the
+ * retired page's own flag-per-printshop navigation. Flag artwork is the same vendored static
+ * SVG set (`@/components/flags.tsx`) the old tab bar used - deliberately not unicode emoji
+ * flags, which Windows browsers render as plain letter pairs (see `docs/features/
+ * print-export-page.md`'s retirement note for the history).
+ *
+ * ## Home-printing guidance
+ *
+ * The modal opens with an Alert on print-at-home scaling: a browser/printer driver set to
+ * "Fit to Page" (or a borderless "Expansion" above its minimum) enlarges the whole sheet, which
+ * no page-layout setting in the app can compensate for. This is the export affordance's own
+ * single placement for that guidance - deliberately not duplicated on the PDF item.
+ */
 import styled from "@emotion/styled";
-import dynamic from "next/dynamic";
 import React, { useState } from "react";
 import Alert from "react-bootstrap/Alert";
-import Button from "react-bootstrap/Button";
 import Col from "react-bootstrap/Col";
 import Container from "react-bootstrap/Container";
+import Dropdown from "react-bootstrap/Dropdown";
 import Modal from "react-bootstrap/Modal";
 import Row from "react-bootstrap/Row";
 import Tab from "react-bootstrap/Tab";
+import Tabs from "react-bootstrap/Tabs";
 
 import {
-  NavbarHeight,
-  NavPillButtonHeight,
-  NavUnderlineButtonHeight,
   UpstreamDesktopTool,
   UpstreamDesktopToolReleasesURL,
   UpstreamDesktopToolSourceURL,
   UpstreamDesktopToolWikiURL,
 } from "@/common/constants";
-import { useAppDispatch, useAppSelector } from "@/common/types";
 import { Coffee } from "@/components/Coffee";
 import { CanadaFlag, ChinaFlag, USAFlag } from "@/components/flags";
+import { RightPaddedIcon } from "@/components/icon";
 import { MakePlayingCardsLink } from "@/components/MakePlayingCardsLink";
-import { NavBanner, NavBannerItem } from "@/components/NavBanner";
 import { NotMPCLink } from "@/components/NotMPCLink";
-import { OverflowCol } from "@/components/OverflowCol";
 import { PringlePrintsLink } from "@/components/PringlePrintsLink";
-import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
 import { useLocalFilesDirectoryHandle } from "@/features/clientSearch/clientSearchHooks";
-import { useDownloadXML } from "@/features/download/downloadXML";
-import { useProjectName } from "@/store/slices/backendSlice";
-import { showModal } from "@/store/slices/modalsSlice";
-import { selectIsProjectEmpty } from "@/store/slices/projectSlice";
 
 import { MobileStatus } from "../mobile/MobileStatus";
-
-const PDFGenerator = dynamic(
-  () => import("../pdf/PDFGenerator").then((mod) => mod.PDFGenerator),
-  { ssr: false }
-);
-
-interface ExitModal {
-  show: boolean;
-  handleClose: {
-    (): void;
-    (event: React.MouseEvent<HTMLButtonElement, MouseEvent>): void;
-  };
-}
 
 const BigOL = styled.ol`
   list-style-type: none;
@@ -104,7 +111,6 @@ const DownloadButtonLink = styled.a`
 `;
 
 const LocalFilesInstructions = () => {
-  const { clientSearchService } = useClientSearchContext();
   const directoryHandle = useLocalFilesDirectoryHandle();
   return (
     directoryHandle !== undefined && (
@@ -118,7 +124,6 @@ const LocalFilesInstructions = () => {
 };
 
 const RunDesktopToolInstructions = () => {
-  const { clientSearchService } = useClientSearchContext();
   const directoryHandle = useLocalFilesDirectoryHandle();
   return (
     <>
@@ -146,34 +151,6 @@ const RunDesktopToolInstructions = () => {
     </>
   );
 };
-
-function ProjectDownload() {
-  const downloadXML = useDownloadXML();
-  const projectName = useProjectName();
-  return (
-    <>
-      <p>
-        An XML file is a snapshot of all the cards and image versions you
-        selected. Our desktop tool reads this file and automatically turns it
-        into an order with <MakePlayingCardsLink />.
-      </p>
-      <p>
-        You also can <b>re-upload</b> your XML file to {projectName} and{" "}
-        <b>continue editing it later</b>!
-      </p>
-      <Row>
-        <Col md={{ span: 8, offset: 2 }} sm={12}>
-          <DownloadButton onClick={downloadXML}>
-            <DownloadButtonLink>
-              <h1 className="bi bi-file-code"></h1>
-              <h4>Download Project as XML</h4>
-            </DownloadButtonLink>
-          </DownloadButton>
-        </Col>
-      </Row>
-    </>
-  );
-}
 
 // These used to auto-download a per-platform ZIP from download.mpcautofill.com via an
 // in-app fetch - that domain isn't owned by this fork's infrastructure and the deploy job
@@ -247,7 +224,16 @@ const MakePlayingCardsInstructions = () => {
       <BigOL>
         <BigLI className="py-3">
           <h3>Download Your Project</h3>
-          <ProjectDownload />
+          <p>
+            An XML file is a snapshot of all the cards and image versions you
+            selected. Head back to the <b>Export</b> menu and choose <b>XML</b>{" "}
+            to download it. Our desktop tool reads this file and automatically
+            turns it into an order with <MakePlayingCardsLink />.
+          </p>
+          <p>
+            You also can <b>re-upload</b> your XML file and{" "}
+            <b>continue editing it later</b>!
+          </p>
         </BigLI>
         <BigLI className="py-3">
           <h3>Download the Desktop Tool</h3>
@@ -340,8 +326,8 @@ const PringlePrintsInstructions = () => {
         <BigLI className="py-3">
           <h3>Prepare Your Print File</h3>
           <p>
-            Head to the <b>PDF</b> tab and generate a print-ready PDF or PNG of
-            your project at <b>300 DPI or higher</b>.
+            Head to the <b>Export</b> menu and choose <b>PDF</b> to generate a
+            print-ready PDF or PNG of your project at <b>300 DPI or higher</b>.
           </p>
         </BigLI>
         <BigLI className="py-3">
@@ -370,48 +356,66 @@ const PringlePrintsInstructions = () => {
   );
 };
 
-type FinishedMyProjectExportType = "mpc" | "notmpc" | "pringleprints" | "pdf";
+const PrintshopHomePrintingAlert = () => (
+  <Alert variant="info">
+    Printing these files at home? Make sure your print dialog is set to{" "}
+    <b>100% / Actual Size</b> rather than &quot;Fit to Page&quot;, and use{" "}
+    <b>borderless</b> printing with <b>Expansion</b> set to its minimum. A
+    scaling driver enlarges the whole sheet, which no page-layout setting in the
+    app can compensate for.
+  </Alert>
+);
 
-export function FinishedMyProject() {
-  const [key, setKey] = useState<FinishedMyProjectExportType>("pringleprints");
-  const navBannerItems: Array<NavBannerItem<FinishedMyProjectExportType>> = [
-    { key: "pdf", label: "PDF", bootstrapIconName: "file-pdf" },
-    { key: "pringleprints", label: "PringlePrints", icon: <CanadaFlag /> },
-    { key: "mpc", label: "MakePlayingCards", icon: <ChinaFlag /> },
-    { key: "notmpc", label: "NotMPC", icon: <USAFlag /> },
-  ];
+export function DisplayExportPrintshops() {
+  const [show, setShow] = useState(false);
   return (
-    <Tab.Container
-      activeKey={key}
-      onSelect={(k) => {
-        if (k) setKey(k as FinishedMyProjectExportType);
-      }}
-    >
-      <NavBanner items={navBannerItems} variant="underline" />
-      <OverflowCol
-        heightDelta={
-          NavPillButtonHeight + NavUnderlineButtonHeight + NavbarHeight
-        }
+    <>
+      <Dropdown.Item
+        onClick={() => setShow(true)}
+        data-testid="export-printshops-button"
       >
-        <Tab.Content>
-          <Tab.Pane eventKey="pdf" mountOnEnter>
-            <PDFGenerator
-              heightDelta={
-                NavPillButtonHeight + NavUnderlineButtonHeight + NavbarHeight
+        <RightPaddedIcon bootstrapIconName="shop" /> Printshops
+      </Dropdown.Item>
+      <Modal show={show} onHide={() => setShow(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Printshops</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <PrintshopHomePrintingAlert />
+          <Tabs defaultActiveKey="pringleprints" id="printshop-tabs">
+            <Tab
+              eventKey="pringleprints"
+              title={
+                <>
+                  <CanadaFlag /> PringlePrints
+                </>
               }
-            />
-          </Tab.Pane>
-          <Tab.Pane eventKey="pringleprints">
-            <PringlePrintsInstructions />
-          </Tab.Pane>
-          <Tab.Pane eventKey="mpc">
-            <MakePlayingCardsInstructions />
-          </Tab.Pane>
-          <Tab.Pane eventKey="notmpc">
-            <NotMPCInstructions />
-          </Tab.Pane>
-        </Tab.Content>
-      </OverflowCol>
-    </Tab.Container>
+            >
+              <PringlePrintsInstructions />
+            </Tab>
+            <Tab
+              eventKey="mpc"
+              title={
+                <>
+                  <ChinaFlag /> MakePlayingCards
+                </>
+              }
+            >
+              <MakePlayingCardsInstructions />
+            </Tab>
+            <Tab
+              eventKey="notmpc"
+              title={
+                <>
+                  <USAFlag /> NotMPC
+                </>
+              }
+            >
+              <NotMPCInstructions />
+            </Tab>
+          </Tabs>
+        </Modal.Body>
+      </Modal>
+    </>
   );
 }

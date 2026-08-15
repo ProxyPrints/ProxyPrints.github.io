@@ -18,8 +18,10 @@ import {
 
 // Cardback flow round (SPEC-cardback-pdfwait.md §C, PKG1) - the no-cardback reminder gate (1a)
 // and the apply-all/set-default prompt from both entries (1b, toolbar = project-wide, rail =
-// per-slot). Reached entirely through the real /editor -> Finish footer flow, same as every
-// other post-Proposal-H display suite (the classic /editor route is fully unrouted).
+// per-slot). The reminder gate is reached through the real /editor -> Export dropdown -> PDF ->
+// Download flow (the gate now wraps DisplayExportPDF.tsx's own buttons, not a navigation - see
+// docs/features/pdf-generator.md's "Page cut guide lines, Google Drive save, and retiring the
+// Finish footer's own print route"); the classic /editor route is still fully unrouted.
 
 const threeCardHandlers = [
   cardDocumentsThreeResults,
@@ -33,7 +35,7 @@ const threeCardHandlers = [
 test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", () => {
   test.describe.configure({ mode: "serial", timeout: 60_000 });
 
-  test("appears for a project still riding the default cardback; dismissing it (✕) still proceeds (OWNER AMENDMENT 1), and a second attempt this session is silent (CB1)", async ({
+  test("appears for a project still riding the default cardback; dismissing it (✕) still proceeds with the export (OWNER AMENDMENT 1), and a second attempt this session is silent (CB1)", async ({
     page,
     network,
   }) => {
@@ -41,7 +43,19 @@ test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", 
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
 
-    await page.getByTestId("finish-footer-print-export").click();
+    const openPDFSettingsAndClickDownload = async () => {
+      await page.getByTestId("display-export-menu-toggle").click();
+      await page.getByTestId("display-export-pdf-button").click();
+      const settingsModal = page.getByTestId(
+        "display-export-pdf-settings-modal"
+      );
+      await expect(settingsModal).toBeVisible();
+      await settingsModal
+        .getByTestId("display-export-pdf-download-button")
+        .click();
+    };
+
+    await openPDFSettingsAndClickDownload();
 
     const gate = page.getByTestId("pre-print-cardback-gate");
     await expect(gate).toBeVisible();
@@ -49,24 +63,22 @@ test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", 
     await expect(gate.getByTestId("cardback-gate-use-current")).toBeVisible();
 
     // OWNER AMENDMENT 1 - dismiss (the header's own ✕) is NOT a cancel; it behaves exactly like
-    // "Use current & continue" and the print attempt proceeds.
-    await gate.getByLabel("Close").click();
-    await page.waitForURL(/\/print/, { timeout: 30_000 });
-    await expect(page.getByRole("tab", { name: "PDF" })).toBeVisible();
+    // "Use current & continue" and the export attempt proceeds.
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      gate.getByLabel("Close").click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("cards.pdf");
 
-    // Back to the editor (a real reload, same tab/session - sessionStorage survives this even
-    // though the in-memory project itself doesn't, so re-importing is needed before a second
-    // print attempt can be made at all). CB1: at most once per session, so no second gate -
-    // the suppression key is keyed on project identity (unsaved -> one fixed bucket), not
-    // project CONTENT, so a freshly re-imported project is still covered by it.
-    await page.goto("/editor?server=http://127.0.0.1:8000", {
-      waitUntil: "domcontentloaded",
-    });
-    await importTextOnEditorLanding(page, "my search query");
-    await expect(page.getByTestId("finish-footer-print-export")).toBeVisible();
-    await page.getByTestId("finish-footer-print-export").click();
+    // CB1: at most once per session, so a second export attempt (same tab/session, no reload -
+    // the suppression key is keyed on project identity, not project CONTENT, so the still-live
+    // project is still covered by it) shows no gate at all.
+    const [secondDownload] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      openPDFSettingsAndClickDownload(),
+    ]);
     await expect(page.getByTestId("pre-print-cardback-gate")).toHaveCount(0);
-    await page.waitForURL(/\/print/, { timeout: 30_000 });
+    expect(secondDownload.suggestedFilename()).toBe("cards.pdf");
   });
 });
 

@@ -259,6 +259,7 @@ from cardpicker.collector_line_artist import (
 )
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
+from cardpicker.local_art_edge import classify_art_edge_continuity
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     SYMBOL_STRIP_BOX,
@@ -286,6 +287,7 @@ from cardpicker.local_ocr import (
     run_tesseract_text_and_words,
 )
 from cardpicker.local_phash import ART_CROP_BOX
+from cardpicker.local_pinline_inset import measure_pinline_inset
 from cardpicker.models import Card, CardScanLog, ImageEvidence
 from cardpicker.modern_artist_credit import LexiconIndex, recognize_artist_credit
 from cardpicker.utils import twos_complement
@@ -327,6 +329,7 @@ COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v3"
 # NOT bumped: symbol_region is a raw phash of a crop region (imagehash, no tesseract call at all)
 # - engine-independent by construction.
 SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
+ART_EDGE_EXTRACTOR_VERSION = "art-edge-v1"
 # v1 -> v2, same reasoning as the three OCR extractors above: legal_line reads through
 # `local_ocr.run_tesseract` (issue #423's engine seam covers this call site too, not just
 # `run_tesseract_text_and_words`), so its stored `legal_line_raw_text`/`legal_line_copyright_year`/
@@ -337,6 +340,10 @@ LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v2"
 # engine-independent by construction, same reasoning as symbol_region above.
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
 ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v1"
+# NOT bumped: pinline_inset (local_pinline_inset.measure_pinline_inset) is a pure colour-
+# distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
+# quality_signals above.
+PINLINE_INSET_EXTRACTOR_VERSION = "pinline-inset-v1"
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
 # _hash_to_int/_HASH_BITS exactly (imagehash's default hash_size=8 -> a 64-bit hash), reproduced
@@ -1063,7 +1070,7 @@ def compute_card_evidence(
     if image is None:
         skip_reasons["layout_class"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
-        layout_class = classify_border_color(image, bleed_class)
+        layout_class = classify_border_color(image)
         fields["layout_class"] = layout_class or ""
         if layout_class is None:
             # classify_border_color's own documented ambiguous outcome (non-uniform sample or a
@@ -1083,6 +1090,22 @@ def compute_card_evidence(
         fields["artist_crop_px"] = _crop_box_to_pixels(ARTIST_CROP_BOX, bleed_class, width, height)
         fields["art_crop_px"] = _crop_box_to_pixels(ART_CROP_BOX, bleed_class, width, height)
     extractor_versions["crop_coordinates"] = CROP_COORDINATES_EXTRACTOR_VERSION
+
+    # art_edge (issue #830 defect 3): the self-referential extended-art classifier, consuming
+    # crop_coordinates' own art_crop_px above - no new crop box, no re-fetch. EVIDENCE-ONLY, same
+    # convention as artbox_frame_class/etc: stored on every card that reaches a verdict, never
+    # voted on here (see local_art_edge.cast_art_edge_continuity_vote's own docstring for why).
+    # "ambiguous" covers every abstain path classify_art_edge_continuity documents (a degenerate
+    # art_crop_px, or any of its three regions failing to sample) - the same shared skip-reason
+    # vocabulary layout_class's own abstention above uses.
+    if image is None:
+        skip_reasons["art_edge"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+    else:
+        art_edge_class = classify_art_edge_continuity(image, fields.get("art_crop_px"))
+        fields["art_edge_class"] = art_edge_class or ""
+        if art_edge_class is None:
+            skip_reasons["art_edge"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+    extractor_versions["art_edge"] = ART_EDGE_EXTRACTOR_VERSION
 
     # legal_line COMPUTE, hoisted ahead of the OCR group (2026-07-29 - see `_extract_legal_line`'s
     # own docstring for the full rationale). Its RESULTS are still stored at this extractor's own
@@ -1456,6 +1479,34 @@ def compute_card_evidence(
             fields["image_entropy"] = compute_entropy(image)
     extractor_versions["quality_signals"] = QUALITY_SIGNALS_EXTRACTOR_VERSION
 
+    # pinline_inset: see local_pinline_inset.py's own module docstring for the algorithm.
+    # MEASURES AND PERSISTS ONLY - no existing crop box computation above reads these fields,
+    # and this block changes none of them. Shares quality_signals' own degenerate width/height
+    # guard immediately above (the same real, mechanical sub-floor condition, not a new one).
+    if image is None:
+        skip_reasons["pinline_inset"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+    elif width <= 0 or height <= 0:
+        skip_reasons["pinline_inset"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+    else:
+        pinline_inset = measure_pinline_inset(image)
+        if pinline_inset is None:
+            # measure_pinline_inset's own degenerate-input guard - unreachable here in practice
+            # (width/height already confirmed positive above), kept for the same defense-in-depth
+            # reason artbox_phash's degenerate-crop-box guard is kept even though real fetched
+            # images essentially never hit it.
+            skip_reasons["pinline_inset"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        else:
+            fields["pinline_inset_frac_top"] = pinline_inset.top.inset_frac
+            fields["pinline_inset_frac_bottom"] = pinline_inset.bottom.inset_frac
+            fields["pinline_inset_frac_left"] = pinline_inset.left.inset_frac
+            fields["pinline_inset_frac_right"] = pinline_inset.right.inset_frac
+            fields["pinline_inset_call_top"] = pinline_inset.top.call
+            fields["pinline_inset_call_bottom"] = pinline_inset.bottom.call
+            fields["pinline_inset_call_left"] = pinline_inset.left.call
+            fields["pinline_inset_call_right"] = pinline_inset.right.call
+            fields["pinline_inset_verdict"] = pinline_inset.verdict
+    extractor_versions["pinline_inset"] = PINLINE_INSET_EXTRACTOR_VERSION
+
     if profile is not None:
         profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000
         profile["other_ms"] = (
@@ -1652,4 +1703,5 @@ __all__ = [
     "ARTBOX_PHASH_EXTRACTOR_VERSION",
     "ARTBOX_MODERN_CROP_BOX",
     "ARTBOX_OLD_CROP_BOX",
+    "PINLINE_INSET_EXTRACTOR_VERSION",
 ]

@@ -37,9 +37,6 @@
  * - `imageQuality: "full-resolution"` — same full-res export pipeline `PDFGenerator.tsx`'s own
  *   download path uses (`fullResolutionPDFProps`). DPI and JPG quality themselves are real
  *   controls (`DisplayExportSettings.imageDPI`/`jpgQuality`), not defaulted here.
- * - `drawPageCutLines: false` — the rail's single "Guides" toggle only ever drew the per-card
- *   corner guides (page cut lines were never part of this page's sheet); no editor control exists
- *   for a second, page-level guide line.
  *
  * Everything else `PDF.tsx`'s own `PDFProps` interface exposes is now a real control, sourced
  * from either `DisplaySheetExportSettings` (the rail's own sheet state — page size including its
@@ -130,6 +127,11 @@ export interface DisplayExportSettings {
   pageRangeEnd?: number;
   imageDPI: number;
   jpgQuality: number;
+  /** The guillotine-cut page guide lines (as opposed to `sheetSettings.showCutLines`'s per-card
+   * trim marks) - a full sheet's own cut guides, independent of whether card cut lines are drawn
+   * at all. `/print`'s `PDFGenerator.tsx` exposes this as its own "Page Cut Guide Lines" toggle;
+   * this field is the editor's equivalent. */
+  drawPageCutLines: boolean;
   cutLineColor: string;
   cutLineShape: keyof typeof CutLineShape;
   cutLinePlacement: keyof typeof CutLinePlacement;
@@ -194,7 +196,7 @@ export const buildDisplayPDFProps = (
     bleedEdgeMM: sheetSettings.bleedEdgeMM,
     roundCorners: exportSettings.roundCorners,
     drawCardCutLines: sheetSettings.showCutLines,
-    drawPageCutLines: false,
+    drawPageCutLines: exportSettings.drawPageCutLines,
     cutLineLengthMM: exportSettings.cutLineLengthMM,
     cutLineOffsetMM: exportSettings.cutLineOffsetMM,
     cutLineThicknessMM: exportSettings.cutLineThicknessMM,

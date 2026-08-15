@@ -115,11 +115,31 @@ and export a PDF ready to print and cut.
 
 The **Editor** page's Page Setup section defaults to Letter landscape,
 3.175mm bleed, and a **Margin profile** picker (Borderless / Bordered /
-Rear-feed) calibrated against an Epson ET-8500/8550 printer — Borderless
-is the default and the only profile that fits full bleed on a 4-across
-sheet; the other two trade some bleed for a printer-supported margin,
-and the page warns (rather than silently shrinking your bleed value) if
-your current bleed exceeds what the selected profile can fit.
+Rear-feed) calibrated against an Epson ET-8500/8550 printer — **Rear-feed
+is the default**, since that's the tray this print run's paper stock
+actually goes through, not the largest bleed the hardware could support
+in the best case. Borderless remains selectable and is still the only
+profile that fits the full 3.175mm bleed alongside a 4-across sheet; at
+that same 4-across width on US Letter landscape, Rear-feed only has room
+to grant roughly 0.54mm of bleed on the left/right edges (top/bottom get
+the full 3.175mm you asked for), and Bordered lands in between.
+
+Right below the bleed input, a readout states what the page actually
+grants on each axis versus what you requested — separately for
+left/right and top/bottom, since a printer's usable margin often isn't
+the same on every side. The two numbers can differ: the layout first
+works out how many cards fit at their bare size, then hands out
+whatever room is left over as bleed, so the bleed edge you type is a
+ceiling on what can render, not a guarantee — the readout tells you the
+real number instead of leaving you to find out only after printing.
+
+The same section's **Page offset (mm)** control nudges the whole sheet
+left/right/up/down (independent Horizontal/Vertical values, mm) to
+correct for a printer whose feed lands content off-centre on the
+physical page. It is not a margin: it's applied only after everything
+above has already been worked out, so it never changes how many cards
+fit or how much bleed they get — it just moves the finished grid to
+where it should sit on the sheet.
 
 The same section's **Card spacing (mm)** control sets the gutter between
 cards independently on each axis — Horizontal (X) and Vertical (Y)

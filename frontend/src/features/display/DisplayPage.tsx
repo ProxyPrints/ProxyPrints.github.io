@@ -231,6 +231,7 @@ import { useDebounce } from "use-debounce";
 import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
+import { getSheetImageURLs } from "@/common/image";
 import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
 import { SourceType } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
@@ -638,44 +639,61 @@ interface PromotedZoneProps {
   onCompareHide: () => void;
 }
 
-// Editor-polish round, owner amendment 1 (2026-07-24, BINDING) - "More details" RELOCATES from
-// the rail head to directly under the D14 band; this is the exact JSX `RailHeader` used to own
-// (same `CardMetaTable`/`CardDownloadFavorite`, same testids - `display-rail-more-details-*` -
-// so every existing behavior assertion querying those testids keeps working unchanged), just
-// moved into `PromotedZone`, between `ConfidenceElement` and `IdentifyPanel` per the amendment's
-// own "renders directly under the D14 confidence band" instruction.
-interface MoreDetailsSectionProps {
+// Rail restructure ruling 3 (docs/proposals/mockups/editor-repass round, owner directive, item
+// 3) - REV: "More details" and "Wrong printing? Search the right one" merge into ONE band with
+// ONE shared toggle row, instead of two full-width bands each paying for its own background,
+// border-bottom and 8px8px padding. Supersedes editor-polish's own amendment 1 (which moved
+// "More details" to its own standalone band directly under D14) only insofar as that band now
+// shares its wrapper with the identify toggle - amendment 1's actual placement instruction
+// ("directly under the D14 confidence band") is unchanged, and every testid amendment 1 named
+// (`display-rail-more-details-*`) survives unchanged below, so every prior behavior assertion
+// against those testids still exercises the same real DOM node, just inside a merged wrapper.
+// `PrintingTagsBlock`/`CardMetaTable`/`CardDownloadFavorite` are reused verbatim, same as before
+// (item 6/RD1/RD6/RD7's own reasoning, restated by reference rather than duplicated here).
+interface DetailsAndIdentifyRowProps {
   cardDocument: CardDocument | undefined;
-  open: boolean;
-  onToggle: () => void;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+  identifyOpen: boolean;
+  onToggleIdentify: () => void;
 }
 
-const MoreDetailsSection = ({
+const DetailsAndIdentifyRow = ({
   cardDocument,
-  open,
-  onToggle,
-}: MoreDetailsSectionProps) => (
-  <div className="detmore-wrap">
-    <button
-      type="button"
-      className="detmore"
-      aria-expanded={open}
-      onClick={onToggle}
-      data-testid="display-rail-more-details-toggle"
-    >
-      More details <span className="chev">{open ? "⌄" : "›"}</span>
-    </button>
-    <Collapse in={open}>
+  detailsOpen,
+  onToggleDetails,
+  identifyOpen,
+  onToggleIdentify,
+}: DetailsAndIdentifyRowProps) => (
+  <div className="detid-row" data-testid="display-details-identify-row">
+    <div className="detid-toggles">
+      <button
+        type="button"
+        className="detmore"
+        aria-expanded={detailsOpen}
+        onClick={onToggleDetails}
+        data-testid="display-rail-more-details-toggle"
+      >
+        More details <span className="chev">{detailsOpen ? "⌄" : "›"}</span>
+      </button>
+      {cardDocument != null && (
+        <button
+          type="button"
+          className="idtoggle"
+          aria-expanded={identifyOpen}
+          onClick={onToggleIdentify}
+          data-testid="display-identify-toggle"
+        >
+          Wrong printing? Search the right one{" "}
+          <span className="chev">{identifyOpen ? "⌄" : "›"}</span>
+        </button>
+      )}
+    </div>
+    <Collapse in={detailsOpen}>
       <div>
-        {/* RD6 (O2 answered) - the WHOLE Card-Details metadata block (Resolution/DPI, File
-            size, Source, Source type, Class, Identifier, Language, Tags, dates) plus Download +
-            Favourite lives ONLY here now - one of the nine removed grey AutofillCollapse
-            sections, folded in place. */}
         <div className="detbody" data-testid="display-rail-more-details-body">
           {cardDocument != null ? (
             <>
-              {/* RD7 - the printing id lives ONCE, in D14; drop CardMetaTable's own
-                  "Canonical Card" row here so it's never a static second copy. */}
               <CardMetaTable
                 cardDocument={cardDocument}
                 showCanonicalCard={false}
@@ -690,62 +708,25 @@ const MoreDetailsSection = ({
         </div>
       </div>
     </Collapse>
-  </div>
-);
-
-// Rail-delegacy round (item 6, SPEC-rail-delegacy.md §B/§F) - the "Printing Tags" grey accordion
-// (PrintingTagPicker consensus/search/candidate-grid + the AttributeVotingPanel follow-up) is
-// REMOVED as a standalone section and rehung directly off the D14 band it's ABOUT ("what printing
-// is this"), opened on demand - never a grey accordion. `PrintingTagsBlock` is reused verbatim
-// (CardDetailedViewBody.tsx) - it already owns the exact PrintingTagPicker + conditional
-// AttributeVotingPanel-when-unresolved composition item 6/RD1 call for; the ONE explicit
-// attribute-vote surface stays here (RD1/O1) - the funnel's own chips (SelectVersionResults.tsx)
-// are implicit-only.
-interface IdentifyPanelProps {
-  cardDocument: CardDocument | undefined;
-  open: boolean;
-  onToggle: () => void;
-}
-
-const IdentifyPanel = ({
-  cardDocument,
-  open,
-  onToggle,
-}: IdentifyPanelProps) => {
-  if (cardDocument == null) {
-    return null;
-  }
-  return (
-    <div className="idhang" data-testid="display-identify-panel">
-      <button
-        type="button"
-        className="idtoggle"
-        aria-expanded={open}
-        onClick={onToggle}
-        data-testid="display-identify-toggle"
-      >
-        Wrong printing? Search the right one{" "}
-        <span className="chev">{open ? "⌄" : "›"}</span>
-      </button>
-      <Collapse in={open}>
+    {cardDocument != null && (
+      <Collapse in={identifyOpen}>
         <div>
           <div className="idbody" data-testid="display-identify-body">
             <PrintingTagsBlock cardDocument={cardDocument} />
           </div>
         </div>
       </Collapse>
-    </div>
-  );
-};
+    )}
+  </div>
+);
 
-// Fix round (SPEC-display-left-rail.md §3): ConfidenceElement now renders FIRST - it's identity
-// (directly under the header's name/RequestedPrintingBadge), not demoted metadata, per the
-// spec's explicit placement call. ArtistSection follows, still promoted/always-visible (D3),
-// just no longer ahead of D14. ConfidenceElement owns its own full-width band styling
-// (`.d14` - background/border-bottom/padding all live in its own markup now, RailRoot's CSS
-// below), so it no longer needs an outer padded wrapper here; ArtistSection still does
-// (`.artist-line`) - density (§2): `px-2 py-1` (8/4) -> explicit `8px 10px`. Rail-delegacy round
-// adds the IdentifyPanel directly below ConfidenceElement (item 6 - "hangs off D14", same subject).
+// Rail restructure ruling 2 (docs/proposals/mockups/editor-repass round, owner directive): the
+// rail orders by distance from the subject - things ABOUT this card sit adjacent to the
+// reference image, things that PROPOSE a different card sit further down. ArtistSection is
+// "about this card," so it moves directly under ConfidenceElement now (previously fifth block
+// down, behind More details/Identify). ConfidenceElement owns its own full-width band styling
+// (`.d14`, RailRoot's CSS below), so it needs no outer padded wrapper here; ArtistSection still
+// does (`.artist-line`).
 const PromotedZone = ({
   cardDocument,
   backendURL,
@@ -767,17 +748,6 @@ const PromotedZone = ({
       onCompareShow={onCompareShow}
       onCompareHide={onCompareHide}
     />
-    {/* Amendment 1 - directly under the D14 band, ahead of the identify panel. */}
-    <MoreDetailsSection
-      cardDocument={cardDocument}
-      open={detailsOpen}
-      onToggle={onToggleDetails}
-    />
-    <IdentifyPanel
-      cardDocument={cardDocument}
-      open={identifyOpen}
-      onToggle={onToggleIdentify}
-    />
     <div
       // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - see RailHeader's
       // own identical comment for why the Bootstrap `.border-bottom` utility is retired here too.
@@ -786,10 +756,20 @@ const PromotedZone = ({
       // with an explicit `13px` inline style (component-scoped, this exact node only) matching
       // §D.1 precisely.
       className="artist-line"
-      style={{ padding: "8px 10px", fontSize: "13px" }}
+      style={{ padding: "8px 8px", fontSize: "13px" }}
     >
       <ArtistSection cardDocument={cardDocument} />
     </div>
+    {/* Amendment 1 - directly under the artist line now (see this component's own module
+        comment on the ruling-2 reorder above); ruling 3 merges the two toggles this used to be
+        into one row (see DetailsAndIdentifyRow's own comment). */}
+    <DetailsAndIdentifyRow
+      cardDocument={cardDocument}
+      detailsOpen={detailsOpen}
+      onToggleDetails={onToggleDetails}
+      identifyOpen={identifyOpen}
+      onToggleIdentify={onToggleIdentify}
+    />
   </>
 );
 
@@ -804,6 +784,14 @@ const PromotedZone = ({
 // SelectVersionResults fix the redline's Bkg 2/4/5 breakages (filters auto-opening cramped inside
 // the 380px rail, "Jump to Version" wrapping vertically, bottom controls clipping at the rail
 // edge) - see those two files' own prop comments.
+
+/* A slot whose query has no results yet resolves to this shared reference rather than a fresh
+   `[]`. A new array each render misses `selectCardDocumentsByIdentifiers`' size-1 memo, which
+   returns a new object, which re-fires useGridSelectorSearch's filter effect, which setStates
+   and re-renders - an unbreakable loop ("Maximum update depth exceeded") that pegs the main
+   thread so no image on either rail ever loads. Large decks hit it because their search results
+   arrive slowly enough for a slot to be clicked while still empty. */
+const EMPTY_SEARCH_RESULTS: Array<string> = [];
 
 interface SelectVersionSectionProps {
   face: Faces;
@@ -820,6 +808,10 @@ interface SelectVersionSectionProps {
     candidateIdentifier: string,
     supportTagNames: string[]
   ) => void;
+  /** Rail-anchored filters round - forwarded straight through to SelectVersionResults' own prop
+   * of the same name (see its comment); lets LeftRailOffcanvas widen while the Filters panel is
+   * open. */
+  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 // Reuses the same real search/filter machinery GridSelectorModal itself now delegates to
@@ -838,6 +830,7 @@ const SelectVersionSection = ({
   selectedImage,
   backendURL,
   onImplicitSupport,
+  onFiltersOpenChange,
 }: SelectVersionSectionProps) => {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -885,7 +878,7 @@ const SelectVersionSection = ({
         query?.collectorNumber,
         face
       )
-    ) ?? [];
+    ) ?? EMPTY_SEARCH_RESULTS;
   const focusRef = useRef<HTMLInputElement>(null);
   // E3/X2 (Bkg 5) - the rail always starts with Filters collapsed, regardless of viewport width
   // (the modal's own GridSelectorModal caller doesn't pass this, so its width-based default is
@@ -955,6 +948,7 @@ const SelectVersionSection = ({
         backendURL={backendURL}
         layout="stacked"
         voteLayer={voteLayer}
+        onFiltersOpenChange={onFiltersOpenChange}
       />
     </>
   );
@@ -1156,18 +1150,30 @@ const DisplayBodyRegion = styled.div`
 // ("pinned to the bottom and mostly non visible") was a genuinely-open drawer only 30vh tall, most
 // of its own content clipped below that. The explicit height (not max-height) below matches the
 // approved mockup's own bottom-sheet rule exactly - see the design doc's R5 row.
-const LeftRailOffcanvas = styled(Offcanvas)`
+// Rail-anchored filters round - `$filtersOpen` (SelectVersionResults.tsx's own
+// `onFiltersOpenChange`, threaded through Rail/SelectVersionSection below) widens this SAME rail
+// column instead of floating a separate panel over the page: the inline (`lg`+) sticky column and
+// the tablet `start` drawer both grow from their normal width while the funnel's Filters panel is
+// open, so its fieldsets and the candidate grid underneath both fit without one covering the
+// other. Phone's `bottom` sheet is untouched - it's already full-viewport width.
+const LeftRailOffcanvas = styled(Offcanvas)<{ $filtersOpen?: boolean }>`
   &.offcanvas-bottom {
     height: 72vh;
     border-top-left-radius: 0.75rem;
     border-top-right-radius: 0.75rem;
   }
 
+  &.offcanvas-start {
+    width: ${(props) => (props.$filtersOpen ? "min(640px, 92vw)" : "400px")};
+    max-width: ${(props) =>
+      props.$filtersOpen ? "min(640px, 92vw)" : "400px"};
+  }
+
   @media (min-width: 992px) {
     &.offcanvas-lg {
-      width: 380px;
-      max-width: 380px;
-      flex: 0 0 380px;
+      width: ${(props) => (props.$filtersOpen ? "640px" : "380px")};
+      max-width: ${(props) => (props.$filtersOpen ? "640px" : "380px")};
+      flex: 0 0 ${(props) => (props.$filtersOpen ? "640px" : "380px")};
       position: sticky;
       top: 0;
       max-height: 100vh;
@@ -1297,7 +1303,7 @@ const RailRoot = styled.div`
   .rail-head {
     background: var(--theme-raised-bg);
     border-bottom: 1px solid var(--theme-divider);
-    padding: 8px 10px;
+    padding: 8px 8px;
   }
   .artist-line {
     background: var(--theme-raised-bg);
@@ -1329,7 +1335,7 @@ const RailRoot = styled.div`
     gap: 8px;
     flex-wrap: wrap;
     margin: 0;
-    padding: 8px 10px;
+    padding: 8px 8px;
     background: var(--theme-band-bg);
     border-bottom: 1px solid var(--theme-divider);
     font-size: 12px;
@@ -1487,9 +1493,14 @@ const RailRoot = styled.div`
     gap: 10px;
     align-items: flex-start;
   }
+  /* Rail restructure ruling 1 (docs/proposals/mockups/editor-repass round, owner directive):
+     the reference card is the LARGEST element on the rail - grown from 116px (smaller than a
+     "large"-density candidate tile) to 200px (bigger than every candidate density, including
+     "large" at 170px). Ruling 3 pays for this: the rail is now a scrolling column, not a
+     fixed-height one, so the extra height has somewhere to go. */
   .subject {
-    flex: 0 0 116px;
-    width: 116px;
+    flex: 0 0 200px;
+    width: 200px;
     aspect-ratio: 63 / 88;
     position: relative;
     overflow: hidden;
@@ -1590,13 +1601,22 @@ const RailRoot = styled.div`
     margin-top: 8px;
   }
   /* Amendment 1 (owner, 2026-07-24, BINDING) - "More details" moved out of the rail head to
-     directly under the D14 band; same padded/divider rhythm as its new neighbours ('.d14'/
-     '.idhang', both '#2b3e50') rather than the rail-head's own '#22303f', since it's still
-     "about the currently-identified printing," the same subject D14 covers. */
-  .detmore-wrap {
+     directly under the D14 band; same padded/divider rhythm as its new neighbours ('.d14', both
+     '#2b3e50') rather than the rail-head's own '#22303f', since it's still "about the
+     currently-identified printing," the same subject D14 covers. Ruling 3 (editor-repass round,
+     item 3) - REV: '.detmore-wrap'/'.idhang' (formerly two separate bands, each paying for its
+     own background/border/padding) merge into this ONE band; '.detid-toggles' lays the two
+     toggle buttons out side by side inside it instead of stacking two full-width rows. */
+  .detid-row {
     background: var(--theme-band-bg);
     border-bottom: 1px solid var(--theme-divider);
-    padding: 8px 10px;
+    padding: 8px 8px;
+  }
+  .detid-toggles {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
   }
   .detmore {
     background: transparent;
@@ -1619,8 +1639,10 @@ const RailRoot = styled.div`
     border-top: 1px solid var(--theme-divider);
     font-size: 11px;
   }
-  /* EP9 (N, §D.1 '.compare') - the Scryfall reference reveal, anchored beside the 116px subject
-     image (116 + the '.rhead-row' 10px gap = 126). 'pointer-events: none' is load-bearing, not
+  /* EP9 (N, §D.1 '.compare') - the Scryfall reference reveal, anchored beside the subject image
+     (subject width + the '.rhead-row' 10px gap - see ruling 1's own comment on '.subject' for
+     why that width grew from 116px to 200px, moving this offset from 126px to 210px in step).
+     'pointer-events: none' is load-bearing, not
      decorative: at z-index 40 this panel paints ABOVE later DOM siblings (the D14 band sits
      right after the rail head, and the panel's own aspect-ratio height easily reaches down far
      enough to visually cover the very pill that triggered it) - without this, the panel would
@@ -1632,7 +1654,7 @@ const RailRoot = styled.div`
      exactly as the mockup's own hover-reveal (not a second interactive layer) intends. */
   .compare {
     position: absolute;
-    left: 126px;
+    left: 210px;
     top: 0;
     z-index: 40;
     width: 150px;
@@ -1658,12 +1680,8 @@ const RailRoot = styled.div`
     font-weight: 700;
   }
 
-  /* identify panel band (item 6) - hangs off D14, same surface (§2/band-bg) */
-  .idhang {
-    background: var(--theme-band-bg);
-    border-bottom: 1px solid var(--theme-divider);
-    padding: 0 10px 8px;
-  }
+  /* identify toggle (item 6) - lives inside '.detid-toggles' now (ruling 3); no wrapper of its
+     own left to style, '.detid-row' above owns the shared background/border/padding. */
   .idtoggle {
     background: transparent;
     border: 1px solid #6b7d8e;
@@ -1745,19 +1763,44 @@ const RailRoot = styled.div`
     color: var(--theme-btn-ink);
   }
 
-  /* Filters panel - one shared fieldset body, tier-conditional container (RD4/O3): phone = the
-     in-rail .fpanel.inline below, still inside this styled-component's own DOM/CSS scope.
-     Desktop/tablet's own .fpanel.float + .fscrim are portaled to document.body instead (see
-     SelectVersionResults.tsx's FloatFiltersPortalRoot comment for why a plain in-tree
-     position:fixed node isn't enough here) - those two classes' rules travel WITH that portal
-     component, duplicated in lockstep, not defined here. */
+  /* Rail-anchored filters round - ONE panel now, every viewport tier: this .fpanel.inline,
+     expanded in place via an in-rail Collapse (SelectVersionResults.tsx) - no page-darkening
+     backdrop, no document.body portal any more (the old .fpanel.float/.fscrim pair is retired).
+     The left accent border reads it as belonging to this rail, not a dialog floating over the
+     page; LeftRailOffcanvas widens itself while it's open (this component's own $filtersOpen
+     prop, below) so the funnel's chips and the candidate grid stay visible together instead of
+     one covering the other. */
   .fpanel {
     background: var(--theme-raised-bg);
     border: 1px solid var(--theme-divider);
-    padding: 8px;
+    padding: 0;
   }
   .fpanel.inline {
     margin-bottom: 8px;
+    border-left: 3px solid var(--bs-primary);
+  }
+  .fptitle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--theme-card-header-bg);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .fptitle button {
+    background: transparent;
+    border: 1px solid rgba(var(--bs-body-color-rgb), 0.2);
+    color: var(--bs-body-color);
+    padding: 2px 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .fpwrap {
+    padding: 8px;
   }
   .fset {
     border: none;
@@ -1796,7 +1839,7 @@ const RailRoot = styled.div`
 
   /* control stack (item 7) - Print Options + Slot Actions + Report */
   .cstack {
-    padding: 8px 10px;
+    padding: 8px 8px;
   }
   .cs-group {
     margin-bottom: 10px;
@@ -1883,6 +1926,9 @@ interface RailProps {
     candidateIdentifier: string,
     supportTagNames: string[]
   ) => void;
+  /** Rail-anchored filters round - threaded straight through to SelectVersionSection/
+   * SelectVersionResults; see SelectVersionResults' own prop comment. */
+  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 const Rail = ({
@@ -1891,6 +1937,7 @@ const Rail = ({
   backendURL,
   onSlotDeleted,
   onImplicitSupport,
+  onFiltersOpenChange,
 }: RailProps) => {
   // Rail-delegacy round - the old six-key `expandedSections` accordion state is gone with the
   // grey sections it drove; the two remaining disclosures ("More details", the D14 identify
@@ -2002,31 +2049,11 @@ const Rail = ({
         compareOpen={compareOpen}
         comparePrinting={comparePrinting}
       />
-      <div className="railsec">
-        <div
-          className="lg"
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-            color: "var(--theme-muted)",
-            marginBottom: 5,
-          }}
-        >
-          Cardback (this slot)
-        </div>
-        <SlotCardbackControl
-          slot={selectedSlotRef.slot}
-          backImage={backProjectMember?.selectedImage}
-          projectCardback={projectCardback}
-        />
-      </div>
-      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + "More details"
-          (amendment 1) + the identify panel that hangs off it (item 6) + artist support line,
-          none of which are collapsible accordion sections (D3). Fix round
-          (SPEC-display-left-rail.md §3): ConfidenceElement renders BEFORE ArtistSection - it is
-          identity, not demoted metadata; see PromotedZone's own comment for the full ordering
-          rationale. */}
+      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + artist support
+          line + "More details" (amendment 1) + the identify panel that hangs off it (item 6),
+          none of which are collapsible accordion sections (D3). Rail restructure ruling 2 - this
+          whole zone is "about this card," so it sits directly under the header's reference
+          image; see PromotedZone's own comment for the full ordering rationale. */}
       <PromotedZone
         cardDocument={selectedCardDocument}
         backendURL={backendURL}
@@ -2047,15 +2074,8 @@ const Rail = ({
           the nine removed grey sections (SPEC-rail-delegacy.md §B/RD - owner answer #3).*/}
       <SourcesAccordion />
       {/* E2/E3/L4 - Select Version, promoted + always open (renamed from "Choose Image", no
-          collapse chrome at all - the primary art surface, not one accordion among several).
-          Density (§2): `px-2 pt-2` (8/8-top) -> explicit `8px 10px`. O1 fix round
-          (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this wrapper gains a
-          `select-version-wrapper` class carrying the normalized `#16202b` bottom hairline (see
-          RailRoot's own rule below) - it had no block-boundary divider of its own before. */}
-      <div
-        className="select-version-wrapper sv"
-        style={{ padding: "8px 10px" }}
-      >
+          collapse chrome at all - the primary art surface, not one accordion among several). */}
+      <div className="select-version-wrapper sv" style={{ padding: "8px 8px" }}>
         <h6 className="select-version-heading">Select Version</h6>
         <SelectVersionSection
           face={selectedSlotRef.face}
@@ -2064,6 +2084,29 @@ const Rail = ({
           selectedImage={selectedImage}
           backendURL={backendURL}
           onImplicitSupport={onImplicitSupport}
+          onFiltersOpenChange={onFiltersOpenChange}
+        />
+      </div>
+      {/* Rail restructure ruling 2 - the per-slot cardback control proposes a DIFFERENT card
+          (a different back face), so it moves past the identity zone and the candidate grid
+          rather than sitting above both, as it did before this round. */}
+      <div className="railsec">
+        <div
+          className="lg"
+          style={{
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            color: "var(--theme-muted)",
+            marginBottom: 5,
+          }}
+        >
+          Cardback (this slot)
+        </div>
+        <SlotCardbackControl
+          slot={selectedSlotRef.slot}
+          backImage={backProjectMember?.selectedImage}
+          projectCardback={projectCardback}
         />
       </div>
       {/* Rail-delegacy round (item 7, RD5)/editor-polish item 4 (REV RD5) - Print Options +
@@ -2160,6 +2203,11 @@ export function DisplayPage() {
     viewportTier === "phone" ? "bottom" : "start";
   const [leftRailOpen, setLeftRailOpen] = useState(false);
   const [rightRailOpen, setRightRailOpen] = useState(false);
+  // Rail-anchored filters round - SelectVersionResults' own Filters panel, reported up through
+  // Rail/SelectVersionSection (see their own `onFiltersOpenChange` prop comments). Drives
+  // LeftRailOffcanvas's `$filtersOpen` width below - the panel is drawn from this rail by widening
+  // it, not by floating a separate darkened dialog over the page.
+  const [railFiltersOpen, setRailFiltersOpen] = useState(false);
   // Design doc §4's "two overlays, one screen" invariant - opening either rail closes the other,
   // so they never stack below their own inline tier. Harmless to call at inline tiers too:
   // Offcanvas ignores `show` there entirely (see its own source - `hideResponsiveOffcanvas`
@@ -2449,8 +2497,11 @@ export function DisplayPage() {
                 ? "loading"
                 : "failed"
               : undefined;
+          const sheetImageURLs =
+            cardDocument != null ? getSheetImageURLs(cardDocument) : [];
           const content: PagePreviewSlotContent = {
-            imageUrl: cardDocument?.mediumThumbnailUrl,
+            imageUrl: sheetImageURLs[0],
+            imageUrls: sheetImageURLs,
             name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
             queryText,
             loadState,
@@ -2775,6 +2826,7 @@ export function DisplayPage() {
           onHide={() => setLeftRailOpen(false)}
           responsive="lg"
           placement={leftPlacement}
+          $filtersOpen={railFiltersOpen}
           data-testid="display-rail"
           aria-label="Card details and art selection"
         >
@@ -2799,7 +2851,14 @@ export function DisplayPage() {
           <Offcanvas.Header closeButton>
             <Offcanvas.Title>Card details</Offcanvas.Title>
           </Offcanvas.Header>
-          <Offcanvas.Body>
+          {/* Rail restructure ruling 6 (editor-repass round, item 1/4) - REV: Bootstrap's stock
+              Offcanvas.Body padding (p-3, 16px) was stacking with every RailRoot section's OWN
+              8px-scale padding underneath it, so the rail was carrying 24px of horizontal inset
+              per side instead of the 8px every other rail block already uses (the right rail's
+              own Offcanvas.Body already made this exact move under ruling 7 - see its own
+              comment below). Removing it both tightens the rail generally AND frees the ~32px
+              of width the "large" candidate density needs to show two tiles per row. */}
+          <Offcanvas.Body className="p-0">
             {/* `key` here (not inside Rail itself) is what actually forces a remount on slot
                 change - a key set on an element INSIDE a component's own render output has no
                 effect on that same component's hooks; only the key the PARENT assigns to the
@@ -2816,6 +2875,7 @@ export function DisplayPage() {
               cardDocumentsByIdentifier={cardDocumentsByIdentifier}
               backendURL={backendURL ?? ""}
               onSlotDeleted={() => setSelectedSlotRef(null)}
+              onFiltersOpenChange={setRailFiltersOpen}
               onImplicitSupport={
                 selectedSlotRef != null
                   ? (candidateIdentifier, supportTagNames) =>
@@ -3041,7 +3101,9 @@ export function DisplayPage() {
             <Offcanvas.Title>Print &amp; Settings</Offcanvas.Title>
           </Offcanvas.Header>
           <Offcanvas.Body className="d-flex flex-column p-0">
-            <div className="flex-grow-1 overflow-auto p-3">
+            {/* Rail restructure ruling 7 - both rails move to 8px interior padding (the 4/8
+                token scale); this was Bootstrap's stock p-3 (16px). */}
+            <div className="flex-grow-1 overflow-auto p-2">
               <div className="mb-3">
                 <h6>Page Setup</h6>
                 <Form.Select
@@ -3260,13 +3322,14 @@ export function DisplayPage() {
 
             {/* Design doc §4.2's "Prepare Print footer - pinned, always visible at the rail's
                 bottom (flex column: body scrolls, footer doesn't)". Issue #275 (ADDENDUM D9/F2)
-                replaces the old three-button stack with FinishFooter's own co-equal Save
-                Deck/Print - Export pair + the unchanged Export dropdown - see this file's own
-                module comment for the full rationale. */}
-            <div className="border-top p-3">
+                introduced FinishFooter's own Save Deck/Print-Export pair + the Export dropdown;
+                the separate Print/Export button was later folded into the Export dropdown's own
+                PDF item once Drive save landed there too - see FinishFooter.tsx's own module
+                comment for the full rationale. */}
+            <div className="border-top p-2">
               <FinishFooter
                 hasBackedUpThisSession={draftBackup.hasBackedUpThisSession}
-                onPrintClick={prePrintSaveGate.startPrintFlow}
+                runExportGate={prePrintSaveGate.startPrintFlow}
                 sheetSettings={settings}
               />
             </div>

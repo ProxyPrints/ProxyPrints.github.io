@@ -1,9 +1,17 @@
-# "Print!" export page
+# "Print!" export page — RETIRED
 
-`FinishedMyProject.tsx` — the final step of the editor where a finished
-project gets sent off to be physically printed.
+> **Retired 2026-08-14.** The `/print` page (`pages/print.tsx`) and its "Print!" tab
+> (`FinishedMyProject.tsx`) were deleted along with the rest of the print-only chain
+> (`Export.tsx`, `ExportPDF.tsx`, `PDFGenerator.tsx`, `PDFCanvasPreview.tsx`,
+> `PDFWaitPanel.tsx`, `PDFGeneratorModal.tsx`). The three printshop ordering guides
+> (PringlePrints / MakePlayingCards / NotMPC) moved into `/editor`'s Export ▾ menu as a
+> "Printshops" item opening a modal — see `docs/features/pdf-generator.md`'s
+> [Printshop ordering guides](pdf-generator.md#printshop-ordering-guides-the-retired-print-print-tab)
+> section for the new home, the flags rationale, and the home-printing guidance. This file is
+> kept as a stub (rather than deleted) so the wiki-publish map's `Print-Export-Page` entry
+> keeps resolving; the history below is preserved for reference.
 
-## What it does
+## What it used to do
 
 - A NotMPC ordering tab mirroring the MakePlayingCards tab's 3-step
   structure. NotMPC.com flow steps have a TODO for manual verification —
@@ -25,62 +33,16 @@ generated stripes, a hand-typed maple-leaf path) specifically to avoid
 that — which produced two real rendering bugs of its own, fixed, then
 later simplified to the vendored static SVGs above once the original
 Windows-emoji reasoning was already satisfied by "not emoji" rather than
-requiring hand-rolled SVG specifically.
+requiring hand-rolled SVG specifically. The same vendored SVGs still title
+the printshop tabs in the modal that replaced this page.
 
-## Post-export contribution prompt (issue #166)
-
-The `PDFGenerator.tsx` mounted inside this tab's own "PDF" sub-tab carries a
-dismissible `Alert` shown once per session after a genuine "Generate
-PDF"/"Save PDF to Google Drive" success, linking to `/whatsthat`. One shared
-implementation (`frontend/src/features/export/ usePostExportContributionPrompt.ts` + `PostExportContributionPrompt.tsx`),
-mounted from `PDFGenerator.tsx` itself so every real caller of that
-component gets it for free, rather than wiring it into `FinishedMyProject.tsx`
-separately. This tab was reachable both via the classic editor's "Print!"
-tab and, since issue #275, standalone at `pages/print.tsx` — the later
-Proposal H route swap (2026-07-23, issues #231/#272) fully unrouted the
-classic grid `ProjectEditor.tsx` (component kept in-tree, deletion is a
-separate later decision), so `pages/print.tsx` is this tab's only live
-route today; `PDFGeneratorModal.tsx` remains a second, route-independent
-mount (via `Modals.tsx`). (Issue #275 also retired the unified `/display` page's OWN separate inline
-export pipeline and its own mount of this same prompt — `/editor`'s Finish
-footer reaches this tab's memory-heavy Generate PDF/Save-to-Drive operations
-via a pre-print save gate; see
-`docs/proposals/proposal-h-display-layout-spec.md`'s [Finish
-Footer](../proposals/proposal-h-display-layout-spec.md#finish-footer-save-before-print)
-and [Print-Page
-Funnel](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)
-decisions. `/editor` later regained a lightweight PDF export of its own,
-directly off its Export ▾ menu — see `docs/features/pdf-generator.md`'s
-"Editor-native PDF export" section; it does not mount this prompt.) See
-`docs/features/printing-tags.md`'s own entry for the full detail (session-
-scoped `sessionStorage` flag, success-detection mechanism, why it's a
-funnel entry point rather than a parallel one) and
-`docs/features/pdf-generator.md`'s "Key files" for the export-pipeline side
-of the wiring.
-
-## Key files
-
-- `frontend/src/features/export/FinishedMyProject.tsx`
-- `frontend/src/components/flags.tsx`
-- `frontend/public/*.svg` (vendored flag icons)
-- `frontend/src/pages/print.tsx` (issue #275, the [Print-Page Funnel
-  decision](../proposals/proposal-h-display-layout-spec.md#print-page-funnel-destination)'s
-  F5 row) — thin standalone route
-  wrapper mounting `FinishedMyProject` unchanged, mirroring `pages/myDecks.tsx`;
-  the funnel destination `/display`'s Finish footer navigates to
-
-## Status
-
-Confirmed live. Verified end-to-end via a temporary Playwright test reusing
-this repo's MSW mock infra (`tests/test-utils.ts` + `src/mocks/handlers.ts`)
-reaching the Print! tab and screenshotting the tab bar — all 3 flags
-rendered correctly; test file removed after verification (not a permanent
-addition).
-
-## Known gaps
+## Known gaps (carried into the new home)
 
 - The NotMPC flow steps still carry a TODO for manual verification against
   the real site (currently based on an automated read only).
-- The PringlePrints flow steps carry the identical TODO (`FinishedMyProject.tsx:347`)
-  — steps/pricing/service-area were derived from a one-time read of
-  pringleprints.ca, not a manual walkthrough, and may have changed since.
+- The PringlePrints flow steps carry the identical TODO — steps/pricing/
+  service-area were derived from a one-time read of pringleprints.ca, not a
+  manual walkthrough, and may have changed since.
+
+Both TODOs and the "steps current as of July 2026 — confirm before ordering"
+caveats were ported verbatim into `DisplayExportPrintshops.tsx`.

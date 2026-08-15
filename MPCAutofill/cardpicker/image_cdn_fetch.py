@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # hash-at-ingest deliberately overrides it with a much smaller size (see local_phash's
 # INGEST_HASH_FETCH_DPI) since phash's own internal downsampling makes the extra resolution
 # unnecessary for hashing specifically.
-DEFAULT_FETCH_DPI: Optional[int] = 250
+DEFAULT_FETCH_DPI: Optional[int] = 460
 
 
 def get_worker_image_url(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional[str]:

@@ -16,7 +16,9 @@ from cardpicker.search.search_functions import (
 )
 
 
-def make_search_settings(full_art_only: bool = False, borderless_only: bool = False) -> SearchSettings:
+def make_search_settings(
+    full_art_only: bool = False, borderless_only: bool = False, fuzzy_search: bool = False
+) -> SearchSettings:
     return SearchSettings(
         filterSettings=FilterSettings(
             minimumDPI=0,
@@ -28,7 +30,7 @@ def make_search_settings(full_art_only: bool = False, borderless_only: bool = Fa
             fullArtOnly=full_art_only,
             borderlessOnly=borderless_only,
         ),
-        searchTypeSettings=SearchTypeSettings(fuzzySearch=False, filterCardbacks=False),
+        searchTypeSettings=SearchTypeSettings(fuzzySearch=fuzzy_search, filterCardbacks=False),
         sourceSettings=SourceSettings(sources=[]),
     )
 
@@ -233,3 +235,47 @@ class TestRetrieveCardIdentifiersDegradation:
         assert identifiers == ["fallback-id"]
         assert degraded is True
         assert calls == [("2ED", None), (None, None)]
+
+
+class TestRetrieveCardIdentifiersAlwaysPrecise:
+    """
+    `retrieve_card_identifiers` is only ever reached from the editor-search endpoints, which
+    resolve an already-imported project slot's fixed query - never a fresh discovery search.
+    The owner ruling (2026-08-14): searching an already-imported card is always precise
+    regardless of the caller's global fuzzy/precise preference; fuzzy is scoped to add-cards
+    discovery, which doesn't route through this function at all.
+    """
+
+    def test_fuzzy_search_true_is_overridden_to_precise(self):
+        with patch.object(search_functions, "_retrieve_card_identifiers_once", return_value=["abc"]) as mock_once:
+            retrieve_card_identifiers(
+                search_settings=make_search_settings(fuzzy_search=True),
+                query="lightning bolt",
+                card_type=CardType.CARD,
+            )
+        called_settings: SearchSettings = mock_once.call_args.args[0]
+        assert called_settings.searchTypeSettings.fuzzySearch is False
+
+    def test_fuzzy_search_true_is_overridden_to_precise_on_degraded_retry(self):
+        with patch.object(search_functions, "_retrieve_card_identifiers_once", return_value=[]) as mock_once:
+            retrieve_card_identifiers(
+                search_settings=make_search_settings(fuzzy_search=True),
+                query="lightning bolt",
+                card_type=CardType.CARD,
+                expansion_code="2ED",
+                collector_number="162",
+            )
+        assert mock_once.call_count == 2
+        for call in mock_once.call_args_list:
+            called_settings: SearchSettings = call.args[0]
+            assert called_settings.searchTypeSettings.fuzzySearch is False
+
+    def test_precise_override_does_not_mutate_the_caller_s_settings(self):
+        original_settings = make_search_settings(fuzzy_search=True)
+        with patch.object(search_functions, "_retrieve_card_identifiers_once", return_value=["abc"]):
+            retrieve_card_identifiers(
+                search_settings=original_settings,
+                query="lightning bolt",
+                card_type=CardType.CARD,
+            )
+        assert original_settings.searchTypeSettings.fuzzySearch is True

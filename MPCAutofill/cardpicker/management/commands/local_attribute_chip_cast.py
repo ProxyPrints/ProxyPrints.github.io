@@ -4,7 +4,6 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from cardpicker.local_attribute_chip_cast import (
-    BLEED_EDGE_CAST_ANONYMOUS_ID,
     FRAME_STYLE_CAST_ANONYMOUS_ID,
     run_attribute_chip_cast,
 )
@@ -18,15 +17,17 @@ from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 
 class Command(BaseCommand):
     help = (
-        "Casts the FRAME-STYLE (Old Border/Modern Border) and BLEED-EDGE (appropriate-bleed) "
-        "attribute chips by reading Stage C's already-persisted ImageEvidence - zero image "
-        "fetches. Closes the hole the 2026-07-29 composition audit measured: both chip families "
-        "sat at zero machine rows with no substitute, because the only code that ever cast them "
-        "was inside the live-fetch pilot and inside image_evidence.extract_card_evidence, which "
-        "has no production callers. Border chips are deliberately NOT cast here - "
-        "local_layout_class_cast is already the evidence-reading border caster, and a third "
-        "border channel is the duplication the audit says to cull, not extend. Never resolves a "
-        "tag by itself: a single VoteSource.OCR vote cannot clear the human-backed gate "
+        "Casts the FRAME-STYLE (Old Border/Modern Border) attribute chip by reading Stage C's "
+        "already-persisted ImageEvidence - zero image fetches. Closes the hole the 2026-07-29 "
+        "composition audit measured: the frame chip sat at zero machine rows with no substitute, "
+        "because the only code that ever cast it was inside the live-fetch pilot and inside "
+        "image_evidence.extract_card_evidence, which has no production callers. The bleed half of "
+        "this caster (bleed-edge-cast-v1) is RETIRED - the cross-checked bleed calculator "
+        "(local_bleed_calculator, bleed-calculator-cast-v1) is the sole machine channel for "
+        "appropriate-bleed. Border chips are deliberately NOT cast here - local_layout_class_cast "
+        "is already the evidence-reading border caster, and a third border channel is the "
+        "duplication the audit says to cull, not extend. Never resolves a tag by itself: a single "
+        "VoteSource.OCR vote cannot clear the human-backed gate "
         "(vote_consensus.resolve_weighted_consensus). Defaults to dry-run and requires an "
         "explicit --write, matching every other Stage 3+ command's own convention."
     )
@@ -72,7 +73,6 @@ class Command(BaseCommand):
             print(
                 f"[attribute-chips] considered={result.cards_considered} "
                 f"frame={'written=' + str(result.frame_votes_written) if not dry_run else 'would_cast=' + str(result.frame_votes_would_cast)} "
-                f"bleed={'written=' + str(result.bleed_votes_written) if not dry_run else 'would_cast=' + str(result.bleed_votes_would_cast)} "
                 f"skip_counts={dict(result.skip_counts)}"
             )
             print(f"[attribute-chips] votes_by_tag={dict(result.votes_by_tag)}")
@@ -83,7 +83,7 @@ class Command(BaseCommand):
                 touched_card_ids = list(
                     CardTagVote.objects.filter(
                         run_id=run_id,
-                        anonymous_id__in=[FRAME_STYLE_CAST_ANONYMOUS_ID, BLEED_EDGE_CAST_ANONYMOUS_ID],
+                        anonymous_id=FRAME_STYLE_CAST_ANONYMOUS_ID,
                     ).values_list("card_id", flat=True)
                 )
                 violations = verify_no_machine_only_resolutions(touched_card_ids)

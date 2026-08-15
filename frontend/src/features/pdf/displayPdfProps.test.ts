@@ -48,6 +48,7 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
   roundCorners: false,
+  drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,
   scmPaperSize: "letter",
@@ -178,8 +179,13 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
     expect(props.drawCardCutLines).toBe(false);
   });
 
-  it("page cut lines are a named default (false) - the rail's Guides toggle never drew them", () => {
-    expect(buildDisplayPDFProps(baseInput).drawPageCutLines).toBe(false);
+  it("page cut lines default to on, matching /print's own default, and map straight through from export settings", () => {
+    expect(buildDisplayPDFProps(baseInput).drawPageCutLines).toBe(true);
+    const props = buildDisplayPDFProps({
+      ...baseInput,
+      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, drawPageCutLines: false },
+    });
+    expect(props.drawPageCutLines).toBe(false);
   });
 
   it("cut line colour, shape, placement, and geometry all map straight through from export settings", () => {

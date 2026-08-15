@@ -4,7 +4,6 @@ import { useAppDispatch, useAppSelector } from "@/common/types";
 import { MemoizedCardDetailedView } from "@/features/cardDetailedView/CardDetailedViewModal";
 import { ChangeQueryModal } from "@/features/changeQuery/ChangeQueryModal";
 import { InvalidIdentifiersModal } from "@/features/invalidIdentifiers/InvalidIdentifiersModal";
-import { PDFGeneratorModal } from "@/features/pdf/PDFGeneratorModal";
 import { selectHiddenCardIdentifiersSet } from "@/store/slices/hiddenCardsSlice";
 import {
   hideModal,
@@ -56,10 +55,6 @@ export function Modals() {
       )}
       <InvalidIdentifiersModal
         show={shownModal === "invalidIdentifiers"}
-        handleClose={handleClose}
-      />
-      <PDFGeneratorModal
-        show={shownModal === "PDFGenerator"}
         handleClose={handleClose}
       />
     </>

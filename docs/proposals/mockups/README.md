@@ -1,7 +1,9 @@
 # docs/proposals/mockups/
 
-Design-artifact bundles: a BINDING owner-approved spec (`SPEC-*.md`) plus
-its companion static-HTML mockup, one directory per round. These are
+Design-artifact bundles: a spec (`SPEC-*.md`) plus its companion static-HTML
+mockup, one directory per round. Most are BINDING owner-approved specs; a
+bundle that has not been ratified says so in its own header and in its entry
+below (`editor-repass/` is currently the only one). These are
 design artifacts, not application code — see each bundle's own header for
 its "how to view" instructions. Like the rest of `proposals/`, never
 published to the wiki (per
@@ -29,6 +31,16 @@ durability copies of work that landed only on an open PR branch, not
   — the `/editor` cardback flow (PKG 1) + PDF-generation wait experience
   (PKG 2), inherited on top of both rounds above. Companion mockup:
   [`cardback-pdfwait-mockup.html`](cardback-pdfwait/cardback-pdfwait-mockup.html).
+- [`editor-repass/SPEC-editor-repass.md`](editor-repass/SPEC-editor-repass.md)
+  — the `/editor` design repass: eleven numbered items (R1–R11) diagnosing why
+  the left rail reads as a metadata surface rather than an image one, and why
+  settings ended up in dialogs the rails were meant to carry. Covers art-tile
+  sizing and the asset tier behind it, survivor-grid windowing, rail reordering,
+  the three search-settings homes, the export-settings modal, the finish
+  footer's button weights, the requery glyph, the four cardback surfaces, one
+  visual vocabulary, and density. **PROPOSAL — not ratified**; it contradicts
+  several shipped decisions and says which, per item. Companion mockup:
+  [`editor-repass-mockup.html`](editor-repass/editor-repass-mockup.html).
 - [`wtc-rebuild/SPEC-wtc-rebuild.md`](wtc-rebuild/SPEC-wtc-rebuild.md) —
   the "What's That Card?" (`/whatsthat`) rebuild spec: Tokyo-11 theme
   adoption for the page's own prior bespoke identity. Companion mockup:

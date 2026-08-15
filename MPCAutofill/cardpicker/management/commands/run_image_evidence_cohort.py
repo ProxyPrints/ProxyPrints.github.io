@@ -158,10 +158,10 @@ cards SOME run once finished, so a plain invocation redoes the catalogue from sc
 resume is `--run-id <the killed run's id>`. `--only-never-extracted` narrows back to the old
 identity-scoped predicate. See `already_extracted_card_ids`' own docstring for the full argument
 and for the `bleed_diff_mm` case that made the old predicate a permanent blind spot.
-`MANIFEST_EXTRACTOR_KEYS` and `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` are kept in sync with
-`image_evidence.compute_card_evidence`'s own `extractor_versions` assignments (11 keys as of
-color_profile's retirement 2026-07-27) - stale here would silently under-count "already done"
-and re-pay fetch+OCR cost this resume filter exists specifically to avoid.
+    `MANIFEST_EXTRACTOR_KEYS` and `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` are kept in sync with
+    `image_evidence.compute_card_evidence`'s own `extractor_versions` assignments (12 keys as of
+    pinline_inset's addition, see below) - stale here would silently under-count "already done"
+    and re-pay fetch+OCR cost this resume filter exists specifically to avoid.
 
 That sync is now ENFORCED, not merely requested: `.github/scripts/check_extractor_manifest_sync.py`
 derives {key: version} from image_evidence.py by AST and fails CI if either constant below
@@ -170,12 +170,18 @@ than a sterner comment - it said "12" when the manifest carried 11 keys, and it 
 `extract_card_evidence` when the assignments actually live in `compute_card_evidence`. A
 hand-written anchor drifts exactly like a hand-written list.
 
-`artbox_phash` (issue #480, added 2026-07-25) has the same "adding a manifest key stales every
-row's `has_keys` check" consequence every prior manifest addition has had, deliberately - see
-that issue's own binding sequencing comment: this key merges into the manifest, but the resulting
-whole-catalog Stage C pass it makes eligible does NOT run until the owner schedules it (riding
-`#473`/`#472`'s own deploy first, per that comment) - never a standalone `artbox_phash`-only
-backfill, which would duplicate ~218k fetches the combined pass already needs to make anyway.
+    `artbox_phash` (issue #480, added 2026-07-25) has the same "adding a manifest key stales every
+    row's `has_keys` check" consequence every prior manifest addition has had, deliberately - see
+    that issue's own binding sequencing comment: this key merges into the manifest, but the resulting
+    whole-catalog Stage C pass it makes eligible does NOT run until the owner schedules it (riding
+    `#473`/`#472`'s own deploy first, per that comment) - never a standalone `artbox_phash`-only
+    backfill, which would duplicate ~218k fetches the combined pass already needs to make anyway.
+
+    `pinline_inset` (added alongside the pinline-inset measurement, 2026-08-14) has the identical
+    consequence: every one of the ~220k existing `ImageEvidence` rows now fails `has_keys` for
+    lacking this key and becomes eligible for re-extraction, and the resulting whole-catalog Stage C
+    pass does not run until the owner schedules it - same posture as `artbox_phash` above, not a
+    standalone `pinline_inset`-only backfill.
 
 EVIDENCE TRANSFER (2026-07-25, issue #473 PR-2, folded with issue #472): `_fetch_one_card` checks
 `evidence_transfer.find_transfer_source(card)` BEFORE the network fetch call below - a card with a
@@ -291,9 +297,9 @@ from cardpicker.utils import get_baked_git_sha, read_card_ids_file
 
 logger = logging.getLogger(__name__)
 
-# The full Stage C manifest as of 2026-07-27 (fetch_health + geometry-bleed + geometry-group +
-# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals; color_profile retired
-# 2026-07-27, never consumed downstream) - matches
+# The full Stage C manifest as of 2026-08-14 (fetch_health + geometry-bleed + geometry-group +
+# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals + pinline-inset;
+# color_profile retired 2026-07-27, never consumed downstream) - matches
 # image_evidence.compute_card_evidence's own extractor_versions keys exactly. Keep this set in
 # sync with that function whenever a new extractor group lands (see module docstring) - and note
 # that "keep in sync" is now CHECKED by .github/scripts/check_extractor_manifest_sync.py, so a
@@ -304,6 +310,7 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
         "geometry_bleed",
         "layout_class",
         "crop_coordinates",
+        "art_edge",
         "collector_line_ocr",
         "artist_ocr",
         "collector_line_tsv",
@@ -311,6 +318,7 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
         "symbol_region",
         "legal_line",
         "quality_signals",
+        "pinline_inset",
     }
 )
 
@@ -329,6 +337,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "geometry_bleed": "geometry-bleed-v1",
     "layout_class": "layout-class-v1",
     "crop_coordinates": "crop-coordinates-v1",
+    "art_edge": "art-edge-v1",
     "collector_line_ocr": "collector-line-ocr-v3",
     "artist_ocr": "artist-ocr-v4",
     "collector_line_tsv": "collector-line-tsv-v3",
@@ -336,6 +345,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "symbol_region": "symbol-region-v1",
     "legal_line": "legal-line-v2",
     "quality_signals": "quality-signals-v1",
+    "pinline_inset": "pinline-inset-v1",
 }
 
 

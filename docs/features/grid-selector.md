@@ -223,6 +223,19 @@ This is scoped to the rail (`layout="stacked"`) caller only; the
 `GridSelectorFilters` component this doc's earlier sections describe is
 a completely separate code path, also unaffected.
 
+**Superseded again by the rail-anchored filters round** — the owner
+rejected the tier-conditional float/scrim panel above as a de-facto
+modal ("a massive background darkening box"). The panel is now ONE
+in-rail `Collapse` (`.fpanel.inline`) at every viewport tier, not just
+phone; there is no `.fpanel.float`, no `.fscrim`, and no
+`ReactDOM.createPortal` call left in `SelectVersionResults.tsx`.
+`DisplayPage.tsx`'s `LeftRailOffcanvas` widens itself (its own
+`$filtersOpen` prop, reported up through `SelectVersionResults`' own
+`onFiltersOpenChange`) while the panel is open, so the funnel's chips and
+the candidate grid stay visible together instead of one covering the
+other. The panel still starts closed by default (`initialSettingsVisible: false`, unchanged) and is opened via the same `funnel-filters-toggle`
+button. This is scoped to the same rail (`layout="stacked"`) caller only.
+
 - <a id="funnel-chips-positive-or-off"></a>**Per-axis segmented chips are
   positive-or-off (two-state) for Border/Frame, not the QuestionFeed's
   tri-state** (locked 2026-07-22, PR #329; formerly labeled _D23_ in this
