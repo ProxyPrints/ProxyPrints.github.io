@@ -203,11 +203,12 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
     const toolbarStrip = page.getByTestId("cardback-rail-strip");
     await expect(toolbarStrip).toBeVisible();
     // Both the project default (cardDocument1) and the custom slot-0 back (cardDocument2) start
-    // unselected in this strip - the selected swatch is the project cardback itself.
-    await expect(toolbarStrip.getByAltText(cardDocument1.name)).toHaveAttribute(
-      "aria-pressed",
-      "true"
-    );
+    // unselected in this strip - the selected swatch is the project cardback itself. aria-pressed
+    // lives on the swatch <button>, not the <img> getByAltText resolves to - target the button by
+    // its accessible name (the same title/aria-label the swatch sets) instead.
+    await expect(
+      toolbarStrip.getByRole("button", { name: cardDocument1.name })
+    ).toHaveAttribute("aria-pressed", "true");
     await expect(
       toolbarSection.getByTestId("cardback-rail-apply-all-button")
     ).toHaveText("Apply to all card backs");

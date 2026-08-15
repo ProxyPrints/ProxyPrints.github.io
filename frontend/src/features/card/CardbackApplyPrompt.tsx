@@ -209,7 +209,7 @@ export function CardbackApplyPrompt({
     <Panel data-testid="cardback-apply-prompt">
       <Title>✓ Cardback selected</Title>
       <Intro>
-        Set as this project&apos;s cardback. Two optional next steps — both
+        Set as this project’s cardback. Two optional next steps — both
         independent, both skippable:
       </Intro>
       {customBackThumbnails.length > 0 && (

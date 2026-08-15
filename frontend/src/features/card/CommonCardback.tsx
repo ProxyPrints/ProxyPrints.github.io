@@ -137,7 +137,6 @@ export function CommonCardbackGridSelector({
       footerContent={
         lastPickedImage != null && (
           <CardbackApplyPrompt
-            entry="toolbar"
             affectedCount={countBackFacesAffectedByApplyAll(
               projectMembers,
               lastPickedImage

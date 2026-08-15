@@ -20,7 +20,8 @@
 import styled from "@emotion/styled";
 import React, { useState } from "react";
 
-import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
+import { useAppSelector } from "@/common/types";
+import { selectCardDocumentsByIdentifiers } from "@/store/slices/cardDocumentsSlice";
 
 /** R9's render-cost cap: min(deckCardbacks, 12) thumbnails render before the "More…" cell. */
 const DEFAULT_MAX_SHOWN = 12;
@@ -82,7 +83,13 @@ export function CardbackSwatchStrip({
   maxShown = DEFAULT_MAX_SHOWN,
   testId,
 }: CardbackSwatchStripProps) {
-  const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
+  // Not useCardDocumentsByIdentifier() - that hook scopes to selectProjectMemberIdentifiers
+  // (only the images currently selected in a slot), which excludes every candidate swatch that
+  // isn't already the active pick. This selector takes the strip's own imageIdentifiers instead,
+  // so every rendered swatch resolves its CardDocument regardless of selection state.
+  const cardDocumentsByIdentifier = useAppSelector((state) =>
+    selectCardDocumentsByIdentifiers(state, imageIdentifiers)
+  );
   const [expanded, setExpanded] = useState(false);
 
   const hasMore = imageIdentifiers.length > maxShown;
