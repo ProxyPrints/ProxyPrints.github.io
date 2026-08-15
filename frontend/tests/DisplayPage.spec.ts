@@ -441,12 +441,15 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
   // Issue #240 (design doc §5's CommonCardback row) - the toolbar previously had no way to reach
   // the project-wide cardback picker at all on this page (only the classic editor's own right
-  // panel could). CardbackToolbarButton (CommonCardback.tsx) reuses
-  // MemoizedCommonCardbackGridSelector's existing GridSelectorModal verbatim - this test only
-  // needs to confirm it opens from the toolbar and that a selection made through it actually
-  // updates the shared project cardback (visible via a back-face slot on the sheet), not that the
-  // grid selector's own internals work (already covered by CardSlot.spec.ts's cardback tests).
-  test("the Cardback toolbar button opens the same project-wide cardback picker the classic editor uses, and a selection made through it updates back-face slots on the sheet", async ({
+  // panel could). R9 (editor-repass round, item 2) retires CardbackToolbarButton in favour of the
+  // shared CardbackSwatchStrip + two plain buttons (CardbackRailControl, CommonCardback.tsx) and
+  // keeps the full picker reachable via the strip section's "Browse all cardbacks…" button, which
+  // reuses MemoizedCommonCardbackGridSelector's existing GridSelectorModal verbatim - this test
+  // only needs to confirm it opens from the right rail and that a selection made through it
+  // actually updates the shared project cardback (visible via a back-face slot on the sheet), not
+  // that the grid selector's own internals work (already covered by CardSlot.spec.ts's cardback
+  // tests).
+  test("the right rail's Browse all cardbacks… opens the same project-wide cardback picker the classic editor uses, and a selection made through it updates back-face slots on the sheet", async ({
     page,
     network,
   }) => {
@@ -465,6 +468,10 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
+    // R9 - the right rail's Cardback section is the shared swatch strip; the strip's own
+    // selected swatch reflects the project cardback (cardDocument1) even before any pick here.
+    await expect(page.getByTestId("cardback-rail-control")).toBeVisible();
+    await expect(page.getByTestId("cardback-rail-strip")).toBeVisible();
     await page.getByText("Showing: Fronts").click();
     const backSheetSlot = page.getByTestId("page-preview-slot").first();
     await expect(backSheetSlot.locator("img")).toHaveAttribute(
@@ -475,7 +482,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3) - a dedicated testid, not
     // a name-based locator, since a sheet slot's own "⟲" flip button can carry an accessible name
     // mentioning "cardback" too (the custom-cardback indicator's aria-label).
-    await page.getByTestId("cardback-toolbar-button").click();
+    await page.getByTestId("cardback-browse-all-button").click();
     const cardbackModal = page.getByTestId("cardback-grid-selector");
     await expect(cardbackModal).toBeVisible();
     await cardbackModal.getByAltText(cardDocument2.name).click();

@@ -340,8 +340,9 @@ export const cardbacksServerError = http.post(buildRoute("2/cardbacks/"), () =>
 );
 
 // GridSelectorModal parity port (2026-07-24, issue #272 wave 3). GridSelectorModal.tsx's only
-// surviving mount post-route-swap is CardbackToolbarButton's project-wide cardback picker
-// (CommonCardback.tsx) - it's fed by the `2/cardbacks` identifier list, not a search query, so
+// surviving mount post-route-swap is the project-wide cardback picker behind CardbackRailControl's
+// "Browse all cardbacks…" button (CommonCardback.tsx; R9 round replaces the old CardbackToolbarButton
+// trigger) - it's fed by the `2/cardbacks` identifier list, not a search query, so
 // the classic per-slot cluster's own `2/cards/` + `3/editorSearch/` fixture pairs (below) need a
 // `2/cardbacks` counterpart naming the same identifiers to reuse unchanged for this wave's ported
 // tests. The modal itself doesn't care what a given identifier's underlying CardDocument's own

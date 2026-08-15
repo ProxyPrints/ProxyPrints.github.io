@@ -114,10 +114,33 @@ for (const viewport of [
       });
       await importTextOnEditorLanding(page, "my search query");
       await ensureDisplayRightRailOpen(page);
-      await page.getByTestId("cardback-toolbar-button").click();
+      // R9 (editor-repass round, item 2) - the toolbar's CardbackToolbarButton is retired in
+      // favour of the shared CardbackSwatchStrip + two plain buttons; the full grid selector is
+      // still reachable via "Browse all cardbacks…", and its inline apply prompt's tokens are
+      // asserted below unchanged.
+      await page.getByTestId("cardback-browse-all-button").click();
       const cardbackModal = page.getByTestId("cardback-grid-selector");
       await expect(cardbackModal).toBeVisible();
       await cardbackModal.getByAltText(cardDocument2.name).click();
+
+      // R9 - the right rail's Cardback section is now the shared swatch strip
+      // (CardbackSwatchStrip). Swatch token (SPEC-editor-repass mockup, strip rows 251-258):
+      // 52px wide at 63/88 aspect, 1px $theme-divider border; the SELECTED swatch (the project
+      // cardback, still cardDocument1 at this point) carries a 2px $theme-accent outline.
+      // Tokyo-11 (2026-07-24): divider #16161e -> rgb(22, 22, 30); accent #7aa2f7 -> #bb9af7,
+      // rgb(122, 162, 247) -> rgb(187, 154, 247).
+      const railStrip = page.getByTestId("cardback-rail-strip");
+      await expect(railStrip).toBeVisible();
+      const selectedSwatch = railStrip.locator('[aria-pressed="true"]');
+      await expect(selectedSwatch).toHaveCSS("width", "52px");
+      await expect(selectedSwatch).toHaveCSS(
+        "border",
+        "1px solid rgb(22, 22, 30)"
+      );
+      await expect(selectedSwatch).toHaveCSS(
+        "outline",
+        "2px solid rgb(187, 154, 247)"
+      );
 
       const prompt = cardbackModal.getByTestId("cardback-apply-prompt");
       await expect(prompt).toBeVisible();

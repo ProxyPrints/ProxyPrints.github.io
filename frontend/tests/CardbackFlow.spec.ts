@@ -1,6 +1,10 @@
 import { expect } from "@playwright/test";
 
-import { cardDocument2, cardDocument3 } from "@/common/test-constants";
+import {
+  cardDocument1,
+  cardDocument2,
+  cardDocument3,
+} from "@/common/test-constants";
 import {
   cardbacksThreeResults,
   cardDocumentsThreeResults,
@@ -22,6 +26,13 @@ import {
 // Download flow (the gate now wraps DisplayExportPDF.tsx's own buttons, not a navigation - see
 // docs/features/pdf-generator.md's "Page cut guide lines, Google Drive save, and retiring the
 // Finish footer's own print route"); the classic /editor route is still fully unrouted.
+//
+// R9 (editor-repass round, item 2) - the per-slot (left rail) picker is now the shared
+// CardbackSwatchStrip with NO apply/set-default affordances (the old never-pre-checked
+// trap-guard prompt is retired with it), and the toolbar (right rail) Carton section is the
+// same strip + two plain buttons, with the full GridSelectorModal reachable via
+// "Browse all cardbacks…" (its inline apply prompt - thumbnails + count + done states - is
+// unchanged and asserted through that path below).
 
 const threeCardHandlers = [
   cardDocumentsThreeResults,
@@ -80,12 +91,44 @@ test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", 
     await expect(page.getByTestId("pre-print-cardback-gate")).toHaveCount(0);
     expect(secondDownload.suggestedFilename()).toBe("cards.pdf");
   });
+
+  test("choosing a cardback from the gate's swatch strip picks it project-wide and still proceeds with the export (R9)", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
+
+    await page.getByTestId("display-export-menu-toggle").click();
+    await page.getByTestId("display-export-pdf-button").click();
+    const settingsModal = page.getByTestId("display-export-pdf-settings-modal");
+    await expect(settingsModal).toBeVisible();
+    await settingsModal
+      .getByTestId("display-export-pdf-download-button")
+      .click();
+
+    const gate = page.getByTestId("pre-print-cardback-gate");
+    await expect(gate).toBeVisible();
+    await gate.getByTestId("cardback-gate-choose").click();
+
+    // R9 - the gate's own body swaps to the shared swatch strip (the retired grid-selector
+    // modal mount is gone); a pick proceeds with the export (OWNER AMENDMENT 1 still applies).
+    const gateStrip = gate.getByTestId("cardback-gate-strip");
+    await expect(gateStrip).toBeVisible();
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      gateStrip.getByAltText(cardDocument2.name).click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("cards.pdf");
+    await expect(gate).toHaveCount(0);
+  });
 });
 
-test.describe("Cardback apply-all + set-default prompt (SPEC-cardback-pdfwait.md §C.2, PKG1b)", () => {
+test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2, PKG1b; R9 strip round)", () => {
   test.describe.configure({ timeout: 60_000 });
 
-  test("rail (per-slot) entry stays per-slot with a never-pre-checked trap-guard, and the sheet's flip icon flags the resulting custom back; the toolbar (project-wide) entry then shows the affected slot's thumbnails + count, and Apply to all/Set default both work independently", async ({
+  test("rail (per-slot) entry picks per-slot via the shared swatch strip - no apply/set-default affordances and no trap-guard prompt any more - and the sheet's flip icon flags the resulting custom back", async ({
     page,
     network,
   }) => {
@@ -100,7 +143,7 @@ test.describe("Cardback apply-all + set-default prompt (SPEC-cardback-pdfwait.md
     await expect(sheetSlots.nth(0).locator("img")).toBeVisible();
     await expect(sheetSlots.nth(1).locator("img")).toBeVisible();
 
-    // --- rail entry: give slot 1 a deliberately-custom back (cardDocument2) ---
+    // --- rail entry: give slot 0 a deliberately-custom back (cardDocument2) via the strip ---
     await sheetSlots.nth(0).click();
     const railControl = page.getByTestId("slot-cardback-control");
     await expect(railControl).toBeVisible();
@@ -108,29 +151,18 @@ test.describe("Cardback apply-all + set-default prompt (SPEC-cardback-pdfwait.md
 
     const railPicker = page.getByTestId("slot-cardback-picker");
     await expect(railPicker).toBeVisible();
+    // R9 - the strip's swatches are real <img> (alt = card name), same alt-text discipline as
+    // the retired embedded results grid; scoped to the picker since the right rail's own strip
+    // shows the same cardbacks.
     await railPicker.getByAltText(cardDocument2.name).click();
 
-    const railPrompt = page.getByTestId("cardback-apply-prompt");
-    await expect(railPrompt).toBeVisible();
-    // Per-slot copy, count = 1 (only slot 2 still differs from the just-picked cardDocument2).
-    await expect(
-      railPrompt.getByTestId("cardback-apply-all-button")
-    ).toHaveText("Apply to all (1)");
-    await expect(
-      railPrompt.getByTestId("cardback-apply-prompt-trapnote")
-    ).toContainText("never pre-checked");
-    // Never pre-checked - the button itself hasn't flipped to a done state.
-    await expect(
-      railPrompt.getByTestId("cardback-apply-all-button")
-    ).not.toHaveText(/✓/);
-    // No skip link on the rail entry (the rail is already the "no modal, ever" surface).
-    await expect(
-      railPrompt.getByTestId("cardback-apply-prompt-not-now")
-    ).toHaveCount(0);
+    // The picker closes on pick, and no apply/set-default prompt follows anywhere (R9 retires
+    // the per-slot prompt outright - there is no per-slot trap-guard to assert any more).
+    await expect(railPicker).toHaveCount(0);
+    await expect(page.getByTestId("cardback-apply-prompt")).toHaveCount(0);
 
-    // Deliberately DON'T apply-all here - "per-slot pick stays per-slot" is the whole point.
-    // Slot 1's flip icon now carries the custom-cardback indicator dot; slot 2's does not
-    // (still following the deck default).
+    // Slot 0's flip icon now carries the custom-cardback indicator dot; slot 1's does not
+    // (still following the deck default) - the per-slot pick stays per-slot.
     await expect(
       sheetSlots
         .nth(0)
@@ -141,40 +173,112 @@ test.describe("Cardback apply-all + set-default prompt (SPEC-cardback-pdfwait.md
         .nth(1)
         .getByTestId("page-preview-slot-custom-cardback-indicator")
     ).toHaveCount(0);
+  });
 
-    // --- toolbar entry: project-wide pick of a THIRD cardback ---
-    // A dedicated testid, not a name-based locator - a slot's own "⟲" flip button can now ALSO
-    // carry "cardback" in its accessible name (this same round's OWNER AMENDMENT 3 indicator),
-    // which makes any Cardback-name-based locator ambiguous/fragile.
-    await page.getByTestId("cardback-toolbar-button").click();
+  test("toolbar (project-wide) entry: the right rail's swatch strip + its two plain buttons apply and remember independently, and Browse all cardbacks… still opens the full modal with the unchanged apply prompt", async ({
+    page,
+    network,
+  }) => {
+    network.use(...threeCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query\nmy search query");
+
+    const sheetSlots = page.getByTestId("page-preview-slot");
+    await expect(sheetSlots.nth(0).locator("img")).toBeVisible();
+    await expect(sheetSlots.nth(1).locator("img")).toBeVisible();
+
+    // Toolbar entry precondition, same as the cardback-flow round: slot 0 gets a deliberately
+    // custom back (cardDocument2) so the modal prompt below has a real "would override" count.
+    await sheetSlots.nth(0).click();
+    const slotControl = page.getByTestId("slot-cardback-control");
+    await slotControl.getByTestId("slot-cardback-choose").click();
+    await page
+      .getByTestId("slot-cardback-picker")
+      .getByAltText(cardDocument2.name)
+      .click();
+
+    // --- toolbar entry: the section is the strip + two plain buttons (R9) ---
+    const toolbarSection = page.getByTestId("cardback-rail-control");
+    await expect(toolbarSection).toBeVisible();
+    const toolbarStrip = page.getByTestId("cardback-rail-strip");
+    await expect(toolbarStrip).toBeVisible();
+    // Both the project default (cardDocument1) and the custom slot-0 back (cardDocument2) start
+    // unselected in this strip - the selected swatch is the project cardback itself.
+    await expect(toolbarStrip.getByAltText(cardDocument1.name)).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    await expect(
+      toolbarSection.getByTestId("cardback-rail-apply-all-button")
+    ).toHaveText("Apply to all card backs");
+    await expect(
+      toolbarSection.getByTestId("cardback-rail-set-default-button")
+    ).toHaveText("Set as my default cardback");
+
+    // A project-wide pick via the strip (cardDocument3) overrides the slot following the
+    // project default; the per-slot custom back is untouched.
+    await toolbarStrip.getByAltText(cardDocument3.name).click();
+    await page.getByText("Showing: Fronts").click();
+    await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
+      "alt",
+      cardDocument2.name
+    );
+    await expect(sheetSlots.nth(1).locator("img")).toHaveAttribute(
+      "alt",
+      cardDocument3.name
+    );
+
+    // Apply to all / Set as my default, under the strip, act on the project cardback (now
+    // cardDocument3) and flip to done states independently; "Apply to all" overrides the
+    // per-slot custom back too.
+    const applyAllButton = toolbarSection.getByTestId(
+      "cardback-rail-apply-all-button"
+    );
+    const setDefaultButton = toolbarSection.getByTestId(
+      "cardback-rail-set-default-button"
+    );
+    await applyAllButton.click();
+    await expect(applyAllButton).toHaveText("Applied to all ✓");
+    await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
+      "alt",
+      cardDocument3.name
+    );
+    // Slot 0's custom-cardback indicator is gone - it no longer differs from the deck default.
+    await expect(
+      sheetSlots
+        .nth(0)
+        .getByTestId("page-preview-slot-custom-cardback-indicator")
+    ).toHaveCount(0);
+    await setDefaultButton.click();
+    await expect(setDefaultButton).toHaveText("Default set ✓");
+
+    // --- Browse all cardbacks… still opens the same GridSelectorModal; its inline apply prompt
+    //     (thumbnails + count + done states, OWNER AMENDMENT 2/OQ-B) is unchanged. ---
+    await page.getByTestId("cardback-browse-all-button").click();
     const cardbackModal = page.getByTestId("cardback-grid-selector");
     await expect(cardbackModal).toBeVisible();
-    await cardbackModal.getByAltText(cardDocument3.name).click();
+    await cardbackModal.getByAltText(cardDocument2.name).click();
 
     const toolbarPrompt = cardbackModal.getByTestId("cardback-apply-prompt");
     await expect(toolbarPrompt).toBeVisible();
-    // OWNER AMENDMENT 2/OQ-B - the affected (still-custom) slot's thumbnails render above the
-    // count line, and the count names it explicitly.
+    // Both slots now follow cardDocument3, so picking cardDocument2 names both as affected.
     const thumbnails = toolbarPrompt.getByTestId(
       "cardback-apply-prompt-thumbnails"
     );
     await expect(thumbnails).toBeVisible();
     await expect(thumbnails).toContainText("Slot 1");
+    await expect(thumbnails).toContainText("Slot 2");
     await expect(
       toolbarPrompt.getByTestId("cardback-apply-all-button")
-    ).toHaveText("Apply to all (1)");
+    ).toHaveText("Apply to all (2)");
     await expect(
       toolbarPrompt.getByTestId("cardback-apply-prompt-not-now")
     ).toBeVisible();
 
-    // Apply to all - overrides slot 1's deliberately-custom back too (override-with-count, OQ-B).
     await toolbarPrompt.getByTestId("cardback-apply-all-button").click();
     await expect(
       toolbarPrompt.getByTestId("cardback-apply-all-button")
     ).toHaveText("Applied to all ✓");
-
-    // Set as my default cardback - independent of the apply-all choice, seam-mocked (Annex A-2 -
-    // no real persistence layer exists yet), but the UI's own done-state is real.
     await toolbarPrompt.getByTestId("cardback-set-default-button").click();
     await expect(
       toolbarPrompt.getByTestId("cardback-set-default-button")
@@ -183,23 +287,14 @@ test.describe("Cardback apply-all + set-default prompt (SPEC-cardback-pdfwait.md
     await cardbackModal.getByRole("button", { name: "Close" }).last().click();
     await expect(cardbackModal).not.toBeVisible();
 
-    // The sheet reflects the override - toggling to the back view shows cardDocument3 on BOTH
-    // slots now (the button's own current label - "Showing: Fronts" - toggles TO backs on click).
-    await page.getByText("Showing: Fronts").click();
+    // The sheet reflects the modal's pick - both slots now show cardDocument2's back.
     await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
       "alt",
-      cardDocument3.name
+      cardDocument2.name
     );
     await expect(sheetSlots.nth(1).locator("img")).toHaveAttribute(
       "alt",
-      cardDocument3.name
+      cardDocument2.name
     );
-    // Slot 1's custom-cardback indicator is gone - it's no longer different from the deck
-    // default (the flip icon/indicator rendering is independent of which face is on screen).
-    await expect(
-      sheetSlots
-        .nth(0)
-        .getByTestId("page-preview-slot-custom-cardback-indicator")
-    ).toHaveCount(0);
   });
 });

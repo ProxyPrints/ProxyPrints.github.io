@@ -192,18 +192,18 @@ test.describe("SelectVersionSection (issue #167)", () => {
   // through the unified block's own chips.
   //
   // Rail-delegacy round (item 2/3/5, RD1/RD4, SPEC-rail-delegacy.md) - the chips now live INSIDE
-  // the one Filters panel (closed by default, opened via `funnel-filters-toggle`) instead of
-  // always rendering above the grid; the funnel-head's own active-tag pill row is retired along
-  // with the old always-visible arrangement (RD1: the panel's own chip highlight - `data-active` -
-  // is the one place active state now shows), so this test now asserts the chip's own active
-  // state instead of a pill.
+  // the one Filters panel instead of always rendering above the grid; the funnel-head's own
+  // active-tag pill row is retired along with the old always-visible arrangement (RD1: the
+  // panel's own chip highlight - `data-active` - is the one place active state now shows), so
+  // this test now asserts the chip's own active state instead of a pill. Under the editor-repass
+  // round (item 1) the panel starts OPEN (`initialSettingsVisible={true}`), so these tests no
+  // longer toggle it open first - the toggles that used to precede each funnel test are gone.
   test("the unified Frame+Treatment block's tri-state chips filter the whole grid", async ({
     page,
     network,
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
-    await page.getByTestId("funnel-filters-toggle").click();
 
     // cardDocument18 (unknown bucket) has a resolved "Full Art" tag and is the ONLY candidate
     // with it in this fixture set - one click cycles the Treatment chip untouched -> include.
@@ -235,7 +235,6 @@ test.describe("SelectVersionSection (issue #167)", () => {
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
-    await page.getByTestId("funnel-filters-toggle").click();
 
     // Manually activate the "Old Border" funnel chip - cardDocument18 carries a *suggested* (not
     // resolved) Old Border vote, so it should still be filtered in (resolved-OR-suggested when
@@ -306,7 +305,6 @@ test.describe("SelectVersionSection (issue #167)", () => {
       ...selectVersionHandlers
     );
     await openSelectVersionSection(page);
-    await page.getByTestId("funnel-filters-toggle").click();
 
     // First pick: cardDocument18 (1lL2...), under the active "Old Border" chip - casts support.
     // Rail-anchored filters round - the panel no longer covers the grid, so the tile stays
@@ -396,7 +394,6 @@ test.describe("SelectVersionSection (issue #167)", () => {
       ...defaultHandlers
     );
     await openSelectVersionSection(page);
-    await page.getByTestId("funnel-filters-toggle").click();
 
     // No suggested chip for "Old Border" at all - the only candidate that carries it
     // (cardDocument19) does so via tagVoteStatuses only, which the funnel no longer consults for
@@ -479,7 +476,6 @@ test.describe("SelectVersionSection (issue #167)", () => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
 
-    await page.getByTestId("funnel-filters-toggle").click();
     // Nudging a DPI range filter input triggers the same debounced re-filter
     // `search.displaySpinner` gates on - drag the min-DPI slider up.
     const minDpiSlider = page.locator('input[type="range"]').first();

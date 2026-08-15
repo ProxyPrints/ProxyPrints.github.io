@@ -1,9 +1,16 @@
 /**
- * Cardback flow round (SPEC-cardback-pdfwait.md §C.2/§E.2, OWNER AMENDMENT 2/OQ-B) - the shared
- * inline "Apply to all card backs" + "Set as my default cardback" prompt, rendered from BOTH
- * cardback-pick entries (the toolbar's project-wide `GridSelectorModal` footer, and the rail's
- * per-slot picker) - one component, so the two surfaces can't drift (§C.2's own binding
- * requirement). Never a second stacked modal - always rendered inline by its caller.
+ * Cardback flow round (SPEC-cardback-pdfwait.md §C.2/§E.2, OWNER AMENDMENT 2/OQ-B) - the inline
+ * "Apply to all card backs" + "Set as my default cardback" prompt rendered from the project-wide
+ * cardback picker's modal footer (`CommonCardbackGridSelector`'s `footerContent`). Never a second
+ * stacked modal - always rendered inline by its caller.
+ *
+ * R9 (editor-repass round, item 2) - the rail (per-slot) entry of this prompt is retired with
+ * the per-slot picker's move to the `CardbackSwatchStrip`: the left rail has no apply-all/
+ * set-default affordances at all any more, and the right rail's Cardback section puts them
+ * beneath the strip as its own two plain buttons (`CardbackRailControl`), not via this
+ * component. This prompt's only surviving call site is the modal footer (the "Browse all
+ * cardbacks…" full-browse path), so the `entry` prop's rail half - the never-pre-checked
+ * trap-guard line and the per-slot copy - is gone with its caller.
  *
  * Token table E.2 (BINDING, #302 palette; re-themed to Tokyo-11, 2026-07-24 - see
  * docs/features/theming.md - tokens and spec tables move together, same discipline
@@ -12,11 +19,9 @@
  * primary-tinted ($primary border/text, hover fills $primary/$theme-btn-ink - Tokyo-11's
  * primary is light, so the filled-hover state needs the dark ink, not white -, done state
  * $success/$success); `.defbtn` info-tinted ($info border/text, hover fills $info/
- * $theme-btn-ink, same done state); `.trapnote` $warning (rail only); `.skip` $theme-muted
- * underline link (toolbar only, since the rail per-slot picker already IS the "no modal,
- * ever" surface - leaving the section collapsed is itself "not now"). Unlike the #302 palette,
- * Tokyo-11's primary/info/success tokens are all light enough to use directly as text colour -
- * no separate hand-picked tint literal is needed the way `#ffb27d`/`#8fd7ea` were.
+ * $theme-btn-ink, same done state); `.skip` $theme-muted underline link. Unlike the #302
+ * palette, Tokyo-11's primary/info/success tokens are all light enough to use directly as text
+ * colour - no separate hand-picked tint literal is needed the way `#ffb27d`/`#8fd7ea` were.
  */
 import styled from "@emotion/styled";
 import React, { useState } from "react";
@@ -132,15 +137,6 @@ const SkipRow = styled.div`
   }
 `;
 
-const TrapNote = styled.div`
-  font-size: 11px;
-  color: var(--bs-warning);
-  margin-top: 8px;
-  display: flex;
-  gap: 5px;
-  align-items: flex-start;
-`;
-
 const ThumbGrid = styled.div`
   display: flex;
   flex-wrap: wrap;
@@ -177,9 +173,6 @@ const ThumbLabel = styled.div`
 `;
 
 export interface CardbackApplyPromptProps {
-  /** Toolbar = project-wide canonical copy + a "Not now" skip link; rail = per-slot copy + the
-   * never-pre-checked trap-guard line instead of a skip link (§C.2's own two-entry split). */
-  entry: "toolbar" | "rail";
   /** How many back faces "Apply to all" would touch, including custom ones - the prompt's own
    * "Apply to all (N)" count (`countBackFacesAffectedByApplyAll`). */
   affectedCount: number;
@@ -188,12 +181,12 @@ export interface CardbackApplyPromptProps {
   customBackThumbnails: Array<CustomBackSlotThumbnail>;
   onApplyAll: () => void;
   onSetDefault: () => void;
-  /** Toolbar only - see this file's own header comment for why the rail entry has no skip link. */
+  /** The "Not now" skip link (see this file's own header comment for why the retired rail entry
+   * used to have none). */
   onDismiss?: () => void;
 }
 
 export function CardbackApplyPrompt({
-  entry,
   affectedCount,
   customBackThumbnails,
   onApplyAll,
@@ -212,15 +205,12 @@ export function CardbackApplyPrompt({
     setDefaultDone(true);
   };
 
-  const isPerSlot = entry === "rail";
-
   return (
     <Panel data-testid="cardback-apply-prompt">
       <Title>✓ Cardback selected</Title>
       <Intro>
-        {isPerSlot
-          ? "Applied to this slot’s back only. Two optional next steps — both independent, both skippable:"
-          : "Set as this project’s cardback. Two optional next steps — both independent, both skippable:"}
+        Set as this project&apos;s cardback. Two optional next steps — both
+        independent, both skippable:
       </Intro>
       {customBackThumbnails.length > 0 && (
         <ThumbGrid data-testid="cardback-apply-prompt-thumbnails">
@@ -243,11 +233,9 @@ export function CardbackApplyPrompt({
         <ChoiceLabel>
           <div className="h">Apply to all card backs in this deck</div>
           <div className="s">
-            {isPerSlot
-              ? "opt-in — nothing changes unless you tap"
-              : `also overrides ${customBackThumbnails.length} card${
-                  customBackThumbnails.length === 1 ? "" : "s"
-                } with a custom back`}
+            {`also overrides ${customBackThumbnails.length} card${
+              customBackThumbnails.length === 1 ? "" : "s"
+            } with a custom back`}
           </div>
         </ChoiceLabel>
         <ApplyButton
@@ -273,28 +261,17 @@ export function CardbackApplyPrompt({
           {defaultDone ? "Default set ✓" : "Set default"}
         </DefaultButton>
       </Choice>
-      {isPerSlot ? (
-        <TrapNote data-testid="cardback-apply-prompt-trapnote">
-          <span aria-hidden="true">⚠</span>
-          <span>
-            Per-slot pick stays per-slot. &quot;Apply to all&quot; is never
-            pre-checked — a single-slot choice can&apos;t silently rewrite the
-            deck.
-          </span>
-        </TrapNote>
-      ) : (
-        onDismiss != null && (
-          <SkipRow>
-            <a
-              onClick={onDismiss}
-              data-testid="cardback-apply-prompt-not-now"
-              role="button"
-              tabIndex={0}
-            >
-              Not now
-            </a>
-          </SkipRow>
-        )
+      {onDismiss != null && (
+        <SkipRow>
+          <a
+            onClick={onDismiss}
+            data-testid="cardback-apply-prompt-not-now"
+            role="button"
+            tabIndex={0}
+          >
+            Not now
+          </a>
+        </SkipRow>
       )}
     </Panel>
   );

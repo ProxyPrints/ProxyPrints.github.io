@@ -10,7 +10,6 @@ import Button from "react-bootstrap/Button";
 import { Back } from "@/common/constants";
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { wrapIndex } from "@/common/utils";
-import { RightPaddedIcon } from "@/components/icon";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import {
   countBackFacesAffectedByApplyAll,
@@ -18,6 +17,7 @@ import {
 } from "@/features/card/cardbackApply";
 import { CardbackApplyPrompt } from "@/features/card/CardbackApplyPrompt";
 import { setUserDefaultCardback } from "@/features/card/cardbackDefaultPreference";
+import { CardbackSwatchStrip } from "@/features/card/CardbackSwatchStrip";
 import { CardFooter } from "@/features/card/CardFooter";
 import { GridSelectorModal } from "@/features/gridSelector/GridSelectorModal";
 import { selectCardbacks } from "@/store/slices/cardbackSlice";
@@ -251,41 +251,101 @@ export function CommonCardback({ selectedImage }: CommonCardbackProps) {
 
 //# endregion
 
-//# region cardback toolbar button (issue #240, design doc §5's CommonCardback row)
+//# region cardback rail control (R9, editor-repass round)
 
 /**
- * A standalone trigger for the same self-contained cardback picker `CommonCardback` (above)
- * already owns - for a surface with no per-slot swatch/prev-next `CardFooter` to hang a "change"
- * button off (the unified display page's toolbar, `DisplayPage.tsx`), this exposes just the
- * button+modal half directly rather than the full swatch card. Reuses
- * `MemoizedCommonCardbackGridSelector`'s existing `GridSelectorModal` verbatim - same
- * `searchCardbacks` results, same `bulkReplaceSelectedImage`/`setSelectedCardback` dispatch on
- * selection. NOT the same "no modal, ever" exception the design doc's §4.4′ carves out for the
- * per-slot Choose Image picker - that ban is specifically about a second modal stacking over an
- * already-open rail/drawer; this standalone, project-wide picker opens directly from the toolbar
- * with nothing else open behind it, so it keeps its existing modal as-is (see §5's row).
+ * The right rail's Cardback section on the unified display page (DisplayPage.tsx) - the R9
+ * swatch-strip surface replacing the old single `CardbackToolbarButton` trigger. The strip
+ * (`CardbackSwatchStrip`) IS the picker: a pick dispatches the same project-wide
+ * `bulkReplaceSelectedImage`/`setSelectedCardback` pair the modal's own grid uses. The two
+ * project-wide actions sit beneath the strip as plain buttons with the R9 task's exact names,
+ * acting on the strip's currently-selected project cardback (the apply/set-default prompt
+ * component itself is for the modal's own footer - see `CommonCardbackGridSelector`). A
+ * "Browse all cardbacks…" button keeps the full `GridSelectorModal` (filters/sort/search)
+ * reachable, unchanged - proposal-h's own strip + "Choose cardback…" pairing, so the modal
+ * stays the page's one full-browse path and its existing test coverage keeps a host.
  */
-export function CardbackToolbarButton() {
+export function CardbackRailControl() {
+  const dispatch = useAppDispatch();
   const searchResults = useAppSelector(selectCardbacks);
+  const projectCardback = useAppSelector(selectProjectCardback);
 
   const [showGridSelector, setShowGridSelector] = useState<boolean>(false);
+  const [applyDone, setApplyDone] = useState(false);
+  const [defaultDone, setDefaultDone] = useState(false);
+
+  const handleSelect = (image: string) => {
+    setApplyDone(false);
+    setDefaultDone(false);
+    if (projectCardback != null) {
+      dispatch(
+        bulkReplaceSelectedImage({
+          currentImage: projectCardback,
+          selectedImage: image,
+          face: Back,
+        })
+      );
+    }
+    dispatch(setSelectedCardback({ selectedImage: image, explicit: true }));
+  };
+
+  const handleApplyAll = () => {
+    if (projectCardback != null) {
+      dispatch(applyCardbackToAllSlots({ selectedImage: projectCardback }));
+      setApplyDone(true);
+    }
+  };
+  const handleSetDefault = () => {
+    if (projectCardback != null) {
+      // Annex A-2 - seam-mocked: no real persistence layer exists for the default preference yet.
+      void setUserDefaultCardback(projectCardback);
+      setDefaultDone(true);
+    }
+  };
   const handleShowGridSelector = () => setShowGridSelector(true);
   const handleCloseGridSelector = () => setShowGridSelector(false);
 
   return (
-    <>
+    <div data-testid="cardback-rail-control">
+      <h6>Cardback (project)</h6>
+      <CardbackSwatchStrip
+        imageIdentifiers={searchResults}
+        selectedImage={projectCardback}
+        onSelect={handleSelect}
+        testId="cardback-rail-strip"
+      />
+      <div className="d-flex flex-wrap gap-2 mt-2">
+        <Button
+          size="sm"
+          variant={applyDone ? "outline-success" : "outline-secondary"}
+          disabled={projectCardback == null}
+          onClick={handleApplyAll}
+          data-testid="cardback-rail-apply-all-button"
+        >
+          {applyDone ? "Applied to all ✓" : "Apply to all card backs"}
+        </Button>
+        <Button
+          size="sm"
+          variant={defaultDone ? "outline-success" : "outline-secondary"}
+          disabled={projectCardback == null}
+          onClick={handleSetDefault}
+          data-testid="cardback-rail-set-default-button"
+        >
+          {defaultDone ? "Default set ✓" : "Set as my default cardback"}
+        </Button>
+      </div>
       <Button
         size="sm"
-        variant="outline-secondary"
+        variant="outline-light"
+        className="mt-2"
         onClick={handleShowGridSelector}
-        // Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3) - a real testid, not
-        // just this button's own accessible name, since a sheet slot's "⟲" flip button can now
-        // ALSO carry "cardback" in its own aria-label (the custom-cardback indicator), which
-        // otherwise makes a name-based locator for this button ambiguous/fragile.
-        data-testid="cardback-toolbar-button"
+        // Named/visible enough to find, but never caught by a generic /Cardback/ name locator
+        // (it's "Browse all cardbacks…", not a bare "Cardback" label) - test-utils and specs
+        // use the dedicated testid below, the same discipline the old toolbar button's own
+        // OWNER AMENDMENT 3 comment called for.
+        data-testid="cardback-browse-all-button"
       >
-        <RightPaddedIcon bootstrapIconName="image" />
-        Cardback
+        Browse all cardbacks…
       </Button>
       {showGridSelector && (
         <MemoizedCommonCardbackGridSelector
@@ -294,7 +354,7 @@ export function CardbackToolbarButton() {
           handleClose={handleCloseGridSelector}
         />
       )}
-    </>
+    </div>
   );
 }
 

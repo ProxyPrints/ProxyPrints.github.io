@@ -175,15 +175,14 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(filtersToggle).toHaveCSS("font-size", "14px");
     await expect(filtersToggle).toHaveCSS("padding", "4px 8px");
     expect(await filtersToggle.evaluate((el) => el.tagName)).toBe("BUTTON");
-    await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
-
-    // Rail-anchored filters round - opening Filters at the default (desktop) viewport expands the
-    // SAME in-rail panel the phone tier already used (`.fpanel.inline`) - there is no separate
-    // float/scrim variant any more, and no page-darkening backdrop appears anywhere.
-    const inlinePanel = page.getByTestId("filters-panel-inline");
-    await expect(inlinePanel).not.toBeVisible();
-    await filtersToggle.click();
+    // E3/X2 (Bkg 5) - editor-repass round (item 1): the panel now starts OPEN
+    // (`initialSettingsVisible={true}`), so the toggle's initial aria-expanded is "true".
     await expect(filtersToggle).toHaveAttribute("aria-expanded", "true");
+
+    // Rail-anchored filters round - the Filters panel is the SAME in-rail panel the phone tier
+    // already used (`.fpanel.inline`) - there is no separate float/scrim variant any more, and
+    // no page-darkening backdrop appears anywhere; the panel is open on load, not after a tap.
+    const inlinePanel = page.getByTestId("filters-panel-inline");
     await expect(inlinePanel).toBeVisible();
     await expect(inlinePanel).not.toHaveCSS("position", "fixed");
     await expect(page.getByTestId("filters-panel-float")).toHaveCount(0);
@@ -207,10 +206,15 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     ).toBeVisible();
 
     // The panel closes via its own Close button, same as it always could - it just no longer has
-    // a backdrop to also close it via.
+    // a backdrop to also close it via; and the toggle still reopens it (item 1 only changed the
+    // INITIAL state, not the open/close mechanics).
     await page.getByTestId("filters-panel-close").click();
     await expect(inlinePanel).not.toBeVisible();
     await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
+    await filtersToggle.click();
+    await expect(inlinePanel).toBeVisible();
+    await page.getByTestId("filters-panel-close").click();
+    await expect(inlinePanel).not.toBeVisible();
 
     // Machine-diff-precedent tile styling (§D.1, inherited) - unchanged by this round except
     // colour. Tokyo-11: $theme-success #5cb85c -> #9ece6a, rgba(92, 184, 92, .92) ->
@@ -402,6 +406,11 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
 
     const filtersToggle = page.getByTestId("funnel-filters-toggle");
     await expect(filtersToggle).toBeVisible();
+    // Editor-repass round (item 1) - the panel is already open on load, but the toggle still
+    // closes/reopens it; exercise both directions here so the phone tier's in-place behavior is
+    // asserted against an actual open/close cycle, not just the initial state.
+    await filtersToggle.click();
+    await expect(page.getByTestId("filters-panel-inline")).not.toBeVisible();
     await filtersToggle.click();
 
     await expect(page.getByTestId("filters-panel-inline")).toBeVisible();

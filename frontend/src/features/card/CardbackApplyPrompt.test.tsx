@@ -1,8 +1,9 @@
 /**
  * Cardback flow round (SPEC-cardback-pdfwait.md §C.2, OWNER AMENDMENT 2/OQ-B) - component-level
- * coverage for the shared apply-all/set-default prompt: the two entries' distinct copy/chrome
- * (toolbar's "Not now" skip link vs. rail's never-pre-checked trap-guard line), the done-state
- * flip on each button, and the OWNER AMENDMENT 2 thumbnail grid.
+ * coverage for the shared apply-all/set-default prompt: the "Not now" skip link, the done-state
+ * flip on each button, and the OWNER AMENDMENT 2 thumbnail grid. The rail entry's per-slot copy
+ * and trap-guard line were retired with the R9 per-slot strip move (see CardbackApplyPrompt.tsx's
+ * own header comment).
  */
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -11,11 +12,10 @@ import React from "react";
 import { CardbackApplyPrompt } from "@/features/card/CardbackApplyPrompt";
 
 describe("CardbackApplyPrompt", () => {
-  test("toolbar entry: project-wide copy, a 'Not now' skip link, no trap-guard note", () => {
+  test("project-wide copy, a 'Not now' skip link, and the affected-count label", () => {
     const onDismiss = jest.fn();
     render(
       <CardbackApplyPrompt
-        entry="toolbar"
         affectedCount={3}
         customBackThumbnails={[]}
         onApplyAll={jest.fn()}
@@ -36,32 +36,11 @@ describe("CardbackApplyPrompt", () => {
     ).toBeInTheDocument();
   });
 
-  test("rail entry: per-slot copy, the never-pre-checked trap-guard note, no skip link", () => {
-    render(
-      <CardbackApplyPrompt
-        entry="rail"
-        affectedCount={6}
-        customBackThumbnails={[]}
-        onApplyAll={jest.fn()}
-        onSetDefault={jest.fn()}
-      />
-    );
-
-    expect(
-      screen.getByText(/Applied to this slot’s back only/)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByTestId("cardback-apply-prompt-trapnote")
-    ).toHaveTextContent(/never pre-checked/);
-    expect(screen.queryByTestId("cardback-apply-prompt-not-now")).toBeNull();
-  });
-
   test("apply-all button is never pre-checked/done, and flips to a done state only after a real click", async () => {
     const user = userEvent.setup();
     const onApplyAll = jest.fn();
     render(
       <CardbackApplyPrompt
-        entry="rail"
         affectedCount={6}
         customBackThumbnails={[]}
         onApplyAll={onApplyAll}
@@ -84,7 +63,6 @@ describe("CardbackApplyPrompt", () => {
     const onSetDefault = jest.fn();
     render(
       <CardbackApplyPrompt
-        entry="toolbar"
         affectedCount={1}
         customBackThumbnails={[]}
         onApplyAll={jest.fn()}
@@ -107,7 +85,6 @@ describe("CardbackApplyPrompt", () => {
   test("OWNER AMENDMENT 2 - renders a thumbnail (front + current custom back) for every affected slot, above the count line", () => {
     render(
       <CardbackApplyPrompt
-        entry="toolbar"
         affectedCount={2}
         customBackThumbnails={[
           {
@@ -141,7 +118,6 @@ describe("CardbackApplyPrompt", () => {
   test("renders no thumbnail grid when nothing is currently custom", () => {
     render(
       <CardbackApplyPrompt
-        entry="toolbar"
         affectedCount={0}
         customBackThumbnails={[]}
         onApplyAll={jest.fn()}

@@ -20,7 +20,8 @@
  * wired from DisplayPage.tsx), asserted below on both faces.
  *
  * The classic editor's own "Common Cardback" panel (CommonCardback.tsx, /editor only - /display
- * has no equivalent persistent tile, only the CardbackToolbarButton picker) is covered
+ * has no equivalent persistent tile, only the CardbackRailControl strip section's Browse-all
+ * picker) is covered
  * separately by ImportXML.spec.ts's "brand new project" test, since that panel/bug is
  * editor-specific.
  */
