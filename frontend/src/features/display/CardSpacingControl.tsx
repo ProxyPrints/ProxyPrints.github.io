@@ -70,7 +70,7 @@ export function CardSpacingControl({
         <span className="small">Card spacing (mm)</span>
         <Button
           size="sm"
-          variant={linked ? "primary" : "outline-secondary"}
+          variant={linked ? "primary" : "outline-light"}
           onClick={toggleLinked}
           aria-pressed={linked}
           data-testid="display-spacing-link-toggle"

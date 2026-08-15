@@ -40,7 +40,7 @@ const DownloadDropdownToggle = styled(Button)`
   --bs-btn-active-bg: rgba(255, 255, 255, 15%);
   --bs-btn-active-color: rgba(255, 255, 255, 15%);
 
-  border-radius: 4px;
+  border-radius: var(--theme-radius-base);
   transition: background-color 0.1s ease-in-out;
   cursor: pointer;
   width: ${NavbarLogoHeight}px;
@@ -130,10 +130,14 @@ interface OpenDownloadManagerButtonProps {
     (): void;
     (event: React.MouseEvent<HTMLButtonElement, MouseEvent>): void;
   };
+  /** Extra classes merged onto the download toggle (FinishFooter's R7 pair pins it at a fixed
+   * 34px via `download-manager-toggle`). Optional - print.tsx's mount stays unchanged. */
+  className?: string;
 }
 
 export function OpenDownloadManagerButton({
   handleClick,
+  className,
 }: OpenDownloadManagerButtonProps) {
   const fileDownloads = useAppSelector(selectSortedFileDownloads);
   const enqueuedCount = fileDownloads.filter(
@@ -149,7 +153,7 @@ export function OpenDownloadManagerButton({
     <DownloadDropdownToggle
       onClick={handleClick}
       id="dropdown-basic"
-      className="m-0 p-0"
+      className={`m-0 p-0${className != null ? ` ${className}` : ""}`}
       data-testid="download-manager-toggle"
     >
       <DownloadIcon />

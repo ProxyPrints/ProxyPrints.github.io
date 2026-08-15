@@ -33,8 +33,7 @@ export function DisplayExportMenu({
   return (
     <Dropdown>
       <Dropdown.Toggle
-        size="sm"
-        variant="outline-secondary"
+        variant="outline-primary"
         id="display-export-menu-toggle"
         data-testid="display-export-menu-toggle"
       >

@@ -185,7 +185,7 @@ test.describe("Cardback apply-all + set-default prompt (SPEC-cardback-pdfwait.md
 
     // The sheet reflects the override - toggling to the back view shows cardDocument3 on BOTH
     // slots now (the button's own current label - "Showing: Fronts" - toggles TO backs on click).
-    await page.getByText("Showing: Fronts").click();
+    await page.getByTestId("display-view-toggle-backs").click();
     await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
       "alt",
       cardDocument3.name
