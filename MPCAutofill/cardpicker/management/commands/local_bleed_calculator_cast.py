@@ -3,9 +3,9 @@ from typing import Any
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from cardpicker.local_attribute_chip_cast import (
-    FRAME_STYLE_CAST_ANONYMOUS_ID,
-    run_attribute_chip_cast,
+from cardpicker.local_bleed_calculator import (
+    BLEED_CALCULATOR_CAST_ANONYMOUS_ID,
+    run_bleed_calculator_cast,
 )
 from cardpicker.local_identify_printing_tags import generate_run_id
 from cardpicker.management.commands.purge_machine_votes import (
@@ -17,17 +17,14 @@ from cardpicker.utils import find_stale_applied_migrations, get_baked_git_sha
 
 class Command(BaseCommand):
     help = (
-        "Casts the FRAME-STYLE (Old Border/Modern Border) attribute chip by reading Stage C's "
-        "already-persisted ImageEvidence - zero image fetches. Closes the hole the 2026-07-29 "
-        "composition audit measured: the frame chip sat at zero machine rows with no substitute, "
-        "because the only code that ever cast it was inside the live-fetch pilot and inside "
-        "image_evidence.extract_card_evidence, which has no production callers. The bleed half of "
-        "this caster (bleed-edge-cast-v1) is RETIRED - the cross-checked bleed calculator "
-        "(local_bleed_calculator, bleed-calculator-cast-v1) is the sole machine channel for "
-        "appropriate-bleed. Border chips are deliberately NOT cast here - local_layout_class_cast "
-        "is already the evidence-reading border caster, and a third border channel is the "
-        "duplication the audit says to cull, not extend. Never resolves a tag by itself: a single "
-        "VoteSource.OCR vote cannot clear the human-backed gate "
+        "Casts the appropriate-bleed attribute chip from the cross-checked bleed calculator "
+        "(cardpicker.local_bleed_calculator - Method A closed-form aspect ratio, Method B "
+        "pinline ruler, gated by a 2mm disagreement abstain rule) by reading Stage C's "
+        "already-persisted ImageEvidence/CanonicalPrintingMetadata - zero image fetches. "
+        "Negative-only, same convention as the now-retired bleed-edge-cast-v1 identity it "
+        "replaces: votes only when this calculator's own reading agrees the card is 'trimmed'. "
+        "Never resolves "
+        "a tag by itself: a single VoteSource.OCR vote cannot clear the human-backed gate "
         "(vote_consensus.resolve_weighted_consensus). Defaults to dry-run and requires an "
         "explicit --write, matching every other Stage 3+ command's own convention."
     )
@@ -58,32 +55,30 @@ class Command(BaseCommand):
         run_id = kwargs["run_id"] or generate_run_id()
         dry_run = not kwargs["write"]
         mode = "WRITE" if kwargs["write"] else "DRY RUN"
-        print(f"[{mode}] local_attribute_chip_cast run_id={run_id} git_sha={get_baked_git_sha()}")
+        print(f"[{mode}] local_bleed_calculator_cast run_id={run_id} git_sha={get_baked_git_sha()}")
 
         ledger = PilotRunLedger.objects.create(
             run_id=run_id,
-            command="local_attribute_chip_cast",
+            command="local_bleed_calculator_cast",
             dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,
             git_sha=get_baked_git_sha(),
         )
 
         try:
-            result = run_attribute_chip_cast(run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"])
+            result = run_bleed_calculator_cast(run_id=run_id, dry_run=dry_run, chunk_size=kwargs["chunk_size"])
             print(
-                f"[attribute-chips] considered={result.cards_considered} "
-                f"frame={'written=' + str(result.frame_votes_written) if not dry_run else 'would_cast=' + str(result.frame_votes_would_cast)} "
+                f"[bleed-calculator] considered={result.cards_considered} "
+                f"{'written=' + str(result.votes_written) if not dry_run else 'would_cast=' + str(result.votes_would_cast)} "
                 f"skip_counts={dict(result.skip_counts)}"
             )
-            print(f"[attribute-chips] votes_by_tag={dict(result.votes_by_tag)}")
             for entry in result.audit[:10]:
                 print(f"  sample: {entry}")
 
             if not dry_run:
                 touched_card_ids = list(
                     CardTagVote.objects.filter(
-                        run_id=run_id,
-                        anonymous_id=FRAME_STYLE_CAST_ANONYMOUS_ID,
+                        run_id=run_id, anonymous_id=BLEED_CALCULATOR_CAST_ANONYMOUS_ID
                     ).values_list("card_id", flat=True)
                 )
                 violations = verify_no_machine_only_resolutions(touched_card_ids)

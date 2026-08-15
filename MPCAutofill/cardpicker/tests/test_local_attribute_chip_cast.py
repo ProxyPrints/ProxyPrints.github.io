@@ -1,15 +1,19 @@
 """
 Tests for `cardpicker.local_attribute_chip_cast` - the evidence-reading caster for the FRAME-STYLE
-(`Old Border`/`Modern Border`) and BLEED-EDGE (`appropriate-bleed`) attribute chips, plus the proof
-that both are now reachable from the conveyor.
+(`Old Border`/`Modern Border`) attribute chip, plus the proof that it is reachable from the
+conveyor. The BLEED-EDGE half this module used to cast is RETIRED (identity `bleed-edge-cast-v1`,
+superseded by `bleed-calculator-cast-v1` in `local_bleed_calculator`, the sole machine channel for
+`appropriate-bleed`) - so a load-bearing property here is that the retired identity never casts,
+while the frame chip keeps casting exactly as before.
 
-WHAT THESE GUARD. The 2026-07-29 composition audit measured both chip families at ZERO machine rows
-with no substitute: the only code that ever cast them lived in `local_identify_printing_tags.
+WHAT THESE GUARD. The 2026-07-29 composition audit measured the frame chip at ZERO machine rows
+with no substitute: the only code that ever cast it lived in `local_identify_printing_tags.
 run_pilot` (a live-FETCH pilot, one completed run ever) and in `image_evidence.
 extract_card_evidence`, which had zero production callers. So the properties worth pinning are
-(a) the chips are derivable from stored evidence, (b) nothing here fetches, (c) the caster is
-actually WIRED into an engine, and (d) the frame chip gates on `artist_ocr` rather than reading a
-missing `illus_anchor_fired` as a real `False`.
+(a) the chip is derivable from stored evidence, (b) nothing here fetches, (c) the caster is
+actually WIRED into an engine, (d) the frame chip gates on `artist_ocr` rather than reading a
+missing `illus_anchor_fired` as a real `False`, and (e) the retired bleed identity no longer casts
+while frame-style casting continues.
 
 No network calls, no live image fetch - same "host venv, no network" precedent
 `test_local_layout_class_cast.py`/`test_local_detect_ai_art.py` already establish.
@@ -30,12 +34,8 @@ from cardpicker.local_attribute_chip_cast import (
     calculate_attribute_chip_verdict,
     run_attribute_chip_cast,
 )
-from cardpicker.local_fallback import (
-    BLEED_EDGE_TAG_NAME,
-    BLEED_EDGE_VOTE_CONFIDENCE,
-    FRAME_STYLE_TO_TAG,
-    FRAME_VOTE_CONFIDENCE,
-)
+from cardpicker.local_bleed_calculator import BLEED_CALCULATOR_CAST_ANONYMOUS_ID
+from cardpicker.local_fallback import FRAME_STYLE_TO_TAG, FRAME_VOTE_CONFIDENCE
 from cardpicker.models import CardScanLog, CardTagVote, VotePolarity, VoteSource
 from cardpicker.sensitive_tags import seed_sensitive_tags
 from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory
@@ -112,9 +112,10 @@ class TestCalculateAttributeChipVerdict:
         assert verdict.frame_tag_name is None
         assert verdict.frame_skip_reason == CHIP_INCOMPLETE_EVIDENCE_SKIP_REASON
 
-    def test_a_missing_geometry_bleed_extractor_skips_only_the_bleed_chip(self, db):
-        """The two families gate INDEPENDENTLY - a card missing one extractor still gets the other
-        family's chip, rather than being dropped from both."""
+    def test_a_missing_geometry_bleed_extractor_leaves_the_frame_chip_unaffected(self, db):
+        """The two families USED to gate independently - a card missing one extractor still got
+        the other family's chip. The bleed half is retired now, so this pins the surviving half:
+        missing `geometry_bleed` must not disturb the frame reading."""
         card = CardFactory(content_phash=1)
         versions = dict(_COMPLETE_EXTRACTOR_VERSIONS)
         del versions["geometry_bleed"]
@@ -122,35 +123,29 @@ class TestCalculateAttributeChipVerdict:
             card.pk, _evidence(card, extractor_versions=versions, collector_line_collector_number="123")
         )
 
-        assert verdict.bleed_skip_reason == CHIP_INCOMPLETE_EVIDENCE_SKIP_REASON
-        assert verdict.bleed_tag_name is None
         assert verdict.frame_tag_name == FRAME_STYLE_TO_TAG["modern"]
 
-    def test_a_trimmed_bleed_class_is_the_only_thing_that_votes(self, db):
-        """The 2,786-row population."""
+    @pytest.mark.parametrize("bleed_class", ["bleed", "trimmed", ""])
+    def test_bleed_class_is_irrelevant_to_the_frame_verdict(self, db, bleed_class):
+        """The verdict no longer carries a bleed dimension at all - the retired bleed half cast
+        on `bleed_class == "trimmed"` alone, and `bleed-calculator-cast-v1` owns that decision
+        now. Whatever the reading, the frame chip must produce the identical frame verdict."""
         card = CardFactory(content_phash=1)
-        verdict = calculate_attribute_chip_verdict(card.pk, _evidence(card, bleed_class="trimmed"))
+        verdict = calculate_attribute_chip_verdict(
+            card.pk, _evidence(card, collector_line_collector_number="123", bleed_class=bleed_class)
+        )
 
-        assert verdict.bleed_tag_name == BLEED_EDGE_TAG_NAME
-
-    @pytest.mark.parametrize("bleed_class", ["bleed", ""])
-    def test_ordinary_and_unclassifiable_bleed_cast_nothing(self, db, bleed_class):
-        """NEGATIVE-ONLY, matching `cast_bleed_edge_vote` exactly. Absence of a vote is the
-        documented convention for "this card has normal bleed"; `appropriate-bleed` is a SENSITIVE
-        tag and voting APPLY on the routine ~97.5% case would flood moderation with confirmations
-        of normalcy rather than surfacing the rare real exception."""
-        card = CardFactory(content_phash=1)
-        verdict = calculate_attribute_chip_verdict(card.pk, _evidence(card, bleed_class=bleed_class))
-
-        assert verdict.bleed_tag_name is None
-        assert verdict.bleed_skip_reason == CHIP_ABSTAINED_SKIP_REASON
+        assert verdict.frame_class == "modern"
+        assert verdict.frame_tag_name == FRAME_STYLE_TO_TAG["modern"]
+        assert not hasattr(verdict, "bleed_tag_name")
 
 
 class TestRunAttributeChipCast:
-    def test_a_write_run_casts_both_families_with_the_shared_confidences_and_polarities(self, db):
-        """The end-to-end write. Polarity is the load-bearing assertion on the bleed side: a
-        `trimmed` card is one whose bleed is NOT appropriate, so the vote is `NOT_APPLICABLE`, not
-        `APPLY` - getting that backwards would assert the opposite of the measurement."""
+    def test_a_write_run_casts_frame_style_only_and_never_the_retired_bleed_identity(self, db):
+        """THE RETIREMENT, END TO END. The frame chip votes with its shared confidence and
+        polarity; the retired `bleed-edge-cast-v1` identity writes NOTHING - not even on a
+        `trimmed` card, which is exactly the reading its old single-signal logic used to vote on
+        (that decision now belongs to `bleed-calculator-cast-v1` alone)."""
         _seed_tags()
         card = CardFactory(content_phash=1)
         _evidence(card, collector_line_collector_number="123", bleed_class="trimmed")
@@ -158,17 +153,15 @@ class TestRunAttributeChipCast:
         result = run_attribute_chip_cast(run_id="r1", dry_run=False)
 
         assert result.frame_votes_written == 1
-        assert result.bleed_votes_written == 1
+        assert result.votes_written == 1  # the frame vote is the ONLY vote the caster can produce now
         frame_vote = CardTagVote.objects.get(anonymous_id=FRAME_STYLE_CAST_ANONYMOUS_ID)
         assert frame_vote.tag.name == FRAME_STYLE_TO_TAG["modern"]
         assert frame_vote.polarity == VotePolarity.APPLY
         assert frame_vote.confidence == FRAME_VOTE_CONFIDENCE
         assert frame_vote.source == VoteSource.OCR
         assert frame_vote.run_id == "r1"
-        bleed_vote = CardTagVote.objects.get(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID)
-        assert bleed_vote.tag.name == BLEED_EDGE_TAG_NAME
-        assert bleed_vote.polarity == VotePolarity.NOT_APPLICABLE
-        assert bleed_vote.confidence == BLEED_EDGE_VOTE_CONFIDENCE
+        assert CardTagVote.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).count() == 0
+        assert CardScanLog.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).count() == 0
 
     def test_a_dry_run_writes_nothing_at_all(self, db):
         _seed_tags()
@@ -177,31 +170,33 @@ class TestRunAttributeChipCast:
 
         result = run_attribute_chip_cast(run_id="r1", dry_run=True)
 
-        assert result.votes_would_cast == 2
+        assert result.votes_would_cast == 1
         assert CardTagVote.objects.count() == 0
         assert CardScanLog.objects.count() == 0
 
-    def test_the_two_identities_do_not_suppress_each_other(self, db):
-        """WHY THERE ARE TWO ANONYMOUS_IDS. The bleed chip is negative-only, so ~98.7% of cards get
-        a frame vote and no bleed vote. Under ONE shared identity that frame vote would read as
-        "this card is handled" and permanently strand the bleed chip for every card that ever got a
-        frame reading. Here: run once while the card reads ordinary bleed (frame votes, bleed
-        abstains), then let Stage C re-read it as trimmed, and the bleed chip must still land."""
+    def test_the_retired_bleed_identity_is_not_resurrected_by_a_later_pass(self, db):
+        """The old bleed logic's re-selection contract (a frame vote must never strand the bleed
+        chip) is now satisfied structurally: the bleed calculator owns its own identity. What this
+        module must guarantee instead is that the retired identity stays dead across passes - a
+        card re-presented as `trimmed` on a SECOND run still gets no `bleed-edge-cast-v1` vote
+        (nor scan-log row), while the frame chip keeps its own re-selection semantics."""
         _seed_tags()
         card = CardFactory(content_phash=1)
         evidence = _evidence(card, collector_line_collector_number="123", bleed_class="bleed")
         run_attribute_chip_cast(run_id="r1", dry_run=False)
+        assert CardTagVote.objects.filter(anonymous_id=FRAME_STYLE_CAST_ANONYMOUS_ID).count() == 1
         assert CardTagVote.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).count() == 0
 
         evidence.bleed_class = "trimmed"
         evidence.save()
         # `ambiguous` is deliberately NOT rescannable, so the abstention row must be cleared for
         # the card to be reconsidered - the same re-selection contract every other caster has.
-        CardScanLog.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).delete()
+        CardScanLog.objects.filter(anonymous_id=FRAME_STYLE_CAST_ANONYMOUS_ID).delete()
         run_attribute_chip_cast(run_id="r2", dry_run=False)
 
-        assert CardTagVote.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).count() == 1
         assert CardTagVote.objects.filter(anonymous_id=FRAME_STYLE_CAST_ANONYMOUS_ID).count() == 1
+        assert CardTagVote.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).count() == 0
+        assert CardScanLog.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).count() == 0
 
     def test_a_second_run_is_idempotent(self, db):
         _seed_tags()
@@ -212,12 +207,13 @@ class TestRunAttributeChipCast:
         second = run_attribute_chip_cast(run_id="r2", dry_run=False)
 
         assert second.votes_written == 0
-        assert CardTagVote.objects.count() == 2
+        assert CardTagVote.objects.count() == 1
 
     def test_a_card_with_no_current_evidence_is_a_named_skip_not_a_crash(self, db):
         """A stale evidence row (content_hash != the card's live content_phash) is not consulted -
         `current_evidence_queryset`'s shared staleness rule - and produces `no-evidence`, which IS
-        rescannable, so the card returns to the pool once Stage C re-extracts it."""
+        rescannable, so the card returns to the pool once Stage C re-extracts it. One identity is
+        skipped now (the retired bleed identity never enters the pool)."""
         _seed_tags()
         card = CardFactory(content_phash=1)
         _evidence(card, content_hash=999, collector_line_collector_number="123")
@@ -225,10 +221,10 @@ class TestRunAttributeChipCast:
         result = run_attribute_chip_cast(run_id="r1", dry_run=False)
 
         assert result.votes_written == 0
-        assert result.skip_counts[CHIP_NO_EVIDENCE_SKIP_REASON] == 2
+        assert result.skip_counts[CHIP_NO_EVIDENCE_SKIP_REASON] == 1
         assert set(
             CardScanLog.objects.filter(skip_reason=CHIP_NO_EVIDENCE_SKIP_REASON).values_list("anonymous_id", flat=True)
-        ) == {FRAME_STYLE_CAST_ANONYMOUS_ID, BLEED_EDGE_CAST_ANONYMOUS_ID}
+        ) == {FRAME_STYLE_CAST_ANONYMOUS_ID}
 
     def test_card_ids_scoping_narrows_the_pass(self, db):
         _seed_tags()
@@ -272,7 +268,7 @@ class TestRunAttributeChipCast:
         card = CardFactory(content_phash=1)
         _evidence(card, collector_line_collector_number="123", bleed_class="trimmed")
 
-        assert run_attribute_chip_cast(run_id="r1", dry_run=False).votes_written == 2
+        assert run_attribute_chip_cast(run_id="r1", dry_run=False).votes_written == 1
 
 
 class TestConveyorWiring:
@@ -280,20 +276,30 @@ class TestConveyorWiring:
     §2a table has `POOLED=N, CONVEYOR=N` for channels 9, 10, 11 and 12. These prove the conveyor now
     reaches them, which no assertion about the calculator in isolation can."""
 
-    def test_run_stage_d_casts_frame_and_bleed_chips(self, db):
+    def test_run_stage_d_casts_frame_chip_and_bleed_calculator(self, db):
+        """THE REPLACEMENT, THROUGH THE CONVEYOR. The frame chip and the bleed calculator both
+        vote on one card in a single dispatch, the retired `bleed-edge-cast-v1` identity writes
+        nothing, and the old chip counter is GONE from the outcome (one channel per tag)."""
         from cardpicker.stage_e_dispatch import DispatchOutcome, _run_stage_d
 
         _seed_tags()
         card = CardFactory(content_phash=1)
-        _evidence(card, collector_line_collector_number="123", bleed_class="trimmed")
+        _evidence(
+            card,
+            collector_line_collector_number="123",
+            bleed_class="trimmed",
+            bleed_diff_mm=0.5,  # Method A's stored input - gives the calculator a reading to vote from
+        )
 
         outcome = DispatchOutcome(status="dispatched")
         _run_stage_d([card.pk], run_id="r1", outcome=outcome)
 
         assert outcome.stage_d_frame_chip_votes == 1
-        assert outcome.stage_d_bleed_chip_votes == 1
+        assert outcome.stage_d_bleed_calculator_votes == 1
+        assert not hasattr(outcome, "stage_d_bleed_chip_votes")
         assert CardTagVote.objects.filter(anonymous_id=FRAME_STYLE_CAST_ANONYMOUS_ID).count() == 1
-        assert CardTagVote.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).count() == 1
+        assert CardTagVote.objects.filter(anonymous_id=BLEED_CALCULATOR_CAST_ANONYMOUS_ID).count() == 1
+        assert CardTagVote.objects.filter(anonymous_id=BLEED_EDGE_CAST_ANONYMOUS_ID).count() == 0
 
     def test_run_stage_d_casts_the_border_chip_too(self, db):
         """Border colour survived the 2026-07-29 purge only because `local_layout_class_cast`
@@ -367,7 +373,7 @@ class TestExtractCardEvidenceCastsNoVote:
             _run_attribute_chip_casters(run_id="r1", card_ids=[card.pk], outcome=outcome)
 
         assert outcome.stage_d_frame_chip_votes == 0
-        assert outcome.stage_d_bleed_chip_votes == 0
+        assert outcome.stage_d_bleed_calculator_votes == 0
         assert outcome.stage_d_border_chip_votes == 0
         assert "Attribute-chip casters skipped" in caplog.text
         assert "seed_attribute_tags" in caplog.text
