@@ -2816,13 +2816,22 @@ verdict, not a second classifier" framing:
   `CanonicalPrintingMetadata.border_color` (direct string comparison — both
   use the same value space) and an OCR-re-derived frame class
   (`local_fallback.classify_frame_style`/`frame_style_is_consistent`,
-  PROTECTED CORE, called not modified) vs. `.frame` — either disagreement
-  WITHHOLDS the match (`border-mismatch`/`frame-mismatch` named skips),
-  mirroring the live pilot's own frame-mismatch-withholding exactly.
-  `bleed_class` is deliberately NOT cross-checked (no Scryfall field it
-  could ever agree/disagree with — a proxy-sheet-formatting property, not a
-  printing property), despite this PR's own earlier deferred-item wording
-  naming it.
+  PROTECTED CORE, called not modified) vs. `.frame`. A frame disagreement
+  WITHHOLDS the match (`frame-mismatch` named skip), mirroring the live
+  pilot's own frame-mismatch-withholding exactly. A border disagreement
+  instead WEAKENS confidence (`JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT`,
+  same tier as artist-OCR disagreement below) as of the 2026-08-14
+  downgrade-not-veto change: `layout_class` and `border_color` are two
+  independent signals rather than one contradicting its own source, and a
+  measurement of the live veto population found the large majority of
+  border vetoes were suppressing a correct match whose image was simply
+  re-rendered in a different border treatment. `border-mismatch` stays
+  declared and stays in `JOIN_KEY_NO_HIT_SKIP_REASONS` so a pre-change
+  historical row still routes to review, same as `proxy-marker-veto`
+  above. `bleed_class` is deliberately NOT cross-checked (no Scryfall field
+  it could ever agree/disagree with — a proxy-sheet-formatting property,
+  not a printing property), despite this PR's own earlier deferred-item
+  wording naming it.
 - **Copyright-year era check** (issue #152/#220 follow-up, built alongside
   the slow-path routing calculator below): the legal line's parsed
   copyright year (`ImageEvidence.legal_line_copyright_year`, issue

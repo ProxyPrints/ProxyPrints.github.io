@@ -14,7 +14,6 @@ import {
   selectAnySelectedProjectMembersMatchQuery,
   setQueries,
 } from "@/store/slices/projectSlice";
-import { selectFuzzySearch } from "@/store/slices/searchSettingsSlice";
 
 interface ChangeQueryModalProps {
   slots: Slots;
@@ -37,7 +36,6 @@ export function ChangeQueryModal({
   const dispatch = useAppDispatch();
   const sampleCardsQuery = useGetSampleCardsQuery();
   const dfcPairsQuery = useGetDFCPairsQuery();
-  const fuzzySearch = useAppSelector(selectFuzzySearch);
 
   const dfcPairs = dfcPairsQuery.data ?? {};
 
@@ -59,10 +57,15 @@ export function ChangeQueryModal({
     setRevertToDefaultBack(false);
   }, [show]);
 
+  // Retyping a slot's query is refining which printing of an already-bound card is wanted, not
+  // discovering a card the user cannot name - the same "already-imported card" precise-search
+  // rule PR #820 established for editorSearch/retrieve_card_identifiers applies here too. The
+  // DFC-back suggestion is therefore forced precise regardless of the live Fuzzy/Precise search
+  // setting, once, here.
   const dfcBack = getDfcBack(
     changeSelectedImageQueriesModalValue,
     dfcPairs,
-    fuzzySearch
+    false
   );
 
   const areAllSlotsFront = slots.every(([face, slotNumber]) => face === Front);

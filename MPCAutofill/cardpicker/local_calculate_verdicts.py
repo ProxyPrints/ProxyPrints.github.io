@@ -77,16 +77,19 @@ control flow (no new eligible-card population, no new `anonymous_id`, no new vot
     the bare back-face name a split-image upload is named after.
   - Geometry/border agreement + frame agreement (issue #148/#149's `layout_class`/OCR-derived
     frame reading vs. the matched printing's own `CanonicalPrintingMetadata.border_color`/`frame`):
-    a genuine disagreement WITHHOLDS the match entirely (`border-mismatch`/`frame-mismatch` named
-    skips), mirroring `local_identify_printing_tags`'s existing frame-mismatch-withholding logic
-    exactly (same `local_fallback.classify_frame_style`/`frame_style_is_consistent`, PROTECTED
-    CORE, called not modified) - a join-key match landing on a printing whose real border/frame
-    contradicts what's actually visible on the card face means the image most likely doesn't
-    faithfully depict that specific printing, the same reasoning that precedent already
-    established. `bleed_class` is NOT cross-checked here - there is no Scryfall field it could
-    ever agree or disagree with (bleed is a proxy-sheet-formatting property, not a printing
-    property), so despite this PR's own earlier deferred-item wording naming it, it's correctly
-    out of scope for an AGREEMENT check specifically (nothing to agree or disagree WITH).
+    a genuine FRAME disagreement WITHHOLDS the match entirely (`frame-mismatch` named skip),
+    mirroring `local_identify_printing_tags`'s existing frame-mismatch-withholding logic exactly
+    (same `local_fallback.classify_frame_style`/`frame_style_is_consistent`, PROTECTED CORE,
+    called not modified). A genuine BORDER disagreement instead WEAKENS the match
+    (`JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT`'s tier, same as an artist-OCR disagreement below) -
+    unlike frame, this was a veto through 2026-08-14 and downgraded per a measurement of the live
+    veto population finding the large majority of border vetoes suppressed a correct match whose
+    image was simply re-rendered in a different border treatment; see `_apply_agreement_checks`'s
+    own inline comment at this check's call site for the full reasoning. `bleed_class` is NOT
+    cross-checked here - there is no Scryfall field it could ever agree or disagree with (bleed is
+    a proxy-sheet-formatting property, not a printing property), so despite this PR's own earlier
+    deferred-item wording naming it, it's correctly out of scope for an AGREEMENT check
+    specifically (nothing to agree or disagree WITH).
   - Copyright-year era check: the legal line's parsed copyright year
     (`ImageEvidence.legal_line_copyright_year`, issue #151/#159) cross-checked against the matched
     printing's own Scryfall release date (`CanonicalPrintingMetadata.released_at`) - reusing the
@@ -494,13 +497,23 @@ JOIN_KEY_NO_MATCH_CONFIDENCE = 0.6
 # Artist-OCR corroboration's own weaker tier (module docstring's "agreement/corroboration
 # layer"): a disagreement between `artist_ocr_name` and the matched printing's real artist
 # WEAKENS an otherwise-confident join-key hit rather than vetoing it (unlike the hard
-# border/frame/proxy-marker/truncated-image/copyright-year vetoes, all of which withhold the
-# match entirely) - `local_fallback.match_artist`'s own fuzzy-ratio threshold leaves real room for
+# frame/proxy-marker/truncated-image/copyright-year vetoes, all of which withhold the match
+# entirely) - `local_fallback.match_artist`'s own fuzzy-ratio threshold leaves real room for
 # a false negative (an OCR misread, an unusual name spelling), so a single disagreeing signal is
 # real but softer evidence against the match than a hard geometric/era contradiction. Placed above
 # JOIN_KEY_NO_MATCH_CONFIDENCE (0.6, a genuine non-match) since this IS still a real positive
 # match assertion, just a weaker one - not a calibrated number, a reasoned ordering between the
 # two already-established tiers immediately above and below it.
+#
+# ALSO the border-disagreement tier as of the border check's downgrade-not-veto change (see
+# `JOIN_KEY_BORDER_MISMATCH_SKIP_REASON`'s own comment below): `ImageEvidence.layout_class` vs.
+# `CanonicalPrintingMetadata.border_color` is two independent signals, either of which can be
+# wrong, exactly the shape this tier already exists for - a border disagreement is a real
+# positive match assertion, just a weaker one, the same reasoning that already applies to an
+# artist-OCR disagreement. Reused rather than given a sibling constant: `resolve_weighted_
+# consensus` weights strictly by `source`, never `confidence` (see immediately below), so a
+# separate tier would only exist for audit-output legibility, which the two checks landing in the
+# same ordering slot don't need.
 JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT = 0.65
 
 # RETIRED: INTERIM STAGE D GUARD (issue #473 PR-2, TEMPORARY BY DESIGN, removed by PR-3 -
@@ -538,6 +551,12 @@ JOIN_KEY_NO_EVIDENCE_SKIP_REASON = "no-evidence"
 JOIN_KEY_NO_TEXT_SKIP_REASON = "no-text"
 JOIN_KEY_AMBIGUOUS_SKIP_REASON = "ambiguous"
 JOIN_KEY_TRUNCATED_IMAGE_SKIP_REASON = "truncated-image"
+# RETIRED as a write value (border-check downgrade-not-veto change): `_apply_agreement_checks`
+# no longer withholds on a border disagreement, so no code path writes a NEW row with this
+# reason - see that function's own inline comment at this check's call site. Declared, and still
+# a member of JOIN_KEY_NO_HIT_SKIP_REASONS below, purely so HISTORICAL rows still read sensibly
+# and still route their card to human review - the same retired-not-removed treatment
+# TRANSFERRED_INTERIM_GUARD_SKIP_REASON and JOIN_KEY_PROXY_MARKER_VETO_SKIP_REASON get above.
 JOIN_KEY_BORDER_MISMATCH_SKIP_REASON = "border-mismatch"
 JOIN_KEY_FRAME_MISMATCH_SKIP_REASON = "frame-mismatch"
 JOIN_KEY_COPYRIGHT_YEAR_MISMATCH_SKIP_REASON = "copyright-year-mismatch"
@@ -807,23 +826,42 @@ def _apply_agreement_checks(
     canonical = CanonicalCard.objects.filter(pk=matched.pk).select_related("printing_metadata", "artist").first()
     metadata = getattr(canonical, "printing_metadata", None) if canonical is not None else None
 
+    # Set below, inside the `if metadata is not None:` block, whenever the border half of the
+    # shared check finds a disagreement - read much further down where `confidence` is assigned,
+    # not used here. Declared at this scope (not inside the block) because that read site is
+    # outside the block too.
+    border_disagreement = False
+
     if metadata is not None:
-        # THE BORDER AND FRAME AGREEMENT VETOES (module docstring), both of them, in one shared
-        # call. The implementation moved to `local_identify_printing_tags.
-        # printing_attribute_disagreement` on 2026-07-30 - unchanged in behaviour, and moved for a
-        # specific reason rather than for tidiness: `run_name_frequency_elimination` deduces a
-        # printing purely by COUNTING, with no look at the image at all, and the owner-ruled fix
-        # for that unsoundness is to require this exact cross-check. Two implementations of a
-        # check whose frame half has a STRICT missing-data degradation (PR #656, and that
-        # function's own docstring) is precisely the shape that has drifted three times in this
-        # project, so there is now ONE implementation and two callers.
+        # THE BORDER/FRAME CROSS-CHECK (module docstring), both halves in one shared call. The
+        # implementation moved to `local_identify_printing_tags.printing_attribute_disagreement`
+        # on 2026-07-30 - unchanged in behaviour, and moved for a specific reason rather than for
+        # tidiness: `run_name_frequency_elimination` deduces a printing purely by COUNTING, with
+        # no look at the image at all, and the owner-ruled fix for that unsoundness is to require
+        # this exact cross-check. Two implementations of a check whose frame half has a STRICT
+        # missing-data degradation (PR #656, and that function's own docstring) is precisely the
+        # shape that has drifted three times in this project, so there is now ONE implementation
+        # and two callers.
+        #
+        # THE TWO HALVES NOW DIVERGE HERE (2026-08-14). `ImageEvidence.layout_class` and
+        # `CanonicalPrintingMetadata.border_color` are two independent signals - a pixel sample
+        # and a printing fact - either of which can be wrong; that is a cross-signal disagreement,
+        # not an internal inconsistency (contrast the collector-line artist gate above, which
+        # withholds because there the parse contradicts its OWN source string). A border
+        # disagreement therefore only records itself here and falls through to the confidence
+        # downgrade assigned near this function's return, the same tier an artist-OCR
+        # disagreement gets below. FRAME keeps withholding unchanged: it is a different
+        # comparison this file's own measurement says nothing about, and the shared helper still
+        # returns `ATTRIBUTE_BORDER_MISMATCH` to BOTH callers unchanged - only this caller's
+        # response to it changed. `run_name_frequency_elimination`'s call is untouched: it has no
+        # positive identification standing on its own evidence the way this join-key match does,
+        # so its border cross-check stays a veto.
         #
         # The mapping back to THIS calculator's own skip vocabulary stays here: the shared helper
-        # names the FINDING, each calculator names its own SKIP. The two constants below are
-        # unchanged and still what `question_feed` reads.
+        # names the FINDING, each calculator names its own SKIP.
         disagreement = printing_attribute_disagreement(evidence, metadata)
         if disagreement == ATTRIBUTE_BORDER_MISMATCH:
-            return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_BORDER_MISMATCH_SKIP_REASON, detail=detail)
+            border_disagreement = True
         if disagreement == ATTRIBUTE_FRAME_MISMATCH:
             return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON, detail=detail)
 
@@ -877,6 +915,7 @@ def _apply_agreement_checks(
             return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_ARTIST_MISMATCH_SKIP_REASON, detail=detail)
 
     confidence = base_confidence
+    artist_disagreement = False
     if evidence.artist_ocr_name and canonical is not None:
         # ARTIST-OCR CORROBORATION (module docstring) - match_artist returns None (no surviving
         # candidate cleared its own fuzzy-ratio threshold) on a genuine disagreement; a set
@@ -885,7 +924,14 @@ def _apply_agreement_checks(
         # a hit, not for agreement to strengthen one beyond its own join-key-derived tier).
         surviving = match_artist(evidence.artist_ocr_name, [matched], {matched.pk: canonical.artist.name})
         if surviving is None:
-            confidence = JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT
+            artist_disagreement = True
+
+    # A card can carry both a border and an artist-OCR disagreement at once. Both currently map
+    # to the same tier (see JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT's own comment), so this `or`
+    # already picks the lowest applicable tier - stated explicitly here, as its own condition,
+    # rather than left to fall out of assignment order between two separate `if` blocks.
+    if border_disagreement or artist_disagreement:
+        confidence = JOIN_KEY_CONFIDENCE_ARTIST_DISAGREEMENT
 
     return JoinKeyVerdict(card_id=card_id, printing_pk=matched.pk, confidence=confidence, detail=detail)
 
@@ -2252,6 +2298,10 @@ SLOW_PATH_TO_REVIEW_SKIP_REASON = "to-review"
 # needs to be listed HERE for the same reason every other named skip is: without this, a card the
 # lexicon gate abstains on would silently stop routing to the fallback calculator/slow-path human
 # review queue, a real review-queue gap, not just a naming detail.
+#
+# "border-mismatch" (border-check downgrade-not-veto change): same retired-not-removed treatment
+# as "proxy-marker-veto" immediately above - `_apply_agreement_checks` no longer produces this
+# value going forward, kept HERE so a pre-change stale row still routes to human review.
 JOIN_KEY_NO_HIT_SKIP_REASONS = frozenset(
     {
         JOIN_KEY_AMBIGUOUS_SKIP_REASON,

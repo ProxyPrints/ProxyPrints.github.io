@@ -471,9 +471,11 @@ test.describe("question feed - Level 2 illustration grouping", () => {
 
   // Issue #709 - the illustration-credit ArtistSupportLink used to always stack the page-link
   // button, up to five commerce buttons, a badge, and a credit line next to the question - up to
-  // ~8 rows. It now defaults to one collapsed line and expands on demand; the expansion must
-  // never cover the pinned reference image (SPEC-wtc-rebuild.md Amendment A2).
-  test("the illustration-credit Artist Support Link is compact by default and its expansion never overlaps the pinned reference image", async ({
+  // ~8 rows. It now defaults to a compact two-line collapsed state (page link, then the MTGAC
+  // credit - REV, owner ruling: attribution must be visible without a click) and only the
+  // commerce/badge panel expands on demand; that expansion must never cover the pinned reference
+  // image (SPEC-wtc-rebuild.md Amendment A2).
+  test("the illustration-credit Artist Support Link shows its MTGAC credit without expanding, and its commerce/badge panel expansion never overlaps the pinned reference image", async ({
     page,
     network,
   }) => {
@@ -494,19 +496,21 @@ test.describe("question feed - Level 2 illustration grouping", () => {
     await expect(applet.getByTestId("artist-support-link")).toContainText(
       "Some Artist"
     );
-    await expect(applet.getByTestId("artist-support-credit")).toHaveCount(0);
+    // REV (owner ruling) - the credit is visible without any interaction now.
+    await expect(applet.getByTestId("artist-support-credit")).toContainText(
+      "MTG Artist Connection"
+    );
     await expect(
       applet.getByTestId("artist-support-commerce-links")
     ).toHaveCount(0);
 
-    // Collapsed: one line, well under the height a stacked applet (page link + credit, let
-    // alone commerce buttons) would need.
+    // Collapsed: two compact lines (page link, small credit line), well under the height a
+    // stacked applet (commerce buttons included) would need.
     const collapsedBox = await applet.boundingBox();
     expect(collapsedBox).not.toBeNull();
-    expect((collapsedBox as { height: number }).height).toBeLessThan(40);
+    expect((collapsedBox as { height: number }).height).toBeLessThan(60);
 
     await applet.getByTestId("artist-support-toggle").click();
-    await expect(applet.getByTestId("artist-support-credit")).toBeVisible();
 
     const subjectBox = await page
       .getByTestId("question-feed-subject-art")
@@ -526,9 +530,11 @@ test.describe("question feed - Level 2 illustration grouping", () => {
       )
     ).toBe(false);
 
-    // Collapsing again hides the credit without unmounting the applet.
+    // Collapsing again leaves the credit visible - it was never gated behind the toggle.
     await applet.getByTestId("artist-support-toggle").click();
-    await expect(applet.getByTestId("artist-support-credit")).toHaveCount(0);
+    await expect(applet.getByTestId("artist-support-credit")).toContainText(
+      "MTG Artist Connection"
+    );
   });
 
   // Issue #503 (WTC phase C2) / #524 - supersedes this describe block's former "selecting a

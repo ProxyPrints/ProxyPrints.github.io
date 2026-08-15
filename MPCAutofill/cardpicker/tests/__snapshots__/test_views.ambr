@@ -2049,7 +2049,7 @@
     'status_code': 200,
   })
 # ---
-# name: TestPostEditorSearchResults.test_fuzzy_search
+# name: TestPostEditorSearchResults.test_fuzzy_search_preference_is_ignored_editor_search_stays_precise
   dict({
     'json': dict({
       'degradedQueries': list([
@@ -2058,8 +2058,6 @@
       }),
       'results': dict({
         'key1': list([
-          '1UPdh7J7hScg4ZnxSPJ-EeBYHLp2s3Oz1',
-          '1dxSLHtw-VwwE09pZCA8OA6LbuWRZPEoU',
         ]),
       }),
     }),
