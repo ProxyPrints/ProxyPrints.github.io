@@ -137,11 +137,11 @@ EXPECTED_SKIP_REASONS = {
         "CHIP_INCOMPLETE_EVIDENCE_SKIP_REASON",
         "BLEED_CALC_INCOMPLETE_EVIDENCE_SKIP_REASON",
     },
-    # Attribute-chip cast — local_attribute_chip_cast.py (frame-style-cast-v1 /
-    # bleed-edge-cast-v1, 2026-07-30). ONE vocabulary shared by two anonymous_ids written from a
-    # single pass, hence the `CHIP_` prefix rather than a per-identity one: the two families
-    # differ in which extractor they gate on, not in what a skip MEANS. Its three shared values
-    # are registered against the multi-calculator entries above; only this one is new.
+    # Attribute-chip cast — local_attribute_chip_cast.py (frame-style-cast-v1, 2026-07-30).
+    # ONE vocabulary written from a single identity: the bleed half of this module
+    # (bleed-edge-cast-v1) is RETIRED, so the `CHIP_` prefix now names the frame family alone.
+    # Its three shared values are registered against the multi-calculator entries above; only
+    # this one is new.
     #
     # APPENDED AT THE END, not filed next to the layout-class caster where it reads better.
     # `.github/scripts/constant_rename_equivalence.py` inlines this dict into every assert that

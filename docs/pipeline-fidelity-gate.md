@@ -1185,49 +1185,63 @@ buckets:
   command. Derivable population measured read-only 2026-07-29: 133,627
   `Modern Border` + 9,006 `Old Border`.
 - **`bleed-edge-cast-v1`** (`local_attribute_chip_cast`, NEW 2026-07-30,
-  **0 rows — never run**) — same module, same pass, separate identity;
-  casts `appropriate-bleed` at polarity `NOT_APPLICABLE` for a confidently
-  `trimmed` `bleed_class`. NEGATIVE-ONLY by design: absence of a vote is the
-  documented convention for normal bleed, so a persistently low row count
-  here is correct, not a coverage gap. The identity is separate from
-  `frame-style-cast-v1` precisely because of that — under one shared
-  identity a card's frame vote would read as "already handled" and
-  permanently strand its bleed chip. Derivable population 2026-07-29: 2,786.
+  **RETIRED 2026-08-15 — superseded by `bleed-calculator-cast-v1` below**) —
+  the module's bleed half, which cast `appropriate-bleed` at polarity
+  `NOT_APPLICABLE` for a confidently `trimmed` `bleed_class` from Stage C's
+  single `bleed_class` signal alone. RETIRED rather than deleted — same
+  convention as `scryfall-tagger-v1` further down: the constant and this
+  entry are kept so a reader meeting the string in an old report, run log or
+  database column can find out what it was. It is replaced, not
+  supplemented: `bleed-calculator-cast-v1` now casts the same tag as the
+  SOLE machine channel, and running both would defeat the calculator's
+  abstention — the calculator withholds a vote when its independent
+  measurement contradicts Stage C's `trimmed` reading past the gate, and
+  the old caster voted on exactly those cards, so a concurrent pass would
+  re-cast the very votes the calculator was built to withhold. Wrote **0
+  rows in production**; derivable population (never backfilled, measured
+  read-only 2026-07-29): 2,786.
 - **`bleed-calculator-cast-v1`** (`local_bleed_calculator`, NEW, stacked on
   #819/canvas-padding-stage-c-extractor, **0 rows — not yet mergeable**) —
-  a second, independent channel onto the same `appropriate-bleed` tag as
-  `bleed-edge-cast-v1` above. Cross-checks a closed-form aspect-ratio bleed
-  (reads the already-persisted `ImageEvidence.bleed_diff_mm`) against a
-  per-edge pinline-ruler bleed (`local_pinline_inset`, calibrated by border
-  colour + frame era from `CanonicalPrintingMetadata`, so selectable on
-  roughly a tenth of the catalogue) and withholds a vote when the two
-  disagree by more than 2mm rather than picking a side. Same NEGATIVE-ONLY
-  convention as `bleed-edge-cast-v1` — votes only when its own reading
-  agrees the card is `trimmed`. Cannot go live until `local_pinline_inset`'s
-  own branch merges and its extractor actually runs against production, so
+  the SOLE machine channel onto `appropriate-bleed`, having REPLACED the
+  retired `bleed-edge-cast-v1` above. It covers everything the old caster
+  covered: it skips only when BOTH methods are unavailable, and abstains
+  only when both are present and disagree past the gate — otherwise Method
+  A alone still votes. Cross-checks a closed-form aspect-ratio bleed (reads
+  the already-persisted `ImageEvidence.bleed_diff_mm`) against a per-edge
+  pinline-ruler bleed (`local_pinline_inset`, calibrated by border colour +
+  frame era from `CanonicalPrintingMetadata`, so selectable on roughly a
+  tenth of the catalogue) and withholds a vote when the two disagree by
+  more than 2mm rather than picking a side. Same NEGATIVE-ONLY convention
+  the retired caster followed — votes only when its own reading agrees the
+  card is `trimmed`. Cannot go live until `local_pinline_inset`'s own
+  branch merges and its extractor actually runs against production, so
   0 rows here is expected, not a coverage gap, until that lands.
 
-Both `frame-style-cast-v1`/`bleed-edge-cast-v1` were created because the
-2026-07-29 composition audit found the only casters for these two chips
-inside the live-fetch pilot and inside `image_evidence.extract_card_evidence`,
-which had zero production callers — so both chips sat at zero rows with
-nothing able to re-derive them. See `docs/features/printing-tags.md`, "Who
-actually casts the attribute chips".
+Both `frame-style-cast-v1` and the now-retired `bleed-edge-cast-v1` were
+created because the 2026-07-29 composition audit found the only casters for
+these two chips inside the live-fetch pilot and inside
+`image_evidence.extract_card_evidence`, which had zero production callers —
+so both chips sat at zero rows with nothing able to re-derive them. The
+bleed half was superseded rather than fixed forward: `bleed-calculator-cast-v1`
+covers the same population with a stricter abstention (see its entry above).
+See `docs/features/printing-tags.md`, "Who actually casts the attribute chips".
 
-### Wiring status — the streaming conveyor's `_run_stage_d` (2026-08-05)
+### Wiring status — the streaming conveyor's `_run_stage_d` (2026-08-05, updated 2026-08-15)
 
 The question this section answers: for EVERY identity the roster tether
-derives from code (19 today, 2 of them not real vote-casting calculators —
+derives from code (20 today, 2 of them not real vote-casting calculators —
 `evidence-transfer-v1`/`question-feed-hypothetical-vote`, see
 `CALCULATOR_ROSTER_ALLOWLIST` in `.github/scripts/docs_lint.py` — leaving
-17 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
+18 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
 or the streaming conveyor's own `stage_e_dispatch._run_stage_d`) actually
 INVOKE it, verified by a real call site rather than a name match against
 this file? A prior claim in circulation held that a pass casts on "10 of
-roughly 28" channels — the derived roster is 17 real identities, not ~28,
-and as of this pass **11 of 17** are invoked by a real call site (up from 7
-before this pass — see below), 6 are deliberately unwired with a stated
-reason.
+roughly 28" channels — the derived roster is 18 real identities, not ~28,
+and as of this update **11 of 18** are invoked by a real call site (up from
+7 before the 2026-08-05 pass — see below), 6 are deliberately unwired with
+a stated reason, and 1 (`bleed-edge-cast-v1`) is RETIRED — its wiring slot
+was taken over by `bleed-calculator-cast-v1`, which joins the wired set
+below.
 
 **Wired before this pass (7):** `stage-d-join-key-v1`, `stage-d-fallback-v1`,
 `stage-d-illustration-v2`, `stage-d-slow-path-v1` (all four
@@ -1236,7 +1250,13 @@ reason.
 `_run_attribute_chip_casters`). `stage-d-slow-path-v1` is a router that
 casts 0 votes by construction (see its own entry above) but IS invoked,
 which is why it counts as wired here despite never appearing in a
-vote-count table.
+vote-count table. **`bleed-edge-cast-v1` was replaced by
+`bleed-calculator-cast-v1` in the 2026-08-15 replacement pass** — the
+retired identity is no longer invoked by `_run_attribute_chip_casters`
+(now wiring `layout-class-cast-v1`/`frame-style-cast-v1`/
+`bleed-calculator-cast-v1`), so the wired count stays at 11: the calculator
+took the old identity's slot rather than adding a second channel onto
+`appropriate-bleed`.
 
 **Newly wired by this pass (4)** — `ai-art-detector-v1`,
 `lands-artist-decomp-v1`, `residual-classify-v1`, `art-hash-artist-v1`, via

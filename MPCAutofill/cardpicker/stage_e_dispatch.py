@@ -270,20 +270,23 @@ class DispatchOutcome:
     stage_d_illustration_votes: int = 0
     stage_d_illustration_already_voted: int = 0
     # ATTRIBUTE-CHIP CASTERS (2026-07-30, the 2026-07-29 composition audit's §1 Q1 items 1-3).
-    # All three chip families were reachable from NEITHER engine: the border caster only via the
-    # standalone `local_layout_class_cast` command, and frame-style/bleed-edge only via the
+    # Border and frame-style were reachable from NEITHER engine at the audit: the border caster
+    # only via the standalone `local_layout_class_cast` command, and frame-style only via the
     # live-fetch pilot and via `image_evidence.extract_card_evidence`, which has no production
-    # callers at all - which is why frame-style and bleed-edge sat at literally zero machine rows
-    # after the 2026-07-29 purge with nothing able to re-derive them. Both casters read stored
-    # `ImageEvidence` and fetch nothing, so they cost the conveyor no network budget.
+    # callers at all - which is why both sat at literally zero machine rows after the 2026-07-29
+    # purge with nothing able to re-derive them. The casters read stored `ImageEvidence` and fetch
+    # nothing, so they cost the conveyor no network budget. `appropriate-bleed` is deliberately NOT
+    # counted here: the bleed half of `local_attribute_chip_cast` (identity `bleed-edge-cast-v1`)
+    # is RETIRED - superseded by the cross-checked bleed calculator below, which is the SOLE
+    # machine channel for that tag.
     stage_d_border_chip_votes: int = 0
     stage_d_frame_chip_votes: int = 0
-    stage_d_bleed_chip_votes: int = 0
-    # BLEED CALCULATOR (cardpicker.local_bleed_calculator, bleed-calculator-cast-v1) - a fourth,
-    # independently-derived channel onto the same `appropriate-bleed` tag as
-    # `stage_d_bleed_chip_votes` above, cross-checking the closed-form aspect-ratio bleed against
-    # the pinline-ruler per-edge bleed and withholding a vote on disagreement past a 2mm gate.
-    # Also reads stored `ImageEvidence`/`CanonicalPrintingMetadata` and fetches nothing.
+    # BLEED CALCULATOR (cardpicker.local_bleed_calculator, bleed-calculator-cast-v1) - the only
+    # machine channel for `appropriate-bleed`, replacing the retired `bleed-edge-cast-v1` chip
+    # caster (which voted on `bleed_class == "trimmed"` alone). Cross-checks the closed-form
+    # aspect-ratio bleed against the pinline-ruler per-edge bleed and withholds a vote on
+    # disagreement past a 2mm gate - the abstention the old single-signal caster could not make.
+    # Reads stored `ImageEvidence`/`CanonicalPrintingMetadata` and fetches nothing.
     stage_d_bleed_calculator_votes: int = 0
     # EVIDENCE-ONLY CALCULATORS (2026-08-05, closing the "10 of ~28 channels" wiring audit - see
     # `_run_evidence_only_calculators`' own docstring for the FREE/EXPENSIVE classification of
@@ -1193,18 +1196,25 @@ def _run_attribute_chip_casters(
     composition audit's §1 Q1 items 1-3). Same lazy-import posture as
     `_run_illustration_calculator` above, same reasoning.
 
-    WHAT THIS FIXES. The three attribute-chip families - border colour, frame style, bleed edge -
-    were reachable from NEITHER engine. `local_fallback`'s three casters are called only from
-    `local_identify_printing_tags.run_pilot` (a live-FETCH pilot with ONE completed run in its
-    history, 2026-07-16) and from `image_evidence.extract_card_evidence`, which has ZERO production
-    callers because both engines call `compute_card_evidence` + `persist_evidence` directly. Border
-    colour survived the 2026-07-29 purge only because `local_layout_class_cast` independently
-    re-derives it, and even that was reachable only from its own standalone management command.
-    Frame style and bleed edge had no such twin and sat at literally zero machine rows.
+    WHAT THIS FIXES. Border colour, frame style and the bleed chip were reachable from NEITHER
+    engine. `local_fallback`'s casters are called only from `local_identify_printing_tags.run_pilot`
+    (a live-FETCH pilot with ONE completed run in its history, 2026-07-16) and from
+    `image_evidence.extract_card_evidence`, which has ZERO production callers because both engines
+    call `compute_card_evidence` + `persist_evidence` directly. Border colour survived the
+    2026-07-29 purge only because `local_layout_class_cast` independently re-derives it, and even
+    that was reachable only from its own standalone management command. Frame style and the bleed
+    chip had no such twin and sat at literally zero machine rows.
 
-    BOTH CASTERS READ STORED EVIDENCE AND FETCH NOTHING, which is why they can run inside a
+    ONE CHANNEL PER TAG. `run_attribute_chip_cast` casts the frame-style chip only; its bleed half
+    (identity `bleed-edge-cast-v1`) is RETIRED and `run_bleed_calculator_cast` is the SOLE machine
+    channel for `appropriate-bleed`. The old caster voted on `bleed_class == "trimmed"` alone, the
+    calculator votes on a cross-checked reading and withholds on disagreement past a 2mm gate -
+    running both would double-count one signal and the old caster's unconditional vote would land
+    on exactly the cards the calculator abstains on, defeating the abstention.
+
+    THE CASTERS READ STORED EVIDENCE AND FETCH NOTHING, which is why they can run inside a
     micro-batch at all: the conveyor's fetch budget and the operating envelope's bars are about
-    network and host load, and these two consume neither. Re-deriving these chips through the only
+    network and host load, and these consume neither. Re-deriving these chips through the only
     pre-existing path (the pilot) would instead have meant re-fetching ~220,000 images to recompute
     facts already sitting in the database.
 
@@ -1215,12 +1225,12 @@ def _run_attribute_chip_casters(
     after Stage D's printing calculators only because the printing verdict is the higher-value work
     and should not be delayed behind chips.
 
-    A MISSING TAG SEED MUST NOT DESTROY A MICRO-BATCH. Both casters raise `RuntimeError` when their
+    A MISSING TAG SEED MUST NOT DESTROY A MICRO-BATCH. The casters raise `RuntimeError` when their
     attribute-chip `Tag` rows have not been seeded - the right behaviour for a standalone management
     command an operator is watching, and the wrong behaviour here: by the time this runs, the four
     printing calculators above have ALREADY written their votes, and letting the exception out would
     mark the whole dispatch FAILED (`mark_ledger_failed`) over an operator setup gap in an advisory
-    chip. So the seed gap is caught, logged at ERROR, and leaves the three counters at 0. It is NOT
+    chip. So the seed gap is caught, logged at ERROR, and leaves the counters at 0. It is NOT
     silently swallowed - a persistent zero on a chip counter is precisely the signal the 2026-07-29
     audit says to read as "this channel never ran", and the log line names the fix. Only that
     `RuntimeError` is caught; every other exception propagates exactly as the printing calculators'
@@ -1236,7 +1246,6 @@ def _run_attribute_chip_casters(
 
         chip_result = run_attribute_chip_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
         outcome.stage_d_frame_chip_votes = chip_result.frame_votes_written
-        outcome.stage_d_bleed_chip_votes = chip_result.bleed_votes_written
 
         bleed_calc_result = run_bleed_calculator_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
         outcome.stage_d_bleed_calculator_votes = bleed_calc_result.votes_written
@@ -1244,8 +1253,8 @@ def _run_attribute_chip_casters(
         logger.error(
             "Attribute-chip casters skipped for run_id=%s: %s Stage D's printing votes for this "
             "batch are unaffected and already written. Run `seed_default_tags`/`seed_attribute_tags`"
-            "/`seed_sensitive_tags` to close this - until then the border/frame/bleed chip counters "
-            "stay at zero on every dispatch.",
+            "/`seed_sensitive_tags` to close this - until then the border/frame chip and bleed "
+            "calculator counters stay at zero on every dispatch.",
             run_id,
             exc,
         )
@@ -1796,7 +1805,6 @@ def dispatch_micro_batch(
                     "stage_d_slow_path_routed": outcome.stage_d_slow_path_routed,
                     "stage_d_border_chip_votes": outcome.stage_d_border_chip_votes,
                     "stage_d_frame_chip_votes": outcome.stage_d_frame_chip_votes,
-                    "stage_d_bleed_chip_votes": outcome.stage_d_bleed_chip_votes,
                     "stage_d_bleed_calculator_votes": outcome.stage_d_bleed_calculator_votes,
                     "stage_d_ai_art_votes": outcome.stage_d_ai_art_votes,
                     "stage_d_art_hash_artist_votes": outcome.stage_d_art_hash_artist_votes,

@@ -510,14 +510,18 @@ three were documented, deliberate states, not defects:
 
 - `local-fallback-v1` at zero — superseded by a purpose-built caster
   (PR #654).
-- bleed-edge (`bleed-edge-cast-v1`) emitting only negative votes —
-  `local_fallback.cast_bleed_edge_vote`'s own docstring records that this
-  negative-only design superseded an original both-directions design on
-  2026-07-15: `appropriate-bleed` is a SENSITIVE tag requiring moderator
-  co-sign, and voting APPLY on the routine ~97.5% case "would flood
-  moderation with confirmations of normalcy rather than surfacing the
-  rare real exception, which is what a SENSITIVE tag is for." Absence of
-  a vote **is** the documented convention for normal bleed.
+- `bleed-edge-cast-v1` (the retired chip-caster identity for
+  `appropriate-bleed`) — **RETIRED 2026-08-15**, superseded by
+  `bleed-calculator-cast-v1` as the sole machine channel for that tag (PR
+  #827); its negative-only design descended from
+  `local_fallback.cast_bleed_edge_vote`'s own 2026-07-15 docstring: the
+  original both-directions design was superseded because `appropriate-bleed`
+  is a SENSITIVE tag requiring moderator co-sign, and voting APPLY on the
+  routine ~97.5% case "would flood moderation with confirmations of
+  normalcy rather than surfacing the rare real exception, which is what a
+  SENSITIVE tag is for." Absence of a vote **is** the documented convention
+  for normal bleed — the calculator keeps that convention and adds the
+  cross-method abstention on top.
 - art-edge-continuity (`local_art_edge.classify_art_edge_continuity`)
   casting nothing — its own docstring states it is "EVIDENCE-ONLY
   today — nothing votes on it yet", gated behind

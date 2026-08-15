@@ -81,14 +81,19 @@ exactly the "single evidence source" case. The confidence value is still stored 
 `CardTagVote` row, same as every other machine caster in this codebase - an honest record of how
 the calculator itself rates the evidence, informational per `vote_consensus.py`, not read by it.
 
-NEGATIVE-ONLY, SAME CONVENTION AS `cast_bleed_edge_vote`/`local_attribute_chip_cast`'s bleed
-branch: a vote is cast only when this calculator's own (cross-checked) reading agrees with Stage
-C's `bleed_class == "trimmed"` - the ~2.5% real exception, not the ~97.5% ordinary "bleed" case.
-Voting APPLY on the routine case would flood moderation with confirmations of normalcy, which is
-the opposite of what `appropriate-bleed`, a SENSITIVE tag, is for. This calculator's genuine value
-add over the existing `bleed-edge-cast-v1` identity (which already casts on `bleed_class ==
-"trimmed"` alone) is withholding the vote when Method B's independent, per-edge measurement
-contradicts that "trimmed" reading past the abstain gate - the same 1.5% the gate itself measures.
+NEGATIVE-ONLY, SAME CONVENTION AS `cast_bleed_edge_vote`: a vote is cast only when this
+calculator's own (cross-checked) reading agrees with Stage C's `bleed_class == "trimmed"` - the
+~2.5% real exception, not the ~97.5% ordinary "bleed" case. Voting APPLY on the routine case
+would flood moderation with confirmations of normalcy, which is the opposite of what
+`appropriate-bleed`, a SENSITIVE tag, is for. This calculator REPLACES the `bleed-edge-cast-v1`
+identity in `local_attribute_chip_cast`, which cast on `bleed_class == "trimmed"` alone and is now
+retired: this calculator's whole reason to exist is withholding the vote when Method B's
+independent, per-edge measurement contradicts that "trimmed" reading past the abstain gate - the
+same 1.5% the gate itself measures - and the old single-signal caster would have voted on exactly
+those cards, defeating the abstention and double-counting one signal. As the sole machine channel
+it covers everything the old caster covered: it skips only when BOTH methods are unavailable, and
+abstains only when both are present and disagree past the gate - otherwise Method A alone still
+votes.
 
 ZERO IMAGE FETCHES. Every input (`ImageEvidence.bleed_diff_mm`/`bleed_class`/`pinline_inset_*`,
 `CanonicalPrintingMetadata.border_color`/`frame`) is already in the database.
@@ -121,10 +126,10 @@ from cardpicker.models import (
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.vote_write import purge_and_write_votes
 
-# Own anonymous_id (distinct from `local_fallback.FALLBACK_ANONYMOUS_ID` and
+# Own anonymous_id (distinct from `local_fallback.FALLBACK_ANONYMOUS_ID` and from the retired
 # `local_attribute_chip_cast.BLEED_EDGE_CAST_ANONYMOUS_ID` - see module docstring's
-# "NEGATIVE-ONLY" section for why this is a genuinely separate channel, not a duplicate of
-# either).
+# "NEGATIVE-ONLY" section for why this identity is the SOLE machine channel for
+# `appropriate-bleed`, replacing that retired chip caster).
 BLEED_CALCULATOR_CAST_ANONYMOUS_ID = "bleed-calculator-cast-v1"
 
 # Method A's own extractor family (bleed_diff_mm/bleed_class/width/height all persisted together
