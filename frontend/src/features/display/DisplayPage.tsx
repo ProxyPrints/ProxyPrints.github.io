@@ -808,6 +808,10 @@ interface SelectVersionSectionProps {
     candidateIdentifier: string,
     supportTagNames: string[]
   ) => void;
+  /** Rail-anchored filters round - forwarded straight through to SelectVersionResults' own prop
+   * of the same name (see its comment); lets LeftRailOffcanvas widen while the Filters panel is
+   * open. */
+  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 // Reuses the same real search/filter machinery GridSelectorModal itself now delegates to
@@ -826,6 +830,7 @@ const SelectVersionSection = ({
   selectedImage,
   backendURL,
   onImplicitSupport,
+  onFiltersOpenChange,
 }: SelectVersionSectionProps) => {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -943,6 +948,7 @@ const SelectVersionSection = ({
         backendURL={backendURL}
         layout="stacked"
         voteLayer={voteLayer}
+        onFiltersOpenChange={onFiltersOpenChange}
       />
     </>
   );
@@ -1144,18 +1150,30 @@ const DisplayBodyRegion = styled.div`
 // ("pinned to the bottom and mostly non visible") was a genuinely-open drawer only 30vh tall, most
 // of its own content clipped below that. The explicit height (not max-height) below matches the
 // approved mockup's own bottom-sheet rule exactly - see the design doc's R5 row.
-const LeftRailOffcanvas = styled(Offcanvas)`
+// Rail-anchored filters round - `$filtersOpen` (SelectVersionResults.tsx's own
+// `onFiltersOpenChange`, threaded through Rail/SelectVersionSection below) widens this SAME rail
+// column instead of floating a separate panel over the page: the inline (`lg`+) sticky column and
+// the tablet `start` drawer both grow from their normal width while the funnel's Filters panel is
+// open, so its fieldsets and the candidate grid underneath both fit without one covering the
+// other. Phone's `bottom` sheet is untouched - it's already full-viewport width.
+const LeftRailOffcanvas = styled(Offcanvas)<{ $filtersOpen?: boolean }>`
   &.offcanvas-bottom {
     height: 72vh;
     border-top-left-radius: 0.75rem;
     border-top-right-radius: 0.75rem;
   }
 
+  &.offcanvas-start {
+    width: ${(props) => (props.$filtersOpen ? "min(640px, 92vw)" : "400px")};
+    max-width: ${(props) =>
+      props.$filtersOpen ? "min(640px, 92vw)" : "400px"};
+  }
+
   @media (min-width: 992px) {
     &.offcanvas-lg {
-      width: 380px;
-      max-width: 380px;
-      flex: 0 0 380px;
+      width: ${(props) => (props.$filtersOpen ? "640px" : "380px")};
+      max-width: ${(props) => (props.$filtersOpen ? "640px" : "380px")};
+      flex: 0 0 ${(props) => (props.$filtersOpen ? "640px" : "380px")};
       position: sticky;
       top: 0;
       max-height: 100vh;
@@ -1745,19 +1763,44 @@ const RailRoot = styled.div`
     color: var(--theme-btn-ink);
   }
 
-  /* Filters panel - one shared fieldset body, tier-conditional container (RD4/O3): phone = the
-     in-rail .fpanel.inline below, still inside this styled-component's own DOM/CSS scope.
-     Desktop/tablet's own .fpanel.float + .fscrim are portaled to document.body instead (see
-     SelectVersionResults.tsx's FloatFiltersPortalRoot comment for why a plain in-tree
-     position:fixed node isn't enough here) - those two classes' rules travel WITH that portal
-     component, duplicated in lockstep, not defined here. */
+  /* Rail-anchored filters round - ONE panel now, every viewport tier: this .fpanel.inline,
+     expanded in place via an in-rail Collapse (SelectVersionResults.tsx) - no page-darkening
+     backdrop, no document.body portal any more (the old .fpanel.float/.fscrim pair is retired).
+     The left accent border reads it as belonging to this rail, not a dialog floating over the
+     page; LeftRailOffcanvas widens itself while it's open (this component's own $filtersOpen
+     prop, below) so the funnel's chips and the candidate grid stay visible together instead of
+     one covering the other. */
   .fpanel {
     background: var(--theme-raised-bg);
     border: 1px solid var(--theme-divider);
-    padding: 8px;
+    padding: 0;
   }
   .fpanel.inline {
     margin-bottom: 8px;
+    border-left: 3px solid var(--bs-primary);
+  }
+  .fptitle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--theme-card-header-bg);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .fptitle button {
+    background: transparent;
+    border: 1px solid rgba(var(--bs-body-color-rgb), 0.2);
+    color: var(--bs-body-color);
+    padding: 2px 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .fpwrap {
+    padding: 8px;
   }
   .fset {
     border: none;
@@ -1883,6 +1926,9 @@ interface RailProps {
     candidateIdentifier: string,
     supportTagNames: string[]
   ) => void;
+  /** Rail-anchored filters round - threaded straight through to SelectVersionSection/
+   * SelectVersionResults; see SelectVersionResults' own prop comment. */
+  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 const Rail = ({
@@ -1891,6 +1937,7 @@ const Rail = ({
   backendURL,
   onSlotDeleted,
   onImplicitSupport,
+  onFiltersOpenChange,
 }: RailProps) => {
   // Rail-delegacy round - the old six-key `expandedSections` accordion state is gone with the
   // grey sections it drove; the two remaining disclosures ("More details", the D14 identify
@@ -2037,6 +2084,7 @@ const Rail = ({
           selectedImage={selectedImage}
           backendURL={backendURL}
           onImplicitSupport={onImplicitSupport}
+          onFiltersOpenChange={onFiltersOpenChange}
         />
       </div>
       {/* Rail restructure ruling 2 - the per-slot cardback control proposes a DIFFERENT card
@@ -2155,6 +2203,11 @@ export function DisplayPage() {
     viewportTier === "phone" ? "bottom" : "start";
   const [leftRailOpen, setLeftRailOpen] = useState(false);
   const [rightRailOpen, setRightRailOpen] = useState(false);
+  // Rail-anchored filters round - SelectVersionResults' own Filters panel, reported up through
+  // Rail/SelectVersionSection (see their own `onFiltersOpenChange` prop comments). Drives
+  // LeftRailOffcanvas's `$filtersOpen` width below - the panel is drawn from this rail by widening
+  // it, not by floating a separate darkened dialog over the page.
+  const [railFiltersOpen, setRailFiltersOpen] = useState(false);
   // Design doc §4's "two overlays, one screen" invariant - opening either rail closes the other,
   // so they never stack below their own inline tier. Harmless to call at inline tiers too:
   // Offcanvas ignores `show` there entirely (see its own source - `hideResponsiveOffcanvas`
@@ -2773,6 +2826,7 @@ export function DisplayPage() {
           onHide={() => setLeftRailOpen(false)}
           responsive="lg"
           placement={leftPlacement}
+          $filtersOpen={railFiltersOpen}
           data-testid="display-rail"
           aria-label="Card details and art selection"
         >
@@ -2821,6 +2875,7 @@ export function DisplayPage() {
               cardDocumentsByIdentifier={cardDocumentsByIdentifier}
               backendURL={backendURL ?? ""}
               onSlotDeleted={() => setSelectedSlotRef(null)}
+              onFiltersOpenChange={setRailFiltersOpen}
               onImplicitSupport={
                 selectedSlotRef != null
                   ? (candidateIdentifier, supportTagNames) =>
