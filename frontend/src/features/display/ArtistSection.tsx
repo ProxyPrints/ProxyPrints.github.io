@@ -40,10 +40,13 @@ export function ArtistSection({ cardDocument }: ArtistSectionProps) {
   return (
     <div data-testid="display-artist-section">
       {cardDocument.canonicalArtist != null ? (
-        <ArtistSupportLink
-          artistName={cardDocument.canonicalArtist.name}
-          defaultExpanded
-        />
+        // Rail restructure ruling 3 (docs/proposals/mockups/editor-repass round, owner
+        // directive) - REV: no longer `defaultExpanded`. The rail no longer has room to spend on
+        // an always-open commerce-link stack (the owner's own "artist applet ... too large"
+        // complaint); this caller now behaves like every OTHER space-constrained mount
+        // (question feed, card-detail modal) - one compact line (artist link + a visible
+        // disclosure toggle) by default, full applet still one tap away, never removed.
+        <ArtistSupportLink artistName={cardDocument.canonicalArtist.name} />
       ) : (
         <span className="text-muted">Unknown</span>
       )}

@@ -237,12 +237,14 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await openSelectVersionSection(page);
     await expect(page.getByTestId("display-rail-content")).toBeVisible();
 
-    // Item 6 (RD - "hangs off D14") - `.idhang`/`.idtoggle`/`.idbody` (§D.2): same surface colour
-    // as D14 ($theme-band-bg), starts closed, PrintingTagsBlock mounts only once opened.
-    // Tokyo-11: #2b3e50 -> #222234, rgb(43, 62, 80) -> rgb(34, 34, 52).
-    const identifyPanel = page.getByTestId("display-identify-panel");
-    await expect(identifyPanel).toBeVisible();
-    await expect(identifyPanel).toHaveCSS(
+    // Item 6 (RD - "hangs off D14"), REV ruling 3 (editor-repass round, item 3) - `.idtoggle`/
+    // `.idbody` no longer have their own `.idhang` wrapper; they share `.detid-row` with
+    // "More details" now (same surface colour as D14, $theme-band-bg), starts closed,
+    // PrintingTagsBlock mounts only once opened. Tokyo-11: #2b3e50 -> #222234,
+    // rgb(43, 62, 80) -> rgb(34, 34, 52).
+    const detailsIdentifyRow = page.getByTestId("display-details-identify-row");
+    await expect(detailsIdentifyRow).toBeVisible();
+    await expect(detailsIdentifyRow).toHaveCSS(
       "background-color",
       "rgb(34, 34, 52)"
     );
@@ -356,9 +358,11 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
 
     // No resolved card at all here, so D14/identify/More-details/mismatch all correctly render
     // nothing to identify - confirms the empty state doesn't ALSO leave some other element
-    // showing a stale/fabricated id.
+    // showing a stale/fabricated id. REV ruling 3 - `display-identify-panel` no longer exists as
+    // its own node (merged into `.detid-row`, which still renders for "More details" alone); the
+    // identify toggle itself is the thing gated on a resolved card, so that's what's asserted.
     await expect(page.getByTestId("display-confidence-element")).toHaveCount(0);
-    await expect(page.getByTestId("display-identify-panel")).toHaveCount(0);
+    await expect(page.getByTestId("display-identify-toggle")).toHaveCount(0);
     await expect(page.getByTestId("requested-printing-badge")).toHaveCount(0);
   });
 
@@ -595,10 +599,13 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     ).toHaveCount(0);
 
     const order = await page.evaluate(() => {
+      // REV ruling 3 (editor-repass round, item 3) - "display-identify-panel" no longer exists
+      // as its own node (merged into "display-details-identify-row"); the identify toggle button
+      // is the thing whose relative order to "More details" actually matters here.
       const ids = [
         "display-confidence-element",
         "display-rail-more-details-toggle",
-        "display-identify-panel",
+        "display-identify-toggle",
       ];
       const positions = ids.map((id) => {
         const el = document.querySelector(`[data-testid="${id}"]`);
