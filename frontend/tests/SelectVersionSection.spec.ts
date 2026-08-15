@@ -242,10 +242,8 @@ test.describe("SelectVersionSection (issue #167)", () => {
     // the vote layer is on) and its selection should cast an implicit support vote.
     await page.getByTestId("funnel-chip-Old Border").click();
     await expect(page.getByTestId("funnel-awareness-line")).toBeVisible();
-    // Rail-delegacy round (RD4/O3) - the desktop/tablet Filters panel is a real modal-style
-    // overlay with its own backdrop (escapes the 380px rail column) - close it first so the
-    // grid tile underneath is actually clickable, same as a real user would have to.
-    await page.getByTestId("filters-panel-close").click();
+    // Rail-anchored filters round - the panel no longer covers the grid (it's drawn from the
+    // rail, not a modal-style overlay), so the tile is clickable with the panel still open.
 
     const tile = page.getByTestId(
       "select-version-tile-1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU"
@@ -257,9 +255,8 @@ test.describe("SelectVersionSection (issue #167)", () => {
     await expect(page.getByTestId("funnel-support-ack")).toContainText(
       "Old Border"
     );
-    // The pick resets the active chips - reopening the panel shows the Border chip back to
-    // untouched, not still active from before the pick.
-    await page.getByTestId("funnel-filters-toggle").click();
+    // The pick resets the active chips - the panel (still open the whole time now) shows the
+    // Border chip back to untouched, not still active from before the pick.
     await expect(page.getByTestId("funnel-awareness-line")).toHaveCount(0);
     await expect(page.getByTestId("funnel-chip-Old Border")).toHaveAttribute(
       "data-active",
@@ -312,10 +309,9 @@ test.describe("SelectVersionSection (issue #167)", () => {
     await page.getByTestId("funnel-filters-toggle").click();
 
     // First pick: cardDocument18 (1lL2...), under the active "Old Border" chip - casts support.
-    // Rail-delegacy round (RD4/O3) - close the Filters panel's own modal-style backdrop first so
-    // the grid tile underneath is actually clickable.
+    // Rail-anchored filters round - the panel no longer covers the grid, so the tile stays
+    // clickable with it still open.
     await page.getByTestId("funnel-chip-Old Border").click();
-    await page.getByTestId("filters-panel-close").click();
     await page
       .getByTestId("select-version-tile-1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU")
       .locator(".mpccard")
@@ -406,9 +402,8 @@ test.describe("SelectVersionSection (issue #167)", () => {
     // (cardDocument19) does so via tagVoteStatuses only, which the funnel no longer consults for
     // the suggested read.
     await expect(page.getByTestId("funnel-chip-Old Border")).toHaveCount(0);
-    // Rail-delegacy round (RD4/O3) - close the Filters panel's own modal-style backdrop first so
-    // the grid tile underneath is actually clickable.
-    await page.getByTestId("filters-panel-close").click();
+    // Rail-anchored filters round - the panel no longer covers the grid, so the tile stays
+    // clickable with it still open.
 
     // Activate a DIFFERENT axis (Treatment has no membership here since none of these three carry
     // a Treatment tag at all) isn't available, so instead: pick cardDocument19 directly with NO
