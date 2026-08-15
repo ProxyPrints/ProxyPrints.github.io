@@ -236,7 +236,7 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
   });
 
   test.describe("fuzzy search", () => {
-    test("DFC prompt shown for a prefix query when fuzzy search is enabled", async ({
+    test("DFC prompt not shown for a prefix query even when fuzzy search is enabled", async ({
       page,
       network,
     }) => {
@@ -247,14 +247,16 @@ test.describe("ChangeQueryModal DFC pair tests", () => {
       await enableDisplayFuzzySearch(page);
 
       const modal = await openDisplayChangeQueryModal(page, 1);
-      // "my search" is a prefix of the DFC front key "my search query"
+      // "my search" is a prefix of the DFC front key "my search query". This surface resolves
+      // precisely regardless of the global fuzzy preference (PR #822) - retyping a slot's query
+      // refines which printing of an already-bound card is wanted, not a new card search.
       await modal
         .getByLabel("change-selected-image-queries-text")
         .fill("my search");
 
       await expect(
         modal.getByText("matches a double-faced card pair")
-      ).toBeVisible();
+      ).not.toBeVisible();
     });
 
     test("DFC prompt not shown for a prefix query when precise search is in use", async ({
