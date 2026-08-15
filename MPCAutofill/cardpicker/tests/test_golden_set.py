@@ -53,6 +53,14 @@ EXTRACTORS_WITHOUT_GOLDEN_EXPECTATIONS = {
     # inherits the status quo so this test can land without a fresh 30-card host-venv run, which
     # needs prod credentials. Closing it is a follow-up, not a design decision.
     "artbox_phash",
+    # PROVISIONAL, same reasoning as artbox_phash above. pinline_inset writes one pinnable
+    # discrete value (`pinline_inset_verdict`: measured/ambiguous/indeterminate - no different in
+    # kind from `geometry_bleed`'s `bleed_class` or `layout_class`'s own output, both of which ARE
+    # pinned) alongside four continuous per-edge fractions and four discrete per-edge calls that
+    # golden_set.py would exclude on the same "continuous/brittle" grounds `fetch_latency_ms`/
+    # width/height already are. It is pinnable and simply has not been pinned; closing it needs
+    # the same real 30-card host-venv run with prod credentials artbox_phash's waiver defers.
+    "pinline_inset",
 }
 
 # GOLDEN_EXPECTATIONS keys that are not themselves `extractor_versions` keys. `bleed_diff_mm` is

@@ -96,6 +96,7 @@ from cardpicker.image_evidence import (
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
     LAYOUT_CLASS_EXTRACTOR_VERSION,
     LEGAL_LINE_EXTRACTOR_VERSION,
+    PINLINE_INSET_EXTRACTOR_VERSION,
     QUALITY_SIGNALS_EXTRACTOR_VERSION,
     SYMBOL_REGION_EXTRACTOR_VERSION,
     ExtractionResult,
@@ -112,6 +113,12 @@ from cardpicker.local_fallback import (
 )
 from cardpicker.local_ocr import DEFAULT_CROP_BOX, LEGAL_LINE_CROP_BOX
 from cardpicker.local_phash import ART_CROP_BOX
+from cardpicker.local_pinline_inset import (
+    CALL_MEASURED,
+    VERDICT_MEASURED,
+    EdgeReading,
+    PinlineInsetResult,
+)
 from cardpicker.models import CardScanLog, CardTagVote, ImageEvidence
 from cardpicker.modern_artist_credit import build_lexicon_index
 from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory, TagFactory
@@ -205,6 +212,27 @@ def _stub_quality_signals(monkeypatch, truncated: bool = False, blur: float = 42
     monkeypatch.setattr(module, "compute_entropy", lambda image: entropy)
 
 
+def _a_pinline_inset_result() -> PinlineInsetResult:
+    """A concrete, non-skip `measure_pinline_inset` outcome (all four edges confidently
+    measured) - used by tests that stub `_StubImage` through the full pipeline but want
+    `pinline_inset` to genuinely NOT skip, mirroring `_stub_border_color`'s own
+    caller-supplied-non-None-value convention above."""
+    reading = EdgeReading(inset_frac=0.01, call=CALL_MEASURED)
+    return PinlineInsetResult(top=reading, bottom=reading, left=reading, right=reading, verdict=VERDICT_MEASURED)
+
+
+def _stub_pinline_inset(monkeypatch, result=None):
+    """`_StubImage` has no `.convert()`/pixel data a real PIL image needs, so any test feeding
+    one through `fetch_and_compute_card_evidence_for_tests` (and whose image has a
+    non-degenerate width/height, so the `pinline_inset` extractor's own guard doesn't already
+    skip it - see `image_evidence.py`'s module docstring) must stub `measure_pinline_inset`
+    itself (same rationale as `_stub_border_color`/`_stub_ocr`/`_stub_symbol_region`/
+    `_stub_quality_signals` above). Defaults to `None` (the extractor's own degenerate-input
+    abstention outcome) so tests that don't care about pinline_inset's own result keep an
+    "ambiguous" skip_reasons entry rather than an incidental fields write."""
+    monkeypatch.setattr(module, "measure_pinline_inset", lambda image: result)
+
+
 def _build_card_image(
     regions: list[tuple[tuple[float, float, float, float], str]], bleed: bool = True
 ) -> "Image.Image":
@@ -234,6 +262,7 @@ class TestExtractCardEvidence:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch, result=_a_pinline_inset_result())
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -255,6 +284,7 @@ class TestExtractCardEvidence:
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
             "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
+            "pinline_inset": PINLINE_INSET_EXTRACTOR_VERSION,
         }
         # _stub_ocr's default raw text ("158/287 R MOM EN") is a realistic modern-frame collector
         # line with no artist credit in it - artist_ocr genuinely skips here, which is the
@@ -264,6 +294,8 @@ class TestExtractCardEvidence:
         # module-level patch of run_tesseract). artbox_phash does NOT skip: the same stubbed text
         # parses a real collector number, so classify_frame_style reads "modern" - see
         # TestExtractCardEvidenceArtboxPhash below for the extractor's own dedicated tests.
+        # pinline_inset does NOT skip either - _stub_pinline_inset above is given a concrete
+        # non-skip result rather than its own default (see this test's own "no_skip" name).
         assert result.skip_reasons == {"artist_ocr": "no-text", "legal_line": "no-text"}
 
     def test_forwards_the_cards_own_md5_checksum_onto_the_result(self, db, monkeypatch):
@@ -273,6 +305,7 @@ class TestExtractCardEvidence:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -309,6 +342,7 @@ class TestExtractCardEvidence:
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
             "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
+            "pinline_inset": PINLINE_INSET_EXTRACTOR_VERSION,
         }
         assert result.skip_reasons == {
             "fetch_health": "fetch_failed",
@@ -322,6 +356,7 @@ class TestExtractCardEvidence:
             "symbol_region": "fetch_failed",
             "legal_line": "fetch_failed",
             "quality_signals": "fetch_failed",
+            "pinline_inset": "fetch_failed",
         }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
@@ -331,6 +366,7 @@ class TestExtractCardEvidence:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -354,6 +390,7 @@ class TestExtractCardEvidence:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         fetch_and_compute_card_evidence_for_tests(card)
 
@@ -371,6 +408,7 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -388,6 +426,7 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -401,6 +440,7 @@ class TestExtractCardEvidenceGeometryBleed:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -590,6 +630,7 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -608,6 +649,7 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -627,6 +669,7 @@ class TestExtractCardEvidenceCropCoordinates:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -813,6 +856,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_ocr(monkeypatch, "158/287 R MOM EN")  # digit-bearing -> a real collector number
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -837,6 +881,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_ocr(monkeypatch, "Illus. John Avon")
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -863,6 +908,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_ocr(monkeypatch, "no signal here at all")
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -878,6 +924,7 @@ class TestExtractCardEvidenceArtboxPhash:
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -2273,6 +2320,7 @@ class TestTheTestOnlyWrapperCastsNoVoteAtAll:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         for card in cards:
             fetch_and_compute_card_evidence_for_tests(card)
@@ -2287,6 +2335,7 @@ class TestTheTestOnlyWrapperCastsNoVoteAtAll:
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         fetch_and_compute_card_evidence_for_tests(card)
 
