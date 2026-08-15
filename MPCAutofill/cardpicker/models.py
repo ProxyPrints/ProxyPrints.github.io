@@ -2784,6 +2784,12 @@ class ImageEvidence(models.Model):
     artist_crop_px = models.JSONField(null=True, blank=True)
     art_crop_px = models.JSONField(null=True, blank=True)
 
+    # art_edge (issue #830 defect 3) - local_art_edge.classify_art_edge_continuity's own return
+    # convention ("framed"/"extended"/"mixed"), same blank-string-as-sentinel convention as
+    # layout_class above for the ambiguous/not-yet-run case. EVIDENCE-ONLY: nothing votes on this
+    # column yet (see local_art_edge.cast_art_edge_continuity_vote's own docstring).
+    art_edge_class = models.CharField(max_length=16, blank=True, default="")
+
     # OCR-group (issue #149) - collector_line_ocr/artist_ocr/collector_line_tsv. Raw text +
     # local_ocr.parse_collector_line's tolerant parse of it (blank-string-as-sentinel for "no
     # OCR run yet, or nothing plausible found", same convention as bleed_class/layout_class

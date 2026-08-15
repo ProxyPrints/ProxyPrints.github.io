@@ -1178,7 +1178,7 @@ def _compute_card(
             outcome.disagreement = True
 
     if image is not None:
-        outcome.border_color = local_fallback.classify_border_color(image, bleed_class)
+        outcome.border_color = local_fallback.classify_border_color(image)
         illus_anchor_fired, _artist_name = local_fallback.detect_illus_anchor(image, ocr_raw_texts, bleed_class)
         # "unknown-set-code" (2026-07-23, the SET-CODE LEXICON GATE - see run_ocr_for_card's own
         # known_set_codes docstring paragraph) is included alongside "parsed-but-no-match" here

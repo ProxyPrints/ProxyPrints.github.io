@@ -259,6 +259,7 @@ from cardpicker.collector_line_artist import (
 )
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
+from cardpicker.local_art_edge import classify_art_edge_continuity
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     SYMBOL_STRIP_BOX,
@@ -328,6 +329,7 @@ COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v3"
 # NOT bumped: symbol_region is a raw phash of a crop region (imagehash, no tesseract call at all)
 # - engine-independent by construction.
 SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
+ART_EDGE_EXTRACTOR_VERSION = "art-edge-v1"
 # v1 -> v2, same reasoning as the three OCR extractors above: legal_line reads through
 # `local_ocr.run_tesseract` (issue #423's engine seam covers this call site too, not just
 # `run_tesseract_text_and_words`), so its stored `legal_line_raw_text`/`legal_line_copyright_year`/
@@ -1068,7 +1070,7 @@ def compute_card_evidence(
     if image is None:
         skip_reasons["layout_class"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
     else:
-        layout_class = classify_border_color(image, bleed_class)
+        layout_class = classify_border_color(image)
         fields["layout_class"] = layout_class or ""
         if layout_class is None:
             # classify_border_color's own documented ambiguous outcome (non-uniform sample or a
@@ -1088,6 +1090,22 @@ def compute_card_evidence(
         fields["artist_crop_px"] = _crop_box_to_pixels(ARTIST_CROP_BOX, bleed_class, width, height)
         fields["art_crop_px"] = _crop_box_to_pixels(ART_CROP_BOX, bleed_class, width, height)
     extractor_versions["crop_coordinates"] = CROP_COORDINATES_EXTRACTOR_VERSION
+
+    # art_edge (issue #830 defect 3): the self-referential extended-art classifier, consuming
+    # crop_coordinates' own art_crop_px above - no new crop box, no re-fetch. EVIDENCE-ONLY, same
+    # convention as artbox_frame_class/etc: stored on every card that reaches a verdict, never
+    # voted on here (see local_art_edge.cast_art_edge_continuity_vote's own docstring for why).
+    # "ambiguous" covers every abstain path classify_art_edge_continuity documents (a degenerate
+    # art_crop_px, or any of its three regions failing to sample) - the same shared skip-reason
+    # vocabulary layout_class's own abstention above uses.
+    if image is None:
+        skip_reasons["art_edge"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+    else:
+        art_edge_class = classify_art_edge_continuity(image, fields.get("art_crop_px"))
+        fields["art_edge_class"] = art_edge_class or ""
+        if art_edge_class is None:
+            skip_reasons["art_edge"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+    extractor_versions["art_edge"] = ART_EDGE_EXTRACTOR_VERSION
 
     # legal_line COMPUTE, hoisted ahead of the OCR group (2026-07-29 - see `_extract_legal_line`'s
     # own docstring for the full rationale). Its RESULTS are still stored at this extractor's own

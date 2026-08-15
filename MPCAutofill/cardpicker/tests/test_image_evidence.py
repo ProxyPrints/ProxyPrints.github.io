@@ -85,6 +85,7 @@ import cardpicker.image_evidence as module
 from cardpicker.collector_line_artist import build_artist_lexicon
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import (
+    ART_EDGE_EXTRACTOR_VERSION,
     ARTBOX_MODERN_CROP_BOX,
     ARTBOX_OLD_CROP_BOX,
     ARTBOX_PHASH_EXTRACTOR_VERSION,
@@ -150,6 +151,15 @@ def _stub_border_color(monkeypatch, value=None):
     own outcome pass a fixed non-None value to keep skip_reasons/extractor_versions assertions
     unaffected by an incidental "ambiguous" entry."""
     monkeypatch.setattr(module, "classify_border_color", lambda image, bleed_class=None: value)
+
+
+def _stub_art_edge(monkeypatch, value=None):
+    """`_StubImage` has no `.crop()`/`.convert()`/`.getdata()`, so any test feeding one through
+    `fetch_and_compute_card_evidence_for_tests` must stub out `classify_art_edge_continuity`
+    itself (same rationale as `_stub_border_color` above - `art_edge` runs right after
+    `crop_coordinates`, before every OCR-group/symbol/artbox extractor, so it needs stubbing
+    wherever `_stub_border_color` does)."""
+    monkeypatch.setattr(module, "classify_art_edge_continuity", lambda image, art_crop_px: value)
 
 
 def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
@@ -259,6 +269,7 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -277,6 +288,7 @@ class TestExtractCardEvidence:
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
             "layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION,
             "crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION,
+            "art_edge": ART_EDGE_EXTRACTOR_VERSION,
             "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
@@ -302,6 +314,7 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=12345, md5_checksum="abc123")
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -335,6 +348,7 @@ class TestExtractCardEvidence:
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
             "layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION,
             "crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION,
+            "art_edge": ART_EDGE_EXTRACTOR_VERSION,
             "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
@@ -349,6 +363,7 @@ class TestExtractCardEvidence:
             "geometry_bleed": "fetch_failed",
             "layout_class": "fetch_failed",
             "crop_coordinates": "fetch_failed",
+            "art_edge": "fetch_failed",
             "collector_line_ocr": "fetch_failed",
             "artist_ocr": "fetch_failed",
             "collector_line_tsv": "fetch_failed",
@@ -363,6 +378,7 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=None)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -387,6 +403,7 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -405,6 +422,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -423,6 +441,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -437,6 +456,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _AMBIGUOUS_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -458,6 +478,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
@@ -627,6 +648,7 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(1000, 2000)))
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -646,6 +668,7 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -666,6 +689,7 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -808,6 +832,7 @@ class TestExtractCardEvidenceSymbolRegion:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
@@ -853,6 +878,7 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch, "158/287 R MOM EN")  # digit-bearing -> a real collector number
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -876,6 +902,7 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         # no digit anywhere - _COLLECTOR_NUMBER_RE never matches, so collector_number stays None;
         # "Illus." anchor fires via extract_artist_name's own regex (see local_fallback.py).
         _stub_ocr(monkeypatch, "Illus. John Avon")
@@ -903,6 +930,7 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         # neither a collector number nor an "Illus." credit - classify_frame_style's own
         # documented "neither -> abstain (None)" outcome (see local_fallback.py's own comment).
         _stub_ocr(monkeypatch, "no signal here at all")
@@ -921,6 +949,7 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -944,6 +973,7 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
 
         result = fetch_and_compute_card_evidence_for_tests(card)
@@ -2317,6 +2347,7 @@ class TestTheTestOnlyWrapperCastsNoVoteAtAll:
         cards = [CardFactory(content_phash=i + 1) for i in range(3)]
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
@@ -2332,6 +2363,7 @@ class TestTheTestOnlyWrapperCastsNoVoteAtAll:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, None)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
