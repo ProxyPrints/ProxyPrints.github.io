@@ -53,6 +53,13 @@ EXTRACTORS_WITHOUT_GOLDEN_EXPECTATIONS = {
     # inherits the status quo so this test can land without a fresh 30-card host-venv run, which
     # needs prod credentials. Closing it is a follow-up, not a design decision.
     "artbox_phash",
+    # PROVISIONAL, same status as artbox_phash above. art_edge (issue #830 defect 3) writes one
+    # discrete field, `art_edge_class` ("framed"/"extended"/"mixed"/""), no different in kind
+    # from `layout_class` - the golden set could pin it. It has not been pinned in THIS change
+    # because doing so needs a real run against the 30 golden cards' own stored images, which
+    # needs prod DB/image access this change was scoped to read-only. Closing it is a follow-up,
+    # not a design decision.
+    "art_edge",
 }
 
 # GOLDEN_EXPECTATIONS keys that are not themselves `extractor_versions` keys. `bleed_diff_mm` is
