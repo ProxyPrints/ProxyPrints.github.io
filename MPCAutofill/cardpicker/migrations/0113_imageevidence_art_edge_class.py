@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("cardpicker", "0111_cardprintingtag_evidence_types_used"),
+        ("cardpicker", "0112_imageevidence_pinline_inset_call_bottom_and_more"),
     ]
 
     operations = [
