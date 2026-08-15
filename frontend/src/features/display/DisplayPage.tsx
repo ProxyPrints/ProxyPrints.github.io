@@ -3307,6 +3307,7 @@ export function DisplayPage() {
                     value="fronts"
                     variant="outline-light"
                     size="sm"
+                    active={frontsVisible}
                     data-testid="display-view-toggle-fronts"
                   >
                     Fronts
@@ -3316,6 +3317,7 @@ export function DisplayPage() {
                     value="backs"
                     variant="outline-light"
                     size="sm"
+                    active={!frontsVisible}
                     data-testid="display-view-toggle-backs"
                   >
                     Backs
