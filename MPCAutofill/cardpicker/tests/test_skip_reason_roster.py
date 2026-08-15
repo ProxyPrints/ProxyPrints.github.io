@@ -102,6 +102,7 @@ EXPECTED_SKIP_REASONS = {
         "NO_EVIDENCE_SKIP_REASON",
         "LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON",
         "CHIP_NO_EVIDENCE_SKIP_REASON",
+        "BLEED_CALC_NO_EVIDENCE_SKIP_REASON",
     },
     "eliminated": {
         "FALLBACK_ELIMINATED_SKIP_REASON",
@@ -115,6 +116,7 @@ EXPECTED_SKIP_REASONS = {
         "OCR_AMBIGUOUS_SKIP_REASON",
         "LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON",
         "CHIP_ABSTAINED_SKIP_REASON",
+        "BLEED_CALC_AMBIGUOUS_SKIP_REASON",
     },
     "no-text": {
         "EXTRACTOR_NO_TEXT_SKIP_REASON",
@@ -133,12 +135,13 @@ EXPECTED_SKIP_REASONS = {
         "AI_ART_INCOMPLETE_EVIDENCE_SKIP_REASON",
         "LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON",
         "CHIP_INCOMPLETE_EVIDENCE_SKIP_REASON",
+        "BLEED_CALC_INCOMPLETE_EVIDENCE_SKIP_REASON",
     },
-    # Attribute-chip cast — local_attribute_chip_cast.py (frame-style-cast-v1 /
-    # bleed-edge-cast-v1, 2026-07-30). ONE vocabulary shared by two anonymous_ids written from a
-    # single pass, hence the `CHIP_` prefix rather than a per-identity one: the two families
-    # differ in which extractor they gate on, not in what a skip MEANS. Its three shared values
-    # are registered against the multi-calculator entries above; only this one is new.
+    # Attribute-chip cast — local_attribute_chip_cast.py (frame-style-cast-v1, 2026-07-30).
+    # ONE vocabulary written from a single identity: the bleed half of this module
+    # (bleed-edge-cast-v1) is RETIRED, so the `CHIP_` prefix now names the frame family alone.
+    # Its three shared values are registered against the multi-calculator entries above; only
+    # this one is new.
     #
     # APPENDED AT THE END, not filed next to the layout-class caster where it reads better.
     # `.github/scripts/constant_rename_equivalence.py` inlines this dict into every assert that
@@ -146,6 +149,12 @@ EXPECTED_SKIP_REASONS = {
     # shifts every later key and reports as a behaviour divergence. A trailing addition shifts
     # nothing. Keep new entries here.
     "unmapped-frame-class": {"CHIP_UNMAPPED_SKIP_REASON"},
+    # Bleed calculator — local_bleed_calculator.py (bleed-calculator-cast-v1, cross-checked
+    # appropriate-bleed caster). Two values genuinely new to the roster: the abstain-gate outcome
+    # itself, and the "value computed but this card isn't trimmed" outcome (the ordinary, ~97.5%
+    # case). Appended at the end, same positional-stability reasoning as the CHIP entry above.
+    "method-disagreement": {"BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON"},
+    "not-trimmed": {"BLEED_CALC_NOT_TRIMMED_SKIP_REASON"},
 }
 
 # The same regex `.github/scripts/docs_lint.py`'s roster tether uses. Kept as a

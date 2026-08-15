@@ -135,7 +135,7 @@ class _StubImage:
         return self
 
 
-# A real fetched image at DEFAULT_FETCH_DPI (250) is ~925px tall - these stub sizes just need to
+# A real fetched image at DEFAULT_FETCH_DPI (460) is ~1702px tall - these stub sizes just need to
 # land at the right aspect ratio, not the right absolute resolution, since classify_bleed_edge
 # only looks at the width/height ratio.
 _BLEED_IMAGE = _StubImage(size=(round(1000 * BLEED_ASPECT_RATIO), 1000))

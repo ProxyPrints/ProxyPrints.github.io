@@ -4,20 +4,24 @@ docs/features/catalog-completion-plan.md's "Harvest-calculate pipeline" section)
 change to the fetch tier a future R2-cached harvest tier would use: T1 measures real OCR
 accuracy at each candidate resolution (not interpolated from the RESOLUTION_FLOOR_DPI sweep), T2
 measures phash Hamming-distance drift against the SAME "full resolution" baseline every existing
-phash calibration in this project actually used - confirmed directly against
+phash calibration in this project actually used - originally confirmed directly against
 docs/features/printing-tags.md's "Phash accuracy at small CDN sizes" section ("hashed at full
-res (250dpi/~925px)"), NOT literal native resolution, which is a distinct, higher baseline
-(dpi=None -> no h= param sent to Google's lh4 endpoint at all, confirmed against
-image-cdn/src/url.ts + GoogleDriveService.ts). Both baselines are probed here so the report can
-state plainly which one the harvest-tier candidate should be compared against, rather than
-assuming the two coincide.
+res (250dpi/~925px)"), NOT literal native resolution, which is a distinct, higher baseline. This
+baseline tracks image_cdn_fetch.DEFAULT_FETCH_DPI LIVE, not a value pinned here - "full
+resolution" means "whatever production actually fetches", so when that constant moved 250 -> 460
+(2026-08-14, for downstream geometric-measurement precision) the calibration tier moved with it
+to 460dpi/~1702px, same reasoning docs/features/printing-tags.md's own historical 250dpi
+measurement used when 250 was still the production default. Both baselines (native and this one)
+are probed here so the report can state plainly which one the harvest-tier candidate should be
+compared against, rather than assuming the two coincide.
 
 DPI tiers (height = dpi * 1110 / 300, image-cdn/src/url.ts):
 - "native": dpi=None, Google's own stored original - no resize directive sent at all.
 - "1200px": dpi=320 -> 1184px (nearest-10 dpi at/above the literal ~1200px target the owner
   named for a prospective harvest tier).
-- "925px": dpi=250 (image_cdn_fetch.DEFAULT_FETCH_DPI) - the resolution every phash calibration
-  doc in this project actually means by "full resolution", not a new value invented here.
+- "1702px": dpi=image_cdn_fetch.DEFAULT_FETCH_DPI (currently 460) - the resolution every phash
+  calibration doc in this project actually means by "full resolution", tracking whatever
+  production fetches at rather than a value pinned here.
 - "800px": dpi=220 (local_lands_identify.OCR_FETCH_DPI) - already shipped, already used in
   production for Part 4's LANDS OCR pass.
 """
@@ -26,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from cardpicker import local_phash
-from cardpicker.image_cdn_fetch import fetch_card_image
+from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
 from cardpicker.local_fallback import classify_bleed_edge
 from cardpicker.local_identify_printing_tags import (
     CandidateNameIndex,
@@ -39,7 +43,7 @@ from cardpicker.models import Card, CardTypes
 RESOLUTION_TIERS: dict[str, Optional[int]] = {
     "native": None,
     "1200px": 320,
-    "925px": 250,
+    "1702px": DEFAULT_FETCH_DPI,
     "800px": 220,
 }
 
@@ -49,7 +53,7 @@ NATIVE_TIER = "native"
 
 # What every existing phash calibration doc in this project actually means by "full resolution"
 # (see module docstring) - T2's real comparison baseline, distinct from NATIVE_TIER.
-CALIBRATION_BASELINE_TIER = "925px"
+CALIBRATION_BASELINE_TIER = "1702px"
 
 
 @dataclass
