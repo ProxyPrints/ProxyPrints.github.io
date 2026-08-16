@@ -168,6 +168,22 @@ describe("filterCandidatesByChipStates", () => {
       expect(result).toEqual([blackBordered]);
     });
 
+    it("keeps a single-printing illustration that has no printing matching the active chip", () => {
+      // Regression test for the single-printing illustration bug fix - an illustration
+      // with only one printing (group.size === 1) should still survive when no printing
+      // matches the active chip, since it carries a real illustrationId.
+      const singlePrinting = {
+        ...printingCandidate1,
+        identifier: "printing-single",
+        borderColor: "silver",
+        illustrationId,
+      };
+      const result = filterCandidatesByChipStates([singlePrinting], {
+        "Black Border": "positive",
+      });
+      expect(result).toEqual([singlePrinting]);
+    });
+
     it("a candidate with no illustrationId at all is unaffected - still excluded on a genuine mismatch", () => {
       const result = filterCandidatesByChipStates(
         [printingCandidate1, printingCandidate2],
