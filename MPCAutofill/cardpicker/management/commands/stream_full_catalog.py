@@ -404,6 +404,10 @@ EXIT_ENVELOPE_HALT = 3
 EXIT_THROTTLE_BUDGET_EXHAUSTED = 4
 EXIT_MAX_BATCHES_REACHED = 5
 EXIT_STREAMING_DISABLED = 6
+# Owned by run_pipeline.py's own fidelity gate (Stage D machine-only-resolution check) and
+# declared here, not there, so backfill_survivor_pks can import it the same way it already
+# imports every other exit code from this module - one declaration, never two that could drift.
+EXIT_FIDELITY_GATE_VIOLATION = 7
 
 
 def resume_scope_for(source_keys: Optional[List[str]]) -> str:

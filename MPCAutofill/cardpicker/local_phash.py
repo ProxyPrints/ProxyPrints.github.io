@@ -61,7 +61,7 @@ DEFAULT_MARGIN = 5
 ART_CROP_BOX: tuple[float, float, float, float] = (0.07, 0.10, 0.93, 0.58)
 
 # Hash-at-ingest/backfill fetch size (2026-07-16, docs/features/printing-tags.md's "Phash
-# accuracy at small CDN sizes"): deliberately small, NOT DEFAULT_FETCH_DPI (250) - phash's own
+# accuracy at small CDN sizes"): deliberately small, NOT DEFAULT_FETCH_DPI (460) - phash's own
 # internal downsample to 32x32 grayscale before its DCT means 148px is already ~5x the
 # resolution the algorithm actually uses, and measured on 150 real cards/11,175 pairs, zero
 # false merges occurred at this size (min distance among confirmed-different pairs: 16-18,

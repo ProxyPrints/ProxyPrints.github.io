@@ -17,7 +17,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
 import cardpicker.local_lands_identify as module
-from cardpicker import local_ocr
+from cardpicker import image_cdn_fetch, local_ocr
 from cardpicker.local_identify_printing_tags import (
     OCR_ANONYMOUS_ID,
     OCR_CONFIDENCE_BOTH,
@@ -409,7 +409,7 @@ class TestRunLandsIdentify:
         run_lands_identify(dry_run=True, sample_size=300, fetch_budget=10)
 
         assert captured_dpi == [module.OCR_FETCH_DPI]
-        assert module.OCR_FETCH_DPI != 250  # not the print-quality DEFAULT_FETCH_DPI
+        assert module.OCR_FETCH_DPI != image_cdn_fetch.DEFAULT_FETCH_DPI
 
     def test_dry_run_writes_nothing(self, db, monkeypatch):
         artist = CanonicalArtistFactory(name="Rebecca Guay")

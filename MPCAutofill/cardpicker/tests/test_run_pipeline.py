@@ -39,10 +39,8 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 
 from cardpicker import stage_e_dispatch
-from cardpicker.local_attribute_chip_cast import (
-    BLEED_EDGE_CAST_ANONYMOUS_ID,
-    FRAME_STYLE_CAST_ANONYMOUS_ID,
-)
+from cardpicker.local_attribute_chip_cast import FRAME_STYLE_CAST_ANONYMOUS_ID
+from cardpicker.local_bleed_calculator import BLEED_CALCULATOR_CAST_ANONYMOUS_ID
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.local_layout_class_cast import LAYOUT_CLASS_CAST_ANONYMOUS_ID
 from cardpicker.management.commands import run_image_evidence_cohort as cohort_command
@@ -331,7 +329,7 @@ class TestEndToEndPass:
         for identity in (
             LAYOUT_CLASS_CAST_ANONYMOUS_ID,
             FRAME_STYLE_CAST_ANONYMOUS_ID,
-            BLEED_EDGE_CAST_ANONYMOUS_ID,
+            BLEED_CALCULATOR_CAST_ANONYMOUS_ID,
         ):
             assert CardTagVote.objects.filter(
                 run_id="test-monolith", anonymous_id=identity
@@ -496,7 +494,7 @@ class TestUnwiringAStageIsCaught:
         for identity in (
             LAYOUT_CLASS_CAST_ANONYMOUS_ID,
             FRAME_STYLE_CAST_ANONYMOUS_ID,
-            BLEED_EDGE_CAST_ANONYMOUS_ID,
+            BLEED_CALCULATOR_CAST_ANONYMOUS_ID,
         ):
             assert not CardTagVote.objects.filter(run_id="test-monolith", anonymous_id=identity).exists()
 
@@ -644,7 +642,7 @@ class TestWritesByDefault:
         for identity in (
             LAYOUT_CLASS_CAST_ANONYMOUS_ID,
             FRAME_STYLE_CAST_ANONYMOUS_ID,
-            BLEED_EDGE_CAST_ANONYMOUS_ID,
+            BLEED_CALCULATOR_CAST_ANONYMOUS_ID,
         ):
             assert CardTagVote.objects.filter(
                 run_id="test-monolith", anonymous_id=identity

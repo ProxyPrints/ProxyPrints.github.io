@@ -2730,8 +2730,20 @@ class ImageEvidence(models.Model):
     predates the OCR group and had to use `classify_border_color` as a stand-in, this extractor
     lands after issue #149's OCR group and can call the real frame classifier. `artbox_phash` is
     a perceptual hash (`imagehash.phash`, same family/size as `symbol_phash` above) of that
-    region, stored the same signed-64-bit-int way. Null when not yet computed (fetch failure, an
+    region, stored the same signed-64-bit-int way.     Null when not yet computed (fetch failure, an
     unclassifiable frame, or a degenerate crop box - see `image_evidence.py`'s module docstring).
+
+    pinline_inset (Stage C pinline-inset measurement, MEASURE-AND-PERSIST-ONLY - no consumer of
+    any kind is built or wired in this PR): four per-edge inset-fraction measurements
+    (`pinline_inset_frac_*`), four per-edge calls (`pinline_inset_call_*`, `local_pinline_
+    inset.CALL_*`), and one whole-image verdict (`pinline_inset_verdict`, `local_pinline_
+    inset.VERDICT_*`) - see `local_pinline_inset.py`'s own module docstring for what the number
+    means, its two guards (the uniformity gate against measuring a borderless card's own artwork,
+    and the black-on-black abstention that keeps an unreadable edge from ever reading as a
+    measured zero), and what it deliberately does not do. Every `*_frac` field is a fraction of
+    the relevant dimension, not a pixel count - `width`/`height` already on this row make pixels
+    trivially derivable, while a fraction stays valid even if a later extraction pass fetches the
+    same upload at a different resolution.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -2771,6 +2783,12 @@ class ImageEvidence(models.Model):
     collector_line_crop_px = models.JSONField(null=True, blank=True)
     artist_crop_px = models.JSONField(null=True, blank=True)
     art_crop_px = models.JSONField(null=True, blank=True)
+
+    # art_edge (issue #830 defect 3) - local_art_edge.classify_art_edge_continuity's own return
+    # convention ("framed"/"extended"/"mixed"), same blank-string-as-sentinel convention as
+    # layout_class above for the ambiguous/not-yet-run case. EVIDENCE-ONLY: nothing votes on this
+    # column yet (see local_art_edge.cast_art_edge_continuity_vote's own docstring).
+    art_edge_class = models.CharField(max_length=16, blank=True, default="")
 
     # OCR-group (issue #149) - collector_line_ocr/artist_ocr/collector_line_tsv. Raw text +
     # local_ocr.parse_collector_line's tolerant parse of it (blank-string-as-sentinel for "no
@@ -2857,6 +2875,38 @@ class ImageEvidence(models.Model):
     artbox_crop_px = models.JSONField(null=True, blank=True)
     artbox_frame_class = models.CharField(max_length=16, blank=True, default="")
     artbox_phash = models.BigIntegerField(null=True, blank=True)
+
+    # pinline_inset (local_pinline_inset.measure_pinline_inset, MEASURE-AND-PERSIST-ONLY - no
+    # existing crop box computation above reads these fields yet): four per-edge measurements of
+    # how far the first sustained colour transition inward from this image's own edge sits - on a
+    # bordered card, the pinline where the border's ink meets the frame/art, not a canvas
+    # boundary. See local_pinline_inset.py's own module docstring for what the number means and
+    # how it was validated, and its two guards.
+    #
+    # Stored as FRACTIONS of the relevant dimension, not pixels: width/height are already on this
+    # row, so a pixel value stays trivially derivable, while a fraction is a property of the
+    # UPLOAD itself and stays valid even if a later extraction pass fetches the same upload at a
+    # different resolution.
+    #
+    # Each *_frac field is null when that edge's own reading is INDETERMINATE, never zero -
+    # distinguishing "not measured" from "measured a zero-distance inset" matters most exactly
+    # where it's easy to get wrong: a black canvas around a black-bordered card produces no colour
+    # departure at all, so the null is the honest reading, and the paired *_call field (local_
+    # pinline_inset.CALL_*) says why. A consumer that defaulted a null fraction to zero would
+    # silently mislocate a black-on-black card's pinline instead of correctly declining to.
+    pinline_inset_frac_top = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_bottom = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_left = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_right = models.FloatField(null=True, blank=True)
+    # local_pinline_inset.CALL_* - measured/indeterminate_black/no_transition. Blank-string-as-
+    # sentinel for "not yet computed", same convention as bleed_class/layout_class above.
+    pinline_inset_call_top = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_bottom = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_left = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_right = models.CharField(max_length=24, blank=True, default="")
+    # local_pinline_inset.VERDICT_* - measured/ambiguous/indeterminate. Blank-string-as-sentinel
+    # for "not yet computed", same convention as the per-edge calls above.
+    pinline_inset_verdict = models.CharField(max_length=16, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
