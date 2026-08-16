@@ -246,10 +246,11 @@ export function isChipContradicted(
  *    a contradiction, so it can't be excluded by that group's chips either way.
  * 2. A chip never eliminates an illustration outright. Candidates are grouped by
  *    illustrationId (an ungrouped candidate is its own group of one) before filtering; within
- *    a group of more than one, a chip narrows to the matching members same as always, but if
+ *    a group, a chip narrows to the matching members same as always, but if
  *    that would empty the group completely, the group survives unnarrowed instead of
  *    disappearing. Border/frame axes are independent of illustration identity - a statement
- *    about one must not remove the other from consideration.
+ *    about one must not remove the other from consideration. Only candidates with no
+ *    illustrationId (solo candidates) can be eliminated by a genuine mismatch.
  */
 export function filterCandidatesByChipStates<T extends PrintingCandidate>(
   candidates: T[],
@@ -294,7 +295,8 @@ export function filterCandidatesByChipStates<T extends PrintingCandidate>(
   groupKeys.forEach((key) => {
     const group = groups.get(key) as T[];
     const matched = group.filter(satisfiesActiveChips);
-    const survivors = matched.length > 0 || group.length <= 1 ? matched : group;
+    const survivors =
+      matched.length > 0 || group[0].illustrationId == null ? matched : group;
     survivors.forEach((candidate) => survivingIds.add(candidate.identifier));
   });
 
