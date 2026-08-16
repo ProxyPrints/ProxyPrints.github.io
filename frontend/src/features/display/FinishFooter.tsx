@@ -26,6 +26,7 @@
  * AuthWidget.tsx already uses) labeled "Sign in to Save" rather than a disabled/dead control, so
  * an anonymous user always has somewhere to go from this footer, never a no-op button.
  */
+import styled from "@emotion/styled";
 import React, { useEffect, useState } from "react";
 import Button from "react-bootstrap/Button";
 
@@ -39,6 +40,28 @@ import { DisplaySheetExportSettings } from "@/features/pdf/displayPdfProps";
 import { useSaveDeckFlow } from "@/features/savedDecks/useSaveDeckFlow";
 import { useGetWhoamiQuery } from "@/store/api";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
+
+// Editor-repass R7 (SPEC-editor-repass.md) - Save Deck / Export ▾ read as siblings: one grid
+// holding both at equal column width, height and type size (mockup: `.pair`). Height/type-size
+// parity deliberately overrides Bootstrap's button defaults inside this pair; radius comes from
+// `$btn-border-radius` (`--theme-radius-base`, 6px) on all three by default. The
+// download-manager counter is the grid's own auto-width third column - a small icon-only button
+// (`.download-manager-toggle`, 34px) that never competes with either.
+const FinishFooterPair = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+  align-items: stretch;
+  .btn {
+    height: 34px;
+    font-size: 13px;
+    width: 100%;
+  }
+  .download-manager-toggle {
+    width: 34px;
+    padding: 0;
+  }
+`;
 
 interface FinishFooterProps {
   /** useProjectDraftBackup's own `hasBackedUpThisSession` - drives the compact note below the
@@ -91,27 +114,27 @@ export function FinishFooter({
 
   return (
     <div className="d-grid gap-2" data-testid="display-finish-footer">
-      {isAuthenticated ? (
-        <Button
-          variant="primary"
-          disabled={isProjectEmpty}
-          onClick={() => triggerSave()}
-          data-testid="finish-footer-save-deck"
-        >
-          Save Deck
-        </Button>
-      ) : (
-        <Button
-          variant="primary"
-          href={loginHref}
-          disabled={loginHref == null}
-          title="Sign in to save decks & track your confirmations"
-          data-testid="finish-footer-save-deck-signin"
-        >
-          Sign in to Save
-        </Button>
-      )}
-      <div className="d-flex gap-2 align-items-center">
+      <FinishFooterPair>
+        {isAuthenticated ? (
+          <Button
+            variant="primary"
+            disabled={isProjectEmpty}
+            onClick={() => triggerSave()}
+            data-testid="finish-footer-save-deck"
+          >
+            Save Deck
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            href={loginHref}
+            disabled={loginHref == null}
+            title="Sign in to save decks & track your confirmations"
+            data-testid="finish-footer-save-deck-signin"
+          >
+            Sign in to Save
+          </Button>
+        )}
         {/* Issue #241 (design doc §5's export-beyond-PDF row) - XML/Card Images/Decklist, plus
             this page's own PDF item (DisplayExportPDF.tsx), which downloads straight from the
             rail's live sheet settings rather than opening the classic PDFGenerator modal. Its
@@ -122,9 +145,10 @@ export function FinishFooter({
           runExportGate={runExportGate}
         />
         <OpenDownloadManagerButton
+          className="download-manager-toggle"
           handleClick={() => setShowDownloadManager(true)}
         />
-      </div>
+      </FinishFooterPair>
       <DownloadManager
         show={showDownloadManager}
         handleClose={() => setShowDownloadManager(false)}

@@ -1108,6 +1108,10 @@ function SelectVersionTile({
           noResultsFound={false}
           highlight={identifier === selectedImage}
           compressed={compressed}
+          // Editor-repass R1 - the rail's art tiles draw at ≤~170px, so the Drive fallback
+          // serves them at the ~340px thumb tier (`sz=w340-h340`); the modal/sidebar layout
+          // keeps today's "small" tier unchanged.
+          imageTier={stacked ? "thumb" : "small"}
         />
         {/* Addendum item 2 - group membership / requested / suggested-survivor are tile-corner
             annotations here (stacked layout only), not the separate rows the sidebar/modal

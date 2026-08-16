@@ -340,7 +340,8 @@ import {
 import { selectSearchResultsForQueryOrDefault } from "@/store/slices/searchResultsSlice";
 import {
   selectFrontsVisible,
-  toggleFaces,
+  switchToBack,
+  switchToFront,
 } from "@/store/slices/viewSettingsSlice";
 
 //# region local, page-only settings state
@@ -1069,7 +1070,7 @@ const DeckInputLanding = ({
           </Button>
           <Button
             size="sm"
-            variant="outline-secondary"
+            variant="outline-light"
             onClick={onDismissDraft}
             data-testid="display-restore-draft-dismiss"
           >
@@ -1185,6 +1186,21 @@ const LeftRailOffcanvas = styled(Offcanvas)<{ $filtersOpen?: boolean }>`
 `;
 
 const RightRailOffcanvas = styled(Offcanvas)`
+  /* Editor-repass R10.3 - the one section-heading style: the left rail's 10px uppercase muted
+     legend (matches .fset > .lg and .select-version-heading), adopted by the right rail. */
+  .rail-section-heading {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--theme-muted);
+  }
+  /* Editor-repass R10.2 - the View control's full-width segmented pair fills its 300px rail
+     column evenly (mockup: .seg with flex:1 children). Scoped to this rail's own w-100 groups
+     so the action bar's Add/Browse and the center's Print sheets/Browse results keep their
+     existing natural-width idiom. */
+  .btn-group.w-100 > .btn {
+    flex: 1 1 0;
+  }
   @media (min-width: 1200px) {
     &.offcanvas-xl {
       width: 300px;
@@ -1240,26 +1256,9 @@ const ActionBarSearchGroup = styled.div`
   }
 `;
 
-// Editor-polish round, item 2 (EP2, SPEC-editor-polish.md §D.6 `.abtn`) - the page-wide button-
-// contrast floor: the toolbar's `outline-secondary` "Add"/"Add card"/etc buttons resolve to
-// Bootstrap Superhero's own `$secondary` (`#4e5d6c`) border/text, which reads as a near-
-// invisible grey ghost on this dark chrome. Scoped to the toolbar's own DOM subtree (this
-// styled-component wraps it - see `data-testid="display-toolbar"`'s own call site below) so
-// every OTHER `outline-secondary` button sitewide (outside this page) is unaffected - the same
-// component-scoped-override discipline as `.rail-source-toggle`/`.cstack .form-select` above.
-const ToolbarRoot = styled.div`
-  .btn-outline-secondary {
-    background: var(--theme-raised-bg);
-    color: var(--bs-body-color);
-    border: 1px solid #46586a;
-  }
-  .btn-outline-secondary:hover,
-  .btn-outline-secondary:focus {
-    background: var(--theme-raised-bg);
-    color: var(--bs-body-color);
-    border-color: var(--theme-light);
-  }
-`;
+// Editor-repass R10 (SPEC-editor-repass.md) - the EP2 `.btn-outline-secondary` contrast floor
+// is retired: R10.1 migrated every toolbar/right-rail button to the real `outline-light`
+// variant, so this override's one-page scope now has no remaining targets.
 
 // Editor-completion package, E1/X6 - the mockup's rail stylesheet, lifted verbatim per the
 // owner's grant (spec §5: "the left rail MAY lift the mockup's CSS verbatim rather than
@@ -1318,14 +1317,13 @@ const RailRoot = styled.div`
   .select-version-heading {
     margin: 0;
     padding: 8px 0 4px;
-    font-weight: 600;
-    /* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this
-       bespoke, single-use classname had no font-size rule at all, so it fell through to the
-       Bootstrap body default (16px) instead of the spec's own 14px. This selector is invented
-       for this one heading element only (not a reused Bootstrap classname like the old
-       .card-header pattern), so extending its existing RailRoot rule is component-scoped in the
-       sense the #400 rule cares about - it cannot clobber anything else on the page. */
-    font-size: 14px;
+    /* Editor-repass R10.3 - the one section-heading style everywhere: the left rail's 10px
+       uppercase muted legend (same recipe as .fset > .lg and the right rail's
+       .rail-section-heading). Supersedes the 14px/600 weight that §D.1 pinned here. */
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--theme-muted);
   }
   /* D14 confidence band - full-width, no floating chip inset margin (density §2: "kills the
      floating-chip inset margin"). */
@@ -2716,7 +2714,7 @@ export function DisplayPage() {
           mode, a plain controlled Form.Control in Browse mode - see ActionBarSearchGroup's own
           comment for why ImportText itself stays unaware of Browse mode), and the existing
           Import.tsx dropdown (D15 - Text/XML/CSV/URL, verbatim, unforked). */}
-      <ToolbarRoot
+      <div
         className="d-flex align-items-center flex-wrap gap-2 px-3 py-2 border-bottom"
         data-testid="display-toolbar"
       >
@@ -2744,7 +2742,7 @@ export function DisplayPage() {
             <ToggleButton
               id="display-search-mode-add"
               value="add"
-              variant="outline-secondary"
+              variant="outline-light"
               size="sm"
               data-testid="display-search-mode-add"
             >
@@ -2753,7 +2751,7 @@ export function DisplayPage() {
             <ToggleButton
               id="display-search-mode-browse"
               value="browse"
-              variant="outline-secondary"
+              variant="outline-light"
               size="sm"
               data-testid="display-search-mode-browse"
             >
@@ -2803,7 +2801,7 @@ export function DisplayPage() {
             open it. */}
         <Button
           size="sm"
-          variant="outline-secondary"
+          variant="outline-light"
           className="ms-auto d-xl-none"
           onClick={openRightRail}
           aria-expanded={rightRailOpen}
@@ -2813,7 +2811,7 @@ export function DisplayPage() {
           <RightPaddedIcon bootstrapIconName="gear" />
           Print &amp; Settings
         </Button>
-      </ToolbarRoot>
+      </div>
 
       <DisplayBodyRegion>
         {/* Issue #266 (design doc §4.1) - ONE node, all widths: inline sticky 380px column at
@@ -2911,7 +2909,7 @@ export function DisplayPage() {
             <ToggleButton
               id="display-center-view-sheets"
               value="sheets"
-              variant="outline-secondary"
+              variant="outline-light"
               size="sm"
               data-testid="display-center-view-sheets"
             >
@@ -2920,7 +2918,7 @@ export function DisplayPage() {
             <ToggleButton
               id="display-center-view-browse"
               value="browse"
-              variant="outline-secondary"
+              variant="outline-light"
               size="sm"
               data-testid="display-center-view-browse"
             >
@@ -3105,7 +3103,10 @@ export function DisplayPage() {
                 token scale); this was Bootstrap's stock p-3 (16px). */}
             <div className="flex-grow-1 overflow-auto p-2">
               <div className="mb-3">
-                <h6>Page Setup</h6>
+                {/* Editor-repass R10.3 - right-rail section headings adopt the left rail's
+                    10px uppercase muted legend style (see `.rail-section-heading` under
+                    RightRailOffcanvas). */}
+                <h6 className="rail-section-heading">Page Setup</h6>
                 <Form.Select
                   size="sm"
                   className="mb-2"
@@ -3285,14 +3286,43 @@ export function DisplayPage() {
               </div>
 
               <div className="mb-3">
-                <h6>View</h6>
-                <Button
-                  size="sm"
-                  variant="outline-secondary"
-                  onClick={() => dispatch(toggleFaces())}
+                {/* Editor-repass R10.2 - the View control is a Fronts/Backs ToggleButtonGroup
+                    now, the same segmented idiom as Add/Browse (was a label-flipping
+                    "Showing: Fronts/Backs" button under an <h6>). R10.3: the heading is the
+                    shared 10px uppercase muted legend style. */}
+                <h6 className="rail-section-heading">View</h6>
+                <ToggleButtonGroup
+                  type="radio"
+                  name="display-view-faces"
+                  value={frontsVisible ? "fronts" : "backs"}
+                  onChange={(value) =>
+                    dispatch(
+                      value === "fronts" ? switchToFront() : switchToBack()
+                    )
+                  }
+                  className="w-100"
                 >
-                  {frontsVisible ? "Showing: Fronts" : "Showing: Backs"}
-                </Button>
+                  <ToggleButton
+                    id="display-view-faces-fronts"
+                    value="fronts"
+                    variant="outline-light"
+                    size="sm"
+                    active={frontsVisible}
+                    data-testid="display-view-toggle-fronts"
+                  >
+                    Fronts
+                  </ToggleButton>
+                  <ToggleButton
+                    id="display-view-faces-backs"
+                    value="backs"
+                    variant="outline-light"
+                    size="sm"
+                    active={!frontsVisible}
+                    data-testid="display-view-toggle-backs"
+                  >
+                    Backs
+                  </ToggleButton>
+                </ToggleButtonGroup>
               </div>
 
               <div className="mb-3">

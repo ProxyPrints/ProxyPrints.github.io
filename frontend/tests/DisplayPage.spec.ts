@@ -334,9 +334,13 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
 
-    await expect(page.getByText("Showing: Fronts")).toBeVisible();
-    await page.getByText("Showing: Fronts").click();
-    await expect(page.getByText("Showing: Backs")).toBeVisible();
+    await expect(page.getByTestId("display-view-toggle-fronts")).toHaveClass(
+      /active/
+    );
+    await page.getByTestId("display-view-toggle-backs").click();
+    await expect(page.getByTestId("display-view-toggle-backs")).toHaveClass(
+      /active/
+    );
   });
 
   test("toggling Guides shows and hides the cut-line overlay", async ({
@@ -465,7 +469,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
-    await page.getByText("Showing: Fronts").click();
+    await page.getByTestId("display-view-toggle-backs").click();
     const backSheetSlot = page.getByTestId("page-preview-slot").first();
     await expect(backSheetSlot.locator("img")).toHaveAttribute(
       "alt",

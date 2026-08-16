@@ -189,7 +189,7 @@ test.describe("Contrast audit - card-list/editor page (owner defect 3+4: Dismiss
 });
 
 test.describe("Contrast audit - editor mobile Print & Settings sheet (owner defect 3)", () => {
-  test("Showing: Fronts / Cardback / Export controls in the offcanvas", async ({
+  test("View segments / Cardback / Export controls in the offcanvas", async ({
     page,
     network,
   }) => {
@@ -202,7 +202,7 @@ test.describe("Contrast audit - editor mobile Print & Settings sheet (owner defe
     await page.getByTestId("display-gear-button").click();
     const rail = page.getByTestId("display-print-settings-rail");
     await expect(rail).toBeVisible();
-    await expect(rail.getByText(/Showing: (Fronts|Backs)/)).toBeVisible();
+    await expect(rail.getByTestId("display-view-toggle-fronts")).toBeVisible();
 
     const result = await auditContrast(page);
     await page.screenshot({
