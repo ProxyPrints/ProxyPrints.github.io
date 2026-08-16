@@ -28,18 +28,19 @@ import {
 } from "./test-utils";
 
 // Parity wave 3 (2026-07-24, issue #272) - un-skipped and ported onto the unified `/editor` page.
-// GridSelectorModal.tsx's only surviving mount post-route-swap is CardbackToolbarButton's
-// project-wide cardback picker (`openDisplayCardbackGridSelector`, test-utils.ts) - see that
+// GridSelectorModal.tsx's only surviving mount post-route-swap is the project-wide cardback
+// picker behind CardbackRailControl's "Browse all cardbacks…" button
+// (`openDisplayCardbackGridSelector`, test-utils.ts) - see that
 // helper's own comment for why this is the right, full-fidelity retarget (the modal itself is
 // entirely generic; every grouping/filter/keyboard/mobile-viewport behavior below is identical
 // regardless of which caller's identifiers feed it). Fixtures below reuse the exact same
 // cardDocument sets the classic per-slot cluster used (cardDocumentsThreeResults/
 // cardDocumentsTwoSources/cardDocumentsWithCanonicalCards), just ALSO fetched via `2/cardbacks`
 // (new handlers, mocks/handlers.ts) - the `3/editorSearch/`-backed search-result fixtures stay,
-// since the right rail (and the "Cardback" button inside it) only exist once the project is
-// non-empty (DisplayPage.tsx's own `isProjectEmpty` early-return) - every test below runs one
-// plain import first purely to populate the project, regardless of whether it cares what that
-// import's own front-face card turns out to be. The modal's own title text differs ("Select
+// since the right rail (and the "Browse all cardbacks…" button inside it) only exist once the
+// project is non-empty (DisplayPage.tsx's own `isProjectEmpty` early-return) - every test below
+// runs one plain import first purely to populate the project, regardless of whether it cares what
+// that import's own front-face card turns out to be. The modal's own title text differs ("Select
 // Cardback" vs. "Select Version") - every `getByText("Select Version — N results")` assertion
 // below is updated to match.
 const threeCardSetup = {

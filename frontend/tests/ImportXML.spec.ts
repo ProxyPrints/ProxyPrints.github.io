@@ -538,7 +538,8 @@ test.describe("ImportXML", () => {
   // The assertion below was rewritten (2026-07-23, following PR #398's PagePreview orphan-badge
   // parity fix) to check the /editor sheet's own per-slot corner badge instead of the classic
   // "Common Cardback" panel - DisplayPage has no equivalent persistent tile (only the
-  // CardbackToolbarButton picker, per this file's own header comment), so the fix's underlying
+  // CardbackRailControl strip section's Browse-all picker, opened via "Browse all cardbacks…",
+  // per this file's own header comment), so the fix's underlying
   // behaviour (a BRAND NEW project's cardback initialises from the import, orphan or not) is now
   // observed the same way OrphanRendering.spec.ts's own "b:null" case observes it: the sheet's
   // `page-preview-slot`, toggled to its back face, showing both the resolved orphan image and the

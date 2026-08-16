@@ -73,10 +73,11 @@
  *
  * Issue #240 (Cardback toolbar parity, design doc §5's CommonCardback row) - the toolbar
  * previously had no way to reach the project-wide cardback picker at all on this page (only the
- * classic editor's own right panel could). CardbackToolbarButton (CommonCardback.tsx) is a new,
- * small button+modal pairing - reusing MemoizedCommonCardbackGridSelector's existing
- * GridSelectorModal verbatim - rather than mounting CommonCardback itself, since that component's
- * swatch/prev-next CardFooter chrome belongs to the editor's right panel, not a toolbar button.
+ * classic editor's own right panel could). CardbackRailControl (CommonCardback.tsx, R9 round) is
+ * the shared swatch-strip section - reusing MemoizedCommonCardbackGridSelector's existing
+ * GridSelectorModal verbatim behind its "Browse all cardbacks…" button - rather than mounting
+ * CommonCardback itself, since that component's swatch/prev-next CardFooter chrome belongs to the
+ * editor's right panel, not a toolbar button.
  *
  * Issue #241 (Export ▾ toolbar parity, design doc §5's export-beyond-PDF row) - the last of the
  * three toolbar-parity findings from the same audit. DisplayExportMenu.tsx composes the same
@@ -248,7 +249,7 @@ import { RightPaddedIcon } from "@/components/icon";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { CardSlotContextMenu } from "@/features/card/CardSlotContextMenu";
 import { getCardSlotMenuActions } from "@/features/card/CardSlotMenuActions";
-import { CardbackToolbarButton } from "@/features/card/CommonCardback";
+import { CardbackRailControl } from "@/features/card/CommonCardback";
 import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import {
   CardDownloadFavorite,
@@ -781,10 +782,12 @@ const PromotedZone = ({
 // Editor-completion package, E2/E3/L4 (Bkg 1/2/4/5) - promoted to the always-visible, always-open
 // art surface (renamed "Select Version", no AutofillCollapse wrapper at all - it's no longer a
 // collapsible section, "Choose Image" as an accordion key is gone from AccordionSectionKey
-// entirely). `initialSettingsVisible={false}` on useGridSelectorSearch and `layout="stacked"` on
-// SelectVersionResults fix the redline's Bkg 2/4/5 breakages (filters auto-opening cramped inside
-// the 380px rail, "Jump to Version" wrapping vertically, bottom controls clipping at the rail
-// edge) - see those two files' own prop comments.
+// entirely). `initialSettingsVisible={true}` on useGridSelectorSearch and `layout="stacked"` on
+// SelectVersionResults: the Filters panel starts OPEN (editor-repass round, item 1), and
+// LeftRailOffcanvas widens to 640px while it's open (SelectVersionResults' onFiltersOpenChange) -
+// so the redline's Bkg 2/4/5 breakages (filters auto-opening cramped inside the 380px rail,
+// "Jump to Version" wrapping vertically, bottom controls clipping at the rail edge) are answered
+// by the wider rail rather than by collapsing the panel - see those two files' own prop comments.
 
 /* A slot whose query has no results yet resolves to this shared reference rather than a fresh
    `[]`. A new array each render misses `selectCardDocumentsByIdentifiers`' size-1 memo, which
@@ -881,13 +884,16 @@ const SelectVersionSection = ({
       )
     ) ?? EMPTY_SEARCH_RESULTS;
   const focusRef = useRef<HTMLInputElement>(null);
-  // E3/X2 (Bkg 5) - the rail always starts with Filters collapsed, regardless of viewport width
-  // (the modal's own GridSelectorModal caller doesn't pass this, so its width-based default is
-  // unchanged).
+  // E3/X2 (Bkg 5) - the rail now starts with Filters OPEN at every viewport width, regardless of
+  // the rail's current width (the modal's own GridSelectorModal caller doesn't pass this, so its
+  // width-based default is unchanged). The initial open fires `onFiltersOpenChange` on mount
+  // (SelectVersionResults' own effect), so LeftRailOffcanvas widens to 640px alongside it - the
+  // redline's "filters auto-opening cramped inside the 380px rail" breakage is answered by the
+  // wider rail, not by collapsing the panel.
   const search = useGridSelectorSearch({
     imageIdentifiers: searchResultsForQuery,
     active: true,
-    initialSettingsVisible: false,
+    initialSettingsVisible: true,
   });
 
   const onSelectImage = (identifier: string) => {
@@ -3326,16 +3332,16 @@ export function DisplayPage() {
               </div>
 
               <div className="mb-3">
-                {/* No section heading here (unlike Page Setup/View above) - the button's own
-                    label already reads "Cardback", and a separate identical-text heading would
-                    make any future generic getByText("Cardback") locator ambiguous, exactly the
-                    ambiguity the Search Settings section right below used to hit (see this file's
-                    own history/PR notes). Issue #240 (design doc §5's CommonCardback row) - a
-                    project-wide setting (true of the whole deck, not one selected slot),
-                    relocated here unmodified - opens the same GridSelectorModal instance
-                    CommonCardback.tsx's editor mount already owns (see that component's own
-                    CardbackToolbarButton comment). */}
-                <CardbackToolbarButton />
+                {/* R9 (editor-repass round, item 2) - the right rail's Cardback section is now a
+                    swatch strip (CardbackSwatchStrip) under a "Cardback (project)" legend, with
+                    the project-wide "Apply to all card backs" / "Set as my default cardback"
+                    actions as two buttons beneath the strip (exact names per the R9 task text)
+                    and a "Browse all cardbacks…" button opening the same GridSelectorModal
+                    instance CommonCardback.tsx's editor mount already owns - the modal keeps its
+                    inline apply prompt (proposal-h's own strip + "Choose cardback…" pairing).
+                    The old single trigger button (CardbackToolbarButton) is retired with this
+                    round. */}
+                <CardbackRailControl />
               </div>
 
               <div>

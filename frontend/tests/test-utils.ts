@@ -820,13 +820,16 @@ export const enableDisplayFuzzySearch = async (page: Page) => {
 // below). Per-slot picking on the unified page goes through the rail's own Select Version section
 // instead (SelectVersionSection.spec.ts's own coverage) - a materially different component with no
 // grouping/filters-sidebar/Jump-to-Version UI of its own. The ONE GridSelectorModal instance still
-// reachable on this page is CardbackToolbarButton's project-wide cardback picker
-// (CommonCardback.tsx's `MemoizedCommonCardbackGridSelector`, testid `cardback-grid-selector`,
-// title "Select Cardback") - GridSelectorModal.tsx itself is entirely generic (a bare
-// `imageIdentifiers` array + `onClick` callback, doesn't care what the identifiers represent), so
-// every grouping/filter/keyboard/autofocus/mobile-viewport behavior this modal exposes is
-// identical regardless of which caller's identifiers feed it - this is the full-fidelity instance
-// this wave's GridSelectorModal.spec.ts/GridSelectorModalVariants.spec.ts clusters port onto.
+// reachable on this page is the project-wide cardback picker behind CardbackRailControl's
+// "Browse all cardbacks…" button (CommonCardback.tsx's `MemoizedCommonCardbackGridSelector`,
+// testid `cardback-grid-selector`, title "Select Cardback") - GridSelectorModal.tsx itself is
+// entirely generic (a bare `imageIdentifiers` array + `onClick` callback, doesn't care what the
+// identifiers represent), so every grouping/filter/keyboard/autofocus/mobile-viewport behavior
+// this modal exposes is identical regardless of which caller's identifiers feed it - this is the
+// full-fidelity instance this wave's GridSelectorModal.spec.ts/GridSelectorModalVariants.spec.ts
+// clusters port onto. R9 (editor-repass round, item 2): CardbackToolbarButton is retired in
+// favour of CardbackRailControl (the shared CardbackSwatchStrip + two plain buttons), and the
+// full picker is reached via its "Browse all cardbacks…" button (`cardback-browse-all-button`).
 // Requires the right rail open first (same isVisible()-guard pattern as
 // openDisplaySearchSettingsModal). Also requires a NON-empty project already: DisplayPage.tsx's
 // own `if (isProjectEmpty) return <DeckInputLanding ... />` early-return means the toolbar/gear
@@ -839,7 +842,9 @@ export const openDisplayCardbackGridSelector = async (page: Page) => {
     await page.getByTestId("display-gear-button").click();
     await expect(rail).toBeVisible();
   }
-  await rail.getByRole("button", { name: /Cardback/ }).click();
+  // Dedicated testid (not a name-based locator): the sheet slot's own "⟲" flip button can carry
+  // an accessible name mentioning "cardback" too (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3).
+  await page.getByTestId("cardback-browse-all-button").click();
   const gridSelector = page.getByTestId("cardback-grid-selector");
   await expect(gridSelector).toBeVisible();
   return gridSelector;

@@ -1,35 +1,27 @@
 /**
  * Cardback flow round (SPEC-cardback-pdfwait.md §C.2, `PKG1b` rail entry) - the left rail's
  * per-slot cardback control: a thumbnail of the slot's own resolved back face + a "Choose a
- * different back…" button. Unlike the toolbar entry (`CommonCardbackGridSelector`, a
- * project-wide `GridSelectorModal` pick), this is a per-slot pick - it dispatches
- * `setSelectedImages` for THIS SLOT'S back face only, never `bulkReplaceSelectedImage`/
- * `setSelectedCardback` (those are project-wide concepts).
+ * different back…" button. Unlike the right-rail entry (`CardbackRailControl`, a project-wide
+ * pick), this is a per-slot pick - it dispatches `setSelectedImages` for THIS SLOT'S back face
+ * only, never `bulkReplaceSelectedImage`/`setSelectedCardback` (those are project-wide concepts).
  *
- * "No modal, ever" (§C.2's own text: "the rail per-slot picker is already the 'no modal, ever'
- * surface") - reuses `GridSelectorResults`'s `"embedded"` variant + `useGridSelectorSearch`
- * directly (the exact same pair `SelectVersionResults.tsx` already uses for the rail's own
- * front/back art picker), never `GridSelectorModal`.
+ * R9 (editor-repass round, item 2) - the embedded `GridSelectorResults` body (search/filters/
+ * sort, the same "embedded" variant `SelectVersionResults` uses for the front/back art picker)
+ * is replaced by the shared `CardbackSwatchStrip` primitive: same strip the right rail and the
+ * pre-export reminder use, no search/sort, no apply-all/set-default affordances here, never a
+ * modal (§C.2's own "the rail per-slot picker is already the 'no modal, ever' surface").
  */
 import styled from "@emotion/styled";
-import React, { useRef, useState } from "react";
+import React, { useState } from "react";
 import Button from "react-bootstrap/Button";
 
 import { Back } from "@/common/constants";
 import { useAppDispatch, useAppSelector } from "@/common/types";
-import {
-  countBackFacesAffectedByApplyAll,
-  resolveCustomBackSlotThumbnails,
-} from "@/features/card/cardbackApply";
-import { CardbackApplyPrompt } from "@/features/card/CardbackApplyPrompt";
-import { setUserDefaultCardback } from "@/features/card/cardbackDefaultPreference";
-import { GridSelectorResults } from "@/features/gridSelector/GridSelectorResults";
-import { useGridSelectorSearch } from "@/features/gridSelector/useGridSelectorSearch";
+import { CardbackSwatchStrip } from "@/features/card/CardbackSwatchStrip";
 import { selectCardbacks } from "@/store/slices/cardbackSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
-  applyCardbackToAllSlots,
-  selectProjectMembers,
+  selectProjectCardback,
   setSelectedImages,
 } from "@/store/slices/projectSlice";
 
@@ -93,20 +85,10 @@ export function SlotCardbackControl({
   projectCardback,
 }: SlotCardbackControlProps) {
   const dispatch = useAppDispatch();
-  const projectMembers = useAppSelector(selectProjectMembers);
   const cardbackSearchResults = useAppSelector(selectCardbacks);
   const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
 
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [lastPickedImage, setLastPickedImage] = useState<string | undefined>(
-    undefined
-  );
-  const focusRef = useRef<HTMLInputElement>(null);
-
-  const search = useGridSelectorSearch({
-    imageIdentifiers: cardbackSearchResults,
-    active: pickerOpen,
-  });
 
   const backDocument =
     backImage != null ? cardDocumentsByIdentifier[backImage] : undefined;
@@ -119,29 +101,8 @@ export function SlotCardbackControl({
     dispatch(
       setSelectedImages({ selectedImage: image, slots: [[Back, slot]] })
     );
-    setLastPickedImage(image);
     setPickerOpen(false);
   };
-
-  const handleApplyAll = () => {
-    if (lastPickedImage != null) {
-      dispatch(applyCardbackToAllSlots({ selectedImage: lastPickedImage }));
-    }
-  };
-  const handleSetDefault = () => {
-    if (lastPickedImage != null) {
-      void setUserDefaultCardback(lastPickedImage);
-    }
-  };
-
-  const customBackThumbnails =
-    lastPickedImage != null
-      ? resolveCustomBackSlotThumbnails(
-          projectMembers,
-          lastPickedImage,
-          cardDocumentsByIdentifier
-        )
-      : [];
 
   return (
     <div data-testid="slot-cardback-control">
@@ -169,27 +130,13 @@ export function SlotCardbackControl({
       </Row>
       {pickerOpen && (
         <div className="mt-2" data-testid="slot-cardback-picker">
-          <GridSelectorResults
-            variant="embedded"
+          <CardbackSwatchStrip
             imageIdentifiers={cardbackSearchResults}
             selectedImage={backImage}
-            onSelectImage={handlePick}
-            focusRef={focusRef}
-            search={search}
+            onSelect={handlePick}
+            testId="slot-cardback-strip"
           />
         </div>
-      )}
-      {lastPickedImage != null && (
-        <CardbackApplyPrompt
-          entry="rail"
-          affectedCount={countBackFacesAffectedByApplyAll(
-            projectMembers,
-            lastPickedImage
-          )}
-          customBackThumbnails={customBackThumbnails}
-          onApplyAll={handleApplyAll}
-          onSetDefault={handleSetDefault}
-        />
       )}
     </div>
   );

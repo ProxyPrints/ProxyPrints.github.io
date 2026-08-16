@@ -216,12 +216,12 @@ test.describe("CardSlot", () => {
     await expectDisplaySheetSlotState(page, 1, "back", cardDocument2.name);
   });
 
-  // Cluster-8 ruling (2026-07-24, issue #272 parked-spec port wave): CardbackToolbarButton's
-  // modal (the test directly above) is the project-wide canonical entry - picking there changes
-  // EVERY slot's default back. The rail's own per-slot Select Version section is the other
-  // supported entry, and is a genuine PER-SLOT OVERRIDE instead - both are supported, but they're
-  // not the same operation, and nothing before this test asserted the rail path leaves sibling
-  // slots (or the project-wide default itself) alone.
+  // Cluster-8 ruling (2026-07-24, issue #272 parked-spec port wave): the right rail's "Browse
+  // all cardbacks…" modal (the test directly above) is the project-wide canonical entry - picking
+  // there changes EVERY slot's default back. The rail's own per-slot Select Version section is
+  // the other supported entry, and is a genuine PER-SLOT OVERRIDE instead - both are supported,
+  // but they're not the same operation, and nothing before this test asserted the rail path
+  // leaves sibling slots (or the project-wide default itself) alone.
   test("CardSlot's own rail Select Version section overrides just one slot's back, leaving the project-wide cardback (and sibling slots) untouched", async ({
     page,
     network,
