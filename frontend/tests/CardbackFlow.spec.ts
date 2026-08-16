@@ -187,8 +187,12 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
     await expect(sheetSlots.nth(0).locator("img")).toBeVisible();
     await expect(sheetSlots.nth(1).locator("img")).toBeVisible();
 
-    // Toolbar entry precondition, same as the cardback-flow round: slot 0 gets a deliberately
-    // custom back (cardDocument2) so the modal prompt below has a real "would override" count.
+    // Toolbar entry precondition: slot 0 gets a deliberately custom back (cardDocument2) so the
+    // strip-pick assertion below can prove a project-wide pick never touches a per-slot custom
+    // back. (The modal prompt's own "would override" count is re-seeded separately later - the
+    // strip's apply-all wipes this custom back first, and the modal's pick auto-retargets every
+    // slot still following the project cardback, so only a freshly re-created custom back can
+    // survive long enough to be counted.)
     await sheetSlots.nth(0).click();
     const slotControl = page.getByTestId("slot-cardback-control");
     await slotControl.getByTestId("slot-cardback-choose").click();
@@ -253,6 +257,26 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
     await setDefaultButton.click();
     await expect(setDefaultButton).toHaveText("Default set ✓");
 
+    // R9 - the strip apply-all just normalized BOTH slots to cardDocument3, and the modal's own
+    // pick auto-bulk-replaces every slot still following the project cardback (§C.2, unchanged),
+    // so re-seeding a custom back here (cardDocument1, != the modal's upcoming cardDocument2
+    // pick) is what gives the prompt below a real "would override" count - the same precondition
+    // the pre-R9 toolbar test relied on, reached via the per-slot strip instead. The re-pick
+    // happens in the fronts view (where slot selection is exercised elsewhere in this suite);
+    // the modal section below runs in the backs view like the earlier assertions.
+    await page.getByTestId("display-view-toggle-fronts").click();
+    await sheetSlots.nth(0).click();
+    await page
+      .getByTestId("slot-cardback-control")
+      .getByTestId("slot-cardback-choose")
+      .click();
+    await page
+      .getByTestId("slot-cardback-picker")
+      .getByAltText(cardDocument1.name)
+      .click();
+    await expect(page.getByTestId("slot-cardback-picker")).toHaveCount(0);
+    await page.getByTestId("display-view-toggle-backs").click();
+
     // --- Browse all cardbacks… still opens the same GridSelectorModal; its inline apply prompt
     //     (thumbnails + count + done states, OWNER AMENDMENT 2/OQ-B) is unchanged. ---
     await page.getByTestId("cardback-browse-all-button").click();
@@ -262,16 +286,18 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
 
     const toolbarPrompt = cardbackModal.getByTestId("cardback-apply-prompt");
     await expect(toolbarPrompt).toBeVisible();
-    // Both slots now follow cardDocument3, so picking cardDocument2 names both as affected.
+    // Slot 0's re-seeded custom back (cardDocument1) survives the modal's pick untouched - the
+    // pick's §C.2 bulk-replace only retargeted slot 1 (back === old project cardback
+    // cardDocument3) to cardDocument2 - so the prompt names exactly that one slot as affected.
     const thumbnails = toolbarPrompt.getByTestId(
       "cardback-apply-prompt-thumbnails"
     );
     await expect(thumbnails).toBeVisible();
     await expect(thumbnails).toContainText("Slot 1");
-    await expect(thumbnails).toContainText("Slot 2");
+    await expect(thumbnails).not.toContainText("Slot 2");
     await expect(
       toolbarPrompt.getByTestId("cardback-apply-all-button")
-    ).toHaveText("Apply to all (2)");
+    ).toHaveText("Apply to all (1)");
     await expect(
       toolbarPrompt.getByTestId("cardback-apply-prompt-not-now")
     ).toBeVisible();

@@ -137,9 +137,14 @@ for (const viewport of [
         "border",
         "1px solid rgb(22, 22, 30)"
       );
+      // The outline SHORTHAND's serialization order is browser-dependent (Chromium emits
+      // `outline` color-first: "rgb(187, 154, 247) solid 2px", unlike `border`'s width-first
+      // form), so assert the three longhands - exact, order-independent, same tokens.
+      await expect(selectedSwatch).toHaveCSS("outline-width", "2px");
+      await expect(selectedSwatch).toHaveCSS("outline-style", "solid");
       await expect(selectedSwatch).toHaveCSS(
-        "outline",
-        "2px solid rgb(187, 154, 247)"
+        "outline-color",
+        "rgb(187, 154, 247)"
       );
 
       const prompt = cardbackModal.getByTestId("cardback-apply-prompt");
