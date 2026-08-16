@@ -2224,8 +2224,18 @@ every card in the cohort is eligible again. Two things follow:
   feeding the verdict is unchanged (this command never re-extracts): the recomputed verdict is
   identical to the stored one, and `_split_new_printing_tag_votes` skips — counts as
   `already_voted`, never purges or rewrites — a proposed vote that already matches what is stored.
-  No card in this command's own cohort exercises this path (it only selects skip-reason rows), but
-  it is the reasoning that makes the re-dispatch safe for Stage D in general.
+  No card ALREADY carrying a MATCH row is even in this command's own cohort (it only selects
+  skip-reason rows), but it is the reasoning that makes the re-dispatch safe for Stage D in
+  general.
+
+**A card in the cohort can genuinely flip from a repeat skip to a fresh MATCH.** This command
+never re-extracts evidence itself, but the card's `ImageEvidence` can have moved since the
+ORIGINAL skip was scanned through some other pass entirely (a later evidence-transfer hit, a
+reparse, a Stage C re-extraction) — Stage D reads whatever is CURRENTLY persisted, not what was
+persisted the day the original skip was written. The preflight audit for the 2026-08-11 cohort
+put this at scale: roughly 13,200–17,000 cards expected to flip skip→MATCH and cast a brand-new
+fallback vote, plus ~3,400 new join-key votes, on the strength of evidence that improved after
+the original scan. That is real Stage D work, not pure field-fill — see "Fidelity gate" below.
 
 ### Cohort
 
@@ -2248,9 +2258,43 @@ Reuses `cardpicker.models.StageEFullCatalogCursor` — the SAME resume model `st
 uses — under its own scope key (`RESUME_SCOPE = "survivor-backfill"`), never shared with that
 command's own scopes. The stop-condition and exit-code contract (envelope halt → exit 3, no retry
 ever; concurrency-cap throttle → bounded exponential backoff, budget exhaustion → exit 4; genuine
-cohort exhaustion → exit 0) is imported from `stream_full_catalog`, not redeclared, so the two can
-never drift apart. `--dry-run` is a real pass that walks and sizes the cohort and reports the plan
-without dispatching a single batch or touching the resume mark.
+cohort exhaustion → exit 0; fidelity-gate violation → exit 7, see below) is imported from
+`stream_full_catalog`, not redeclared, so the codes can never drift apart across the three
+commands that share them. `--dry-run` is a real pass that walks and sizes the cohort and reports
+the plan without dispatching a single batch or touching the resume mark.
+
+### Fidelity gate (2026-08-13)
+
+Because a real pass can genuinely flip a card to a fresh MATCH (see "Why re-dispatching is safe"
+above), this command carries the same fidelity gate `run_pipeline.py` runs at the end of its own
+pass — `local_identify_printing_tags.run_fidelity_gate` — rather than a second, separately-written
+check. **Both commands call this ONE shared function**, extracted from `run_pipeline.py`'s own
+former `_run_fidelity_gate` method specifically so the two could never disagree on what "the gate"
+means. It answers one question over every card THIS invocation cast a `CardPrintingTag` vote for
+(scoped by the pass's own `run_id`, the same identity stamped on every batch's votes): did any of
+them reach a RESOLVED printing state? The check itself is `verify_zero_resolutions` — a pure
+`resolve_printing` re-read against live DB state — and `resolve_weighted_consensus`'s own
+human-backed hard gate means a card can never resolve from machine votes with literally zero
+human vote anywhere on it; what the fidelity gate actually catches is a card that already carried
+a stale human vote reaching quorum on the strength of THIS pass's own fresh machine vote(s) — a
+resolution nobody explicitly signed off on for the printing this pass just helped settle.
+
+**Never a rollback.** A violation is reported — logged, and returned so the caller can exit
+non-zero on it — but nothing written by this pass (or any earlier one) is purged, retracted, or
+undone. Every row stays exactly where it landed, queryable by `run_id`.
+
+**Precedence.** An envelope halt (exit 3) or an exhausted throttle-retry budget (exit 4) keeps its
+own exit code and its own required next action unchanged — the gate is skipped ENTIRELY on those
+two paths, never merely non-overriding, so it can neither change either exit code nor add a
+second, conflicting report to a pass a human is already required to act on. On every other stop
+path — genuine cohort exhaustion, or the operator's own `--max-batches` bound — a violation
+outranks the exit code that path would otherwise report (`EXIT_FIDELITY_GATE_VIOLATION`, exit 7):
+everything written stays written, but the pass cannot report success, or merely "bounded", while
+machine votes alone resolved a card.
+
+**Coherent with `--dry-run`.** A dry run casts no vote, so the gate has nothing to check — it is
+reported skipped (`FIDELITY GATE: skipped (--dry-run wrote no votes to check).`) rather than
+silently never mentioned, the same handling `run_pipeline.py` gives its own gate under `--dry-run`.
 
 ### Running it
 

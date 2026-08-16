@@ -45,12 +45,19 @@ splits into exactly two cases:
     "ambiguous", the three `CardScanLog` rows this command's cohort selects on - never cast a
     `CardPrintingTag` vote in the first place; `run_fallback_calculator` only ever appends a
     `CardScanLog` row on a skip, never a vote. Re-running appends a NEW `CardScanLog` row under
-    the new `run_id`, this time carrying both fields (the fix is already live). The OLD, field-less
+    the new `run_id`, carrying both fields this time (the fix is already live). The OLD, field-less
     row is left exactly where it is - `CardScanLog` is an append-only audit trail by design (see
     that model's own docstring: "the scan_log table itself is a append-only audit trail like the
     vote tables are"), never updated or deduplicated in place - which is harmless here: every
     reader of these two fields wants the CURRENT/latest row for a card, and after this command runs
-    the latest row is the complete one. This is the ENTIRE cohort this command touches.
+    the latest row is the complete one. This is the ENTIRE cohort this command touches - BUT NOT
+    ALWAYS THE SAME SKIP OUTCOME. This command never re-extracts evidence itself, but the card's
+    `ImageEvidence` can have moved since the ORIGINAL scan through some other pass entirely (a
+    later evidence-transfer hit, a reparse, a Stage C re-extraction) - Stage D reads whatever is
+    CURRENTLY persisted, not what was persisted the day the original skip was written. So a
+    genuine fraction of this cohort re-computes to a real MATCH instead of a repeat skip, casting a
+    brand-new `CardPrintingTag` vote this pass, on the strength of THIS pass's own re-dispatch
+    alone. That is exactly the case the fidelity gate below exists to catch and report.
   * A card whose prior fallback pass reached a MATCH (cast a real `CardPrintingTag` vote) is safe
     from a double-cast for a structural reason, not a hope: since this command never re-extracts
     evidence, the recomputed verdict is IDENTICAL to the stored one, and
@@ -86,9 +93,27 @@ transient and gets a bounded exponential backoff-and-retry of the same chunk bef
 command's own module docstring for the full reasoning; this command imports the codes rather than
 re-deriving them so the two can never drift apart.
 
+FIDELITY GATE (`EXIT_FIDELITY_GATE_VIOLATION`, exit 7) - this command re-drives real Stage D
+work, not pure field-fill (see the SKIP-case note above: a fraction of the cohort genuinely
+flips to a MATCH and casts a brand-new vote), so it carries the same gate `run_pipeline.py` runs
+at the end of its own pass: `local_identify_printing_tags.run_fidelity_gate`, ONE shared function
+both commands call so they can never disagree on what "the gate" means. At the end of a real
+(non-dry-run) pass that did not stop on an envelope halt or an exhausted throttle-retry budget,
+the gate checks every card THIS invocation cast a printing vote for (scoped by this run's own
+`run_id`) and reports - never rolls back, purges, or retracts - any card that reached a RESOLVED
+printing state on machine votes alone. PRECEDENCE: an envelope halt or a throttle-budget
+exhaustion keeps its own exit code and meaning unchanged - the gate is skipped entirely on those
+two paths, never merely non-overriding. On every other stop path (cohort exhaustion, or an
+operator's own `--max-batches` bound), a violation outranks the exit code that path would
+otherwise report: everything written stays written, but the pass cannot report success, or merely
+"bounded", while machine votes alone resolved a card. See `handle`'s own comment for the full
+statement of this rule.
+
 `--dry-run` IS A REAL PASS THAT WITHHOLDS THE WRITE, not a plan: it walks the cohort, sizes it and
 reports how many rows would gain each field, then exits 0 without dispatching a single batch and
-without reading or writing the resume mark.
+without reading or writing the resume mark. A dry run casts no vote, so the fidelity gate has
+nothing to check - it is reported skipped rather than silently never mentioned, the same
+`--dry-run` handling `run_pipeline.py` gives its own gate.
 """
 
 import logging
@@ -106,6 +131,7 @@ from cardpicker.local_calculate_verdicts import (
     FALLBACK_NO_SUB_CHECK_EVIDENCE_SKIP_REASON,
     STAGE_D_FALLBACK_ANONYMOUS_ID,
 )
+from cardpicker.local_identify_printing_tags import run_fidelity_gate
 from cardpicker.management.commands.stream_backstop_sweep import (
     _HALT_STATUSES,
     _THROTTLED_STATUS,
@@ -118,6 +144,7 @@ from cardpicker.management.commands.stream_full_catalog import (
     DEFAULT_THROTTLE_BACKOFF_INITIAL_S,
     DEFAULT_THROTTLE_BACKOFF_MAX_S,
     EXIT_ENVELOPE_HALT,
+    EXIT_FIDELITY_GATE_VIOLATION,
     EXIT_MAX_BATCHES_REACHED,
     EXIT_OK,
     EXIT_STREAMING_DISABLED,
@@ -189,8 +216,11 @@ class Command(BaseCommand):
         "rows that predate #764, by re-dispatching the affected cards through the same Stage E "
         "streaming conveyor (cardpicker.stage_e_dispatch.dispatch_micro_batch) every other "
         "streaming driver uses. Computes nothing itself - run_fallback_calculator (unchanged) "
-        "recomputes the verdict and writes the fields. No-op unless "
-        "settings.STAGE_E_STREAMING_ENABLED is True. See this command's own module docstring."
+        "recomputes the verdict and writes the fields, which can genuinely flip a prior skip to a "
+        "MATCH. A real pass ends with the same fidelity gate run_pipeline.py uses "
+        "(EXIT_FIDELITY_GATE_VIOLATION, exit 7) reporting - never rolling back - any card that "
+        "reached RESOLVED on machine votes alone. No-op unless settings.STAGE_E_STREAMING_ENABLED "
+        "is True. See this command's own module docstring."
     )
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -337,6 +367,7 @@ class Command(BaseCommand):
                 f"DRY RUN - dispatching nothing. {remaining} row(s) would gain survivor_pks/"
                 f"evidence_types_used across ~{planned_batches} batches, starting at pk>{resume_pk}."
             )
+            self.stdout.write("FIDELITY GATE: skipped (--dry-run wrote no votes to check).")
             self._write_verdict(
                 exit_code=EXIT_OK,
                 reason="dry-run-plan-only",
@@ -510,6 +541,29 @@ class Command(BaseCommand):
             f"(relaunch with the same flags to continue, or --start-pk {resume_pk})"
         )
 
+        # FIDELITY GATE. Scoped by this whole invocation's own run identity (run_id_prefix is
+        # stamped on every CardPrintingTag row every batch of this pass wrote, join-key and
+        # fallback alike - see dispatch_micro_batch's own run_id kwarg above), so it answers
+        # exactly one question: did any card THIS PASS touched reach a RESOLVED printing state on
+        # machine votes alone? PRECEDENCE (stated once, here, not re-derived at each exit branch
+        # below): an envelope halt or an exhausted throttle-retry budget already carries its own
+        # non-zero exit and its own required next action (acknowledge the trip; wait for dispatch
+        # slots to free up) - the gate is skipped ENTIRELY on those two paths, not merely
+        # non-overriding, so it can never change either exit code or its meaning. On every other
+        # stop path (genuine cohort exhaustion, or the operator's own --max-batches bound), the
+        # gate runs and a violation outranks both: everything written stays written, but the pass
+        # cannot report success, or merely "bounded", while machine votes alone resolved a card.
+        gate_violations: List[int] = []
+        if throttle_budget_exhausted or halted_status is not None:
+            self.stdout.write(
+                "FIDELITY GATE: skipped (pass stopped on an envelope halt or a throttle-budget "
+                "exhaustion; see the exit code below)."
+            )
+        else:
+            gate_violations = run_fidelity_gate(
+                run_id=run_id_prefix, write=self.stdout.write, style_error=self.style.ERROR
+            )
+
         if throttle_budget_exhausted:
             exit_code = EXIT_THROTTLE_BUDGET_EXHAUSTED
             failure = (
@@ -526,6 +580,19 @@ class Command(BaseCommand):
                 f"(docs/features/stage-e-operations.md); then resume with --start-pk {resume_pk}."
             )
             detail = f"envelope trip {halted_status} hard-stopped the pass; work REMAINS in the cohort"
+        elif gate_violations:
+            exit_code = EXIT_FIDELITY_GATE_VIOLATION
+            failure = (
+                f"FIDELITY GATE: {len(gate_violations)} card(s) reached a RESOLVED printing state "
+                "on machine votes alone in this pass. Everything this pass wrote stays written and "
+                f"is queryable by run_id={run_id_prefix}; this exit is a loud 'read this pass "
+                "before trusting it', not a rollback. Once reviewed, relaunch is safe - resume "
+                f"with --start-pk {resume_pk} if the cohort was not exhausted."
+            )
+            detail = (
+                f"the fidelity gate found {len(gate_violations)} machine-only resolution(s); "
+                "everything written stays written"
+            )
         elif stopped_reason == "max-batches-reached":
             exit_code = EXIT_MAX_BATCHES_REACHED
             failure = (
@@ -541,7 +608,7 @@ class Command(BaseCommand):
 
         self._write_verdict(
             exit_code=exit_code,
-            reason=stopped_reason or "cohort-exhausted",
+            reason="fidelity-gate-violation" if gate_violations else (stopped_reason or "cohort-exhausted"),
             detail=detail,
             resume_pk=resume_pk,
         )

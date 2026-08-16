@@ -36,7 +36,9 @@ export function getCardSlotMenuActions(
     {
       key: "change-query",
       label: "Change Query",
-      bootstrapIconName: "arrow-repeat",
+      // Editor-repass R8: was `bi-arrow-repeat`, which read as flip on a screen whose sheet-slot
+      // corner button is already `⟲`. `bi-search` matches the search bar's "find a card" glyph.
+      bootstrapIconName: "search",
       onClick: handlers.onChangeQuery,
     },
     {

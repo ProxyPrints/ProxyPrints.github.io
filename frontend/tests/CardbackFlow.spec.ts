@@ -219,7 +219,7 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
     // A project-wide pick via the strip (cardDocument3) overrides the slot following the
     // project default; the per-slot custom back is untouched.
     await toolbarStrip.getByAltText(cardDocument3.name).click();
-    await page.getByText("Showing: Fronts").click();
+    await page.getByTestId("display-view-toggle-backs").click();
     await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
       "alt",
       cardDocument2.name
@@ -288,7 +288,8 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
     await cardbackModal.getByRole("button", { name: "Close" }).last().click();
     await expect(cardbackModal).not.toBeVisible();
 
-    // The sheet reflects the modal's pick - both slots now show cardDocument2's back.
+    // The sheet reflects the modal's pick - both slots now show cardDocument2's back (the
+    // back view is already active from the earlier display-view-toggle-backs switch).
     await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
       "alt",
       cardDocument2.name

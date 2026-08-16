@@ -501,7 +501,14 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     // itself, which Bootstrap's own toggle-button CSS covers with its sibling `<label>` by
     // design - `force: true` bypasses Playwright's actionability wait for that expected overlap
     // (the same pattern any `ToggleButtonGroup`/`ToggleButton` test in this codebase needs).
-    await page.getByRole("radio", { name: "Back" }).click({ force: true });
+    // Scoped to `.fbtoggle` (same as the `frontToggleLabel` locator above) - R10.2 added a
+    // second Fronts/Backs `ToggleButtonGroup` (the right rail's View control), and an
+    // unscoped `name: "Back"` substring-matches both that group's "Backs" radio and this
+    // rail-head toggle's "Back" radio.
+    await page
+      .locator(".fbtoggle")
+      .getByRole("radio", { name: "Back" })
+      .click({ force: true });
     // Either a real back-face thumbnail (`.subject[data-face=back]`, same testid, reused - a
     // real distinct back ProjectMember resolved) or the `.backart` placeholder (nothing
     // resolved for back) renders - never the FRONT-faced subject any more either way.

@@ -588,7 +588,7 @@ test.describe("ImportXML", () => {
     // The imported <cardback> (an orphan here) is this test's own point - toggle to the back
     // face and confirm the project's cardback initialised from it, including the sheet's own
     // orphan corner badge (see the comment above).
-    await page.getByRole("button", { name: /Showing: Fronts/ }).click();
+    await page.getByTestId("display-view-toggle-backs").click();
     const backImage = slot.locator("img");
     await expect(backImage).toHaveCount(1, { timeout: 45_000 });
     await expect(backImage).toHaveAttribute(

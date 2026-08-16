@@ -36,12 +36,14 @@ from cardpicker.models import (
     CardScanLog,
     PilotRunLedger,
     StageEFullCatalogCursor,
+    VoteSource,
 )
 from cardpicker.stage_e_dispatch import DispatchOutcome
 from cardpicker.tests.factories import (
     CanonicalCardFactory,
     CanonicalPrintingMetadataFactory,
     CardFactory,
+    CardPrintingTagFactory,
     ImageEvidenceFactory,
 )
 from cardpicker.tests.test_stage_e_dispatch import _SyncStagePoolStub
@@ -384,3 +386,140 @@ class TestRealConveyorBackfill:
 
         assert list(backfill_cohort_queryset()) == []  # the card has dropped out of the cohort
         assert CardPrintingTag.objects.filter(card=card, anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID).count() == 0
+
+
+class _VoteCastingDispatch:
+    """Same recording shape as `_RecordingDispatch`, plus an optional side effect: on a given
+    call index, cast real `CardPrintingTag` rows (stamped with THIS call's own `run_id`, exactly
+    as the real conveyor stamps every vote it writes) before returning the stubbed outcome. Lets
+    a test prove the fidelity gate reacts to genuine rows under this pass's own run identity,
+    without needing to drive the real Stage D calculators to get there."""
+
+    def __init__(self, outcomes: Any = None, votes_by_call_index: Any = None) -> None:
+        self.calls: List[dict] = []
+        self._outcomes = list(outcomes) if outcomes is not None else None
+        self._votes_by_call_index = dict(votes_by_call_index) if votes_by_call_index is not None else {}
+
+    def __call__(self, **kwargs: Any) -> DispatchOutcome:
+        index = len(self.calls)
+        self.calls.append(kwargs)
+        for factory_kwargs in self._votes_by_call_index.get(index, []):
+            CardPrintingTagFactory(run_id=kwargs["run_id"], **factory_kwargs)
+        if self._outcomes:
+            return self._outcomes.pop(0)
+        return DispatchOutcome(status="completed", run_id=kwargs.get("run_id"), card_ids=list(kwargs["card_ids"]))
+
+
+class TestFidelityGate:
+    """`local_identify_printing_tags.run_fidelity_gate` wired into a real pass - the SAME shared
+    gate `run_pipeline.py` calls at the end of its own pass, so both commands agree on what "the
+    gate" means (see this command's own module docstring). Votes are cast by a stub dispatch
+    rather than the real Stage D calculators - the gate's own reaction to genuine rows under this
+    pass's `run_id` is what's under test here, not calculator internals (already covered by
+    `TestRealConveyorBackfill` and `local_calculate_verdicts`'s own test suite)."""
+
+    @STREAMING_ON
+    def test_a_clean_pass_reports_the_gate_and_exits_ok(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        card = CardFactory(content_phash=1)
+        _incomplete_row(card)
+        printing = CanonicalCardFactory()
+        # A single machine vote (weight 0.5) sits well below PRINTING_TAG_MIN_VOTES (2.0) on its
+        # own - the card stays UNRESOLVED, so the gate has real rows to inspect and finds them
+        # clean, rather than trivially reporting "nothing to check".
+        monkeypatch.setattr(
+            backfill_survivor_pks,
+            "dispatch_micro_batch",
+            _VoteCastingDispatch(votes_by_call_index={0: [dict(card=card, printing=printing, source=VoteSource.OCR)]}),
+        )
+
+        assert _exit_code("--batch-size", "10") == 0
+        output = capsys.readouterr().out
+
+        assert "FIDELITY GATE: clear over 1 cards." in output
+        assert "FIDELITY GATE VIOLATION" not in output
+        assert CardPrintingTag.objects.filter(card=card).count() == 1  # the vote stays written
+
+    @STREAMING_ON
+    def test_a_card_resolved_on_this_pass_own_machine_votes_makes_the_gate_fire_and_exit_seven(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """The hard human-backed gate in `vote_consensus.resolve_weighted_consensus` means a
+        card can never resolve from machine votes with literally zero human vote anywhere on it -
+        that path is structurally closed. What this pass CAN do is cast the fresh machine vote
+        that tips an already-borderline card (one stale human vote, short of quorum alone) over
+        `PRINTING_TAG_MIN_VOTES` - a real card reaching RESOLVED on the strength of THIS pass's
+        own machine votes, exactly the case this gate exists to report."""
+        card = CardFactory(content_phash=1)
+        _incomplete_row(card)
+        printing = CanonicalCardFactory()
+        # Pre-existing, stale human vote (weight 1.0) - short of the 2.0 quorum alone.
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.USER, run_id="stale-earlier-run")
+        # THIS pass casts two agreeing machine votes (0.5 each) under its own run_id - combined
+        # weight 2.0, clears quorum, and the human-backed gate is satisfied by the stale vote
+        # above, so the card genuinely resolves.
+        monkeypatch.setattr(
+            backfill_survivor_pks,
+            "dispatch_micro_batch",
+            _VoteCastingDispatch(
+                votes_by_call_index={
+                    0: [
+                        dict(card=card, printing=printing, source=VoteSource.OCR),
+                        dict(card=card, printing=printing, source=VoteSource.OCR),
+                    ]
+                }
+            ),
+        )
+
+        assert _exit_code("--batch-size", "10") == 7
+        output = capsys.readouterr().out
+
+        assert "FIDELITY GATE VIOLATION: 1 card(s)" in output
+        assert "PASS STOPPED EARLY exit_code=7 reason=fidelity-gate-violation" in output
+        # never rolled back - every vote this pass cast stays written.
+        assert CardPrintingTag.objects.filter(card=card, source=VoteSource.OCR).count() == 2
+
+    @STREAMING_ON
+    def test_an_envelope_halt_keeps_its_own_exit_code_even_with_a_violation_ready_to_fire(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        """PRECEDENCE: an envelope halt keeps EXIT_ENVELOPE_HALT (3) and its own meaning
+        unchanged, even when an earlier batch in the SAME pass already cast votes that would
+        violate the gate. The gate is skipped entirely once a halt is seen - never merely
+        non-overriding - so it can neither change the exit code nor add a second, conflicting
+        report to a pass a human is already required to go acknowledge."""
+        cards = [CardFactory(content_phash=i) for i in range(1, 5)]
+        for card in cards:
+            _incomplete_row(card)
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=cards[0], printing=printing, source=VoteSource.USER, run_id="stale-earlier-run")
+        monkeypatch.setattr(
+            backfill_survivor_pks,
+            "dispatch_micro_batch",
+            _VoteCastingDispatch(
+                outcomes=[
+                    DispatchOutcome(status="completed", card_ids=[cards[0].pk, cards[1].pk]),
+                    DispatchOutcome(status="halted-new-trip", trip_id="envtrip-test"),
+                ],
+                votes_by_call_index={
+                    0: [
+                        dict(card=cards[0], printing=printing, source=VoteSource.OCR),
+                        dict(card=cards[0], printing=printing, source=VoteSource.OCR),
+                    ]
+                },
+            ),
+        )
+        # Sanity: the votes the first batch casts really would resolve the card and really would
+        # violate the gate if it ran - otherwise this test could pass for the wrong reason.
+        from cardpicker.printing_consensus import resolve_printing
+
+        assert _exit_code("--batch-size", "2") == 3  # EXIT_ENVELOPE_HALT, unchanged
+        output = capsys.readouterr().out
+
+        assert resolve_printing(cards[0]) == printing
+        assert "FIDELITY GATE: skipped" in output
+        assert "FIDELITY GATE VIOLATION" not in output
+        assert "halted=halted-new-trip" in output
+        # nothing rolled back - the first batch's votes stay written despite the later halt.
+        assert CardPrintingTag.objects.filter(card=cards[0], source=VoteSource.OCR).count() == 2

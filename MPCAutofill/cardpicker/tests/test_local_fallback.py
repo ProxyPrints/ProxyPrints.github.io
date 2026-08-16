@@ -12,16 +12,19 @@ it's pure local asset loading, no different in kind from the raw Pillow calls el
 this suite.
 """
 
+import pytest
 from PIL import Image, ImageDraw
 
 import cardpicker.local_ocr as local_ocr
 from cardpicker.attribute_tags import seed_attribute_tags
 from cardpicker.default_tags import seed_default_tags
 from cardpicker.local_fallback import (
+    _BORDER_SAMPLE_BANDS_MM,
     BLEED_ASPECT_RATIO,
     BLEED_EDGE_TAG_NAME,
     BORDER_COLOR_TO_TAG,
     FALLBACK_ANONYMOUS_ID,
+    MIN_USABLE_BAND_PX,
     TRIM_ASPECT_RATIO,
     cast_bleed_edge_vote,
     cast_border_attribute_vote,
@@ -33,6 +36,7 @@ from cardpicker.local_fallback import (
     filter_by_border_color,
     frame_style_is_consistent,
     match_artist,
+    project_mm_box_to_fractions,
     render_set_symbol,
     run_fallback_for_card,
 )
@@ -130,6 +134,93 @@ class TestClassifyBorderColor:
         # four taxonomy buckets - gold/yellow borders are explicitly out of scope for v1 (see
         # docs/features/printing-tags.md's chip taxonomy notes)
         assert classify_border_color(self._uniform_bordered_image((180, 140, 40))) is None
+
+    @staticmethod
+    def _image_with_sparse_text_bands(noisy_bands, base_rgb=(5, 5, 5), text_rgb=(250, 250, 250)) -> Image.Image:
+        """A card whose border reads `base_rgb` everywhere except `noisy_bands` (a subset of
+        {"left", "right", "top", "bottom"}), which carry a sparse (~1-in-7) `text_rgb` overlay -
+        real-content-in-a-band, but weighted like actual text on a border (mean stays close to
+        `base_rgb`; population std climbs well past `_BORDER_UNIFORMITY_STD_THRESHOLD`) rather
+        than the full random noise `test_borderless_when_edges_are_noisy_content` uses, which
+        would swing the pooled colour average unrecognisably far from `base_rgb` and so could
+        not isolate "is this band judged uniform" from "what colour does this card read as"."""
+        width, height = 750, 1050
+        img = Image.new("RGB", (width, height), base_rgb)
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([60, 60, 690, 990], fill=(120, 80, 200))
+        pixels = img.load()
+        for name in noisy_bands:
+            box = project_mm_box_to_fractions(_BORDER_SAMPLE_BANDS_MM[name], img)
+            assert box is not None, f"{name} band did not project on the 750x1050 fixture"
+            left, top, right, bottom = (
+                int(box[0] * width),
+                int(box[1] * height),
+                int(box[2] * width),
+                int(box[3] * height),
+            )
+            i = 0
+            for y in range(top, bottom):
+                for x in range(left, right):
+                    if i % 7 == 0:
+                        pixels[x, y] = text_rgb
+                    i += 1
+        return img
+
+    def test_non_uniform_sides_with_uniform_top_still_names_a_colour(self):
+        """issue #830 defect 2: an extended-art-shaped card - real content (not a painted
+        border) at the left/right edges, but a genuine uniform border at the top - must still
+        get a colour reading. The old pooled-uniformity test measured this exact shape
+        misreading as 'borderless' on 20 of 30 confirmed extended-art images."""
+        img = self._image_with_sparse_text_bands(noisy_bands=("left", "right"))
+        assert classify_border_color(img) == "black"
+
+    def test_non_uniform_sides_and_top_reads_borderless(self):
+        img = self._image_with_sparse_text_bands(noisy_bands=("left", "right", "top"))
+        assert classify_border_color(img) == "borderless"
+
+    def test_bottom_band_variance_never_affects_the_uniformity_decision(self):
+        """The bottom band is excluded from the per-band uniformity gate entirely (it carries
+        the collector line on every real card, regardless of border colour) - real content
+        there alone must not flip an otherwise clean border to 'borderless', nor visibly move
+        the reported colour (its mean still folds into the colour average unchanged, matching
+        the old pooled implementation's own behaviour on an ordinary framed card)."""
+        img = self._image_with_sparse_text_bands(noisy_bands=("bottom",))
+        assert classify_border_color(img) == "black"
+
+
+class TestProjectMmBoxToFractions:
+    """issue #830 defect 1: the mm-relative band projection. `_BORDER_SAMPLE_BANDS_MM`'s own
+    bands, converted, must not collapse below `MIN_USABLE_BAND_PX` on a trim-exact image at
+    production resolutions - the regression this whole mechanism exists to prevent (see
+    `project_mm_box_to_fractions`'s own docstring)."""
+
+    @staticmethod
+    def _trim_exact_image(dpi: int) -> Image.Image:
+        # 63mm x 88mm at `dpi` - a genuinely trim-exact (no bleed margin) synthetic image,
+        # the worst case for band collapse (see this PR's own report for the bleed-inclusive
+        # numbers at the same two DPIs).
+        width = round(63.0 / 25.4 * dpi)
+        height = round(88.0 / 25.4 * dpi)
+        return Image.new("RGB", (width, height), (5, 5, 5))
+
+    @pytest.mark.parametrize("dpi", [250, 460])
+    @pytest.mark.parametrize("band_name", ["left", "right", "top", "bottom"])
+    def test_band_does_not_collapse_on_a_trim_exact_image(self, dpi, band_name):
+        img = self._trim_exact_image(dpi)
+        width, height = img.size
+        box = project_mm_box_to_fractions(_BORDER_SAMPLE_BANDS_MM[band_name], img)
+        assert box is not None, f"{band_name} band refused to project at {dpi} DPI trim-exact"
+        left, top, right, bottom = box
+        assert int(right * width) - int(left * width) >= MIN_USABLE_BAND_PX
+        assert int(bottom * height) - int(top * height) >= MIN_USABLE_BAND_PX
+
+    def test_refuses_a_box_thinner_than_the_usable_floor(self):
+        """A degenerate mm box (both edges effectively the same coordinate) must refuse rather
+        than silently return a sub-pixel band - the exact failure this mechanism exists to
+        prevent, proven directly rather than only via the non-collapse cases above."""
+        img = self._trim_exact_image(250)
+        degenerate_top_band = (7.2275, 0.0, 55.7725, 0.001)
+        assert project_mm_box_to_fractions(degenerate_top_band, img) is None
 
 
 class TestFilterByBorderColor:

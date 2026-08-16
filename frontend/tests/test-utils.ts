@@ -129,12 +129,18 @@ export const closeDetailedView = async (page: Page) => {
 // standing in for (which specific candidate got auto-selected); see this port's own report for
 // the one place that stops being true.
 export const ensureDisplayFace = async (page: Page, face: "front" | "back") => {
-  const wantLabel = face === "front" ? "Showing: Fronts" : "Showing: Backs";
-  const otherLabel = face === "front" ? "Showing: Backs" : "Showing: Fronts";
-  if (await page.getByText(otherLabel).isVisible()) {
-    await page.getByText(otherLabel).click();
+  // Editor-repass R10.2 - the right-rail View control is a Fronts/Backs ToggleButtonGroup now
+  // (was a label-flipping "Showing: Fronts/Backs" button); react-bootstrap marks the active
+  // segment with the `active` class.
+  const wantTestId =
+    face === "front"
+      ? "display-view-toggle-fronts"
+      : "display-view-toggle-backs";
+  const segment = page.getByTestId(wantTestId);
+  if (!(await segment.evaluate((el) => el.classList.contains("active")))) {
+    await segment.click();
   }
-  await expect(page.getByText(wantLabel)).toBeVisible();
+  await expect(segment).toHaveClass(/active/);
 };
 
 export const expectDisplaySheetSlotState = async (
