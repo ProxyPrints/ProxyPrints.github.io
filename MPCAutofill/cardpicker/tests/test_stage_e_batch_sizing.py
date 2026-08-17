@@ -84,7 +84,7 @@ class TestSaturationCap:
 
 
 class TestMemoryGuard:
-    """The memory term against the ratified 768 MB per-worker RSS bar. It is a GUARD - on any host
+    """The memory term against the ratified 1024 MB per-worker RSS bar. It is a GUARD - on any host
     that can hold the working set it is worth hundreds of thousands of cards and cannot bind - so
     what is worth testing is that it engages at all when the host really is small, and that it
     divides the host's memory between every concurrent dispatch PROCESS rather than handing the
@@ -111,7 +111,7 @@ class TestMemoryGuard:
         assert crowded.memory_limit == 0
 
     def test_the_budget_never_exceeds_the_ratified_per_worker_rss_bar(self) -> None:
-        # A host with effectively unlimited memory must still be bounded by the 768 MB bar, because
+        # A host with effectively unlimited memory must still be bounded by the 1024 MB bar, because
         # that bar is what the operating envelope actually trips on - sizing against the machine's
         # free memory instead would produce batches the envelope halts.
         limit = autoscale_batch_size(
@@ -124,7 +124,7 @@ class TestMemoryGuard:
         # The sizing consequence of the discovery fix, on a host small enough for the memory term to
         # be the binding one. 12 concurrent dispatches on a 8 GB box get 683 MB each; the old
         # expression clamped the count to `GOOGLE_IMAGE.max_concurrency` = 6 and handed each one
-        # 1366 MB - over the 768 MB per-worker bar, and twice the memory the batch may really take.
+        # 1366 MB - over the 1024 MB per-worker bar, and twice the memory the batch may really take.
         # The semaphore that clamp appealed to is per-PROCESS and cannot see the other eleven.
         honest = autoscale_batch_size(mode=MODE_BULK, host=host(available_rss_mb=8192.0, concurrent_dispatches=12))
         as_the_semaphore_would_have_had_it = autoscale_batch_size(
@@ -301,9 +301,9 @@ class TestHostDiscovery:
         assert profile.fetch_overcommitted is True
 
     def test_a_conveyor_sized_cap_is_within_the_destination_budget(self) -> None:
-        # The production setting (2) and the largest cap that still fits the destination budget are
+        # The production setting (5) and the largest cap that still fits the destination budget are
         # NOT flagged - the flag has to mean something, so it must be quiet in the normal case.
-        for cap in (1, 2, GOOGLE_IMAGE.max_concurrency // FETCH_THREADS_PER_DISPATCH):
+        for cap in (1, 2, 5, GOOGLE_IMAGE.max_concurrency // FETCH_THREADS_PER_DISPATCH):
             with override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=cap):
                 profile = discover_host()
             assert profile.aggregate_fetch_threads <= GOOGLE_IMAGE.max_concurrency

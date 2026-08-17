@@ -638,12 +638,14 @@ STAGE_E_MICRO_BATCH_SIZE = env.int("STAGE_E_MICRO_BATCH_SIZE", default=None)
 # django-q2 worker PROCESS (Q_CLUSTER["workers"] = 8 above) to this value - the shakedown's first
 # live run had eight concurrent dispatches, each running CPU-bound OCR/phash extraction, trip the
 # host-load envelope bar on a host with only 7 usable compute cores (docs/features/catalog-
-# completion-plan.md L1794/2248/2366's hardware profile). Default 2 is a conservative starting
-# point (well under the 7-core ceiling even accounting for other concurrent host activity - Stage
-# C's own bulk driver, image-cdn fetch threads, etc.), not a measured/considered answer - tunable
-# without a code change (env var) pending real shakedown data, matching STAGE_E_MICRO_BATCH_SIZE's
-# own "placeholder, not invented precision" convention immediately above.
-STAGE_E_MAX_CONCURRENT_DISPATCHES = env.int("STAGE_E_MAX_CONCURRENT_DISPATCHES", default=2)
+# completion-plan.md L1794/2248/2366's hardware profile). Default raised 2 -> 5 (2026-08-17):
+# DPI-460 rendering (PR #826) roughly doubled the per-card OCR cost of each dispatch, and at the
+# 250-card batch the previous 2/3-work settings throttled the full-catalog rescan's throughput
+# well below what the 7-core ceiling allows - 5 concurrent dispatches restores it while still
+# sitting under that ceiling with room for other concurrent host activity (Stage C's own bulk
+# driver, image-cdn fetch threads, etc.). Env-tunable without a code change, matching
+# STAGE_E_MICRO_BATCH_SIZE's own convention immediately above.
+STAGE_E_MAX_CONCURRENT_DISPATCHES = env.int("STAGE_E_MAX_CONCURRENT_DISPATCHES", default=5)
 
 # Host-load AIMD governor (2026-08-13, replacing the 2026-08-05 three-band soft brake - see
 # cardpicker/stage_e_load_brake.py's own module docstring for the full control law and the

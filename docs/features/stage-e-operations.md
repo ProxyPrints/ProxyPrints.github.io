@@ -60,7 +60,7 @@ of them crosses its bar. The four ratified bars
 | -------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Google fetch lockout | any occurrence — **instant** pause                                               | the existing `GoogleFetchLockoutError`/`lockout_hit` signal, unchanged            |
 | Host load average    | **> 7.0**                                                                        | the existing escalation threshold (`docs/reports/2026-07-23-4c-pilot-dry-run.md`) |
-| RSS per worker       | **> 768MB**                                                                      | `stage-e-streaming.md` §10(a), a new, streaming-specific per-worker bar           |
+| RSS per worker       | **> 1024MB**                                                                     | `stage-e-streaming.md` §10(a), a new, streaming-specific per-worker bar           |
 | Fetch-failure rate   | **> 1%** over a rolling 500-card window, **excluding rate pressure** — see below | `stage-e-streaming.md` §10(a), narrowed 2026-07-30                                |
 
 None of these numbers are invented on this page or in `operating_envelope.py`
@@ -68,11 +68,13 @@ itself — every one is cited to the ratifying brief section in that module's
 own docstring, which is the place to check if a bar's exact value is ever in
 question.
 
-**One bar has moved since §10(a) was written.** The per-worker RSS ceiling
-was ratified at 512MB and raised 512 → 768 by `70225df8` (2026-07-28, an
-owner ops ruling — itself the ratifying act for 768). 768 is the live bar and
-the value `operating_envelope.RSS_MB_PER_WORKER_CEILING` carries; a 512 in an
-older report or test is pre-`70225df8` history, not a competing number.
+**One bar has moved since §10(a) was written — twice.** The per-worker RSS
+ceiling was ratified at 512MB, raised 512 → 768 by `70225df8` (2026-07-28, an
+owner ops ruling — itself the ratifying act for 768), then raised 768 → 1024
+(2026-08-17) to fit the DPI-460 rendering footprint the full-catalog rescan
+repeatedly tripped (813MB observed against the 768 ceiling). 1024 is the live
+bar and the value `operating_envelope.RSS_MB_PER_WORKER_CEILING` carries; an
+older figure in a report or test is pre-raise history, not a competing number.
 
 ### Rate pressure is throttled, not halted (owner ruling, 2026-07-30)
 
@@ -950,9 +952,10 @@ it as an incident.
 
 Caps the number of `dispatch_micro_batch` calls running CONCURRENTLY, across
 every django-q2 worker process on the box, to
-`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (default `2`, env-tunable —
-same "placeholder pending real measurement" posture as
-`STAGE_E_MICRO_BATCH_SIZE` above). Motivated by the shakedown incident PR
+`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (default `5`, env-tunable —
+raised 2026-08-17 from 2: DPI-460 rendering raised the per-card OCR cost of
+each dispatch, and at batch 250 the old 2/3-work settings throttled the
+rescan's throughput below what the 7-core ceiling allows). Motivated by the shakedown incident PR
 #448 also fixed (the vote-collision half of the same run) — see
 `local_calculate_verdicts._split_new_printing_tag_votes`'s own docstring for
 the full incident numbers: eight concurrent dispatches, all running
