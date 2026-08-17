@@ -57,6 +57,12 @@ interface ArtistVotePickerProps {
    * this component needing to know anything about that surface's own UI. Omitted (this
    * component's other caller, AttributeVotingPanel): unchanged behavior, nothing extra rendered. */
   onArtistConfirmed?: (artistName: string) => void;
+  /** Called after ANY artist vote succeeds - a named candidate OR "Unknown artist". Lets a
+   * funnel-style caller (QuestionFeed.tsx) gate its own "you're done" affordance on a real
+   * vote existing at all, which onArtistConfirmed alone cannot do (it never fires for the
+   * Unknown-artist answer). Omitted (this component's other caller, AttributeVotingPanel):
+   * unchanged behavior, nothing extra rendered. */
+  onVoteCast?: () => void;
 }
 
 export function ArtistVotePicker({
@@ -66,6 +72,7 @@ export function ArtistVotePicker({
   onRateLimited,
   voteSurface,
   onArtistConfirmed,
+  onVoteCast,
 }: ArtistVotePickerProps) {
   const dispatch = useAppDispatch();
 
@@ -118,6 +125,7 @@ export function ArtistVotePicker({
     )
       .then((response) => {
         setConsensus(response);
+        onVoteCast?.();
         dispatch(
           setNotification([
             Math.random().toString(),
