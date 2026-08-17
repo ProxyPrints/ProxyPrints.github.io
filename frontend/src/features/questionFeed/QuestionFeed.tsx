@@ -825,6 +825,11 @@ export function QuestionFeed() {
   const [confirmedArtistName, setConfirmedArtistName] = useState<string | null>(
     null
   );
+  // Completion gate for the artist question's Confirm answer - true once ANY artist vote has
+  // landed (named via onArtistConfirmed's flow, or "Unknown artist" via onVoteCast alone -
+  // onArtistConfirmed never fires for the Unknown answer). Reset with the rest of the
+  // per-item state below.
+  const [artistVoteCast, setArtistVoteCast] = useState<boolean>(false);
   // A 429 from any vote-casting call below (printing, tag, artist) sets this instead of firing
   // the usual error toast - see the banner rendered near the top of the item below. In a
   // one-tap funnel, a rate-limit pause is an expected, honest condition, not a failure, so it
@@ -916,6 +921,7 @@ export function QuestionFeed() {
         setRejectedCandidateIds(new Set());
         setSelectedCandidateId(null);
         setConfirmedArtistName(null);
+        setArtistVoteCast(false);
         setRateLimited(false);
         // Issue #707 / A4 amendment - shown automatically for identify_printing's shortlist,
         // where the attribute chips actually narrow something on first render. confirm_suggestion
@@ -1337,6 +1343,19 @@ export function QuestionFeed() {
   // happened - see useTagVoting) and advances - guarded the same way as skip() above so a
   // double-tap can't advance two cards.
   const finishSameArtBut = () => {
+    if (voteInFlightRef.current) {
+      return;
+    }
+    voteInFlightRef.current = true;
+    advance();
+  };
+
+  // Border and artist questions' completion answer - the chip taps / picker selections
+  // already cast their own real votes as they happened, so this only advances, carrying them
+  // WITHOUT recording an abstention (unlike the "Can't tell"/"Skip" answers beside it).
+  // Guarded exactly like finishSameArtBut/skip() above. Rendered only once a vote has
+  // actually been cast - see each ActionRow's gate below.
+  const advanceCarryingVotes = () => {
     if (voteInFlightRef.current) {
       return;
     }
@@ -2145,6 +2164,7 @@ export function QuestionFeed() {
               confidentlyKnownArtistName={item.confidentlyKnownArtistName}
               onRateLimited={() => setRateLimited(true)}
               voteSurface="question-feed"
+              onVoteCast={() => setArtistVoteCast(true)}
               onArtistConfirmed={(name) => {
                 bumpSessionCount();
                 setConfirmedArtistName(name);
@@ -2162,6 +2182,15 @@ export function QuestionFeed() {
               <Btn className="ghost" onClick={skip}>
                 Skip
               </Btn>
+              {artistVoteCast && (
+                <Btn
+                  className="primary"
+                  onClick={advanceCarryingVotes}
+                  data-testid="question-feed-artist-confirm"
+                >
+                  Confirm
+                </Btn>
+              )}
             </ActionRow>
           </>
         )}
@@ -2207,6 +2236,17 @@ export function QuestionFeed() {
               <Btn className="ghost" onClick={() => abstainAndAdvance()}>
                 Skip
               </Btn>
+              {Object.values(chipStates).some(
+                (state) => state !== "untouched"
+              ) && (
+                <Btn
+                  className="primary"
+                  onClick={advanceCarryingVotes}
+                  data-testid="question-feed-border-continue"
+                >
+                  Continue
+                </Btn>
+              )}
             </ActionRow>
           </>
         )}
