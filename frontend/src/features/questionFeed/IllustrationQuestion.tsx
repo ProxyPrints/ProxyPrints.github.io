@@ -5,6 +5,7 @@ import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { PrintingCandidate, QuestionFeedItem } from "@/common/schema_types";
 import { useAppDispatch } from "@/common/types";
+import { ArtistSupportLink } from "@/components/ArtistSupportLink";
 import {
   CandidateButton,
   ILLUSTRATION_CROP_ASPECT_RATIO,
@@ -47,6 +48,17 @@ const IllustrationTileWrapper = styled.div`
 const IllustrationTile = styled(CandidateButton)`
   overflow: hidden;
   aspect-ratio: ${ILLUSTRATION_CROP_ASPECT_RATIO};
+`;
+
+// ArtistSupportLink is interactive (an <a> plus an expand disclosure), so it cannot render
+// inside the tile's vote <button> - interactive-in-interactive is invalid HTML and would
+// bubble a link/toggle click into a vote. It sits below the art as the tile's credit instead,
+// following the illustration-group pattern (QuestionFeed.tsx's ArtistCredit shell) including
+// the shared 220px cap that keeps the applet a compact cluster credit rather than a full-bleed
+// CTA (DESIGN-REPASS Rule 6).
+const IllustrationTileCredit = styled.div`
+  max-width: 220px;
+  margin-top: 4px;
 `;
 
 const RejectButton = styled.button`
@@ -178,6 +190,11 @@ export function IllustrationQuestion({
               <IllustrationArtPlaceholder />
             )}
           </IllustrationTile>
+          {candidate.artist.trim() !== "" && (
+            <IllustrationTileCredit>
+              <ArtistSupportLink artistName={candidate.artist} />
+            </IllustrationTileCredit>
+          )}
           <RejectButton
             type="button"
             data-testid={`question-feed-illustration-reject-${candidate.illustrationId}`}

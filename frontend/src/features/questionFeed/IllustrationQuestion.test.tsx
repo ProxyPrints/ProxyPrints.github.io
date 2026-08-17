@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import React from "react";
 import { Provider } from "react-redux";
@@ -191,5 +197,56 @@ describe("IllustrationQuestion", () => {
     expect(rejectPayload!.anonymousId).toBeTruthy();
     expect(voteEndpointWasCalled).toBe(false);
     expect(printingTagVoteWasCalled).toBe(false);
+  });
+
+  it("renders an artist support applet beneath each tile, outside the vote button", () => {
+    renderComponent();
+
+    const applets = screen.getAllByTestId("artist-support-applet");
+    expect(applets).toHaveLength(2);
+
+    for (const applet of applets) {
+      // The compact-cluster applet: collapsed artist name carrying the MTGAC page link
+      // (deterministic fallback URL - no remote backend in this render, so the RTK query
+      // is skipped) plus the expand disclosure. Same ArtistCredit shell as the
+      // illustration-group flow, incl. its 220px width cap.
+      expect(within(applet).getByText("Some Artist")).toBeInTheDocument();
+      expect(within(applet).getByTestId("artist-support-link")).toHaveAttribute(
+        "href",
+        "https://www.mtgartistconnection.com/artist/Some%20Artist"
+      );
+      expect(
+        within(applet).getByTestId("artist-support-toggle")
+      ).toHaveAttribute("aria-expanded", "false");
+    }
+
+    // Placed AFTER the tile's art and BEFORE the reject control, as siblings of the vote
+    // button - never inside it (ArtistSupportLink renders an <a> and a disclosure <button>;
+    // interactive-in-interactive is invalid HTML and would bubble their clicks into a vote).
+    const artTile = screen.getByTestId(
+      "question-feed-illustration-illustration-shared"
+    );
+    const wrapper = artTile.parentElement;
+    expect(wrapper).not.toBeNull();
+    const children = Array.from(wrapper!.children);
+    expect(children[0]).toBe(artTile);
+    expect(
+      children[1].querySelector('[data-testid="artist-support-applet"]')
+    ).not.toBeNull();
+    expect(children[2].getAttribute("data-testid")).toMatch(
+      /question-feed-illustration-reject-/
+    );
+  });
+
+  it("the artist applet's expand toggle never submits a vote", () => {
+    const onAnswered = jest.fn();
+    renderComponent(onAnswered);
+
+    const toggle = screen.getAllByTestId("artist-support-toggle")[0];
+    fireEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("artist-support-expanded")).toBeInTheDocument();
+    expect(onAnswered).not.toHaveBeenCalled();
   });
 });
