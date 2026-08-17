@@ -78,7 +78,7 @@ maintainer's laptop, or on a box under real memory pressure, without being tuned
     themselves are NOT batch-size-proportional at all - `_STAGE_C_FETCH_AHEAD_DEPTH = 2` bounds
     the number of decoded images in flight regardless of N, which is the property that makes a
     large batch affordable in the first place. Against `operating_envelope.
-    RSS_MB_PER_WORKER_CEILING = 768` and a measured warm working set of ~300 MB, the memory term
+    RSS_MB_PER_WORKER_CEILING = 1024` and a measured warm working set of ~300 MB, the memory term
     is worth hundreds of thousands of cards and cannot bind at any size this rule would choose.
     It is kept anyway, and stated as a guard rather than dressed up as a tuning knob: on a host
     where the working set does not fit the per-process budget at all it collapses the batch to
@@ -403,7 +403,7 @@ def _memory_limit(host: HostProfile) -> Optional[int]:
     How many cards a batch may hold before its own live set threatens the ratified per-worker RSS
     bar. The budget is the SMALLER of that bar and this host's actually-available memory divided
     between the concurrent dispatch PROCESSES - the bar alone would be the wrong question on a host
-    that does not have 768 MB per process to give. `None` when available memory could not be read.
+    that does not have 1024 MB per process to give. `None` when available memory could not be read.
 
     The divisor is `concurrent_dispatches` (the advisory-lock cap), deliberately, and NOT a number
     trimmed by core count or by the fetch limiter: memory is held by every resident process,

@@ -126,7 +126,7 @@ def deterministic_host_load(request, monkeypatch):
 
 
 # The per-worker RSS every test sees, unless it opts out with `@pytest.mark.real_process_rss`.
-# Deliberately well under `operating_envelope.RSS_MB_PER_WORKER_CEILING` (768.0, a RATIFIED number
+# Deliberately well under `operating_envelope.RSS_MB_PER_WORKER_CEILING` (1024.0, a RATIFIED number
 # - not changed here, and not to be changed to accommodate tests).
 #
 # Why this exists (2026-07-29): the envelope has ONE gate with TWO ambient sensors. The load one was
@@ -137,8 +137,8 @@ def deterministic_host_load(request, monkeypatch):
 # test_stage_e_shakedown, 7 in test_stream_full_catalog - the same split as the load-sensitive set,
 # because it is one gate with two sensors. Re-measure with the override below rather than trusting
 # that count; it was 37 a few PRs ago and #545 added one). The
-# measured margin is comfortable today (the suite peaks around 348MB VmHWM against the 768MB bar,
-# ~2.2x) but it is a margin, not a guarantee: it moves with fixture growth, with a bigger
+# measured margin is comfortable today (the suite peaks around 348MB VmHWM against the 1024MB bar,
+# ~2.9x) but it is a margin, not a guarantee: it moves with fixture growth, with a bigger
 # testcontainers footprint, and with whatever else the three agents commonly sharing this box are
 # doing. An RSS-driven failure looks exactly like an envelope bug and costs the same hours the load
 # flakes did.
