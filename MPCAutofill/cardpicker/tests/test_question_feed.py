@@ -69,6 +69,7 @@ from cardpicker.tests.factories import (
     CardTagVoteFactory,
     TagFactory,
 )
+from cardpicker.vote_consensus import contested_queryset
 
 
 def _warm_all_lanes() -> None:
@@ -334,9 +335,20 @@ class TestGetNextQuestionFeedItem:
 
 
 class TestContestedIdsMemoizedPerRequest:
-    """`get_contested_card_ids`/`get_contested_artist_card_ids` are expensive (issue #726:
-    330-400ms each on production data) and, before this fix, were recomputed once per tier that
-    consulted them instead of once per `get_next_question_feed_item` call."""
+    """`get_contested_card_ids` is expensive (issue #726: 330-400ms on production data per
+    call, 520-686ms measured 2026-08-16) and, before this fix, was recomputed once per tier
+    that consulted it instead of once per `get_next_question_feed_item` call. `contested_card_ids`
+    is now resolved at most once per call and threaded to every lane that needs it.
+
+    `get_contested_artist_card_ids` is deliberately NOT part of the pool-served request path
+    any more: the bare call inside the contested lane (a vestige of the pre-pool waterfall)
+    was removed, and the contested lane's artist half relies on the per-candidate read-time
+    filter `artist_vote_status=ArtistVoteStatus.CONTESTED` in
+    `question_feed_pools.draw_contested_entry` - the same "still CONTESTED right now, not just
+    as of the last warm" staleness guarantee the printing half's
+    `_fetch_unresolved_printing_card` documents. The contested-artist id set is consumed where
+    it still matters: by the live `_tier_2_contested` (its artist half filters on it) and by
+    the contested-lane pool builder at warm time."""
 
     def test_get_contested_card_ids_computed_once_when_tier_2_and_tier_4_are_both_consulted(self, db):
         # a plain unresolved card with no votes: tier 2 finds nothing contested and falls
@@ -359,7 +371,7 @@ class TestContestedIdsMemoizedPerRequest:
         assert item is not None
         assert item.card.identifier == card.identifier
         assert mock_contested.call_count == 1
-        assert mock_contested_artist.call_count == 1
+        assert mock_contested_artist.call_count == 0  # the vestigial bare call was removed
 
     def test_get_contested_card_ids_not_called_when_tier_1_serves_the_item(self, db):
         # tier 1 (confirm_suggestion) and the likely-resolve pool both resolve before tier 2 is
@@ -373,6 +385,34 @@ class TestContestedIdsMemoizedPerRequest:
         assert item is not None
         assert item.type.value == "confirm_suggestion"
         assert mock_contested.call_count == 0
+
+
+class TestGetContestedCardIdsCaching:
+    """`get_contested_card_ids`'s short-TTL "shared"-cache wrapper (2026-08-16): the value is a
+    pure function of persisted votes and measured at 520-686ms per call against live production
+    data, and `views.get_question_feed` resolves it once per feed request - so it is cached on
+    the cross-process `"shared"` cache for `_CONTESTED_CARD_IDS_CACHE_TTL` (300s), the TTL being
+    the only invalidation mechanism, same convention as the remaining-estimate counts."""
+
+    def test_second_call_within_ttl_hits_the_cache(self, db):
+        with patch("cardpicker.printing_consensus.contested_queryset", wraps=contested_queryset) as mock_compute:
+            first = get_contested_card_ids()
+            second = get_contested_card_ids()
+            assert mock_compute.call_count == 1  # the second call was served by the cache
+        assert first == second
+
+    def test_clearing_the_cache_forces_a_recompute(self, db):
+        with patch("cardpicker.printing_consensus.contested_queryset", wraps=contested_queryset) as mock_compute:
+            get_contested_card_ids()
+            caches["shared"].clear()
+            get_contested_card_ids()
+            assert mock_compute.call_count == 2
+
+    def test_a_mutating_caller_never_poisons_the_cached_value(self, db):
+        first = get_contested_card_ids()
+        first.append(999999999)  # a caller mutating the returned list
+        second = get_contested_card_ids()
+        assert 999999999 not in second  # the cache serves a fresh copy, unaffected
 
 
 class TestPhaseCNotOfficialArtRouting:

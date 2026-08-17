@@ -32,6 +32,7 @@ from cardpicker.models import (
     VotePolarity,
     VoteSource,
 )
+from cardpicker.question_feed import _question_information_gain_score
 from cardpicker.question_feed_pools import (
     KIND_ARTIST,
     KIND_ILLUSTRATION,
@@ -45,7 +46,9 @@ from cardpicker.question_feed_pools import (
     PoolEntry,
     _cache_key,
     _get_cached_pool,
+    _live_information_gain_score,
     _pool_sample_chunk_size,
+    _precomputed_information_gain_score,
     _sample_across_pk_strata,
     draw_cold_entry,
     draw_confirm_card,
@@ -108,12 +111,19 @@ def make_contested_tag(tag_name: str = "Full Art") -> tuple:
     return card, tag
 
 
+def without_scores(pool_entries) -> list:
+    """`PoolEntry`s with the warm-time `score` field stripped - builder-membership assertions
+    check the candidate identity (`kind`/`card_id`/`tag_name`/`reason`), never the precomputed
+    score itself, so building the expected entry without a score must still match."""
+    return [PoolEntry(kind=e.kind, card_id=e.card_id, tag_name=e.tag_name, reason=e.reason) for e in pool_entries]
+
+
 class TestBuildPoolResolutionImminent:
     def test_includes_a_card_one_vote_from_resolving(self, db):
         card, _ = make_one_vote_from_resolving_card()
         warm_pool_cache(LANE_RESOLUTION_IMMINENT)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_RESOLUTION_IMMINENT))
-        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk) in entries
+        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk) in without_scores(entries)
 
     def test_excludes_a_card_with_no_votes_at_all(self, db):
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -139,7 +149,7 @@ class TestBuildPoolConfirm:
         card, _ = make_ai_suggested_card()
         warm_pool_cache(LANE_CONFIRM)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_CONFIRM))
-        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk) in entries
+        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk) in without_scores(entries)
 
     def test_excludes_a_card_with_a_human_vote_already(self, db):
         card, printing = make_ai_suggested_card()
@@ -156,7 +166,7 @@ class TestBuildPoolContested:
         CardPrintingTagFactory(card=card, printing=CanonicalCardFactory(), source=VoteSource.USER)
         warm_pool_cache(LANE_CONTESTED)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_CONTESTED))
-        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk) in entries
+        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk) in without_scores(entries)
 
     def test_includes_a_contested_artist_card(self, db):
         from cardpicker.artist_consensus import resolve_and_persist_artist
@@ -170,13 +180,13 @@ class TestBuildPoolContested:
 
         warm_pool_cache(LANE_CONTESTED)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_CONTESTED))
-        assert PoolEntry(kind=KIND_ARTIST, card_id=card.pk) in entries
+        assert PoolEntry(kind=KIND_ARTIST, card_id=card.pk) in without_scores(entries)
 
     def test_includes_a_contested_tag_pair(self, db):
         card, tag = make_contested_tag()
         warm_pool_cache(LANE_CONTESTED)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_CONTESTED))
-        assert PoolEntry(kind=KIND_TAG, card_id=card.pk, tag_name=tag.name) in entries
+        assert PoolEntry(kind=KIND_TAG, card_id=card.pk, tag_name=tag.name) in without_scores(entries)
 
     def test_excludes_a_plain_fresh_card(self, db):
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -190,7 +200,7 @@ class TestBuildPoolCold:
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
-        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk, reason="tier_4_fresh_printing") in entries
+        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk, reason="tier_4_fresh_printing") in without_scores(entries)
 
     def test_includes_a_quick_negative_card_with_the_quick_negative_reason(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -199,7 +209,9 @@ class TestBuildPoolCold:
         )
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
-        assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk, reason="tier_4_quick_negative_to_review") in entries
+        assert PoolEntry(
+            kind=KIND_PRINTING, card_id=card.pk, reason="tier_4_quick_negative_to_review"
+        ) in without_scores(entries)
 
     def test_excludes_a_contested_printing_card(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -217,7 +229,9 @@ class TestBuildPoolCold:
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
-        assert PoolEntry(kind=KIND_ILLUSTRATION, card_id=card.pk, reason="tier_4_fresh_illustration") in entries
+        assert PoolEntry(kind=KIND_ILLUSTRATION, card_id=card.pk, reason="tier_4_fresh_illustration") in without_scores(
+            entries
+        )
 
     def test_excludes_a_card_with_no_illustration_data_at_all(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -231,7 +245,7 @@ class TestBuildPoolCold:
         )
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
-        assert PoolEntry(kind=KIND_ARTIST, card_id=card.pk) in entries
+        assert PoolEntry(kind=KIND_ARTIST, card_id=card.pk) in without_scores(entries)
 
     def test_includes_an_unresolved_tag_pair(self, db):
         card = CardFactory(
@@ -243,7 +257,7 @@ class TestBuildPoolCold:
         card.refresh_from_db()
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
-        assert PoolEntry(kind=KIND_TAG, card_id=card.pk, tag_name=tag.name) in entries
+        assert PoolEntry(kind=KIND_TAG, card_id=card.pk, tag_name=tag.name) in without_scores(entries)
 
 
 class TestPoolSamplesAcrossImportBatches:
@@ -393,23 +407,40 @@ class TestNoInlineBuildOnCacheMiss:
             mock_build.assert_not_called()
 
 
-class TestBoundedPerServeScoring:
-    """A draw must score at most `question_feed._CANDIDATE_SCORING_WINDOW` candidates - each
-    score costs several vote queries (issue #716), and a pool holds up to
-    `settings.QUESTION_FEED_POOL_SIZE` entries per lane, so scoring every entry on every serve
-    reintroduces per-request cost pooling exists to avoid paying."""
+class TestScoresPrecomputedAtWarmTime:
+    """A draw must perform no vote-query scoring on the request path - scoring is paid once per
+    pooled entry at WARM time (`PoolEntry.score`). Before the 2026-08-16 change, every draw
+    scored its window live (`_question_information_gain_score` costs several vote queries per
+    candidate - measured 288-791 queries / 9.1-9.6s per draw against live production data), the
+    exact per-request cost pooling exists to avoid paying."""
 
-    def test_scores_at_most_the_configured_window_per_draw(self, db):
+    def test_draw_of_a_warm_pool_performs_no_scoring(self, db):
         from cardpicker.question_feed import _CANDIDATE_SCORING_WINDOW
 
         for _ in range(_CANDIDATE_SCORING_WINDOW + 20):
             CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
-        warm_pool_cache(LANE_COLD)
+        warm_pool_cache(LANE_COLD)  # scoring is paid here, once per pooled entry
 
-        with patch("cardpicker.question_feed._question_information_gain_score", return_value=0.0) as mock_score:
-            draw_cold_entry("anon-1", set(), set(), contested_card_ids=[])
+        with patch(
+            "cardpicker.question_feed._question_information_gain_score", wraps=_question_information_gain_score
+        ) as mock_score:
+            drawn = draw_cold_entry("anon-1", set(), set(), contested_card_ids=[])
 
-        assert mock_score.call_count <= _CANDIDATE_SCORING_WINDOW
+        assert mock_score.call_count == 0  # the draw sorts by precomputed scores only
+        assert drawn is not None
+
+    def test_precomputed_score_matches_the_live_score_for_the_same_state(self, db):
+        """The request-path fallback (`_live_information_gain_score`, serving a v1 pool that
+        warms out during this change's deploy) must compute exactly what the warm-time
+        precompute stored, and the precompute must route identically whether the builder already
+        held the `Card` or had to fetch it - both wrap `_question_information_gain_score` with
+        the same `(kind, card, tag_name)` call, differing only in whether the routing happened
+        at build time or at draw time."""
+        card, _ = make_one_vote_from_resolving_card()  # real votes, so the score is non-degenerate
+        expected = _question_information_gain_score(KIND_PRINTING, card, None)
+        assert _precomputed_information_gain_score(KIND_PRINTING, card.pk, card=card) == expected
+        assert _precomputed_information_gain_score(KIND_PRINTING, card.pk) == expected  # fetch path
+        assert _live_information_gain_score(PoolEntry(kind=KIND_PRINTING, card_id=card.pk)) == expected
 
 
 class TestDrawResolutionImminentCard:
@@ -496,6 +527,27 @@ class TestDrawContestedEntry:
         drawn = draw_contested_entry(set(), set(), {}, not_official_art_card_ids={card.pk})
 
         assert drawn is None
+
+    def test_an_artist_resolved_since_the_warm_is_excluded_at_read_time(self, db):
+        """The artist-half analogue of the printing-half staleness checks above: resolution
+        happens after the pool warmed, so the draw's per-candidate read-time filter
+        (`Card.objects.filter(pk=..., artist_vote_status=ArtistVoteStatus.CONTESTED)`) must catch
+        it - the same guarantee the pre-pool bare `get_contested_artist_card_ids()` call
+        (removed 2026-08-16) used to provide at request-start."""
+        from cardpicker.artist_consensus import resolve_and_persist_artist
+
+        card = CardFactory(printing_tag_status=PrintingTagStatus.RESOLVED)
+        CardArtistVoteFactory(card=card, artist=CanonicalArtistFactory(), source=VoteSource.USER)
+        CardArtistVoteFactory(card=card, artist=CanonicalArtistFactory(), source=VoteSource.USER)
+        resolve_and_persist_artist(card)
+        card.refresh_from_db()
+        assert card.artist_vote_status == ArtistVoteStatus.CONTESTED
+        warm_pool_cache(LANE_CONTESTED)
+
+        card.artist_vote_status = ArtistVoteStatus.RESOLVED
+        card.save()
+
+        assert draw_contested_entry(set(), set(), {}, set()) is None
 
     def test_a_tag_entry_respects_the_per_tag_exclusion_dict(self, db):
         card, tag = make_contested_tag()

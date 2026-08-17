@@ -39,9 +39,15 @@ card" problem the live `date_created` ordering already has. The information-gain
 (issue #716) that reorders each serve's window by expected information gain is layered ON TOP of
 that random start, not instead of it: only a BOUNDED window taken from the random offset
 (`question_feed._CANDIDATE_SCORING_WINDOW` - the same bound the live tiers' own bounded
-re-ranking already uses, not a second one invented here) is scored, since each scored candidate
-costs several vote queries and a pool holds hundreds to thousands of entries
-(`settings.QUESTION_FEED_POOL_SIZE`). See `_iter_windowed_from_random_offset`'s own docstring.
+re-ranking already uses, not a second one invented here) is SORTED, using the score each entry
+captures at warm time in `PoolEntry.score` (see `_precomputed_information_gain_score`). Sorting
+costs zero queries on the request path - and that is deliberate: scoring a candidate live cost
+several vote queries per candidate (measured 288-791 queries / 9.1-9.6s per draw against live
+production data when it ran per-serve), and a pool holds hundreds to thousands of entries
+(`settings.QUESTION_FEED_POOL_SIZE`) - scoring every entry on every serve reintroduces the exact
+per-request cost this module's pooling exists to avoid paying (see its own module docstring).
+An entry still in the cache without a precomputed score (a v1 pool served during the deploy that
+introduced this) falls back to live scoring, unchanged behavior.
 
 SAMPLE THE POPULATION, NOT THE HEAD (`_sample_across_pk_strata`) - the build side's own half of
 the same anti-convergence property the random-offset serve above exists for. A builder whose
@@ -160,12 +166,21 @@ class PoolEntry(NamedTuple):
     used only by the cold-lane printing sub-list, where the quick-negative/fresh distinction is
     cheaper to resolve once at warm time than to recompute per read; every other entry leaves it
     `None` and the caller in `question_feed.py` falls back to its own lane-default reason
-    string."""
+    string.
+
+    `score` is the entry's PRE-COMPUTED `question_feed._question_information_gain_score`
+    (information-gain ranking for `_iter_windowed_from_random_offset`'s windowed sort), filled
+    by every builder below at warm time - the same "resolve once at warm time" treatment
+    `reason` already gets. A draw sorts by it with zero request-path queries; `None` (an entry
+    built without a precomputed score - e.g. a v1 pool still in the shared cache while this
+    code deploys, before the next warm overwrites it) makes the draw fall back to computing the
+    score live, exactly as it did before."""
 
     kind: str
     card_id: int
     tag_name: Optional[str] = None
     reason: Optional[str] = None
+    score: Optional[float] = None
 
 
 def _cache_key(lane: str) -> str:
@@ -210,27 +225,55 @@ def _get_cached_pool(lane: str) -> Optional[list[PoolEntry]]:
     return shared_cache.get(_cache_key(lane))
 
 
+def _precomputed_information_gain_score(
+    kind: str, card_id: int, tag_name: Optional[str] = None, card: Optional[Card] = None
+) -> float:
+    """`question_feed._question_information_gain_score` for a pool candidate - the value every
+    builder below stores on `PoolEntry.score`. `card` can be passed when the builder already
+    holds the Card object (the single-kind lanes); otherwise the card is fetched by indexed pk,
+    scoring 0.0 for a card that no longer exists. Warm-time only, never on the request path:
+    score is a pure function of persisted votes, so a value computed here equals the value a
+    draw would have computed live for the same state, and the request path pays zero queries
+    for it."""
+    from cardpicker.question_feed import _question_information_gain_score
+
+    if card is None:
+        card = Card.objects.filter(pk=card_id).first()
+    if card is None:
+        return 0.0
+    return _question_information_gain_score(kind, card, tag_name)
+
+
 def _iter_windowed_from_random_offset(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
     """Yields every entry in `entries`, ranked candidates first: a BOUNDED window of
     `question_feed._CANDIDATE_SCORING_WINDOW` entries taken from a RANDOM offset into the pool is
-    scored by expected information gain (issue #716) and yielded best-first, then every
+    sorted by expected information gain (issue #716) and yielded best-first, then every
     remaining entry (the rest of the pool, continuing from where the window left off) is yielded
     unscored, in that same rotated order - so a draw that exhausts the ranked window (every
     candidate in it excluded or stale for this voter) still walks the rest of the pool exactly as
     before, never truncating a voter's effective supply to just the window.
 
-    BOUNDED, not full-pool: scoring costs several vote queries per candidate
-    (`_question_information_gain_score`'s own dispatch), and a pool holds hundreds to thousands
-    of entries (`settings.QUESTION_FEED_POOL_SIZE`) - scoring every entry on every serve
-    reintroduces per-request cost this module's pooling exists to avoid paying (see its own module
-    docstring). The window size is `question_feed._CANDIDATE_SCORING_WINDOW` - the SAME bound the
-    live tiers' own bounded re-ranking already uses (`question_feed._max_scored_candidate`), one
-    shared knob rather than a second one invented here.
+    COST-FREE ON THE REQUEST PATH: the score each entry is sorted by is PRE-COMPUTED at warm
+    time (see `_precomputed_information_gain_score`/`PoolEntry.score`) - a pure function of
+    persisted votes, computed once when the pool is built rather than once per draw. Before the
+    2026-08-16 change, every draw scored its window live (`_question_information_gain_score`
+    costs several vote queries per candidate - measured 288-791 queries and 9.1-9.6s per draw
+    against live production data), which made the request path pay the exact per-request cost
+    pooling exists to avoid. The window size is `question_feed._CANDIDATE_SCORING_WINDOW` - the
+    SAME bound the live tiers' own bounded re-ranking already uses
+    (`question_feed._max_scored_candidate`), one shared knob rather than a second one invented
+    here. An entry with `score is None` (a v1 pool still in the shared cache while this code
+    deploys, before the next warm overwrites it) falls back to computing its score live,
+    exactly as before.
+
+    SORT WINDOW, NOT SCORED WINDOW: only the window is sorted (by precomputed score); the rest
+    of the pool is yielded unscored in rotation. The precompute moves the scoring, not the
+    windowing - the bounded-sort semantic and the anti-convergence property are unchanged.
 
     RANDOM OFFSET, restored: a fixed head-to-tail scan (scored or not) means every voter reading
     the same warm pool converges on the same handful of cards nearest the front - the exact
     problem this module's own "SERVE FROM A RANDOM OFFSET" section exists to prevent. Drawing the
-    scored window from a randomised start (rather than always the head) keeps that anti-
+    sorted window from a randomised start (rather than always the head) keeps that anti-
     convergence property even though the window itself is now reordered by score.
 
     TIE-BREAK ANCHORED TO THE POOL'S OWN ORIGINAL ORDER, NOT THE RANDOMISED ONE: two candidates
@@ -245,10 +288,7 @@ def _iter_windowed_from_random_offset(entries: list[PoolEntry]) -> Iterator[Pool
     (see `_tier_4_fresh`'s own docstring, and this module's own "NOT DISJOINT" section)."""
     if not entries:
         return
-    from cardpicker.question_feed import (
-        _CANDIDATE_SCORING_WINDOW,
-        _question_information_gain_score,
-    )
+    from cardpicker.question_feed import _CANDIDATE_SCORING_WINDOW
 
     offset = random.randrange(len(entries))
     rotated_indices = [(offset + step) % len(entries) for step in range(len(entries))]
@@ -260,8 +300,7 @@ def _iter_windowed_from_random_offset(entries: list[PoolEntry]) -> Iterator[Pool
     scored = []
     for index in window_indices:
         entry = entries[index]
-        card = Card.objects.filter(pk=entry.card_id).first()
-        score = _question_information_gain_score(entry.kind, card, entry.tag_name) if card is not None else 0.0
+        score = entry.score if entry.score is not None else _live_information_gain_score(entry)
         scored.append((score, index, entry))
     scored.sort(key=lambda triple: (-triple[0], triple[1]))
 
@@ -269,6 +308,17 @@ def _iter_windowed_from_random_offset(entries: list[PoolEntry]) -> Iterator[Pool
         yield entry
     for index in rest_indices:
         yield entries[index]
+
+
+def _live_information_gain_score(entry: PoolEntry) -> float:
+    """Request-path fallback for an entry whose builder did not precompute a `score`
+    (`PoolEntry.score is None` - the deploy-transition case where a v1 pool is still served).
+    Same fetch-and-dispatch shape `_precomputed_information_gain_score` uses at warm time, 0.0
+    for a card that no longer exists, so the served ordering cannot differ between the two."""
+    from cardpicker.question_feed import _question_information_gain_score
+
+    card = Card.objects.filter(pk=entry.card_id).first()
+    return _question_information_gain_score(entry.kind, card, entry.tag_name) if card is not None else 0.0
 
 
 def _iter_by_kind_precedence(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
@@ -396,7 +446,14 @@ def _build_pool_resolution_imminent() -> list[PoolEntry]:
             if len(matches) >= limit:
                 break
     matches.sort(key=lambda card: card.date_created)
-    return [PoolEntry(kind=KIND_PRINTING, card_id=card.pk) for card in matches]
+    return [
+        PoolEntry(
+            kind=KIND_PRINTING,
+            card_id=card.pk,
+            score=_precomputed_information_gain_score(KIND_PRINTING, card.pk, card=card),
+        )
+        for card in matches
+    ]
 
 
 def _build_pool_confirm() -> list[PoolEntry]:
@@ -423,7 +480,14 @@ def _build_pool_confirm() -> list[PoolEntry]:
             if len(matches) >= limit:
                 break
     matches.sort(key=lambda card: card.date_created)
-    return [PoolEntry(kind=KIND_PRINTING, card_id=card.pk) for card in matches]
+    return [
+        PoolEntry(
+            kind=KIND_PRINTING,
+            card_id=card.pk,
+            score=_precomputed_information_gain_score(KIND_PRINTING, card.pk, card=card),
+        )
+        for card in matches
+    ]
 
 
 def _build_pool_contested() -> list[PoolEntry]:
@@ -440,7 +504,10 @@ def _build_pool_contested() -> list[PoolEntry]:
         if len(printing_rows) >= limit:
             break
     printing_rows.sort(key=lambda row: row[1], reverse=True)
-    entries: list[PoolEntry] = [PoolEntry(kind=KIND_PRINTING, card_id=pk) for pk, _ in printing_rows]
+    entries: list[PoolEntry] = [
+        PoolEntry(kind=KIND_PRINTING, card_id=pk, score=_precomputed_information_gain_score(KIND_PRINTING, pk))
+        for pk, _ in printing_rows
+    ]
 
     artist_candidates = Card.objects.filter(
         artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=contested_artist_card_ids
@@ -451,7 +518,10 @@ def _build_pool_contested() -> list[PoolEntry]:
         if len(artist_rows) >= limit:
             break
     artist_rows.sort(key=lambda row: row[1], reverse=True)
-    entries.extend(PoolEntry(kind=KIND_ARTIST, card_id=pk) for pk, _ in artist_rows)
+    entries.extend(
+        PoolEntry(kind=KIND_ARTIST, card_id=pk, score=_precomputed_information_gain_score(KIND_ARTIST, pk))
+        for pk, _ in artist_rows
+    )
 
     tag_count = 0
     for card_id, tag_name in get_tag_review_queue_pairs():
@@ -459,7 +529,14 @@ def _build_pool_contested() -> list[PoolEntry]:
             break
         card = Card.objects.get(pk=card_id)
         if card.tag_vote_statuses.get(tag_name) == TagVoteStatus.CONTESTED:
-            entries.append(PoolEntry(kind=KIND_TAG, card_id=card_id, tag_name=tag_name))
+            entries.append(
+                PoolEntry(
+                    kind=KIND_TAG,
+                    card_id=card_id,
+                    tag_name=tag_name,
+                    score=_precomputed_information_gain_score(KIND_TAG, card_id, tag_name=tag_name, card=card),
+                )
+            )
             tag_count += 1
 
     return entries
@@ -496,7 +573,13 @@ def _build_pool_cold() -> list[PoolEntry]:
             break
     illustration_rows.sort(key=lambda row: row[1], reverse=True)
     entries: list[PoolEntry] = [
-        PoolEntry(kind=KIND_ILLUSTRATION, card_id=pk, reason="tier_4_fresh_illustration") for pk, _ in illustration_rows
+        PoolEntry(
+            kind=KIND_ILLUSTRATION,
+            card_id=pk,
+            reason="tier_4_fresh_illustration",
+            score=_precomputed_information_gain_score(KIND_ILLUSTRATION, pk),
+        )
+        for pk, _ in illustration_rows
     ]
 
     printing_candidates = (
@@ -533,6 +616,7 @@ def _build_pool_cold() -> list[PoolEntry]:
                 if origin_reason in QUICK_NEGATIVE_SKIP_REASONS
                 else "tier_4_fresh_printing"
             ),
+            score=_precomputed_information_gain_score(KIND_PRINTING, pk),
         )
         for pk, origin_reason, _vote_count, _is_quick_negative, _date_created in printing_rows
     )
@@ -546,7 +630,10 @@ def _build_pool_cold() -> list[PoolEntry]:
         if len(artist_rows) >= limit:
             break
     artist_rows.sort(key=lambda row: row[1], reverse=True)
-    entries.extend(PoolEntry(kind=KIND_ARTIST, card_id=pk) for pk, _ in artist_rows)
+    entries.extend(
+        PoolEntry(kind=KIND_ARTIST, card_id=pk, score=_precomputed_information_gain_score(KIND_ARTIST, pk))
+        for pk, _ in artist_rows
+    )
 
     tag_count = 0
     for card_id, tag_name in get_tag_review_queue_pairs():
@@ -554,7 +641,14 @@ def _build_pool_cold() -> list[PoolEntry]:
             break
         card = Card.objects.get(pk=card_id)
         if card.tag_vote_statuses.get(tag_name) == TagVoteStatus.UNRESOLVED:
-            entries.append(PoolEntry(kind=KIND_TAG, card_id=card_id, tag_name=tag_name))
+            entries.append(
+                PoolEntry(
+                    kind=KIND_TAG,
+                    card_id=card_id,
+                    tag_name=tag_name,
+                    score=_precomputed_information_gain_score(KIND_TAG, card_id, tag_name=tag_name, card=card),
+                )
+            )
             tag_count += 1
 
     return entries
