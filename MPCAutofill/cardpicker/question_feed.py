@@ -507,11 +507,14 @@ def _printing_vote_tuples(card: Card) -> list[VoteTuple]:
 
 # How many candidates (per question kind) a live tier actually scores per serve. A bounded
 # window rather than a full-pool sort: each scored candidate costs a small number of indexed
-# vote queries, and this re-ranking runs on the pool-MISS fallback path (the materialised
-# pools serve the hot path - see `question_feed_pools`'s module docstring). The window is the
-# ranking's candidate horizon: a genuinely higher-value question past the window is not seen
-# this serve, but nothing is lost permanently - the next serve draws a fresh window from the
-# same pre-ranked queryset, and the pool is the long-horizon layer this reorder refines.
+# vote queries, and this re-ranking runs on the live tier functions' own (direct-call, off the
+# request path) paths - the materialised pools serve the hot path, where the draw's windowed
+# sort uses the score each entry captured at WARM time in `PoolEntry.score` instead (see
+# `question_feed_pools._precomputed_information_gain_score`, which computes this same value).
+# The window is the ranking's candidate horizon: a genuinely higher-value question past the
+# window is not seen this serve, but nothing is lost permanently - the next serve draws a fresh
+# window from the same pre-ranked queryset, and the pool is the long-horizon layer this reorder
+# refines.
 _CANDIDATE_SCORING_WINDOW = 50
 
 # Weight of the cold-start attribute-variance signal inside a printing question's score. A
@@ -1435,7 +1438,6 @@ def get_next_question_feed_item(
         elif lane == question_feed_pools.LANE_CONTESTED:
             if contested_card_ids is None:
                 contested_card_ids = get_contested_card_ids()
-            get_contested_artist_card_ids()
             tier_2_result = _pool_contested_result(
                 answered_card_ids,
                 answered_artist_card_ids,
@@ -1562,16 +1564,20 @@ def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> Qu
     CACHING (2026-08-07): the four counts are cached on the cross-process `"shared"` cache
     (issue #538/#543 - never `default`, which is per-process `LocMemCache` and would make a
     warmer and the endpoint disagree silently) for `_REMAINING_ESTIMATE_CACHE_TTL` (300s).
-    Measured against live production after the 2026-08-06 deploy wave, the uncached body is
-    ~7.45s per feed request (2 id-set scans + 4 `.distinct().count()` buckets); a cache hit
-    skips all of it for one small indexed SELECT on `shared_cache`. These counts are "advisory
-    copy, not a candidate set" (see the docstring header above), so the TTL IS the invalidation
-    policy - votes change the counts, but a 300s-stale header is the accepted window and there
-    are deliberately no invalidation hooks on vote submission. The key is derived from the
-    function's effective inputs (see `_remaining_estimate_cache_key`): one key when
-    `contested_card_ids` is `None`, a digest of the resolved set when the caller passes one, so
-    a request that resolved a different contested set never reads another request's cached
-    counts. Cache miss -> compute -> store, exactly as before otherwise.
+    Measured against live production on 2026-08-16, the uncached body is ~9.2s per feed request
+    (`_tag_review_card_ids_by_status`'s JSONField scan ~1.5s + the 4 `.distinct().count()`
+    buckets ~7.6s); a cache hit skips all of it for one small indexed SELECT on `shared_cache`.
+    These counts are "advisory copy, not a candidate set" (see the docstring header above), so
+    the TTL IS the invalidation policy - votes change the counts, but a 300s-stale header is
+    the accepted window and there are deliberately no invalidation hooks on vote submission.
+    The key is derived from the function's effective inputs (see `_remaining_estimate_cache_key`):
+    one key when `contested_card_ids` is `None`, a digest of the resolved set when the caller
+    passes one, so a request that resolved a different contested set never reads another
+    request's cached counts. With `printing_consensus.get_contested_card_ids` itself cached for
+    the same 300s window (2026-08-16), the pre-resolved set the view path passes is stable
+    within that TTL - so the digest key stops churning with every vote change and the ~9.2s
+    cold body is paid at most once per contested-ids TTL, aligned with the `None`-key path's own
+    once-per-300s cadence. Cache miss -> compute -> store, exactly as before otherwise.
     """
     shared_cache = _remaining_estimate_shared_cache()
     cache_key = _remaining_estimate_cache_key(contested_card_ids)
