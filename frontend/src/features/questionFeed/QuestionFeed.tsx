@@ -110,6 +110,7 @@ import {
 } from "@/features/printingTags/cardPanel";
 import { IllustrationQuestion } from "@/features/questionFeed/IllustrationQuestion";
 import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
+import { ReportCardPanel } from "@/features/reporting/ReportCardPanel";
 import { recordSessionContribution } from "@/features/stats/sessionContributionSlice";
 import {
   APIGetQuestionFeed,
@@ -2313,6 +2314,17 @@ export function QuestionFeed() {
             </Alert>
           )}
           {questionsNode}
+          {/* The shared report panel from the card-detail modal (ReportCardPanel - the same
+              component, same reason chips, same /2/reportCard/ submission flow the legacy
+              page uses), mounted for the current question's card. Keyed by identifier so the
+              panel's one-report-per-card state resets when the feed advances to the next
+              card (the component is designed to collapse into a thank-you line and stay that
+              way for the rest of a card's visit - on this page a card's visit ends at the
+              advance, so the remount restores the closed button). */}
+          <ReportCardPanel
+            key={item.card.identifier}
+            cardDocument={item.card}
+          />
           {counts != null && (
             <StatsLine data-testid="question-feed-stats">
               {counts.confirmable} ready &middot; {counts.total} in catalog

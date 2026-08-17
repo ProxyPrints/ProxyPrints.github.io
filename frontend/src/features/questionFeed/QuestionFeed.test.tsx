@@ -19,6 +19,7 @@ import {
   artistCandidatesTwoResults,
   artistConsensusUnresolved,
   questionFeedBorder,
+  reportCardSuccess,
   submitArtistVoteResolvesToCanonicalArtist1,
   submitTagVoteResolvesToApply,
   tagsNoResults,
@@ -144,6 +145,27 @@ describe("QuestionFeed", () => {
     expect(
       screen.queryByTestId("attribute-chip-panel")
     ).not.toBeInTheDocument();
+  });
+
+  it("renders the shared report panel for the question's card and submits through the existing report flow", async () => {
+    server.use(questionFeedOnce(), reportCardSuccess);
+    renderFeed();
+
+    // The WTC page reuses the card-detail modal's ReportCardPanel unchanged - the button
+    // sits in the QPanel adjacent to the question's own action row (below Skip etc.), and
+    // its accessible name is the component's visible label, same as on the legacy page.
+    const reportButton = await screen.findByTestId("report-card-button");
+    expect(reportButton).toBeInTheDocument();
+    expect(reportButton).toHaveTextContent("Report this card");
+
+    fireEvent.click(reportButton);
+    expect(screen.getByTestId("report-card-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("report-chip-low_quality")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("report-chip-low_quality"));
+    await waitFor(() =>
+      expect(screen.getByTestId("report-card-thanks")).toBeInTheDocument()
+    );
   });
 
   it("the feed's filter panel hides exclusion-group siblings of an explicit positive (context-dependent disqualification)", async () => {
