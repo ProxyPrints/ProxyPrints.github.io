@@ -16,7 +16,10 @@ import {
 } from "@/common/test-constants";
 import { AUTO_DERIVED_TAG_VOTE_SURFACE } from "@/features/attributeChips/attributeChips";
 import {
+  artistCandidatesTwoResults,
+  artistConsensusUnresolved,
   questionFeedBorder,
+  submitArtistVoteResolvesToCanonicalArtist1,
   submitTagVoteResolvesToApply,
   tagsNoResults,
 } from "@/mocks/handlers";
@@ -1701,5 +1704,163 @@ describe("QuestionFeed", () => {
       reason: "cannot-tell",
     });
     await waitFor(() => expect(feedFetchCount).toBe(2));
+  });
+
+  it("'Continue' appears on border questions only after a chip vote, and advances carrying the vote without recording an abstention", async () => {
+    // counting feed: the first fetch serves the border question, the second reports
+    // caught-up so the advance's own re-fetch is observable.
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return feedFetchCount === 1
+          ? HttpResponse.json(
+              {
+                item: {
+                  type: "border",
+                  card: cardDocument9,
+                  tagConfidence: {
+                    "Black Border": 0.8,
+                    "White Border": 0,
+                    "Silver Border": 0,
+                    Borderless: 0,
+                    "Full Art": 0,
+                  },
+                },
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
+              { status: 200 }
+            )
+          : HttpResponse.json(
+              {
+                remainingEstimate: {
+                  total: 0,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 0,
+                },
+              },
+              { status: 200 }
+            );
+      })
+    );
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as { tagName: string };
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: 1,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    let abstentionBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitQuestionAbstention/"),
+        async ({ request }) => {
+          abstentionBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        }
+      )
+    );
+    renderFeed();
+
+    expect(
+      screen.queryByTestId("question-feed-border-continue")
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      await screen.findByTestId("attribute-chip-Black Border-yes")
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("question-feed-border-continue")
+      ).toBeInTheDocument()
+    );
+
+    fireEvent.click(screen.getByTestId("question-feed-border-continue"));
+
+    await waitFor(() => expect(feedFetchCount).toBe(2));
+    expect(abstentionBody).toBeUndefined();
+  });
+
+  it("'Confirm' appears on artist questions only after a vote lands, and advances carrying the vote without recording an abstention", async () => {
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return feedFetchCount === 1
+          ? HttpResponse.json(
+              {
+                item: {
+                  type: "artist",
+                  card: cardDocument9,
+                  confidentlyKnownArtistName: null,
+                  scryfallIllustrationUrl: null,
+                },
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
+              { status: 200 }
+            )
+          : HttpResponse.json(
+              {
+                remainingEstimate: {
+                  total: 0,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 0,
+                },
+              },
+              { status: 200 }
+            );
+      })
+    );
+    server.use(artistCandidatesTwoResults, artistConsensusUnresolved);
+    server.use(submitArtistVoteResolvesToCanonicalArtist1);
+    let abstentionBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitQuestionAbstention/"),
+        async ({ request }) => {
+          abstentionBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        }
+      )
+    );
+    renderFeed();
+
+    expect(
+      screen.queryByTestId("question-feed-artist-confirm")
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Some Artist" }));
+
+    // onVoteCast fires only after the vote POST resolves, so Confirm gates on the landed vote
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("question-feed-artist-confirm")
+      ).toBeInTheDocument()
+    );
+
+    fireEvent.click(screen.getByTestId("question-feed-artist-confirm"));
+
+    await waitFor(() => expect(feedFetchCount).toBe(2));
+    expect(abstentionBody).toBeUndefined();
   });
 });
