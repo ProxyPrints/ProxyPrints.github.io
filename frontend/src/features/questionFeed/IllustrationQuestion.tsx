@@ -7,6 +7,7 @@ import { PrintingCandidate, QuestionFeedItem } from "@/common/schema_types";
 import { useAppDispatch } from "@/common/types";
 import {
   CandidateButton,
+  ILLUSTRATION_CROP_ASPECT_RATIO,
   IllustrationArtPlaceholder,
   ZoomableThumbnail,
 } from "@/features/printingTags/cardPanel";
@@ -34,8 +35,18 @@ const IllustrationTileWrapper = styled.div`
   position: relative;
 `;
 
+// Issue #746 contract (cardPanel.tsx, ZoomableThumbnail/IllustrationArtPlaceholder comments):
+// the harvested art crop is a landscape 584/444 frame, and ZoomableThumbnail is taken out of
+// flow (`position: absolute; inset: 0`) so it never sizes its own parent - the parent's
+// declared aspect-ratio is what actually renders. CandidateButton alone declares no height,
+// so the clamped grid slot (minmax(140px, 1fr)) handed the tile width but nothing handed it
+// height, collapsing the absolutely-positioned thumbnail to a ~0-height sliver. Declaring the
+// art-crop ratio here (the same frame the IllustrationArtPlaceholder fallback renders in)
+// gives every tile real height; the resting clip and hover zoom-escape still behave because
+// CandidateButton already clips at rest and unclips on hover (#705).
 const IllustrationTile = styled(CandidateButton)`
   overflow: hidden;
+  aspect-ratio: ${ILLUSTRATION_CROP_ASPECT_RATIO};
 `;
 
 const RejectButton = styled.button`
@@ -155,12 +166,14 @@ export function IllustrationQuestion({
             title={`${candidate.expansionName} (${candidate.expansionCode}) - ${candidate.artist}`}
           >
             {candidate.artCropUrl ? (
-              <ZoomableThumbnail>
-                <img
-                  src={candidate.artCropUrl}
-                  alt={`${candidate.expansionName} art`}
-                />
-              </ZoomableThumbnail>
+              <IllustrationArtPlaceholder>
+                <ZoomableThumbnail>
+                  <img
+                    src={candidate.artCropUrl}
+                    alt={`${candidate.expansionName} art`}
+                  />
+                </ZoomableThumbnail>
+              </IllustrationArtPlaceholder>
             ) : (
               <IllustrationArtPlaceholder />
             )}

@@ -5,6 +5,7 @@ import { Provider } from "react-redux";
 
 import { QuestionFeedItem, Type } from "@/common/schema_types";
 import { cardDocument1, localBackendURL } from "@/common/test-constants";
+import { ILLUSTRATION_CROP_ASPECT_RATIO } from "@/features/printingTags/cardPanel";
 import {
   illustrationGroupCandidateA,
   illustrationGroupCandidateC,
@@ -67,6 +68,40 @@ describe("IllustrationQuestion", () => {
     });
 
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("each tile declares the landscape art-crop aspect-ratio so the absolutely-positioned thumbnail has real height", () => {
+    renderComponent();
+
+    // Regression (fix/wtc-illustration-sliver): ZoomableThumbnail is absolutely positioned
+    // (`inset: 0`, cardPanel.tsx) and contributes no in-flow height, so a tile with no
+    // declared box size collapses to a ~0-height sliver regardless of how wide the grid slot
+    // is. The tile's own aspect-ratio (the 584/444 art-crop frame, the same one the
+    // IllustrationArtPlaceholder fallback renders in) is what gives the box its height.
+    // The constant keeps its display spacing (`584 / 444`); cssstyle serializes the computed
+    // value space-free (`584/444`), so compare against the normalized form.
+    const artTile = screen.getByTestId(
+      "question-feed-illustration-illustration-shared"
+    );
+    expect(artTile).toHaveStyle({
+      "aspect-ratio": ILLUSTRATION_CROP_ASPECT_RATIO.replace(/\s+/g, ""),
+    });
+
+    // The art <img> must additionally sit inside the same crop-ratio'd frame (the
+    // IllustrationArtPlaceholder wrapper, whose own `img { width: 100%; height: 100%;
+    // object-fit: cover }` rules in cardPanel.tsx are what make the artwork actually fill
+    // the tile) - without that wrapper the tile would have height but only show the img's
+    // top-left corner at its intrinsic size. That frame is the img's grandparent, not its
+    // parent: ZoomableThumbnail sits between them but is taken out of flow (`position:
+    // absolute; inset: 0`) and declares no aspect-ratio of its own, so the ratio the img
+    // is measured against lives on IllustrationArtPlaceholder one level up.
+    const artImg = artTile.querySelector("img");
+    expect(artImg).not.toBeNull();
+    const artFrame = artImg?.parentElement?.parentElement;
+    expect(artFrame).not.toBeNull();
+    expect(artFrame).toHaveStyle({
+      "aspect-ratio": ILLUSTRATION_CROP_ASPECT_RATIO.replace(/\s+/g, ""),
+    });
   });
 
   it("a positive tap calls the illustration vote endpoint with the real illustrationId, never the printing-tag endpoint", async () => {
