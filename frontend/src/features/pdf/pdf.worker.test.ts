@@ -24,14 +24,45 @@ jest.mock("./PDF", () => ({
   createPDFElement: (props: PDFProps) => mockCreatePDFElement(props),
 }));
 
-const mockCreateMergedPDFDocument = jest.fn();
-const mockAppendPDFDocument = jest.fn();
-const mockSaveMergedPDFBlob = jest.fn();
-jest.mock("./pdfMerger", () => ({
-  createMergedPDFDocument: () => mockCreateMergedPDFDocument(),
-  appendPDFDocument: (target: unknown, partial: Blob) =>
-    mockAppendPDFDocument(target, partial),
-  saveMergedPDFBlob: (target: unknown) => mockSaveMergedPDFBlob(target),
+const mockAppendBatch = jest.fn();
+const mockFinalize = jest.fn();
+// Real classes (not jest.fn() factories) so `new PDFIncrementalWriter(sink)` and the worker's
+// own `sink instanceof MemorySink` check both resolve against the exact class this mock module
+// exports - the same identity pdf.worker.ts's dynamic `await import("./pdfIncrementalWriter")`
+// receives.
+class MockPDFIncrementalWriter {
+  constructor(public readonly sink: unknown) {}
+  appendBatch(bytes: Uint8Array) {
+    return mockAppendBatch(bytes);
+  }
+  finalize() {
+    return mockFinalize();
+  }
+}
+const mockToUint8Array = jest.fn(() => new Uint8Array([1, 2, 3]));
+class MockMemorySink {
+  toUint8Array() {
+    return mockToUint8Array();
+  }
+}
+jest.mock("./pdfIncrementalWriter", () => ({
+  PDFIncrementalWriter: MockPDFIncrementalWriter,
+  MemorySink: MockMemorySink,
+}));
+
+const mockCleanupStaleOpfsSinks = jest.fn();
+const mockIsOpfsAvailable = jest.fn();
+const mockOpfsSinkCreate = jest.fn();
+const mockOpfsSinkToBlob = jest.fn();
+class MockOpfsSink {
+  toBlob() {
+    return mockOpfsSinkToBlob();
+  }
+}
+jest.mock("./pdfOpfsSink", () => ({
+  OpfsSink: { create: () => mockOpfsSinkCreate() },
+  cleanupStaleOpfsSinks: () => mockCleanupStaleOpfsSinks(),
+  isOpfsAvailable: () => mockIsOpfsAvailable(),
 }));
 
 const mockRevokeTrackedObjectURLs = jest.fn();
@@ -108,10 +139,16 @@ describe("renderPDF - page batching bounds worker memory", () => {
         .fn()
         .mockResolvedValue(new Blob(["partial"], { type: "application/pdf" })),
     }));
-    mockCreateMergedPDFDocument.mockResolvedValue("merged");
-    mockAppendPDFDocument.mockResolvedValue(undefined);
-    mockSaveMergedPDFBlob.mockResolvedValue(
-      new Blob(["final"], { type: "application/pdf" })
+    mockAppendBatch.mockResolvedValue(undefined);
+    mockFinalize.mockResolvedValue(undefined);
+    mockToUint8Array.mockReturnValue(new Uint8Array([1, 2, 3]));
+    mockCleanupStaleOpfsSinks.mockResolvedValue(undefined);
+    // jsdom has no real OPFS - exercising the MemorySink fallback path is what the test
+    // environment can actually cover; OpfsSink.create()/toBlob() are asserted separately.
+    mockIsOpfsAvailable.mockReturnValue(false);
+    mockOpfsSinkCreate.mockResolvedValue(new MockOpfsSink());
+    mockOpfsSinkToBlob.mockResolvedValue(
+      new Blob(["opfs"], { type: "application/pdf" })
     );
   });
 
@@ -152,12 +189,12 @@ describe("renderPDF - page batching bounds worker memory", () => {
     ]);
   });
 
-  it("merges each batch's partial into the shared document in render order, then saves once", async () => {
+  it("streams each batch's partial into the incremental writer in render order, then finalizes once", async () => {
     mockComputePDFRenderWindow.mockReturnValue({
       startPage: 1,
       totalPages: 16,
     });
-    const partials: Blob[] = [];
+    const partials: Array<Blob> = [];
     mockPdf.mockImplementation(() => ({
       toBlob: jest.fn(() => {
         const blob = new Blob(["partial"], { type: "application/pdf" });
@@ -167,21 +204,44 @@ describe("renderPDF - page batching bounds worker memory", () => {
     }));
     const result = await renderPDF(makePDFProps());
 
-    expect(mockCreateMergedPDFDocument).toHaveBeenCalledTimes(1);
-    expect(mockAppendPDFDocument).toHaveBeenCalledTimes(2);
-    expect(mockAppendPDFDocument).toHaveBeenNthCalledWith(
-      1,
-      "merged",
-      partials[0]
-    );
-    expect(mockAppendPDFDocument).toHaveBeenNthCalledWith(
-      2,
-      "merged",
-      partials[1]
-    );
-    expect(mockSaveMergedPDFBlob).toHaveBeenCalledTimes(1);
-    expect(mockSaveMergedPDFBlob).toHaveBeenCalledWith("merged");
+    expect(mockAppendBatch).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < partials.length; i++) {
+      const expectedBytes = new Uint8Array(await partials[i].arrayBuffer());
+      expect(mockAppendBatch.mock.calls[i][0]).toEqual(expectedBytes);
+    }
+    expect(mockFinalize).toHaveBeenCalledTimes(1);
+    expect(result.blob.type).toBe("application/pdf");
     expect(result.failures).toEqual([]);
+  });
+
+  it("falls back to MemorySink when OPFS is unavailable, and to OpfsSink when it is", async () => {
+    mockIsOpfsAvailable.mockReturnValue(false);
+    await renderPDF(makePDFProps());
+    expect(mockOpfsSinkCreate).not.toHaveBeenCalled();
+    expect(mockToUint8Array).toHaveBeenCalledTimes(1);
+
+    jest.clearAllMocks();
+    mockComputePDFRenderWindow.mockReturnValue({ startPage: 1, totalPages: 1 });
+    mockCreatePDFElement.mockImplementation((props: PDFProps) => props);
+    mockPdf.mockImplementation(() => ({
+      toBlob: jest
+        .fn()
+        .mockResolvedValue(new Blob(["partial"], { type: "application/pdf" })),
+    }));
+    mockAppendBatch.mockResolvedValue(undefined);
+    mockFinalize.mockResolvedValue(undefined);
+    mockCleanupStaleOpfsSinks.mockResolvedValue(undefined);
+    mockOpfsSinkCreate.mockResolvedValue(new MockOpfsSink());
+    mockOpfsSinkToBlob.mockResolvedValue(
+      new Blob(["opfs"], { type: "application/pdf" })
+    );
+    mockIsOpfsAvailable.mockReturnValue(true);
+
+    await renderPDF(makePDFProps());
+    expect(mockCleanupStaleOpfsSinks).toHaveBeenCalledTimes(1);
+    expect(mockOpfsSinkCreate).toHaveBeenCalledTimes(1);
+    expect(mockOpfsSinkToBlob).toHaveBeenCalledTimes(1);
+    expect(mockToUint8Array).not.toHaveBeenCalled();
   });
 
   it("single-page exports render exactly one batch range [1,1]", async () => {
@@ -248,8 +308,8 @@ describe("renderPDF - page batching bounds worker memory", () => {
     await expect(renderPDF(makePDFProps())).rejects.toThrow("render boom");
     // Batch 1's URL set released on success, batch 2's in the failure path's finally.
     expect(mockRevokeTrackedObjectURLs).toHaveBeenCalledTimes(2);
-    expect(mockAppendPDFDocument).toHaveBeenCalledTimes(1);
-    expect(mockSaveMergedPDFBlob).not.toHaveBeenCalled();
+    expect(mockAppendBatch).toHaveBeenCalledTimes(1);
+    expect(mockFinalize).not.toHaveBeenCalled();
   });
 
   it("exposes the same comlink surface as before batching", () => {
