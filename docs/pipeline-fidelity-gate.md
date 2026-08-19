@@ -1278,10 +1278,12 @@ when the wiring call is removed).
 
 **Deliberately left unwired (6), with a reason and a tracked issue each:**
 
-- `art-edge-continuity-v1` — genuinely FREE, but the module's own author
-  gated it behind a stated validation precondition (agreement/false-positive
-  rate against Scryfall's own `frame_effects` ground truth) that has not
-  run. See its own entry below and
+- `art-edge-continuity-v1` — genuinely FREE, and its extraction is wired
+  (Stage C, `ImageEvidence.art_edge_class`); the VOTE remains unwired. The
+  validation precondition has since been measured against real catalog
+  images — Scryfall printing metadata turned out not to be usable ground
+  truth for it (see the entry below) — but wiring the vote is a separate
+  decision this pass does not make. See its own entry below and
   [issue #721](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/721).
 - `deductive-backfill-v1`, `local-name-frequency-v1` — read only
   already-stored data (no fetch/OCR/network), but NEITHER has a `card_ids`
@@ -1365,37 +1367,68 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   statement about illustration matching's yield.
 - **`art-edge-continuity-v1`** (`ART_EDGE_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_art_edge.py`](../MPCAutofill/cardpicker/local_art_edge.py)) —
-  **DECLARED, NOT LIVE. Zero votes, zero `CardScanLog` rows, and no
-  runner calls it — by a measured gate, not by dormancy.** It is the
-  extended-art channel: a within-image colour comparison (does the band
-  adjacent to the art crop match the border colour `ImageEvidence. layout_class` already found for this same image?) that classifies a
-  card image as `framed`/`extended`/`open` and would cast the
-  pre-existing "Extended" attribute tag. It is listed here because this
-  roster's whole purpose is that a calculator producing no output "reads
-  as clean by being invisible" — so the identity is declared and
-  recorded BEFORE it can write anything, the same reasoning
-  `local_fallback`'s skip-reason block gives for declaring its constants
-  ahead of first write.
-  **The gate ran 2026-08-06 and did not clear**
-  (docs/reports/2026-08-06-art-edge-relative-comparison.md): fetched
-  Scryfall's own images for 30 confirmed `extendedart` printings, 20
-  confirmed `borderless` printings, and 20 confirmed ordinary
-  black-bordered printings (Scryfall's `frame_effects`/`border_color` is
-  the label, Scryfall's own image is the pixels — no name-matching step
-  in between, unlike the catalog-cohort measurement this one superseded).
-  Result: 0 of 30 genuine extended-art images read `extended` (worse than
-  the pre-retune absolute-variance classifier's 1 of 30 on the same
-  images), with 0 false positives on either negative cohort. Root cause:
-  `classify_border_color`'s own catch-all reads 20 of the 30 extended-art
-  images as `borderless` (a pre-existing, out-of-scope defect this
-  channel inherits via `layout_class`), and for the remaining 10 where it
-  correctly reads `black`, `normalize_crop_box`'s trimmed-image remap
-  (Scryfall images are always geometrically "trimmed" - no bleed margin)
-  shrinks the edge sample band to only ~0.5% of image width, too thin to
-  give a reliable border-colour reference. Do not read its zero vote
-  count as an unmeasured channel — it has been measured, and the measured
-  answer is "not yet".
+  **EXTRACTION LIVE, VOTE UNWIRED.** `ImageEvidence.art_edge_class` carries
+  234,774 rows (framed 161,221 / extended 36,986 / mixed 36,567). The
+  `layout_class`-dependent design this entry previously described here
+  (which measured 0/30 recall against Scryfall's own extended-art images,
+  2026-08-06) was superseded by a self-referential redesign — issue #830,
+  [PR #832](https://github.com/ProxyPrints/ProxyPrints.github.io/pull/832) —
+  that compares the art-adjacent strip against two other regions of the
+  SAME image instead of against a stored classification, and wired
+  extraction into Stage C. That PR's own algorithm-level validation
+  (20/30 recall against freshly-fetched Scryfall images, 0 false positives
+  on either negative cohort) is recorded there, not restated here.
+  `cast_art_edge_continuity_vote` still casts nothing — no runner calls
+  it, per #830's own "do NOT add a vote in this change" scope note.
+
+  **Issue #721's own gate is the narrower, catalog-specific question this
+  entry now answers: is the classifier accurate enough on the REAL
+  uploaded images already in this catalogue to justify wiring the vote?**
+  #721 originally specified Scryfall `frame_effects`/`border_color` (via
+  `Card.canonical_card`) as the ground truth to check that against.
+  **That ground truth is unusable, and the gate as originally specified
+  cannot be run** — measured 2026-08-19, read-only: of 295 cards matched
+  to an `extendedart` printing, only 16.6% (49/295) read `extended`
+  (framed 55.3%, mixed 28.1%); of 19,874 cards matched to a plain
+  black-bordered printing (no `extendedart`/`showcase`), 11.4% (2,271)
+  also read `extended`. This is not classifier error: this catalogue is
+  user-uploaded proxy renders, and a printing match is a claim about
+  which artwork the image DEPICTS, not evidence the uploader reproduced
+  that printing's frame treatment. Confirmed independently via
+  `border_color`: cross-tabbed against `ImageEvidence.layout_class` (a
+  classifier independently measured 93.75% accurate against eye-labelled
+  images) restricted to cards carrying a reading, agreement is 80.7%
+  (n=19,880) on black-bordered printings and 63.8% (n=2,885) on
+  borderless printings but only 6.3% (n=79) on white and 0.0% (n=26) on
+  silver — a classifier right 93.75% of the time on real images cannot be
+  wrong 93.7% of the time on white borders. 56 of the 79 white-bordered
+  matches carry a black border in the actual upload, which is what the
+  proxy community does (white borders are routinely re-rendered black).
+  See
+  [`reference/self-referential-reasoning.md`](reference/self-referential-reasoning.md)'s
+  2026-08-19 addendum for the general lesson this measurement grounds.
+
+  **Two ground-truth sources that describe the actual uploaded image,
+  not the matched printing, validate the classifier instead.** "Extended"
+  is already a votable attribute chip
+  (`attribute_tags.ATTRIBUTE_CHIP_TAG_NAMES`); scoring `art_edge_class`
+  against people who looked at the real upload (n=33 cards, 5 distinct
+  voters, 0 disputed) gives **recall 87.0% (20/23), false positives 0.0%
+  (0/10), precision 100% (20/20)** — `mixed` fell on 4 of the 10
+  negatives and none of the 23 positives. Uploader-declared filenames
+  corroborate at much larger n: of 13,117 cards whose filename asserts
+  `\bextended\b` (and not `borderless`), 90.7% (11,899) read `extended`
+  (mixed 3.1%, framed 6.2%) — consistent across the seven uploaders with
+  n≥15 (94.2% down to 72.2%; Pozzum supplies 81% of the cohort, so state
+  the per-source spread alongside the headline). Filenames asserting
+  `borderless` (n=4,716, a WEAK negative control — a borderless render
+  genuinely has art reaching the edge, so an `extended` reading there is
+  arguably correct) read `extended` only 23.8% of the time (mixed 46.4%,
+  framed 29.8%).
+
+  Measured 2026-08-19 against production, read-only.
   Tracked: [issue #721](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/721).
+
 - **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —
   **ZERO output of any kind. Under diagnosis; may be retired.** The

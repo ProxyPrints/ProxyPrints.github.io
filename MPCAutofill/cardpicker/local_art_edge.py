@@ -238,11 +238,22 @@ def cast_art_edge_continuity_vote(
     casting a negative "Extended" vote: a negative vote from an unvalidated class is a claim, not
     an abstention, and 'mixed' is by definition the class this classifier is least sure of.
 
-    NOT WIRED INTO ANY VOTE-CASTING RUNNER - deliberately, and this is the honest limit of this
-    PR (issue #830's own "do NOT add a vote in this change" scope note). The self-referential
-    classifier (issue #830 defect 3) is stored as `ImageEvidence.art_edge_class` evidence-only;
-    whether it should ever cast a vote is a separate decision this PR does not make, and depends
-    on that evidence existing first.
+    NOT WIRED INTO ANY VOTE-CASTING RUNNER - deliberately (issue #830's own "do NOT add a vote
+    in this change" scope note). The self-referential classifier (issue #830 defect 3) is stored
+    as `ImageEvidence.art_edge_class` evidence-only; whether it should ever cast a vote is a
+    separate decision this docstring does not make.
+
+    Issue #721's validation precondition has since been measured against real catalog images
+    (2026-08-19, read-only). Scryfall printing `frame_effects`/`border_color` turned out not to
+    be usable ground truth here - a printing match describes which artwork the image DEPICTS, not
+    whether the uploader reproduced that printing's frame treatment (see
+    docs/pipeline-fidelity-gate.md's calculator roster and the 2026-08-19 addendum to
+    docs/reference/self-referential-reasoning.md for the full measurement and the general
+    lesson). Against ground truth that does describe the uploaded image instead: human votes on
+    the pre-existing "Extended" attribute chip give recall 87.0% (20/23), false positives 0.0%
+    (0/10), n=33 cards / 5 voters; uploader-declared filenames corroborate at n=13,117, 90.7%
+    agreement. The remaining limit is sample size on the human-vote channel (n=33) - that channel
+    grows on its own as people vote the existing chip, needing no new mechanism to enlarge it.
     """
     if art_edge_class != ART_EDGE_EXTENDED:
         return None
