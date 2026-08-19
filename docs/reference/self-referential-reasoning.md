@@ -948,6 +948,46 @@ which is the signature of a strict subset. Read together, they say the
 same thing twice by different methods — which, unlike the agreement rate
 either one is examining, is genuine corroboration.
 
+## Addendum (2026-08-19): a label that describes a different object than the one being measured
+
+Found while validating `art-edge-continuity-v1` against issue #721
+([`../pipeline-fidelity-gate.md`](../pipeline-fidelity-gate.md)'s
+calculator roster carries the full measurement). Not one of the eight
+shapes above — those are about the pipeline consuming its OWN output as
+evidence. This is a different trap: an external label that is genuinely
+independent of the pipeline, but describes a different object than the
+one the classifier reads.
+
+Scryfall's `frame_effects`/`border_color` describe the PRINTING a card
+was matched to. This catalogue's images are user-uploaded proxy renders;
+a printing match is a claim about which artwork the image depicts, not
+evidence the uploader reproduced that printing's frame or border
+treatment. Measured against production 2026-08-19: of 79 cards matched
+to a white-bordered printing, 56 (70.9%) carry a black border in the
+actual upload — proxy artists routinely re-render white borders as
+black. Cross-tabbing `border_color` against
+`local_fallback.classify_border_color`'s own output (a classifier
+independently measured 93.75% accurate on eye-labelled images) makes the
+mismatch visible: agreement is 80.7% on black and 63.8% on borderless
+printings, but only 6.3% on white and 0.0% on silver — a classifier
+right 93.75% of the time on real images cannot be wrong 93.7% of the
+time on white borders. The label is correct; it describes the wrong
+thing.
+
+The tell: a "ground truth" sourced from metadata about the CANONICAL
+object (a printing, an official specification) applied to a measurement
+of a physical INSTANCE of it (an uploaded image, a scan, a render) that
+the pipeline has no guarantee reproduces that specification faithfully.
+Distinguish this from shape 8 above: shape 8 is our own completeness
+masquerading as a fact about the world; this is an authoritative,
+independent, CORRECT fact about the wrong referent.
+
+Binds any future frame-treatment measurement on this catalogue: use a
+ground-truth source that describes the actual image (a human vote on
+that image, a declared filename, a second independently-validated pixel
+channel), never printing metadata, whenever the classifier reads pixels
+the uploader controls.
+
 ## How to use this when reviewing a diff
 
 Five questions, in the order they are cheapest to answer:
