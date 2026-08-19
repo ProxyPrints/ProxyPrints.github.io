@@ -2,7 +2,7 @@ import { expose } from "comlink";
 
 import type { PDFProps } from "./PDF";
 import type { ImageFetchFailure } from "./pdfImage";
-import { revokeTrackedObjectURLs } from "./pdfImage";
+import { resetImageBlobCache, revokeTrackedObjectURLs } from "./pdfImage";
 
 export interface RenderPDFResult {
   blob: Blob;
@@ -37,14 +37,21 @@ export const PAGES_PER_BATCH = 8;
 export const renderPDF = async (props: PDFProps): Promise<RenderPDFResult> => {
   const { pdf } = await import("@react-pdf/renderer");
   const { computePDFRenderWindow, createPDFElement } = await import("./PDF");
-  const { appendPDFDocument, createMergedPDFDocument, saveMergedPDFBlob } =
-    await import("./pdfMerger");
+  const { MemorySink, PDFIncrementalWriter } = await import(
+    "./pdfIncrementalWriter"
+  );
+  const { OpfsSink, cleanupStaleOpfsSinks, isOpfsAvailable } = await import(
+    "./pdfOpfsSink"
+  );
 
   const failures: Array<ImageFetchFailure> = [];
-  // Approximate, not exact: counts unique card identifiers in the export, but a card that
-  // appears in more than one slot (e.g. multiple copies in the deck) fetches its image once per
-  // slot, not once per identifier - completed can end up slightly ahead of this total on decks
-  // with duplicates. Good enough for a "this is actively working" indicator; not presented as an
+  // Approximate, not exact: counts unique card identifiers in the export, but `completed`
+  // increments once per resolved image SLOT (PDF.tsx's PDFCardImage calls reportImageProgress
+  // from every slot's own image resolution), not once per identifier - a card that appears in
+  // more than one slot (e.g. multiple copies in the deck) still counts once per slot even though
+  // pdfImage.ts's identifier-keyed cache (see getCachedImageBlob) means it's only actually
+  // FETCHED once per batch - completed can end up slightly ahead of this total on decks with
+  // duplicates. Good enough for a "this is actively working" indicator; not presented as an
   // exact fraction in the UI for that reason.
   const total = Object.keys(props.cardDocumentsByIdentifier).length;
   let completed = 0;
@@ -58,14 +65,17 @@ export const renderPDF = async (props: PDFProps): Promise<RenderPDFResult> => {
 
   // Render the deck in page batches: each batch is a full standalone PDF of at most
   // PAGES_PER_BATCH pages (PDF()/SCMPDF slice the deck by the overloaded page range exactly as
-  // the user's own page-range control would), and each partial is merged into `merged` before
-  // the next batch starts. @react-pdf/renderer keeps its image cache per render call, and the
-  // merged document holds only the already-serialized pages, so peak memory is bounded by one
-  // batch's render plus the accumulated output - never by the whole deck at once. Merge order
-  // equals render order, so the final document is the same page sequence the single-shot render
+  // the user's own page-range control would), and each batch's objects are streamed into `sink`
+  // (OPFS-backed when available - see pdfOpfsSink.ts) before the next batch starts. Nothing the
+  // writer produces is ever held in the worker's JS heap: PDFIncrementalWriter writes every
+  // object straight through as it parses each batch, so peak memory is bounded by one batch's
+  // render plus its own small per-batch parse tables - never by total page count. Batch order
+  // equals write order, so the final document is the same page sequence the single-shot render
   // produced; each partial keeps its own font/image subsets, so per-page raster output is
   // unchanged (files may be marginally larger from duplicated subsets, never different content).
-  const merged = await createMergedPDFDocument();
+  await cleanupStaleOpfsSinks();
+  const sink = isOpfsAvailable() ? await OpfsSink.create() : new MemorySink();
+  const writer = new PDFIncrementalWriter(sink);
   const { startPage, totalPages } = computePDFRenderWindow(props);
   for (
     let batchStartPage = 1;
@@ -96,10 +106,24 @@ export const renderPDF = async (props: PDFProps): Promise<RenderPDFResult> => {
       // blob store bounded by one batch instead of the whole deck (see PAGES_PER_BATCH). Also
       // runs on failure, so a mid-render error leaks at most the failing batch's URLs.
       revokeTrackedObjectURLs();
+      // Clears pdfImage.ts's identifier-keyed fetch dedup cache in the same place, for the same
+      // batch-bounded-memory reason (see getCachedImageBlob's comment) - a later batch that
+      // re-references an identifier fetches it fresh rather than reusing a blob whose object
+      // URLs this call just revoked.
+      resetImageBlobCache();
     }
-    await appendPDFDocument(merged, partialPdf);
+    await writer.appendBatch(new Uint8Array(await partialPdf.arrayBuffer()));
   }
-  return { blob: await saveMergedPDFBlob(merged), failures };
+  await writer.finalize();
+  return {
+    blob:
+      sink instanceof MemorySink
+        ? new Blob([new Uint8Array(sink.toUint8Array())], {
+            type: "application/pdf",
+          })
+        : await sink.toBlob(),
+    failures,
+  };
 };
 
 const renderPDFInWorker = async (props: PDFProps): Promise<RenderPDFResult> => {
