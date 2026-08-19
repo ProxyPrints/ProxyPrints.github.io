@@ -430,20 +430,16 @@ const ArtistCredit = styled.div`
 `;
 
 const IllustrationCredit = styled(ArtistCredit)`
-  margin-bottom: 8px;
+  margin-top: 8px;
 `;
 
 // Issue #707 - the attribute-chip panel's home now that it no longer replaces the subject
-// card slot (see plainCardPanel's own comment). Framed like the page's other secondary
-// panels (SuggestedCard/NegWrap/OpenWrap) rather than left bare, so it reads as a distinct,
-// dismissible section of QPanel instead of loose content between the prompt and the grid.
-// Compact (2026-08-10): the chips inside are a tight flowing multi-line list, so this wrapper
-// stays visually quiet.
+// card slot (see plainCardPanel's own comment). Every prior compaction pass (648a7117/
+// 317c8e65/a3942f2d "compact flowing attribute-chip list") shortened the chip ROWS themselves
+// (killing the exclusion-group column-stack) but never touched this wrapper's own background/
+// border/padding - the "wastes space" box was always this frame, not the chip layout inside
+// it, so shrinking the chips left the box behind every time. Plain spacing only; no frame.
 const FilterPanelWrap = styled.div`
-  background: var(--conf);
-  border: 1px solid var(--divider);
-  border-radius: var(--r-card);
-  padding: 8px 10px;
   margin: 8px 0;
 `;
 
@@ -1408,7 +1404,20 @@ export function QuestionFeed() {
 
   const isCandidateType =
     item.type === "confirm_suggestion" || item.type === "identify_printing";
-  const allCandidates = item.candidates ?? [];
+  const rawCandidates = item.candidates ?? [];
+  // A confirm_suggestion item's own suggestedPrinting is not guaranteed to also appear inside
+  // `candidates` (that field is primarily identify_printing's shortlist) - without it here,
+  // rejecting the suggestion via "Not this art" has no tile left to keep reachable (the #748
+  // comment below), landing on a candidate area with no image and nothing to identify from.
+  // Folding it in once, here, guarantees the rejected printing always has somewhere to live.
+  const allCandidates =
+    item.type === "confirm_suggestion" &&
+    item.suggestedPrinting != null &&
+    !rawCandidates.some(
+      (candidate) => candidate.identifier === item.suggestedPrinting!.identifier
+    )
+      ? [...rawCandidates, item.suggestedPrinting]
+      : rawCandidates;
   // Issue #728 - the suggested candidate is judged exactly ONCE in its own slot above and is
   // never re-offered as a grid tile while that slot is still asking (the old Level 2
   // re-presented it "highlighted" - the same candidate asked about twice). The grid is the
@@ -1817,11 +1826,6 @@ export function QuestionFeed() {
                         ? `Same illustration - ${group.length} printings`
                         : "Illustration"}
                     </IllustrationGroupLabel>
-                    {illustrationArtist != null && (
-                      <IllustrationCredit data-testid="question-feed-illustration-credit">
-                        <ArtistSupportLink artistName={illustrationArtist} />
-                      </IllustrationCredit>
-                    )}
                     <CandidateGrid>
                       {renderCandidateTile(
                         representative,
@@ -1845,6 +1849,11 @@ export function QuestionFeed() {
                           : ArtPlaceholder
                       )}
                     </CandidateGrid>
+                    {illustrationArtist != null && (
+                      <IllustrationCredit data-testid="question-feed-illustration-credit">
+                        <ArtistSupportLink artistName={illustrationArtist} />
+                      </IllustrationCredit>
+                    )}
                   </IllustrationGroup>
                 );
               })}

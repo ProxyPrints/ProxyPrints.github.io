@@ -80,10 +80,11 @@ const CompactLine = styled.div`
 // The MTGAC credit (CreditLine, below) is a separate always-visible line underneath this row,
 // not a third item squeezed into it - there isn't room to keep the credit legible next to a long
 // artist name at 220px, and the collapsed view is explicitly allowed to be two lines now.
+// No gap and stretched heights - the toggle sits flush against the link (split-button
+// treatment, see ExpandToggle below) so it reads as one control, not two adjacent buttons.
 const CompactLineRow = styled.div`
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: stretch;
   min-width: 0;
 `;
 
@@ -93,6 +94,8 @@ const CompactLink = styled.a`
   gap: 4px;
   min-width: 0;
   flex: 1 1 auto;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
 `;
 
 // The artist name is the part that can be arbitrarily long, so ellipsis lives on this inner
@@ -105,18 +108,23 @@ const CompactLinkLabel = styled.span`
   min-width: 0;
 `;
 
+// Split-button treatment (bootstrap's own ".dropdown-toggle-split" pattern) - same background
+// as the primary link, flush against it with no gap, so the pair reads as one button with a
+// disclosure affordance rather than two independent controls.
 const ExpandToggle = styled.button`
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
-  height: 28px;
   padding: 0;
-  background: transparent;
-  border: 1px solid var(--bs-border-color, currentColor);
-  border-radius: var(--r-btn, 4px);
-  color: inherit;
+  margin-left: -1px;
+  background: var(--bs-primary, #0d6efd);
+  border: 1px solid var(--bs-primary, #0d6efd);
+  border-left-color: rgba(255, 255, 255, 0.35);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  color: #fff;
   cursor: pointer;
 `;
 
