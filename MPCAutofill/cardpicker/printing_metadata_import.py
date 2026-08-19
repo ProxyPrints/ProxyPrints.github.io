@@ -57,6 +57,8 @@ class PrintingMetadataRow(BaseModel):
     frame_effects: list[str] = []
     promo_types: list[str] = []
     edhrec_rank: int | None = None
+    color_identity: list[str] = []
+    type_line: str = ""
     # Scryfall's own illustration UUID — identifies the artwork independently of any specific
     # printing. Single-faced cards carry it at the top level; double-faced cards nest it inside
     # each element of card_faces (one illustration per face). The resolved_illustration_id
@@ -346,6 +348,8 @@ _METADATA_SYNC_FIELDS = [
     "layout",
     "promo_types",
     "edhrec_rank",
+    "color_identity",
+    "type_line",
     "catalogued_printings_count",
     "released_at",
     "lang",
@@ -505,6 +509,8 @@ def import_scryfall_printing_metadata(default_cards_path: Path | None = None) ->
                 layout=row.layout,
                 promo_types=row.promo_types,
                 edhrec_rank=row.edhrec_rank,
+                color_identity=row.color_identity,
+                type_line=row.type_line,
                 catalogued_printings_count=catalogued_printings_count,
                 released_at=row.released_at,
                 lang=row.lang,
