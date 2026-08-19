@@ -66,8 +66,10 @@ jest.mock("./pdfOpfsSink", () => ({
 }));
 
 const mockRevokeTrackedObjectURLs = jest.fn();
+const mockResetImageBlobCache = jest.fn();
 jest.mock("./pdfImage", () => ({
   revokeTrackedObjectURLs: () => mockRevokeTrackedObjectURLs(),
+  resetImageBlobCache: () => mockResetImageBlobCache(),
 }));
 
 // The API the worker passed to comlink's expose() on module load - the test drives onImageProgress
@@ -308,6 +310,8 @@ describe("renderPDF - page batching bounds worker memory", () => {
     await expect(renderPDF(makePDFProps())).rejects.toThrow("render boom");
     // Batch 1's URL set released on success, batch 2's in the failure path's finally.
     expect(mockRevokeTrackedObjectURLs).toHaveBeenCalledTimes(2);
+    // The dedup cache is cleared alongside the URL revoke every time, same batch boundary.
+    expect(mockResetImageBlobCache).toHaveBeenCalledTimes(2);
     expect(mockAppendBatch).toHaveBeenCalledTimes(1);
     expect(mockFinalize).not.toHaveBeenCalled();
   });

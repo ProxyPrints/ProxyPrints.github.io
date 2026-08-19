@@ -13,6 +13,7 @@ import {
   FULL_RESOLUTION_FETCH_MAX_RETRIES,
   getPDFImageBlob,
   getPDFImageURL,
+  resetImageBlobCache,
   revokeTrackedObjectURLs,
 } from "./pdfImage";
 
@@ -38,6 +39,10 @@ const errorResponse = (status = 500) =>
 
 describe("getPDFImageURL", () => {
   beforeEach(() => {
+    // getCachedImageBlob's cache is module-level and several tests below reuse the same
+    // identifier ("card-1") - reset it so one test's fetch never silently satisfies a later
+    // test's assertions on fetch call counts.
+    resetImageBlobCache();
     jest.spyOn(global, "fetch").mockReset();
     jest
       .spyOn(URL, "createObjectURL")
@@ -165,6 +170,7 @@ describe("getPDFImageURL", () => {
 
 describe("getPDFImageBlob", () => {
   beforeEach(() => {
+    resetImageBlobCache();
     jest.spyOn(global, "fetch").mockReset();
     mockGetWorkerImageURL.mockReset();
   });
@@ -219,6 +225,148 @@ describe("getPDFImageBlob", () => {
     await expect(getPDFImageBlob(card, undefined, 100, {})).rejects.toThrow(
       /cannot get PDF image blob/
     );
+  });
+});
+
+describe("getPDFImageURL / getPDFImageBlob - per-batch fetch dedup by identifier", () => {
+  beforeEach(() => {
+    resetImageBlobCache();
+    // Drains URLs any earlier test in this file registered but never revoked - see the
+    // "createTrackedObjectURL / revokeTrackedObjectURLs" describe block's own comment.
+    revokeTrackedObjectURLs();
+    jest.spyOn(global, "fetch").mockReset();
+    jest
+      .spyOn(URL, "createObjectURL")
+      .mockImplementation(() => `blob:${Math.random()}`);
+    mockGetWorkerImageURL.mockImplementation(
+      (card: CardDocument) => `https://worker.test/${card.identifier}-full`
+    );
+  });
+
+  it("concurrent full-resolution requests for the same identifier share ONE fetch, not one per slot", async () => {
+    let resolveFetch: (value: Response) => void = () => undefined;
+    const pendingFetch = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchSpy = jest.spyOn(global, "fetch").mockReturnValue(pendingFetch);
+
+    const card = googleDriveCard("dup-card");
+    const slotCount = 4;
+    const results = Promise.all(
+      Array.from({ length: slotCount }, () =>
+        getPDFImageURL(card, "full-resolution", 300, 100, {})
+      )
+    );
+    // Let every slot's call register against the shared in-flight promise before it resolves -
+    // this is what proves it's a shared in-flight promise, not just a cache populated after the
+    // first slot's fetch has already completed.
+    await Promise.resolve();
+    await Promise.resolve();
+    resolveFetch(okResponse());
+    const urls = await results;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(urls).toHaveLength(slotCount);
+  });
+
+  it("a duplicate-heavy deck fetches once per DISTINCT identifier, not once per slot", async () => {
+    const fetchSpy = jest
+      .spyOn(global, "fetch")
+      .mockResolvedValue(okResponse());
+
+    // 4 copies of card-a, 2 of card-b, 1 of card-c: 7 slots, 3 distinct identifiers.
+    const slots = [
+      googleDriveCard("card-a"),
+      googleDriveCard("card-a"),
+      googleDriveCard("card-a"),
+      googleDriveCard("card-a"),
+      googleDriveCard("card-b"),
+      googleDriveCard("card-b"),
+      googleDriveCard("card-c"),
+    ];
+
+    await Promise.all(
+      slots.map((card) => getPDFImageURL(card, "full-resolution", 300, 100, {}))
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("subsequent (non-concurrent) requests for the same identifier also reuse the cached fetch", async () => {
+    const fetchSpy = jest
+      .spyOn(global, "fetch")
+      .mockResolvedValue(okResponse());
+    const card = googleDriveCard("dup-card-sequential");
+
+    await getPDFImageURL(card, "full-resolution", 300, 100, {});
+    await getPDFImageURL(card, "full-resolution", 300, 100, {});
+    await getPDFImageURL(card, "full-resolution", 300, 100, {});
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("resetImageBlobCache (the per-batch boundary) makes a later batch refetch the same identifier", async () => {
+    const fetchSpy = jest
+      .spyOn(global, "fetch")
+      .mockResolvedValue(okResponse());
+    const card = googleDriveCard("dup-card-batch-boundary");
+
+    await getPDFImageURL(card, "full-resolution", 300, 100, {});
+    resetImageBlobCache();
+    await getPDFImageURL(card, "full-resolution", 300, 100, {});
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("two slots sharing one deduped fetch each get their OWN object URL - both remain independently revocable", async () => {
+    jest.spyOn(global, "fetch").mockResolvedValue(okResponse());
+    let urlCounter = 0;
+    jest
+      .spyOn(URL, "createObjectURL")
+      .mockImplementation(() => `blob:tracked-${urlCounter++}`);
+    const revokeSpy = jest
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    const card = googleDriveCard("dup-card-url-lifecycle");
+
+    const urlA = await getPDFImageURL(card, "full-resolution", 300, 100, {});
+    const urlB = await getPDFImageURL(card, "full-resolution", 300, 100, {});
+
+    expect(urlA).not.toBe(urlB);
+
+    revokeTrackedObjectURLs();
+
+    expect(revokeSpy).toHaveBeenCalledWith(urlA);
+    expect(revokeSpy).toHaveBeenCalledWith(urlB);
+    expect(revokeSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("a rejected fetch is shared too - every slot for the failed identifier rejects, without a second fetch attempt", async () => {
+    const fetchSpy = jest
+      .spyOn(global, "fetch")
+      .mockResolvedValue(errorResponse(404));
+    const card = googleDriveCard("dup-card-failure");
+
+    await expect(
+      getPDFImageURL(card, "full-resolution", 300, 100, {})
+    ).rejects.toThrow(/404/);
+    await expect(
+      getPDFImageURL(card, "full-resolution", 300, 100, {})
+    ).rejects.toThrow(/404/);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("getPDFImageBlob (the bleed-normalization path) also dedupes by identifier", async () => {
+    const fetchSpy = jest
+      .spyOn(global, "fetch")
+      .mockResolvedValue(okResponse());
+    const card = googleDriveCard("dup-card-blob-path");
+
+    await getPDFImageBlob(card, 300, 100, {});
+    await getPDFImageBlob(card, 300, 100, {});
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -446,6 +594,7 @@ describe("createTrackedObjectURL / revokeTrackedObjectURLs - pdf.worker.ts's per
     // The module-level registry is shared across tests in this file; the getPDFImageURL tests
     // above register URLs they never revoke, so drain before asserting on revocations.
     revokeTrackedObjectURLs();
+    resetImageBlobCache();
     revokeSpy = jest
       .spyOn(URL, "revokeObjectURL")
       .mockImplementation(() => undefined);

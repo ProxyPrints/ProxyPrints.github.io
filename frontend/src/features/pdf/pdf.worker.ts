@@ -2,7 +2,7 @@ import { expose } from "comlink";
 
 import type { PDFProps } from "./PDF";
 import type { ImageFetchFailure } from "./pdfImage";
-import { revokeTrackedObjectURLs } from "./pdfImage";
+import { resetImageBlobCache, revokeTrackedObjectURLs } from "./pdfImage";
 
 export interface RenderPDFResult {
   blob: Blob;
@@ -45,10 +45,13 @@ export const renderPDF = async (props: PDFProps): Promise<RenderPDFResult> => {
   );
 
   const failures: Array<ImageFetchFailure> = [];
-  // Approximate, not exact: counts unique card identifiers in the export, but a card that
-  // appears in more than one slot (e.g. multiple copies in the deck) fetches its image once per
-  // slot, not once per identifier - completed can end up slightly ahead of this total on decks
-  // with duplicates. Good enough for a "this is actively working" indicator; not presented as an
+  // Approximate, not exact: counts unique card identifiers in the export, but `completed`
+  // increments once per resolved image SLOT (PDF.tsx's PDFCardImage calls reportImageProgress
+  // from every slot's own image resolution), not once per identifier - a card that appears in
+  // more than one slot (e.g. multiple copies in the deck) still counts once per slot even though
+  // pdfImage.ts's identifier-keyed cache (see getCachedImageBlob) means it's only actually
+  // FETCHED once per batch - completed can end up slightly ahead of this total on decks with
+  // duplicates. Good enough for a "this is actively working" indicator; not presented as an
   // exact fraction in the UI for that reason.
   const total = Object.keys(props.cardDocumentsByIdentifier).length;
   let completed = 0;
@@ -103,6 +106,11 @@ export const renderPDF = async (props: PDFProps): Promise<RenderPDFResult> => {
       // blob store bounded by one batch instead of the whole deck (see PAGES_PER_BATCH). Also
       // runs on failure, so a mid-render error leaks at most the failing batch's URLs.
       revokeTrackedObjectURLs();
+      // Clears pdfImage.ts's identifier-keyed fetch dedup cache in the same place, for the same
+      // batch-bounded-memory reason (see getCachedImageBlob's comment) - a later batch that
+      // re-references an identifier fetches it fresh rather than reusing a blob whose object
+      // URLs this call just revoked.
+      resetImageBlobCache();
     }
     await writer.appendBatch(new Uint8Array(await partialPdf.arrayBuffer()));
   }

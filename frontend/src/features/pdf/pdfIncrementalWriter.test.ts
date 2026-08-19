@@ -1,5 +1,5 @@
 import { pdf } from "@react-pdf/renderer";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PDFName } from "pdf-lib";
 import React from "react";
 import zlib from "zlib";
 
@@ -139,6 +139,28 @@ describe("PDFIncrementalWriter - stream integrity against real @react-pdf/render
 
     const loaded = await PDFDocument.load(sink.toUint8Array());
     expect(loaded.getPageCount()).toBe(3);
+  });
+
+  // Carries forward the pdfMerger.test.ts assertion this writer replaced (see finalize()'s
+  // own /PageMode /UseThumbs comment): the merged/finalized document must keep the pageMode
+  // the single-shot render wrote, across a multi-batch export - otherwise the exported PDF
+  // silently opens without its thumbnail sidebar.
+  it("the finalized document's catalog keeps /PageMode /UseThumbs across a multi-batch export", async () => {
+    const batches = await Promise.all([
+      buildBatchBytes(["first "]),
+      buildBatchBytes(["second ", "third "]),
+    ]);
+    const sink = new MemorySink();
+    const writer = new PDFIncrementalWriter(sink);
+    for (const batch of batches) {
+      await writer.appendBatch(batch);
+    }
+    await writer.finalize();
+
+    const loaded = await PDFDocument.load(sink.toUint8Array());
+    expect(loaded.catalog.get(PDFName.of("PageMode"))).toBe(
+      PDFName.of("UseThumbs")
+    );
   });
 
   it("xref offsets exactly locate every object's 'N 0 obj' marker", async () => {
