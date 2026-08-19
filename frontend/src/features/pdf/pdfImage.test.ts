@@ -7,11 +7,13 @@ import {
   computeBleedCropMM,
   computeBleedCropWindowPx,
   computeRenderedBleedMM,
+  createTrackedObjectURL,
   fetchFullResolutionImageAsBlob,
   FULL_RESOLUTION_FETCH_CONCURRENCY,
   FULL_RESOLUTION_FETCH_MAX_RETRIES,
   getPDFImageBlob,
   getPDFImageURL,
+  revokeTrackedObjectURLs,
 } from "./pdfImage";
 
 jest.mock("../../common/image", () => ({
@@ -434,5 +436,59 @@ describe("computeBleedCropWindowPx (#301)", () => {
     expect(window.cropTopPx).toBe(0);
     expect(window.croppedWidthPx).toBe(1000);
     expect(window.croppedHeightPx).toBe(1400);
+  });
+});
+
+describe("createTrackedObjectURL / revokeTrackedObjectURLs - pdf.worker.ts's per-batch release", () => {
+  let revokeSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    // The module-level registry is shared across tests in this file; the getPDFImageURL tests
+    // above register URLs they never revoke, so drain before asserting on revocations.
+    revokeTrackedObjectURLs();
+    revokeSpy = jest
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+  });
+
+  it("registers every created URL and revokes them all on demand", () => {
+    jest
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValueOnce("blob:tracked-1")
+      .mockReturnValueOnce("blob:tracked-2");
+    const first = createTrackedObjectURL(new Blob());
+    const second = createTrackedObjectURL(new Blob());
+    expect(first).toBe("blob:tracked-1");
+    expect(second).toBe("blob:tracked-2");
+    revokeTrackedObjectURLs();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:tracked-1");
+    expect(revokeSpy).toHaveBeenCalledWith("blob:tracked-2");
+    expect(revokeSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("drains the registry: a second revoke call is a no-op", () => {
+    jest.spyOn(URL, "createObjectURL").mockReturnValueOnce("blob:only");
+    createTrackedObjectURL(new Blob());
+    revokeTrackedObjectURLs();
+    revokeTrackedObjectURLs();
+    expect(revokeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("the URL getPDFImageURL returns is the tracked URL the worker revokes per batch", async () => {
+    mockGetBucketImageURL.mockReturnValue("https://bucket.test/card-1-small");
+    mockGetWorkerImageURL.mockReturnValue("https://worker.test/card-1-small");
+    jest.spyOn(global, "fetch").mockResolvedValue(okResponse());
+    jest.spyOn(URL, "createObjectURL").mockReturnValue("blob:getpdfimageurl");
+
+    const url = await getPDFImageURL(
+      googleDriveCard(),
+      "small-thumbnail",
+      undefined,
+      100,
+      {}
+    );
+    expect(url).toBe("blob:getpdfimageurl");
+    revokeTrackedObjectURLs();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:getpdfimageurl");
   });
 });

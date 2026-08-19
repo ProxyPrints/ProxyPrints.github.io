@@ -17,6 +17,33 @@ export interface ImageFetchFailure {
   label: string;
 }
 
+// Every blob: URL this module creates for PDF-image sources is registered here instead of
+// escaping through raw URL.createObjectURL, so pdf.worker.ts's page-batch renderer can release
+// the underlying blobs the moment a batch's PDF has embedded them (see pdf.worker.ts's
+// PAGES_PER_BATCH comment for the memory rationale). Unreferenced object URLs keep their blob
+// alive in the browser's blob store until URL.revokeObjectURL is called, so "the batch's toBlob
+// resolved" must also mean "revoke that batch's URLs" - otherwise an image that exists only as
+// an object URL still pins its full-resolution bytes for the whole export. The registry is
+// bounded to one batch at a time: the worker revokes after every batch, so the array is empty
+// between batches; a mid-render failure leaks at most the failing batch's URLs, which is what a
+// one-shot render used to leak for its ENTIRE page set.
+const trackedObjectURLs: Array<string> = [];
+
+/** Creates an object URL for a PDF image Blob and registers it for `revokeTrackedObjectURLs`. */
+export const createTrackedObjectURL = (blob: Blob): string => {
+  const url = URL.createObjectURL(blob);
+  trackedObjectURLs.push(url);
+  return url;
+};
+
+/** Revokes every object URL created since the last call - call once per rendered page batch. */
+export const revokeTrackedObjectURLs = (): void => {
+  let url: string | undefined;
+  while ((url = trackedObjectURLs.pop()) !== undefined) {
+    URL.revokeObjectURL(url);
+  }
+};
+
 /**
  * The same card can appear in more than one slot in a render (e.g. as both
  * a front and a back), producing one ImageFetchFailure per failed slot. For
@@ -154,7 +181,7 @@ const getThumbnailURL = async (
   const bucketURL = getBucketImageURL(cardDocument, size);
   if (bucketURL !== undefined) {
     try {
-      return URL.createObjectURL(await fetchAsBlob(bucketURL));
+      return createTrackedObjectURL(await fetchAsBlob(bucketURL));
     } catch {
       // bucket miss or network error - fall through to the worker
     }
@@ -170,7 +197,7 @@ const getThumbnailURL = async (
       `no image source configured for card ${cardDocument.identifier}`
     );
   }
-  return URL.createObjectURL(await fetchAsBlob(workerURL));
+  return createTrackedObjectURL(await fetchAsBlob(workerURL));
 };
 
 /**
@@ -199,7 +226,7 @@ const getOrphanPDFImageURL = async (
           `no orphan image source configured for card ${cardDocument.identifier}`
         );
       }
-      return URL.createObjectURL(await fetchAsBlob(thumbnailURL));
+      return createTrackedObjectURL(await fetchAsBlob(thumbnailURL));
     }
     case "full-resolution": {
       const fullResolutionURL = getOrphanFullResolutionImageURL(
@@ -210,7 +237,7 @@ const getOrphanPDFImageURL = async (
           `no orphan image source configured for card ${cardDocument.identifier}`
         );
       }
-      return URL.createObjectURL(
+      return createTrackedObjectURL(
         await fetchFullResolutionImageAsBlob(fullResolutionURL)
       );
     }
@@ -256,7 +283,7 @@ export const getPDFImageURL = async (
               `no image source configured for card ${cardDocument.identifier}`
             );
           }
-          return URL.createObjectURL(
+          return createTrackedObjectURL(
             await fetchFullResolutionImageAsBlob(workerURL)
           );
         }
@@ -267,7 +294,7 @@ export const getPDFImageURL = async (
     case SourceType.LocalFile:
       const handle = fileHandles[cardDocument.identifier];
       if (handle !== undefined) {
-        return URL.createObjectURL(await handle.getFile());
+        return createTrackedObjectURL(await handle.getFile());
       } else {
         throw new Error(
           `could not get handle for file ${cardDocument.identifier}`

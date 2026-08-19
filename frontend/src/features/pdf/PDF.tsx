@@ -1,4 +1,11 @@
-import { Document, Image, Page, StyleSheet, View } from "@react-pdf/renderer";
+import {
+  Document,
+  DocumentProps,
+  Image,
+  Page,
+  StyleSheet,
+  View,
+} from "@react-pdf/renderer";
 import React, { createContext, useContext } from "react";
 
 import {
@@ -17,6 +24,7 @@ import { getPageSizeMM, PageSize } from "@/features/pdf/pageSize";
 import {
   computeBleedCropMM,
   computeRenderedBleedMM,
+  createTrackedObjectURL,
   getPDFImageBlob,
   getPDFImageURL,
   PDFImageQuality,
@@ -26,7 +34,11 @@ import {
   ScmRegistration,
   ScmVariant,
 } from "@/features/pdf/scm/scmLayout";
-import { SCMPDF } from "@/features/pdf/scm/SCMPDF";
+import {
+  computeSCMPDFPageCount,
+  SCMPDF,
+  SCMPDFProps,
+} from "@/features/pdf/scm/SCMPDF";
 
 export { getPageSizeMM, PageSize };
 
@@ -528,7 +540,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
           prior,
           manualOverride
         );
-        return URL.createObjectURL(normalized);
+        return createTrackedObjectURL(normalized);
       }
       return await getPDFImageURL(
         cardDocument,
@@ -1096,28 +1108,32 @@ const sliceToPageRange = (
   return pages.slice(startIndex, endIndex);
 };
 
+// The exact SCMPDFProps the SCM branch of PDF() renders with - factored out so the page count
+// (computePDFRenderPageCount below) plans against the same props set, not a re-derived copy.
+const scmPropsFromPDFProps = (props: PDFProps): SCMPDFProps => ({
+  scmPaperSize: props.scmPaperSize,
+  scmVariant: props.scmVariant,
+  scmRegistration: props.scmRegistration,
+  scmDuplex: props.scmDuplex,
+  scmOffsetXMM: props.scmOffsetXMM,
+  scmOffsetYMM: props.scmOffsetYMM,
+  scmOffsetAngleDeg: props.scmOffsetAngleDeg,
+  cardDocumentsByIdentifier: props.cardDocumentsByIdentifier,
+  projectMembers: props.projectMembers,
+  projectCardback: props.projectCardback,
+  imageQuality: props.imageQuality,
+  imageDPI: props.imageDPI,
+  jpgQuality: props.jpgQuality,
+  fileHandles: props.fileHandles,
+  reportImageFailure: props.reportImageFailure,
+  reportImageProgress: props.reportImageProgress,
+  pageRangeStart: props.pageRangeStart,
+  pageRangeEnd: props.pageRangeEnd,
+});
+
 export const PDF = (props: PDFProps) => {
   if (props.scmMode) {
-    return (
-      <SCMPDF
-        scmPaperSize={props.scmPaperSize}
-        scmVariant={props.scmVariant}
-        scmRegistration={props.scmRegistration}
-        scmDuplex={props.scmDuplex}
-        scmOffsetXMM={props.scmOffsetXMM}
-        scmOffsetYMM={props.scmOffsetYMM}
-        scmOffsetAngleDeg={props.scmOffsetAngleDeg}
-        cardDocumentsByIdentifier={props.cardDocumentsByIdentifier}
-        projectMembers={props.projectMembers}
-        projectCardback={props.projectCardback}
-        imageQuality={props.imageQuality}
-        imageDPI={props.imageDPI}
-        jpgQuality={props.jpgQuality}
-        fileHandles={props.fileHandles}
-        reportImageFailure={props.reportImageFailure}
-        reportImageProgress={props.reportImageProgress}
-      />
-    );
+    return <SCMPDF {...scmPropsFromPDFProps(props)} />;
   }
 
   const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
@@ -1154,3 +1170,41 @@ export const PDF = (props: PDFProps) => {
     </PDFContext.Provider>
   );
 };
+
+// The page COUNT a batch renderer plans against - the range-sliced page total for the standard
+// path (mirrors what PDF() emits, including its single-empty-page fallback for an empty export),
+// and the range-sliced SCM total for SCM mode (which paginates independently inside SCMPDF.tsx).
+// pdf.worker.ts slices this total into PAGES_PER_BATCH chunks and re-renders each chunk via
+// overloaded pageRangeStart/pageRangeEnd - matching PDF()'s own slice semantics is what makes
+// the per-batch outputs concatenate back into exactly the single-shot document.
+export const computePDFRenderPageCount = (props: PDFProps): number => {
+  if (props.scmMode) {
+    return computeSCMPDFPageCount(scmPropsFromPDFProps(props));
+  }
+  const pages = sliceToPageRange(
+    computePDFPages(props),
+    props.pageRangeStart,
+    props.pageRangeEnd
+  );
+  return pages.length > 0 ? pages.length : 1;
+};
+
+// The worker's page-batch loop needs its ranges in ABSOLUTE deck-page numbers: PDF()/SCMPDF()
+// always slice the FULL deck by pageRangeStart/pageRangeEnd, so a batch rendering the slice's
+// k..m-th pages must restate them as full-deck page numbers (startPage + k - 1 .. + m - 1) -
+// batch-relative bounds would re-slice the deck from page 1 and drop the caller's offset.
+export const computePDFRenderWindow = (
+  props: PDFProps
+): { startPage: number; totalPages: number } => ({
+  startPage: Math.max(0, (props.pageRangeStart ?? 1) - 1) + 1,
+  totalPages: computePDFRenderPageCount(props),
+});
+
+// The per-batch element pdf.worker.ts hands to @react-pdf/renderer's pdf(). Built here (a .tsx
+// module) rather than in the worker so it is constructed with JSX: createElement would type it
+// ReactElement<PDFProps>, which pdf()'s ReactElement<DocumentProps> parameter rejects, while a
+// JSX expression is typed JSX.Element (ReactElement<any, any>) and satisfies it - no type escape
+// hatch needed at the call site.
+export const createPDFElement = (
+  props: PDFProps
+): React.ReactElement<DocumentProps> => <PDF {...props} />;
