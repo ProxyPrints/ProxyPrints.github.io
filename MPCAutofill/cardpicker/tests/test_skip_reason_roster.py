@@ -103,6 +103,7 @@ EXPECTED_SKIP_REASONS = {
         "LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON",
         "CHIP_NO_EVIDENCE_SKIP_REASON",
         "BLEED_CALC_NO_EVIDENCE_SKIP_REASON",
+        "ART_EDGE_NO_EVIDENCE_SKIP_REASON",
     },
     "eliminated": {
         "FALLBACK_ELIMINATED_SKIP_REASON",
@@ -155,6 +156,14 @@ EXPECTED_SKIP_REASONS = {
     # case). Appended at the end, same positional-stability reasoning as the CHIP entry above.
     "method-disagreement": {"BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON"},
     "not-trimmed": {"BLEED_CALC_NOT_TRIMMED_SKIP_REASON"},
+    # Art-edge continuity caster — local_art_edge.py (art-edge-continuity-v1, 2026-08-19).
+    # "no-reading" is genuinely new; "framed"/"mixed" are this caster's own abstain-outcome
+    # values (an unvalidated non-'extended' reading), not shared with any other calculator's
+    # vocabulary. Appended at the end, same positional-stability reasoning as the two entries
+    # above.
+    "no-reading": {"ART_EDGE_NO_READING_SKIP_REASON"},
+    "framed": {"ART_EDGE_FRAMED_SKIP_REASON"},
+    "mixed": {"ART_EDGE_MIXED_SKIP_REASON"},
 }
 
 # The same regex `.github/scripts/docs_lint.py`'s roster tether uses. Kept as a

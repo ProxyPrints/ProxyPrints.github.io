@@ -228,24 +228,24 @@ def test_reachability_reproduces_the_audit_per_channel_command_column():
         "vote:CardPrintingTag:local-name-frequency-v1": "local_name_frequency_elimination",
         "vote:CardPrintingTag:stage-d-join-key-v1": "local_calculate_verdicts",
         "vote:CardArtistVote:art-hash-artist-v1": "local_residual_classify",
+        "vote:CardTagVote:art-edge-continuity-v1:Extended": "local_art_edge_cast",
     }
     for key, command in expected.items():
         assert command in _commands_reaching(by_key[key], roster), key
 
 
-def test_reachability_finds_the_audits_unreachable_channel():
-    """The audit's central wiring finding, derived rather than remembered.
+def test_reachability_closed_the_audits_previously_unreachable_channel():
+    """The audit's central wiring finding, now closed, derived rather than remembered.
 
-    `local_art_edge.cast_art_edge_continuity_vote` is reachable from NO
-    management command - the same shape as
-    `image_evidence.extract_card_evidence`, whose only non-test callers are a
-    docstring and a comment. A channel like this reports zero forever and no
-    amount of running changes it, which is precisely the distinction between
-    "run it again" and "wire it first".
+    `local_art_edge.cast_art_edge_continuity_vote` used to be reachable from NO management
+    command - the same shape `image_evidence.extract_card_evidence` still is, whose only
+    non-test callers are a docstring and a comment. This asserts the fix directly: the new
+    `local_art_edge_cast` command and `stage_e_dispatch._run_evidence_only_calculators` both
+    reach it now.
     """
     roster = derive_roster()
     art_edge = next(c for c in roster.vote if c.identity == "art-edge-continuity-v1")
-    assert _commands_reaching(art_edge, roster) == set()
+    assert "local_art_edge_cast" in _commands_reaching(art_edge, roster)
 
 
 def test_the_pooled_runner_reaches_no_vote_channel():
