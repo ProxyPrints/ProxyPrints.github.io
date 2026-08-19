@@ -155,6 +155,12 @@ EXPECTED_SKIP_REASONS = {
     # case). Appended at the end, same positional-stability reasoning as the CHIP entry above.
     "method-disagreement": {"BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON"},
     "not-trimmed": {"BLEED_CALC_NOT_TRIMMED_SKIP_REASON"},
+    # Filename-declaration caster — local_filename_declarations.py
+    # (filename-declaration-cast-v1, 2026-08-19). Two values new to the roster: no keyword
+    # matched at all, and the border-colour axis contradiction abstention. Appended at the end,
+    # same positional-stability reasoning as the two entries above.
+    "no-declaration": {"NO_DECLARATION_SKIP_REASON"},
+    "border-axis-contradiction": {"BORDER_AXIS_CONTRADICTION_SKIP_REASON"},
 }
 
 # The same regex `.github/scripts/docs_lint.py`'s roster tether uses. Kept as a

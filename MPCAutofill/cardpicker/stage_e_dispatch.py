@@ -288,6 +288,12 @@ class DispatchOutcome:
     # disagreement past a 2mm gate - the abstention the old single-signal caster could not make.
     # Reads stored `ImageEvidence`/`CanonicalPrintingMetadata` and fetches nothing.
     stage_d_bleed_calculator_votes: int = 0
+    # FILENAME-DECLARATION CASTER (cardpicker.local_filename_declarations,
+    # filename-declaration-cast-v1) - reads only Card.name (present and immutable from ingest,
+    # independent of Stage C), so it needs no ImageEvidence at all, unlike its siblings above. A
+    # single card can cast several tags at once (Extended and Borderless are not exclusive), so
+    # this counter is a vote count, not a card count - see that module's own docstring.
+    stage_d_filename_declaration_votes: int = 0
     # EVIDENCE-ONLY CALCULATORS (2026-08-05, closing the "10 of ~28 channels" wiring audit - see
     # `_run_evidence_only_calculators`' own docstring for the FREE/EXPENSIVE classification of
     # every channel this closes and every one it deliberately leaves open). All four read only
@@ -1212,6 +1218,11 @@ def _run_attribute_chip_casters(
     running both would double-count one signal and the old caster's unconditional vote would land
     on exactly the cards the calculator abstains on, defeating the abstention.
 
+    FILENAME DECLARATIONS (2026-08-19) are the fourth caster wired here:
+    `local_filename_declarations.run_filename_declaration_cast` parses `Card.name` for uploader-
+    declared treatments and needs no `ImageEvidence` at all - its `Tag` dependency is the same
+    seed gap as its siblings, so it shares this function's try/except rather than getting its own.
+
     THE CASTERS READ STORED EVIDENCE AND FETCH NOTHING, which is why they can run inside a
     micro-batch at all: the conveyor's fetch budget and the operating envelope's bars are about
     network and host load, and these consume neither. Re-deriving these chips through the only
@@ -1238,6 +1249,7 @@ def _run_attribute_chip_casters(
     """
     from cardpicker.local_attribute_chip_cast import run_attribute_chip_cast
     from cardpicker.local_bleed_calculator import run_bleed_calculator_cast
+    from cardpicker.local_filename_declarations import run_filename_declaration_cast
     from cardpicker.local_layout_class_cast import run_layout_class_cast
 
     try:
@@ -1249,12 +1261,15 @@ def _run_attribute_chip_casters(
 
         bleed_calc_result = run_bleed_calculator_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
         outcome.stage_d_bleed_calculator_votes = bleed_calc_result.votes_written
+
+        filename_result = run_filename_declaration_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_filename_declaration_votes = filename_result.votes_written
     except RuntimeError as exc:
         logger.error(
             "Attribute-chip casters skipped for run_id=%s: %s Stage D's printing votes for this "
             "batch are unaffected and already written. Run `seed_default_tags`/`seed_attribute_tags`"
-            "/`seed_sensitive_tags` to close this - until then the border/frame chip and bleed "
-            "calculator counters stay at zero on every dispatch.",
+            "/`seed_sensitive_tags` to close this - until then the border/frame chip, bleed "
+            "calculator and filename-declaration counters stay at zero on every dispatch.",
             run_id,
             exc,
         )
@@ -1806,6 +1821,7 @@ def dispatch_micro_batch(
                     "stage_d_border_chip_votes": outcome.stage_d_border_chip_votes,
                     "stage_d_frame_chip_votes": outcome.stage_d_frame_chip_votes,
                     "stage_d_bleed_calculator_votes": outcome.stage_d_bleed_calculator_votes,
+                    "stage_d_filename_declaration_votes": outcome.stage_d_filename_declaration_votes,
                     "stage_d_ai_art_votes": outcome.stage_d_ai_art_votes,
                     "stage_d_art_hash_artist_votes": outcome.stage_d_art_hash_artist_votes,
                     "stage_d_lands_votes": outcome.stage_d_lands_votes,
