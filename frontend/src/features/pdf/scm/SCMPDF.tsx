@@ -45,6 +45,12 @@ export interface SCMPDFProps {
   fileHandles: { [identifier: string]: FileSystemFileHandle };
   reportImageFailure?: (identifier: string, label: string) => void;
   reportImageProgress?: () => void;
+  // 1-indexed, inclusive bounds over this export's SCM page sequence (front/back pages
+  // interleaved per card group - page 1 is group 0's front, page 2 group 0's back when duplex,
+  // and so on). Same vocabulary as PDFProps.pageRangeStart/pageRangeEnd, which pdf.worker.ts's
+  // page-batch renderer overrides per batch to slice the deck into memory-sized chunks.
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
 }
 
 interface CardPair {
@@ -57,6 +63,70 @@ const chunk = <T,>(arr: Array<T>, size: number): Array<Array<T>> => {
   for (let i = 0; i < arr.length; i += size)
     result.push(arr.slice(i, i + size));
   return result;
+};
+
+/** Resolves every member's card pair against the identifier→CardDocument map, dropping
+ * members whose front card isn't resolvable - the same selection the SCM render emits. */
+const resolveSCMPDFCards = (props: SCMPDFProps): Array<CardPair> => {
+  const docs = props.cardDocumentsByIdentifier;
+  const resolve = (id?: string): CardDocument | undefined =>
+    id ? docs[id] : undefined;
+  return props.projectMembers
+    .map((member): CardPair | undefined => {
+      const front = resolve(member.front?.selectedImage);
+      if (!front) return undefined;
+      const back = resolve(member.back?.selectedImage ?? props.projectCardback);
+      return { front, back };
+    })
+    .filter((card): card is CardPair => card !== undefined);
+};
+
+/** One emitted SCM page, addressed by the card group it draws and whether it's the group's
+ * back (duplex) page. Group g's pages occupy consecutive page numbers g*pagesPerGroup..+1. */
+export interface SCMPageRef {
+  groupIndex: number;
+  isBack: boolean;
+}
+
+/** Pure page-range slicing over SCM's page sequence - the same clamping semantics as PDF.tsx's
+ * sliceToPageRange (1-indexed inclusive bounds, undefined = unbounded), applied to a sequence
+ * of `pagesPerGroup` pages per card group. Lets pdf.worker.ts's page-batch renderer slice an
+ * SCM export into memory-sized chunks by page number, exactly like the standard path. */
+export const slicePageGroups = (
+  groupCount: number,
+  pagesPerGroup: number,
+  pageRangeStart: number | undefined,
+  pageRangeEnd: number | undefined
+): Array<SCMPageRef> => {
+  const totalPages = groupCount * pagesPerGroup;
+  const startIndex = Math.max(0, (pageRangeStart ?? 1) - 1);
+  const endIndex = Math.min(totalPages, pageRangeEnd ?? totalPages);
+  const refs: Array<SCMPageRef> = [];
+  for (let groupIndex = 0; groupIndex < groupCount; groupIndex++) {
+    for (let pageInGroup = 0; pageInGroup < pagesPerGroup; pageInGroup++) {
+      const pageIndex = groupIndex * pagesPerGroup + pageInGroup;
+      if (pageIndex >= startIndex && pageIndex < endIndex) {
+        refs.push({ groupIndex, isBack: pageInGroup === 1 });
+      }
+    }
+  }
+  return refs;
+};
+
+/** The total page count of an SCM export (range-sliced) - what the worker plans its page
+ * batches against; mirrors computePDFPageCount's role for the standard path. */
+export const computeSCMPDFPageCount = (props: SCMPDFProps): number => {
+  const layout = generateScmLayout(props.scmPaperSize, props.scmVariant);
+  const cardsPerPage = layout.rows * layout.cols;
+  const cards = resolveSCMPDFCards(props);
+  const pageGroups = cards.length > 0 ? chunk(cards, cardsPerPage) : [[]];
+  const pagesPerGroup = props.scmDuplex ? 2 : 1;
+  return slicePageGroups(
+    pageGroups.length,
+    pagesPerGroup,
+    props.pageRangeStart,
+    props.pageRangeEnd
+  ).length;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -245,20 +315,15 @@ export const SCMPDF = (props: SCMPDFProps) => {
   const pageOutWMM = isPortrait ? layout.pageHeightMM : layout.pageWidthMM;
   const pageOutHMM = isPortrait ? layout.pageWidthMM : layout.pageHeightMM;
 
-  const docs = props.cardDocumentsByIdentifier;
-  const resolve = (id?: string): CardDocument | undefined =>
-    id ? docs[id] : undefined;
-
-  const cards: CardPair[] = props.projectMembers
-    .map((m): CardPair | undefined => {
-      const front = resolve(m.front?.selectedImage);
-      if (!front) return undefined;
-      const back = resolve(m.back?.selectedImage ?? props.projectCardback);
-      return { front, back };
-    })
-    .filter((c): c is CardPair => c !== undefined);
-
+  const cards = resolveSCMPDFCards(props);
   const pageGroups = cards.length > 0 ? chunk(cards, cardsPerPage) : [[]];
+  const pagesPerGroup = props.scmDuplex ? 2 : 1;
+  const pageRefs = slicePageGroups(
+    pageGroups.length,
+    pagesPerGroup,
+    props.pageRangeStart,
+    props.pageRangeEnd
+  );
 
   const imageProps = {
     imageQuality: props.imageQuality,
@@ -341,13 +406,13 @@ export const SCMPDF = (props: SCMPDFProps) => {
 
   return (
     <Document pageMode="useThumbs">
-      {pageGroups.flatMap((group, i) => {
-        const pages = [renderPage(group, false, `front-${i}`)];
-        if (props.scmDuplex) {
-          pages.push(renderPage(group, true, `back-${i}`));
-        }
-        return pages;
-      })}
+      {pageRefs.map((pageRef, i) =>
+        renderPage(
+          pageGroups[pageRef.groupIndex],
+          pageRef.isBack,
+          `${pageRef.isBack ? "back" : "front"}-${i}`
+        )
+      )}
     </Document>
   );
 };
