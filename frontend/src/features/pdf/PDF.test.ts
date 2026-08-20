@@ -12,6 +12,7 @@ import {
   computePDFRenderPageCount,
   computePDFRenderWindow,
   createPDFElement,
+  dashSegmentLengthsMM,
   DEFAULT_CARD_SELECTION_MODE,
   PDFProps,
 } from "@/features/pdf/PDF";
@@ -239,5 +240,23 @@ describe("createPDFElement - the per-batch element pdf() consumes", () => {
     expect(element.props).toStrictEqual(
       expect.objectContaining({ pageRangeStart: undefined })
     );
+  });
+});
+
+describe("dashSegmentLengthsMM - Dashed cut-line shape's segment layout", () => {
+  it("fills the arm with equal-length segments spaced by the fixed segment+gap step", () => {
+    expect(dashSegmentLengthsMM(10)).toEqual([1.5, 1.5, 1.5, 1.5]);
+  });
+
+  it("clips the final segment to whatever length remains, rather than overshooting", () => {
+    expect(dashSegmentLengthsMM(6)).toEqual([1.5, 1.5, 1]);
+  });
+
+  it("an arm shorter than one segment is a single, shorter segment", () => {
+    expect(dashSegmentLengthsMM(1)).toEqual([1]);
+  });
+
+  it("a zero-length arm has no segments", () => {
+    expect(dashSegmentLengthsMM(0)).toEqual([]);
   });
 });

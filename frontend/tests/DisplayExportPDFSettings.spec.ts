@@ -241,6 +241,12 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await expect(page.getByTestId("display-export-cut-line-color")).toHaveValue(
       "#ff0000"
     );
+    await page
+      .getByTestId("display-export-cut-line-shape")
+      .selectOption("Dashed");
+    await expect(page.getByTestId("display-export-cut-line-shape")).toHaveValue(
+      "Dashed"
+    );
     await page.getByRole("button", { name: "Cancel" }).click();
 
     // Guides off -> the colour/shape controls have nothing to style, so they don't render.

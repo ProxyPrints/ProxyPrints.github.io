@@ -119,6 +119,7 @@ export const CutLineShape = {
   Cross: "Cross Shaped",
   InsideOnly: "Inside Card Border",
   OutsideOnly: "Outside Card Border",
+  Dashed: "Dashed",
 };
 
 export const CardSelectionMode = {
@@ -247,6 +248,81 @@ interface CutLineCornerProps {
   verticalDownLengthOverrideMM?: number;
 }
 
+// Dashed shape - each arm is a run of short segments rather than one solid bar. Fixed segment/gap
+// size, independent of cutLineThicknessMM (the bar's stroke width) - otherwise a thick dashed
+// line would degrade into a row of near-square dots.
+const CUT_LINE_DASH_SEGMENT_MM = 1.5;
+const CUT_LINE_DASH_GAP_MM = 1;
+
+// Segments covering [0, totalLengthMM); the last one is clipped short rather than overshooting.
+export const dashSegmentLengthsMM = (totalLengthMM: number): number[] => {
+  const segments: number[] = [];
+  let covered = 0;
+  while (covered < totalLengthMM) {
+    segments.push(Math.min(CUT_LINE_DASH_SEGMENT_MM, totalLengthMM - covered));
+    covered += CUT_LINE_DASH_SEGMENT_MM + CUT_LINE_DASH_GAP_MM;
+  }
+  return segments;
+};
+
+// One arm of a CutLineCorner mark. "positive" extends right/down from the corner's own anchor
+// point; "negative" extends left/up. Solid (dashed=false) renders the single rect the pre-Dashed
+// implementation always drew; dashed renders the same footprint as a run of segments, still
+// anchored so the segment nearest the corner touches the joint the same way the solid bar did.
+const CutLineBar = ({
+  axis,
+  direction,
+  lengthMM,
+  thicknessMM,
+  color,
+  dashed,
+}: {
+  axis: "horizontal" | "vertical";
+  direction: "positive" | "negative";
+  lengthMM: number;
+  thicknessMM: number;
+  color: string;
+  dashed: boolean;
+}) => {
+  const segmentsMM = dashed ? dashSegmentLengthsMM(lengthMM) : [lengthMM];
+  let coveredMM = 0;
+  return (
+    <>
+      {segmentsMM.map((segmentLengthMM, i) => {
+        const offsetMM = coveredMM;
+        coveredMM += CUT_LINE_DASH_SEGMENT_MM + CUT_LINE_DASH_GAP_MM;
+        const style =
+          axis === "vertical"
+            ? {
+                position: "absolute" as const,
+                width: thicknessMM + "mm",
+                height: segmentLengthMM + "mm",
+                backgroundColor: color,
+                left: 0,
+                ...(direction === "positive"
+                  ? { top: offsetMM + "mm" }
+                  : {
+                      top: -(offsetMM + segmentLengthMM) + thicknessMM + "mm",
+                    }),
+              }
+            : {
+                position: "absolute" as const,
+                width: segmentLengthMM + "mm",
+                height: thicknessMM + "mm",
+                backgroundColor: color,
+                top: 0,
+                ...(direction === "positive"
+                  ? { left: offsetMM + "mm" }
+                  : {
+                      left: -(offsetMM + segmentLengthMM) + thicknessMM + "mm",
+                    }),
+              };
+        return <View key={i} style={style} />;
+      })}
+    </>
+  );
+};
+
 const CutLineCorner = ({
   position,
   lengthMM,
@@ -320,18 +396,20 @@ const CutLineCorner = ({
     bleedMM[inside.verticalCssProperty] - cutLineOffsetMM - thicknessOffset;
 
   const showHorizontal = (dir: "left" | "right") => {
-    if (shape === "Cross") return true;
+    if (shape === "Cross" || shape === "Dashed") return true;
     if (shape === "InsideOnly") return inside.horizontal === dir;
     if (shape === "OutsideOnly") return outside.horizontal === dir;
     return false;
   };
 
   const showVertical = (dir: "up" | "down") => {
-    if (shape === "Cross") return true;
+    if (shape === "Cross" || shape === "Dashed") return true;
     if (shape === "InsideOnly") return inside.vertical === dir;
     if (shape === "OutsideOnly") return outside.vertical === dir;
     return false;
   };
+
+  const dashed = shape === "Dashed";
 
   return (
     <>
@@ -353,61 +431,43 @@ const CutLineCorner = ({
         }}
       >
         {showVertical("down") && (
-          <View
-            style={{
-              // lower vertical bar
-              position: "absolute" as const,
-              width: cutLineThicknessMM + "mm",
-              height: (verticalDownLengthOverrideMM ?? lengthMM) + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left: 0,
-            }}
+          <CutLineBar
+            axis="vertical"
+            direction="positive"
+            lengthMM={verticalDownLengthOverrideMM ?? lengthMM}
+            thicknessMM={cutLineThicknessMM}
+            color={cutLineColor}
+            dashed={dashed}
           />
         )}
         {showVertical("up") && (
-          <View
-            style={{
-              // upper vertical bar
-              position: "absolute" as const,
-              width: cutLineThicknessMM + "mm",
-              height: (verticalUpLengthOverrideMM ?? lengthMM) + "mm",
-              backgroundColor: cutLineColor,
-              top:
-                -(verticalUpLengthOverrideMM ?? lengthMM) +
-                cutLineThicknessMM +
-                "mm",
-              left: 0,
-            }}
+          <CutLineBar
+            axis="vertical"
+            direction="negative"
+            lengthMM={verticalUpLengthOverrideMM ?? lengthMM}
+            thicknessMM={cutLineThicknessMM}
+            color={cutLineColor}
+            dashed={dashed}
           />
         )}
         {showHorizontal("right") && (
-          <View
-            style={{
-              // right horizontal bar
-              position: "absolute" as const,
-              width: (horizontalRightLengthOverrideMM ?? lengthMM) + "mm",
-              height: cutLineThicknessMM + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left: 0,
-            }}
+          <CutLineBar
+            axis="horizontal"
+            direction="positive"
+            lengthMM={horizontalRightLengthOverrideMM ?? lengthMM}
+            thicknessMM={cutLineThicknessMM}
+            color={cutLineColor}
+            dashed={dashed}
           />
         )}
         {showHorizontal("left") && (
-          <View
-            style={{
-              // left horizontal bar
-              position: "absolute" as const,
-              width: (horizontalLeftLengthOverrideMM ?? lengthMM) + "mm",
-              height: cutLineThicknessMM + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left:
-                -(horizontalLeftLengthOverrideMM ?? lengthMM) +
-                cutLineThicknessMM +
-                "mm",
-            }}
+          <CutLineBar
+            axis="horizontal"
+            direction="negative"
+            lengthMM={horizontalLeftLengthOverrideMM ?? lengthMM}
+            thicknessMM={cutLineThicknessMM}
+            color={cutLineColor}
+            dashed={dashed}
           />
         )}
       </View>
@@ -454,7 +514,6 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     bleedPriors,
     bleedOverrides,
   } = ctx;
-  const radius = roundCorners ? CornerRadiusMM : 0;
   const bleedNormalized = isBleedNormalizationEligible(
     cardDocument,
     imageQuality
@@ -478,6 +537,32 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   );
   const height = CardHeightMM + renderedBleedMM.top + renderedBleedMM.bottom;
   const width = CardWidthMM + renderedBleedMM.left + renderedBleedMM.right;
+
+  // Rounding is drawn on this box (card + bleed), but the bleed is exactly what a trim along
+  // the cut guide removes - a flat CornerRadiusMM here would sit entirely inside that discarded
+  // margin and vanish the moment the card is actually cut out. Growing the radius by the
+  // adjoining bleed means the arc reaches the TRUE card edge, so the CUT card's own corner comes
+  // out at exactly CornerRadiusMM (trimming a rounded rect by `b` on each edge shrinks its
+  // radius by `b`). min() of the two edges meeting at a corner handles the rare case where a
+  // crowded page axis has cropped one of them below the configured bleed (#301).
+  const cornerRadiusMM = (edgeAMM: number, edgeBMM: number): number =>
+    roundCorners ? CornerRadiusMM + Math.min(edgeAMM, edgeBMM) : 0;
+  const topLeftRadiusMM = cornerRadiusMM(
+    renderedBleedMM.top,
+    renderedBleedMM.left
+  );
+  const topRightRadiusMM = cornerRadiusMM(
+    renderedBleedMM.top,
+    renderedBleedMM.right
+  );
+  const bottomLeftRadiusMM = cornerRadiusMM(
+    renderedBleedMM.bottom,
+    renderedBleedMM.left
+  );
+  const bottomRightRadiusMM = cornerRadiusMM(
+    renderedBleedMM.bottom,
+    renderedBleedMM.right
+  );
 
   // Non-normalized path only (bleedNormalized short-circuits this - see below): the old
   // proportion-based rescale, fixing up an image assumed to be at the STANDARD bleed amount
@@ -569,10 +654,10 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
           minHeight: height + "mm",
           position: "relative" as const,
           overflow: "hidden",
-          borderTopLeftRadius: radius + "mm",
-          borderTopRightRadius: radius + "mm",
-          borderBottomRightRadius: radius + "mm",
-          borderBottomLeftRadius: radius + "mm",
+          borderTopLeftRadius: topLeftRadiusMM + "mm",
+          borderTopRightRadius: topRightRadiusMM + "mm",
+          borderBottomRightRadius: bottomRightRadiusMM + "mm",
+          borderBottomLeftRadius: bottomLeftRadiusMM + "mm",
         }}
       >
         <Image
@@ -612,10 +697,10 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
             minHeight: height + "mm",
             transform: scaleTransform,
             overflow: "hidden",
-            borderTopLeftRadius: radius + "mm",
-            borderTopRightRadius: radius + "mm",
-            borderBottomRightRadius: radius + "mm",
-            borderBottomLeftRadius: radius + "mm",
+            borderTopLeftRadius: topLeftRadiusMM + "mm",
+            borderTopRightRadius: topRightRadiusMM + "mm",
+            borderBottomRightRadius: bottomRightRadiusMM + "mm",
+            borderBottomLeftRadius: bottomLeftRadiusMM + "mm",
           } as const
         }
       />
