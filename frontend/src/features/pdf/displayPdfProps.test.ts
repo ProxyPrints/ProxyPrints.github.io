@@ -24,29 +24,30 @@ jest.mock("@react-pdf/renderer", () => ({
 // the standard 3.175mm MPC bleed, guides on, no registration offset. LETTER portrait dims from
 // the same getPageSizeMM lookup DisplayPage/displayPdfProps both use.
 const LETTER_PORTRAIT = getPageSizeMM("LETTER", undefined, undefined);
+// Includes the rail's "Print quality" defaults (imageDPI/jpgQuality/roundCorners) - migrated
+// here from DisplayExportPDF.tsx's own settings step, see displayPdfProps.ts's own comment.
 const DEFAULT_SHEET_SETTINGS = {
   pageSize: "LETTER" as const,
   bleedEdgeMM: 3.175,
   showCutLines: true,
   offsetXMM: 0,
   offsetYMM: 0,
+  imageDPI: 600,
+  jpgQuality: 100,
+  roundCorners: true,
 };
 
 // The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS) - the
-// same full-res 600 DPI/100% pipeline PDFGenerator.tsx's own download path uses, and the same
-// lime guide colour PagePreview.tsx's E19 screen-side guides render with.
+// same lime guide colour PagePreview.tsx's E19 screen-side guides render with.
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
-  imageDPI: 600,
-  jpgQuality: 100,
   cutLineColor: "#8ae234",
   showCrossCutLines: false,
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
-  roundCorners: true,
   drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,
@@ -211,7 +212,7 @@ describe("buildDisplayPDFProps - corner rounding maps straight through", () => {
     expect(buildDisplayPDFProps(baseInput).roundCorners).toBe(true);
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, roundCorners: false },
+      sheetSettings: { ...DEFAULT_SHEET_SETTINGS, roundCorners: false },
     });
     expect(props.roundCorners).toBe(false);
   });
@@ -316,12 +317,12 @@ describe("buildDisplayPDFProps - live editor state maps through", () => {
   });
 });
 
-describe("buildDisplayPDFProps - export settings map straight through", () => {
-  it("imageQuality is always full-resolution; DPI and JPG quality come from export settings", () => {
+describe("buildDisplayPDFProps - print-quality rail settings map straight through", () => {
+  it("imageQuality is always full-resolution; DPI and JPG quality come from the rail's sheet settings", () => {
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: {
-        ...DEFAULT_EXPORT_SETTINGS,
+      sheetSettings: {
+        ...DEFAULT_SHEET_SETTINGS,
         imageDPI: 300,
         jpgQuality: 80,
       },
@@ -330,7 +331,9 @@ describe("buildDisplayPDFProps - export settings map straight through", () => {
     expect(props.imageDPI).toBe(300);
     expect(props.jpgQuality).toBe(80);
   });
+});
 
+describe("buildDisplayPDFProps - export settings map straight through", () => {
   it("card selection mode maps straight through from export settings", () => {
     const props = buildDisplayPDFProps({
       ...baseInput,
