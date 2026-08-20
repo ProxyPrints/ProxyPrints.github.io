@@ -114,6 +114,11 @@ export const SourceToggleWidth = 88; // pixels
 // cardpicker/constants.py NSFW constant - it's the same string filename-bracket tagging
 // writes into Card.tags and the seeded sensitive tag uses (docs/features/moderation.md).
 export const NSFW_TAG_NAME = "NSFW";
+// The tag name marking non-official art borrowing an external property (a custom
+// Warhammer proxy, for example) rather than original Magic art. Must match the backend's
+// EXTERNAL_IP_TAG_NAME in cardpicker/reason_tags.py - the same string voting from the
+// report button and the What's That Card feed writes into Card.tags.
+export const EXTERNAL_IP_TAG_NAME = "external-ip";
 export const NavbarHeight = 50; // pixels - aligns with the natural height of the navbar
 export const RibbonHeight = 54; // pixels
 export const NavbarLogoHeight = 40; // pixels
