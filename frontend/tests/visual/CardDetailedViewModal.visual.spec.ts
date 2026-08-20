@@ -43,7 +43,13 @@ test.describe("CardDetailedViewModal visual tests", () => {
     );
     await openDetailedView(page, "my search query", cardDocument1.identifier);
 
-    await expect(page.getByText("English")).toBeVisible();
+    // Languages filter chips (2026-08-20): the Browse-mode filter sidebar now renders an
+    // "English" chip label (LanguageFilter.tsx) alongside this modal's own "English" table
+    // cell, so an unscoped getByText collides - same class of fix as openDetailedView's own
+    // "Card Details" scoping above (test-utils.ts).
+    await expect(
+      page.getByTestId("detailed-view").getByText("English")
+    ).toBeVisible();
     await expect(page.getByText("Not yet resolved")).toBeVisible();
     // Fix round (2026-07-23, this port): toMatchAriaSnapshot asserts the container's full
     // accessibility tree, not a partial/contains match - AttributeVotingPanel (VotePickers.spec.ts's
