@@ -2845,12 +2845,16 @@ Confidence unchanged (0.7). No new tag seeded - the existing-tag check
 (`Tag.objects.filter(name=...).first()`, degrades to no vote if absent)
 was already in place before this change.
 
-### Who actually casts the attribute chips (2026-07-30, updated 2026-08-15)
+### Who actually casts the attribute chips (2026-07-30, updated 2026-08-19)
 
-**This replaces the pilot as the answer.** All three chip families —
-border colour, frame style, bleed edge — are cast by **evidence-reading
-casters that fetch no images**, and both modules are wired into the
-streaming conveyor (`stage_e_dispatch._run_stage_d`):
+**This replaces the pilot as the answer.** Five channels — covering border
+colour, frame style, bleed edge, uploader-declared filename treatments, and
+extended-art continuity — are cast by **evidence-reading casters that fetch
+no images**, wired into the streaming conveyor through two different
+dispatch steps: the first four rows below run inside
+`stage_e_dispatch._run_attribute_chip_casters`, and `art-edge-continuity-v1`
+runs inside the separate `stage_e_dispatch._run_evidence_only_calculators`
+— both are called from `_run_stage_d`:
 
 | chip family                                                                                           | module                        | identity                       |
 | ----------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------ |
@@ -2858,6 +2862,7 @@ streaming conveyor (`stage_e_dispatch._run_stage_d`):
 | Old Border, Modern Border                                                                             | `local_attribute_chip_cast`   | `frame-style-cast-v1`          |
 | appropriate-bleed                                                                                     | `local_bleed_calculator`      | `bleed-calculator-cast-v1`     |
 | Extended, Showcase, Full Art, Etched, Old Border, Future Frame, Black/White/Silver Border, Borderless | `local_filename_declarations` | `filename-declaration-cast-v1` |
+| Extended                                                                                              | `local_art_edge`              | `art-edge-continuity-v1`       |
 
 The old single-signal bleed caster (`bleed-edge-cast-v1`, same module as
 frame style, NEW 2026-07-30) is **RETIRED 2026-08-15**: it is the SOLE
@@ -2926,6 +2931,35 @@ the population worth a human's attention rather than either channel's
 alone. Measured population that same pass: 20,629 distinct cards across
 109 sources declare a treatment this way, three chips (Full Art, Etched,
 Future Frame) with no other machine coverage at all.
+
+### A third channel, wired separately: extended-art continuity (`local_art_edge`, 2026-08-19)
+
+`local_art_edge.run_art_edge_continuity_cast` casts the pre-existing
+"Extended" chip from `ImageEvidence.art_edge_class`, a column Stage C's
+evidence extraction already populates by comparing three regions of the
+same image (the strip beside the art crop against two independent border
+references — see `classify_art_edge_continuity`'s own docstring for the
+geometry). The cast function itself fetches no image; it only reads that
+already-stored column, the same "reads stored evidence, fetches nothing"
+shape the four casters above share.
+
+It is wired into a different dispatch step from the other four, though:
+`stage_e_dispatch._run_evidence_only_calculators`, not
+`_run_attribute_chip_casters` — it was added in a separate wiring pass
+(2026-08-19), behind its own validation precondition (issue #721), after
+the other four were already live.
+
+Only the `extended` reading casts a vote (`VotePolarity.APPLY` on
+"Extended", `source=VoteSource.OCR`, since the underlying classification
+reads pixels even though the cast step itself does not); `framed` and
+`mixed` abstain deliberately rather than casting a negative — a negative
+vote from an unvalidated class would be a claim, not an abstention, and
+`mixed` is by definition the reading this classifier is least sure of.
+Validated against human votes on the pre-existing "Extended" chip: recall
+87.0% (20/23), 0.0% false positives (0/10), precision 100% (20/20), n=33
+cards / 5 voters, 0 disputed — corroborated at much larger scale by the
+filename channel above, which independently agrees with this classifier
+90.7% of the time over 13,117 cards.
 
 ### The bleed calculator: two independent methods, cross-checked (`local_bleed_calculator`)
 
