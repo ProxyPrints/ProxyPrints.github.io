@@ -15,10 +15,12 @@
  *     (`animated striped`) for the `@react-pdf/renderer` layout/encode phase that exposes NO
  *     progress callback - there is no third state to report once fetching completes, only an
  *     honest "still working, can't say how much longer".
- *   - `PDFWaitGameEmbed` - a chrome frame around `<QuestionFeed>` rendered verbatim (no forked
- *     component, no new voting mechanic - the exact `/whatsthat` funnel,
- *     docs/features/printing-tags.md) plus a persistent build-status ribbon so the PDF's own
- *     progress stays visible while playing. Lazy-loaded via `next/dynamic({ssr:false})` and only
+ *   - `PDFWaitGameEmbed` - a chrome frame around `<QuestionFeed>` (no forked component, no new
+ *     voting mechanic - the exact `/whatsthat` funnel, docs/features/printing-tags.md; only
+ *     `hideHeading` is passed, so EmbedHead below stays the one heading above the feed instead
+ *     of stacking behind QuestionFeed's own wordmark) plus a persistent build-status ribbon so
+ *     the PDF's own progress stays visible while playing. Lazy-loaded via
+ *     `next/dynamic({ssr:false})` and only
  *     imported once a caller actually mounts it (which only happens once generation has actually
  *     started - see `derivePDFWaitPhase` below) - never eagerly bundled into a caller's initial
  *     bundle just because that caller imports this module.
@@ -292,7 +294,7 @@ export function PDFWaitGameEmbed({
         </span>
       </BuildRibbon>
       <EmbedBody>
-        <LazyQuestionFeed />
+        <LazyQuestionFeed hideHeading />
       </EmbedBody>
       <div
         style={{

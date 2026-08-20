@@ -760,7 +760,13 @@ function normalizeQuestionFeedCounts(
   return raw;
 }
 
-export function QuestionFeed() {
+export interface QuestionFeedProps {
+  // Set only by PDFWaitGameEmbed (features/pdf/PDFWaitPanel.tsx), whose own EmbedHead already
+  // supplies the heading above this component. whatsthat.tsx never sets this.
+  hideHeading?: boolean;
+}
+
+export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
 
@@ -2288,7 +2294,7 @@ export function QuestionFeed() {
   return (
     <FeedRoot data-testid="question-feed">
       <WtcHead>
-        <WhatsThatWords />
+        {!hideHeading && <WhatsThatWords />}
         <SolvedPill
           data-testid="question-feed-session-counter"
           title="quiet resolved-count - not a score or streak"

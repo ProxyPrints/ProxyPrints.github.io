@@ -2852,11 +2852,12 @@ border colour, frame style, bleed edge — are cast by **evidence-reading
 casters that fetch no images**, and both modules are wired into the
 streaming conveyor (`stage_e_dispatch._run_stage_d`):
 
-| chip family                           | module                      | identity                   |
-| ------------------------------------- | --------------------------- | -------------------------- |
-| Black/White/Silver Border, Borderless | `local_layout_class_cast`   | `layout-class-cast-v1`     |
-| Old Border, Modern Border             | `local_attribute_chip_cast` | `frame-style-cast-v1`      |
-| appropriate-bleed                     | `local_bleed_calculator`    | `bleed-calculator-cast-v1` |
+| chip family                                                                                           | module                        | identity                       |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------ |
+| Black/White/Silver Border, Borderless                                                                 | `local_layout_class_cast`     | `layout-class-cast-v1`         |
+| Old Border, Modern Border                                                                             | `local_attribute_chip_cast`   | `frame-style-cast-v1`          |
+| appropriate-bleed                                                                                     | `local_bleed_calculator`      | `bleed-calculator-cast-v1`     |
+| Extended, Showcase, Full Art, Etched, Old Border, Future Frame, Black/White/Silver Border, Borderless | `local_filename_declarations` | `filename-declaration-cast-v1` |
 
 The old single-signal bleed caster (`bleed-edge-cast-v1`, same module as
 frame style, NEW 2026-07-30) is **RETIRED 2026-08-15**: it is the SOLE
@@ -2900,6 +2901,31 @@ without that gate every card missing `artist_ocr` would read `modern`.
 That is a manufactured vote from evidence that does not exist, and it is
 the same failure mode that lets a genuine old-frame card be vetoed
 `frame-mismatch` in Stage D.
+
+### A second, evidence-free channel: filename declarations (`local_filename_declarations`, 2026-08-19)
+
+Proxy artists name their own renders, and those names routinely declare
+the treatment ("Snapcaster Mage Extended.png"). `local_filename_declarations`
+parses `Card.name` for those declarations and casts the matching chip vote
+at `source=VoteSource.DEDUCTION` (pure inference from already-trusted
+structured data, per that enum's own docstring — filename parsing inspects
+no pixel) rather than `OCR`. Unlike every caster above it needs no
+`ImageEvidence` row at all: the input is present and immutable from the
+moment a card is created. A single card can cast several tags at once
+(Extended and Borderless are not exclusive); the four border-colour tags
+are the one mutually-exclusive axis and abstain as a group, recording
+`border-axis-contradiction`, when a name declares more than one of them.
+
+This channel never gates, skips, or is gated by any pixel-based
+calculator above — the two kinds of evidence are read independently, and
+their disagreement is itself useful: on the Extended chip, the stored
+`ImageEvidence.art_edge_class` pixel classifier independently agrees with
+the filename declaration 90.7% of the time (measured read-only against
+production, 2026-08-19, 235,912 cards), so the remaining 9.3% is exactly
+the population worth a human's attention rather than either channel's
+alone. Measured population that same pass: 20,629 distinct cards across
+109 sources declare a treatment this way, three chips (Full Art, Etched,
+Future Frame) with no other machine coverage at all.
 
 ### The bleed calculator: two independent methods, cross-checked (`local_bleed_calculator`)
 
