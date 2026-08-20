@@ -46,7 +46,7 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
-  roundCorners: false,
+  roundCorners: true,
   drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,
@@ -207,13 +207,13 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
 });
 
 describe("buildDisplayPDFProps - corner rounding maps straight through", () => {
-  it("defaults to square (false), and reads true when set", () => {
-    expect(buildDisplayPDFProps(baseInput).roundCorners).toBe(false);
+  it("defaults to round (true), and reads false when set", () => {
+    expect(buildDisplayPDFProps(baseInput).roundCorners).toBe(true);
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, roundCorners: true },
+      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, roundCorners: false },
     });
-    expect(props.roundCorners).toBe(true);
+    expect(props.roundCorners).toBe(false);
   });
 });
 

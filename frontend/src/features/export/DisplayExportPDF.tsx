@@ -126,7 +126,9 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
-  roundCorners: false,
+  // The dashed trim outline defaults to rounded corners - a real card's die-cut corner is
+  // rounded, so that's the shape the guide should trace by default. Square remains a toggle.
+  roundCorners: true,
   // Matches /print's PDFGenerator.tsx's own default - a guillotine cutting a printed stack
   // relies on these, independent of whether per-card cut lines are also on.
   drawPageCutLines: true,

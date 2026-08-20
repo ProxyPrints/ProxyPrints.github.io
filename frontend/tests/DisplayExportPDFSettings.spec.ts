@@ -429,9 +429,9 @@ test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry
 
     await openPDFSettings(page);
     const roundCorners = page.getByTestId("display-export-round-corners");
-    await expect(roundCorners).not.toBeChecked();
-    await roundCorners.check();
     await expect(roundCorners).toBeChecked();
+    await roundCorners.uncheck();
+    await expect(roundCorners).not.toBeChecked();
   });
 });
 
