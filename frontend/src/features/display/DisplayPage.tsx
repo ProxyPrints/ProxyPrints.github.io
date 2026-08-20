@@ -1157,6 +1157,36 @@ const DisplayBodyRegion = styled.div`
 // ("pinned to the bottom and mostly non visible") was a genuinely-open drawer only 30vh tall, most
 // of its own content clipped below that. The explicit height (not max-height) below matches the
 // approved mockup's own bottom-sheet rule exactly - see the design doc's R5 row.
+// Rails-meet-sheet round - past a certain viewport width, the fixed 380px/300px rail floors
+// leave the centre sheet region wider than the sheet itself ever renders (PagePreview's own
+// SHEET_MAX_WIDTH_PX cap, 960px), so the excess sits as dead space either side of the sheet
+// instead of being given to either rail. RAIL_GROWTH_THRESHOLD_PX is the exact viewport width
+// where that dead space FIRST appears: both rails at their floor (380 + 300) plus the sheet at
+// its own 960px cap plus the sheet-region's own `p-3` padding (32px, 1rem each side) -
+// 380 + 300 + 960 + 32 = 1672. Below this width the sheet is still fit-to-width-shrinking (it
+// hasn't reached its cap yet), so growing a rail there would come directly out of the sheet's
+// own render width, not out of dead space - confirmed against the wide-viewport sheet-region
+// assertion in DisplayPage.spec.ts (1400px, well under this threshold, is untouched by the clamps
+// below). RAIL_GROWTH_THRESHOLD_FILTERS_OPEN_PX is the same derivation with the left rail's own
+// wider floor (640, not 380): 640 + 300 + 960 + 32 = 1932.
+const RAIL_GROWTH_THRESHOLD_PX = 380 + 300 + SHEET_MAX_WIDTH_PX + 32;
+const RAIL_GROWTH_THRESHOLD_FILTERS_OPEN_PX =
+  640 + 300 + SHEET_MAX_WIDTH_PX + 32;
+
+// Past its own threshold, each rail claims a fixed share of the extra viewport width beyond it -
+// 60% to the left rail, 40% to the right. The left rail gets the bigger share because it's the
+// one that "feels cramped" at its 380px floor; the right rail's own content (Save/Export,
+// margins/spacing controls) doesn't need as much room to stop looking cramped. Each `clamp()`
+// floors at the existing fixed width (so nothing below the threshold changes at all) and ceilings
+// at a cap chosen so neither rail turns into a full sidebar on an ultrawide monitor - past the
+// cap, residual dead space on very wide viewports is an accepted trade for not overgrowing the
+// rails.
+const leftRailWidth = (filtersOpen: boolean) =>
+  filtersOpen
+    ? `clamp(640px, calc(640px + (100vw - ${RAIL_GROWTH_THRESHOLD_FILTERS_OPEN_PX}px) * 0.6), 820px)`
+    : `clamp(380px, calc(380px + (100vw - ${RAIL_GROWTH_THRESHOLD_PX}px) * 0.6), 560px)`;
+const RIGHT_RAIL_WIDTH = `clamp(300px, calc(300px + (100vw - ${RAIL_GROWTH_THRESHOLD_PX}px) * 0.4), 420px)`;
+
 // Rail-anchored filters round - `$filtersOpen` (SelectVersionResults.tsx's own
 // `onFiltersOpenChange`, threaded through Rail/SelectVersionSection below) widens this SAME rail
 // column instead of floating a separate panel over the page: the inline (`lg`+) sticky column and
@@ -1178,9 +1208,9 @@ const LeftRailOffcanvas = styled(Offcanvas)<{ $filtersOpen?: boolean }>`
 
   @media (min-width: 992px) {
     &.offcanvas-lg {
-      width: ${(props) => (props.$filtersOpen ? "640px" : "380px")};
-      max-width: ${(props) => (props.$filtersOpen ? "640px" : "380px")};
-      flex: 0 0 ${(props) => (props.$filtersOpen ? "640px" : "380px")};
+      width: ${(props) => leftRailWidth(props.$filtersOpen ?? false)};
+      max-width: ${(props) => leftRailWidth(props.$filtersOpen ?? false)};
+      flex: 0 0 ${(props) => leftRailWidth(props.$filtersOpen ?? false)};
       position: sticky;
       top: 0;
       max-height: 100vh;
@@ -1209,9 +1239,11 @@ const RightRailOffcanvas = styled(Offcanvas)`
   }
   @media (min-width: 1200px) {
     &.offcanvas-xl {
-      width: 300px;
-      max-width: 300px;
-      flex: 0 0 300px;
+      /* Rails-meet-sheet round - see RIGHT_RAIL_WIDTH's own comment above (LeftRailOffcanvas) for
+         the threshold/share derivation; identical clamp, just this rail's own 300px floor. */
+      width: ${RIGHT_RAIL_WIDTH};
+      max-width: ${RIGHT_RAIL_WIDTH};
+      flex: 0 0 ${RIGHT_RAIL_WIDTH};
       position: sticky;
       top: 0;
       max-height: 100vh;
