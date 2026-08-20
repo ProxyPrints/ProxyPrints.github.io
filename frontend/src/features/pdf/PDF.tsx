@@ -3,7 +3,9 @@ import {
   DocumentProps,
   Image,
   Page,
+  Rect,
   StyleSheet,
+  Svg,
   View,
 } from "@react-pdf/renderer";
 import React, { createContext, useContext } from "react";
@@ -109,18 +111,6 @@ const contextAvailableBleedMM = (ctx: PDFProps): LayoutEdgeBleed => {
   return layout.slots[0]?.bleedMM ?? ZERO_BLEED;
 };
 
-export const CutLinePlacement = {
-  Inside: "Inside",
-  Centre: "Centre",
-  Outside: "Outside",
-} as const;
-
-export const CutLineShape = {
-  Cross: "Cross Shaped",
-  InsideOnly: "Inside Card Border",
-  OutsideOnly: "Outside Card Border",
-};
-
 export const CardSelectionMode = {
   frontsAndDistinctBacks: "Fronts + Distinct Backs",
   frontsOnly: "Fronts Only",
@@ -149,8 +139,6 @@ const styles = StyleSheet.create({
 
 export interface PDFProps {
   cardSelectionMode: keyof typeof CardSelectionMode;
-  cutLinePlacement: keyof typeof CutLinePlacement;
-  cutLineShape: keyof typeof CutLineShape;
   pageSize: keyof typeof PageSize;
   pageWidth: number | undefined;
   pageHeight: number | undefined;
@@ -158,6 +146,12 @@ export interface PDFProps {
   roundCorners: boolean;
   drawCardCutLines: boolean;
   drawPageCutLines: boolean;
+  // Optional crosshair corner marks alongside the default dashed trim outline `drawCardCutLines`
+  // already draws - default off (most users just need the outline; the marks are for anyone who
+  // specifically wants a traditional corner-mark guide too). Independent of drawCardCutLines'
+  // own on/off state in principle, but only rendered when it's on (nothing to add marks to
+  // otherwise) - see PDFCardCutLines' own render.
+  showCrossCutLines: boolean;
   cutLineLengthMM: number;
   cutLineOffsetMM: number;
   cutLineThicknessMM: number;
@@ -239,19 +233,64 @@ type CutLineCornerPosition =
 interface CutLineCornerProps {
   position: CutLineCornerPosition;
   lengthMM: number;
-  placement: keyof typeof CutLinePlacement;
-  shape: keyof typeof CutLineShape;
   horizontalLeftLengthOverrideMM?: number;
   horizontalRightLengthOverrideMM?: number;
   verticalUpLengthOverrideMM?: number;
   verticalDownLengthOverrideMM?: number;
 }
 
+// Gap between dashes on the trim outline (PDFCardCutLines' Svg/Rect strokeDasharray) - the dash
+// length itself is the user-adjustable cutLineLengthMM, so only the fixed gap lives here.
+const CUT_LINE_DASH_GAP_MM = 1;
+
+// @react-pdf/renderer's Svg/Rect (unlike View's mm-string styles) take bare point values - see
+// PDFCardCutLines' own comment where this is used.
+const mmToPt = (mm: number): number => (mm / 25.4) * 72;
+
+// One arm of a CutLineCorner mark (the optional crosshair guide) - "positive" extends right/down
+// from the corner's own anchor point, "negative" extends left/up. Always a single solid bar; the
+// dashed guide is the trim outline (PDFCardCutLines' Svg/Rect), not these marks.
+const CutLineBar = ({
+  axis,
+  direction,
+  lengthMM,
+  thicknessMM,
+  color,
+}: {
+  axis: "horizontal" | "vertical";
+  direction: "positive" | "negative";
+  lengthMM: number;
+  thicknessMM: number;
+  color: string;
+}) => {
+  const style =
+    axis === "vertical"
+      ? {
+          position: "absolute" as const,
+          width: thicknessMM + "mm",
+          height: lengthMM + "mm",
+          backgroundColor: color,
+          left: 0,
+          ...(direction === "positive" ? { top: 0 } : { bottom: 0 }),
+        }
+      : {
+          position: "absolute" as const,
+          width: lengthMM + "mm",
+          height: thicknessMM + "mm",
+          backgroundColor: color,
+          top: 0,
+          ...(direction === "positive" ? { left: 0 } : { right: 0 }),
+        };
+  return <View style={style} />;
+};
+
+// The optional crosshair corner-mark guide (PDFProps.showCrossCutLines) - always anchored at the
+// true trim edge (bleedMM.<edge> from the slot's own boundary, same #301 per-axis-cropped-bleed
+// reasoning the dashed outline below uses). This is the only placement CutLineCorner ever needed
+// even before the cut-guide redesign (PageCutLines, further down, already hardcoded it).
 const CutLineCorner = ({
   position,
   lengthMM,
-  placement,
-  shape,
   horizontalLeftLengthOverrideMM,
   horizontalRightLengthOverrideMM,
   verticalUpLengthOverrideMM,
@@ -266,152 +305,79 @@ const CutLineCorner = ({
   // #301 uniform-bleed version used.
   const bleedMM = contextAvailableBleedMM(ctx);
 
-  const cutLinePlacementToThicknessOffset: {
-    [key in keyof typeof CutLinePlacement]: number;
-  } = {
-    [CutLinePlacement.Inside]: 0,
-    [CutLinePlacement.Centre]: 0.5 * cutLineThicknessMM,
-    [CutLinePlacement.Outside]: cutLineThicknessMM,
-  };
-  const thicknessOffset = cutLinePlacementToThicknessOffset[placement];
-
   const positionLookup: {
     [location in CutLineCornerPosition]: {
-      horizontal: "left" | "right";
-      vertical: "up" | "down";
       verticalCssProperty: "top" | "bottom";
       horizontalCssProperty: "left" | "right";
     };
   } = {
-    "top-left": {
-      horizontal: "right",
-      vertical: "down",
-      verticalCssProperty: "top",
-      horizontalCssProperty: "left",
-    },
+    "top-left": { verticalCssProperty: "top", horizontalCssProperty: "left" },
     "top-right": {
-      horizontal: "left",
-      vertical: "down",
       verticalCssProperty: "top",
       horizontalCssProperty: "right",
     },
     "bottom-left": {
-      horizontal: "right",
-      vertical: "up",
       verticalCssProperty: "bottom",
       horizontalCssProperty: "left",
     },
     "bottom-right": {
-      horizontal: "left",
-      vertical: "up",
       verticalCssProperty: "bottom",
       horizontalCssProperty: "right",
     },
   };
 
   const inside = positionLookup[position];
-  const outside = {
-    horizontal: inside.horizontal === "left" ? "right" : "left",
-    vertical: inside.vertical === "up" ? "down" : "up",
-  } as const;
   const horizontalOffset =
-    bleedMM[inside.horizontalCssProperty] - cutLineOffsetMM - thicknessOffset;
-  const verticalOffset =
-    bleedMM[inside.verticalCssProperty] - cutLineOffsetMM - thicknessOffset;
-
-  const showHorizontal = (dir: "left" | "right") => {
-    if (shape === "Cross") return true;
-    if (shape === "InsideOnly") return inside.horizontal === dir;
-    if (shape === "OutsideOnly") return outside.horizontal === dir;
-    return false;
-  };
-
-  const showVertical = (dir: "up" | "down") => {
-    if (shape === "Cross") return true;
-    if (shape === "InsideOnly") return inside.vertical === dir;
-    if (shape === "OutsideOnly") return outside.vertical === dir;
-    return false;
-  };
+    bleedMM[inside.horizontalCssProperty] - cutLineOffsetMM;
+  const verticalOffset = bleedMM[inside.verticalCssProperty] - cutLineOffsetMM;
 
   return (
-    <>
-      <View
-        style={{
-          position: "absolute" as const,
-          ...(inside.verticalCssProperty === "top" && {
-            top: verticalOffset + "mm",
-          }),
-          ...(inside.verticalCssProperty === "bottom" && {
-            bottom: verticalOffset + cutLineThicknessMM + "mm",
-          }),
-          ...(inside.horizontalCssProperty === "left" && {
-            left: horizontalOffset + "mm",
-          }),
-          ...(inside.horizontalCssProperty === "right" && {
-            right: horizontalOffset + cutLineThicknessMM + "mm",
-          }),
-        }}
-      >
-        {showVertical("down") && (
-          <View
-            style={{
-              // lower vertical bar
-              position: "absolute" as const,
-              width: cutLineThicknessMM + "mm",
-              height: (verticalDownLengthOverrideMM ?? lengthMM) + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left: 0,
-            }}
-          />
-        )}
-        {showVertical("up") && (
-          <View
-            style={{
-              // upper vertical bar
-              position: "absolute" as const,
-              width: cutLineThicknessMM + "mm",
-              height: (verticalUpLengthOverrideMM ?? lengthMM) + "mm",
-              backgroundColor: cutLineColor,
-              top:
-                -(verticalUpLengthOverrideMM ?? lengthMM) +
-                cutLineThicknessMM +
-                "mm",
-              left: 0,
-            }}
-          />
-        )}
-        {showHorizontal("right") && (
-          <View
-            style={{
-              // right horizontal bar
-              position: "absolute" as const,
-              width: (horizontalRightLengthOverrideMM ?? lengthMM) + "mm",
-              height: cutLineThicknessMM + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left: 0,
-            }}
-          />
-        )}
-        {showHorizontal("left") && (
-          <View
-            style={{
-              // left horizontal bar
-              position: "absolute" as const,
-              width: (horizontalLeftLengthOverrideMM ?? lengthMM) + "mm",
-              height: cutLineThicknessMM + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left:
-                -(horizontalLeftLengthOverrideMM ?? lengthMM) +
-                cutLineThicknessMM +
-                "mm",
-            }}
-          />
-        )}
-      </View>
-    </>
+    <View
+      style={{
+        position: "absolute" as const,
+        ...(inside.verticalCssProperty === "top" && {
+          top: verticalOffset + "mm",
+        }),
+        ...(inside.verticalCssProperty === "bottom" && {
+          bottom: verticalOffset + cutLineThicknessMM + "mm",
+        }),
+        ...(inside.horizontalCssProperty === "left" && {
+          left: horizontalOffset + "mm",
+        }),
+        ...(inside.horizontalCssProperty === "right" && {
+          right: horizontalOffset + cutLineThicknessMM + "mm",
+        }),
+      }}
+    >
+      <CutLineBar
+        axis="vertical"
+        direction="positive"
+        lengthMM={verticalDownLengthOverrideMM ?? lengthMM}
+        thicknessMM={cutLineThicknessMM}
+        color={cutLineColor}
+      />
+      <CutLineBar
+        axis="vertical"
+        direction="negative"
+        lengthMM={verticalUpLengthOverrideMM ?? lengthMM}
+        thicknessMM={cutLineThicknessMM}
+        color={cutLineColor}
+      />
+      <CutLineBar
+        axis="horizontal"
+        direction="positive"
+        lengthMM={horizontalRightLengthOverrideMM ?? lengthMM}
+        thicknessMM={cutLineThicknessMM}
+        color={cutLineColor}
+      />
+      <CutLineBar
+        axis="horizontal"
+        direction="negative"
+        lengthMM={horizontalLeftLengthOverrideMM ?? lengthMM}
+        thicknessMM={cutLineThicknessMM}
+        color={cutLineColor}
+      />
+    </View>
   );
 };
 
@@ -454,7 +420,6 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     bleedPriors,
     bleedOverrides,
   } = ctx;
-  const radius = roundCorners ? CornerRadiusMM : 0;
   const bleedNormalized = isBleedNormalizationEligible(
     cardDocument,
     imageQuality
@@ -478,6 +443,32 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   );
   const height = CardHeightMM + renderedBleedMM.top + renderedBleedMM.bottom;
   const width = CardWidthMM + renderedBleedMM.left + renderedBleedMM.right;
+
+  // Rounding is drawn on this box (card + bleed), but the bleed is exactly what a trim along
+  // the cut guide removes - a flat CornerRadiusMM here would sit entirely inside that discarded
+  // margin and vanish the moment the card is actually cut out. Growing the radius by the
+  // adjoining bleed means the arc reaches the TRUE card edge, so the CUT card's own corner comes
+  // out at exactly CornerRadiusMM (trimming a rounded rect by `b` on each edge shrinks its
+  // radius by `b`). min() of the two edges meeting at a corner handles the rare case where a
+  // crowded page axis has cropped one of them below the configured bleed (#301).
+  const cornerRadiusMM = (edgeAMM: number, edgeBMM: number): number =>
+    roundCorners ? CornerRadiusMM + Math.min(edgeAMM, edgeBMM) : 0;
+  const topLeftRadiusMM = cornerRadiusMM(
+    renderedBleedMM.top,
+    renderedBleedMM.left
+  );
+  const topRightRadiusMM = cornerRadiusMM(
+    renderedBleedMM.top,
+    renderedBleedMM.right
+  );
+  const bottomLeftRadiusMM = cornerRadiusMM(
+    renderedBleedMM.bottom,
+    renderedBleedMM.left
+  );
+  const bottomRightRadiusMM = cornerRadiusMM(
+    renderedBleedMM.bottom,
+    renderedBleedMM.right
+  );
 
   // Non-normalized path only (bleedNormalized short-circuits this - see below): the old
   // proportion-based rescale, fixing up an image assumed to be at the STANDARD bleed amount
@@ -569,10 +560,10 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
           minHeight: height + "mm",
           position: "relative" as const,
           overflow: "hidden",
-          borderTopLeftRadius: radius + "mm",
-          borderTopRightRadius: radius + "mm",
-          borderBottomRightRadius: radius + "mm",
-          borderBottomLeftRadius: radius + "mm",
+          borderTopLeftRadius: topLeftRadiusMM + "mm",
+          borderTopRightRadius: topRightRadiusMM + "mm",
+          borderBottomRightRadius: bottomRightRadiusMM + "mm",
+          borderBottomLeftRadius: bottomLeftRadiusMM + "mm",
         }}
       >
         <Image
@@ -612,10 +603,10 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
             minHeight: height + "mm",
             transform: scaleTransform,
             overflow: "hidden",
-            borderTopLeftRadius: radius + "mm",
-            borderTopRightRadius: radius + "mm",
-            borderBottomRightRadius: radius + "mm",
-            borderBottomLeftRadius: radius + "mm",
+            borderTopLeftRadius: topLeftRadiusMM + "mm",
+            borderTopRightRadius: topRightRadiusMM + "mm",
+            borderBottomRightRadius: bottomRightRadiusMM + "mm",
+            borderBottomLeftRadius: bottomLeftRadiusMM + "mm",
           } as const
         }
       />
@@ -623,8 +614,13 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   );
 };
 
-// Renders cut lines for a single card slot, absolutely positioned within the
-// overlay layer to match the card at (colIndex, rowIndex) in the grid.
+// Renders cut lines for a single card slot, absolutely positioned within the overlay layer to
+// match the card at (colIndex, rowIndex) in the grid. The default guide is a dashed rounded-rect
+// outline traced directly on the trim boundary (an Svg/Rect, not a corner mark - native SVG
+// stroke-dashing continues the pattern seamlessly around the rounded corners, which the old
+// segment-by-segment CutLineBar approach couldn't do for a full perimeter); the crosshair corner
+// marks (CutLineCorner, same component PageCutLines uses for the sheet-wide guillotine lines) are
+// an opt-in addition, not an alternative shape.
 const PDFCardCutLines = ({
   colIndex,
   rowIndex,
@@ -637,8 +633,11 @@ const PDFCardCutLines = ({
     cardSpacingRowMM,
     cardSpacingColMM,
     cutLineLengthMM,
-    cutLinePlacement,
-    cutLineShape,
+    cutLineThicknessMM,
+    cutLineColor,
+    cutLineOffsetMM,
+    roundCorners,
+    showCrossCutLines,
   } = ctx;
   // #301 - this slot's actual rendered size (may be less than CardSize + 2*bleedEdgeMM on a
   // crowded axis - see layout.ts's fitAxisWithBleed), not the flat target-bleed box the pre-
@@ -650,6 +649,32 @@ const PDFCardCutLines = ({
   const left = colIndex * (cardSlotWidth + cardSpacingColMM);
   const top = rowIndex * (cardSlotHeight + cardSpacingRowMM);
 
+  // The outline's own path grows outward from the true trim rect (CardWidthMM x CardHeightMM at
+  // bleedMM.left/top) by cutLineOffsetMM on every side - offset 0 (the default) puts the path
+  // exactly on the trim boundary, so the stroke straddles it (half into the visible card face,
+  // half into the bleed), which is what "sits on the trim boundary" means for a drawn line. The
+  // Svg viewport is padded by half the stroke width beyond that so the stroke's own outer edge
+  // never sits exactly on (and risks being clipped at) the viewport bound.
+  const outlineWidthMM = CardWidthMM + 2 * cutLineOffsetMM;
+  const outlineHeightMM = CardHeightMM + 2 * cutLineOffsetMM;
+  const strokePadMM = cutLineThicknessMM / 2;
+  const svgLeftMM = bleedMM.left - cutLineOffsetMM - strokePadMM;
+  const svgTopMM = bleedMM.top - cutLineOffsetMM - strokePadMM;
+  const radiusMM = roundCorners ? CornerRadiusMM : 0;
+  // Rasterized proof (fix/print-cut-guides verification pass): Svg's own width/height props
+  // (unlike a View's mm-string styles, which DO get react-pdf's box-model unit conversion) are
+  // read as bare point values - "63mm" renders at 63pt (~22mm), not 63mm. The Rect's own
+  // coordinates share whatever physical scale the Svg viewport resolves to (no viewBox is set),
+  // so every number handed to Svg/Rect below is pre-converted to points explicitly; only the
+  // outer wrapping View's position (mm strings) needs no conversion.
+  const outlineWidthPt = mmToPt(outlineWidthMM);
+  const outlineHeightPt = mmToPt(outlineHeightMM);
+  const strokePadPt = mmToPt(strokePadMM);
+  const radiusPt = mmToPt(radiusMM);
+  const strokeWidthPt = mmToPt(cutLineThicknessMM);
+  const dashLengthPt = mmToPt(cutLineLengthMM);
+  const dashGapPt = mmToPt(CUT_LINE_DASH_GAP_MM);
+
   return (
     <View
       style={{
@@ -660,30 +685,36 @@ const PDFCardCutLines = ({
         height: cardSlotHeight + "mm",
       }}
     >
-      <CutLineCorner
-        position="top-left"
-        lengthMM={cutLineLengthMM}
-        placement={cutLinePlacement}
-        shape={cutLineShape}
-      />
-      <CutLineCorner
-        position="top-right"
-        lengthMM={cutLineLengthMM}
-        placement={cutLinePlacement}
-        shape={cutLineShape}
-      />
-      <CutLineCorner
-        position="bottom-left"
-        lengthMM={cutLineLengthMM}
-        placement={cutLinePlacement}
-        shape={cutLineShape}
-      />
-      <CutLineCorner
-        position="bottom-right"
-        lengthMM={cutLineLengthMM}
-        placement={cutLinePlacement}
-        shape={cutLineShape}
-      />
+      <Svg
+        style={{
+          position: "absolute" as const,
+          left: svgLeftMM + "mm",
+          top: svgTopMM + "mm",
+        }}
+        width={outlineWidthPt + 2 * strokePadPt}
+        height={outlineHeightPt + 2 * strokePadPt}
+      >
+        <Rect
+          x={strokePadPt}
+          y={strokePadPt}
+          width={outlineWidthPt}
+          height={outlineHeightPt}
+          rx={radiusPt}
+          ry={radiusPt}
+          fill="none"
+          stroke={cutLineColor}
+          strokeWidth={strokeWidthPt}
+          strokeDasharray={`${dashLengthPt} ${dashGapPt}`}
+        />
+      </Svg>
+      {showCrossCutLines && (
+        <>
+          <CutLineCorner position="top-left" lengthMM={cutLineLengthMM} />
+          <CutLineCorner position="top-right" lengthMM={cutLineLengthMM} />
+          <CutLineCorner position="bottom-left" lengthMM={cutLineLengthMM} />
+          <CutLineCorner position="bottom-right" lengthMM={cutLineLengthMM} />
+        </>
+      )}
     </View>
   );
 };
@@ -744,16 +775,12 @@ const PageCutLines = ({
       <CutLineCorner
         position="top-left"
         lengthMM={cutLineLengthMM}
-        placement="Inside"
-        shape="Cross"
         {...(colIndex === 0 && { horizontalLeftLengthOverrideMM: lengthMM })}
         {...(rowIndex === 0 && { verticalUpLengthOverrideMM: lengthMM })}
       />
       <CutLineCorner
         position="top-right"
         lengthMM={cutLineLengthMM}
-        placement="Inside"
-        shape="Cross"
         {...(colIndex === cardsPerRow - 1 && {
           horizontalRightLengthOverrideMM: lengthMM,
         })}
@@ -762,8 +789,6 @@ const PageCutLines = ({
       <CutLineCorner
         position="bottom-left"
         lengthMM={cutLineLengthMM}
-        placement="Inside"
-        shape="Cross"
         {...(colIndex === 0 && { horizontalLeftLengthOverrideMM: lengthMM })}
         {...(rowIndex === cardsPerCol - 1 && {
           verticalDownLengthOverrideMM: lengthMM,
@@ -772,8 +797,6 @@ const PageCutLines = ({
       <CutLineCorner
         position="bottom-right"
         lengthMM={cutLineLengthMM}
-        placement="Inside"
-        shape="Cross"
         {...(colIndex === cardsPerRow - 1 && {
           horizontalRightLengthOverrideMM: lengthMM,
         })}

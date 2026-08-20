@@ -34,7 +34,7 @@ const DEFAULT_SHEET_SETTINGS = {
 
 // The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS) - the
 // same full-res 600 DPI/100% pipeline PDFGenerator.tsx's own download path uses, and the same
-// lime corner-only guide style PagePreview.tsx's E19 guides render on screen.
+// lime guide colour PagePreview.tsx's E19 screen-side guides render with.
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
@@ -42,12 +42,11 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   imageDPI: 600,
   jpgQuality: 100,
   cutLineColor: "#8ae234",
-  cutLineShape: "InsideOnly",
-  cutLinePlacement: "Inside",
+  showCrossCutLines: false,
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
-  roundCorners: false,
+  roundCorners: true,
   drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,
@@ -160,12 +159,11 @@ describe("buildDisplayPDFProps - page size and grid match the rail's live sheet"
 });
 
 describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut lines", () => {
-  it("showCutLines: true -> drawCardCutLines: true (and the default lime corner-only geometry)", () => {
+  it("showCutLines: true -> drawCardCutLines: true (and the default lime dashed-outline geometry, cross marks off)", () => {
     const props = buildDisplayPDFProps(baseInput);
     expect(props.drawCardCutLines).toBe(true);
     expect(props.cutLineColor).toBe("#8ae234");
-    expect(props.cutLineShape).toBe("InsideOnly");
-    expect(props.cutLinePlacement).toBe("Inside");
+    expect(props.showCrossCutLines).toBe(false);
     expect(props.cutLineLengthMM).toBe(3);
     expect(props.cutLineThicknessMM).toBe(0.6);
     expect(props.cutLineOffsetMM).toBe(0);
@@ -188,22 +186,20 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
     expect(props.drawPageCutLines).toBe(false);
   });
 
-  it("cut line colour, shape, placement, and geometry all map straight through from export settings", () => {
+  it("cut line colour, cross-marks toggle, and geometry all map straight through from export settings", () => {
     const props = buildDisplayPDFProps({
       ...baseInput,
       exportSettings: {
         ...DEFAULT_EXPORT_SETTINGS,
         cutLineColor: "#ff0000",
-        cutLineShape: "Cross",
-        cutLinePlacement: "Outside",
+        showCrossCutLines: true,
         cutLineLengthMM: 5,
         cutLineThicknessMM: 1,
         cutLineOffsetMM: 0.5,
       },
     });
     expect(props.cutLineColor).toBe("#ff0000");
-    expect(props.cutLineShape).toBe("Cross");
-    expect(props.cutLinePlacement).toBe("Outside");
+    expect(props.showCrossCutLines).toBe(true);
     expect(props.cutLineLengthMM).toBe(5);
     expect(props.cutLineThicknessMM).toBe(1);
     expect(props.cutLineOffsetMM).toBe(0.5);
@@ -211,13 +207,13 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
 });
 
 describe("buildDisplayPDFProps - corner rounding maps straight through", () => {
-  it("defaults to square (false), and reads true when set", () => {
-    expect(buildDisplayPDFProps(baseInput).roundCorners).toBe(false);
+  it("defaults to round (true), and reads false when set", () => {
+    expect(buildDisplayPDFProps(baseInput).roundCorners).toBe(true);
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, roundCorners: true },
+      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, roundCorners: false },
     });
-    expect(props.roundCorners).toBe(true);
+    expect(props.roundCorners).toBe(false);
   });
 });
 

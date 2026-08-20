@@ -21,7 +21,9 @@ import {
 // pass-through element factories that emit real DOM-ish tags in markup - renderToStaticMarkup
 // then lets the tests count how many <pdf-page> elements PDF/SCMPDF actually produce and demand
 // that count equal computePDFRenderPageCount. Same module-scope mock idea as the displayPdfProps
-// and pagination tests, but structural rather than null so rendering works.
+// and pagination tests, but structural rather than null so rendering works. Svg/Rect (the dashed
+// trim-outline cut guide) need the same pass-through treatment as View/Image - without a mock,
+// PDF.tsx's import of them from the real module would be undefined here.
 jest.mock("@react-pdf/renderer", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   return {
@@ -31,6 +33,9 @@ jest.mock("@react-pdf/renderer", () => {
       React.createElement("pdf-page", null, children),
     View: ({ children }: { children?: React.ReactNode }) =>
       React.createElement("pdf-view", null, children),
+    Svg: ({ children }: { children?: React.ReactNode }) =>
+      React.createElement("pdf-svg", null, children),
+    Rect: () => null,
     Image: () => null,
     StyleSheet: { create: (styles: unknown) => styles },
   };
@@ -53,8 +58,7 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   imageDPI: 600,
   jpgQuality: 100,
   cutLineColor: "#8ae234",
-  cutLineShape: "InsideOnly",
-  cutLinePlacement: "Inside",
+  showCrossCutLines: false,
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,

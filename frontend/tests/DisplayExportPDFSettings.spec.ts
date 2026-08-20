@@ -21,7 +21,7 @@ import {
 
 // The editor's real Export ▾ -> PDF settings step (DisplayExportPDF.tsx) - every control that
 // replaced a named default in displayPdfProps.ts (card selection, page range, image quality,
-// cut-line colour/shape/placement/geometry, corner rounding, an advanced per-side margin
+// cut-line colour/geometry, an opt-in crosshair-marks toggle, corner rounding, an advanced per-side margin
 // override, SCM cutting mode, and the rail's own Custom page-size option), plus the
 // willGenerateBleed signal on the sheet itself. Reads back the actual downloaded PDF bytes
 // (pdfjs-dist, page-count/page-dimension metadata only - no canvas/rendering needed for that)
@@ -219,7 +219,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     expect(requestUrl.searchParams.get("jpgQuality")).toBe("5");
   });
 
-  test("cut-line colour and shape controls are only shown when the rail's Guides toggle is on, and map through to the export", async ({
+  test("cut-line colour and cross-marks toggle are only shown when the rail's Guides toggle is on, and map through to the export", async ({
     page,
     network,
   }) => {
@@ -231,19 +231,18 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await expect(
       page.getByTestId("display-export-cut-line-color")
     ).toBeVisible();
-    await expect(
-      page.getByTestId("display-export-cut-line-shape")
-    ).toBeVisible();
+    const crossToggle = page.getByTestId("display-export-cross-cut-lines");
+    await expect(crossToggle).toBeVisible();
+    await expect(crossToggle).not.toBeChecked();
     await page.getByTestId("display-export-cut-line-color").fill("#ff0000");
-    await page
-      .getByTestId("display-export-cut-line-shape")
-      .selectOption("Cross");
+    await crossToggle.check();
     await expect(page.getByTestId("display-export-cut-line-color")).toHaveValue(
       "#ff0000"
     );
+    await expect(crossToggle).toBeChecked();
     await page.getByRole("button", { name: "Cancel" }).click();
 
-    // Guides off -> the colour/shape controls have nothing to style, so they don't render.
+    // Guides off -> the colour/cross-marks controls have nothing to style, so they don't render.
     await page.getByLabel("Guides").uncheck();
     await openPDFSettings(page);
     await expect(
@@ -399,7 +398,7 @@ test.describe("DisplayExportPDF - SCM cutting mode", () => {
 });
 
 test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry", () => {
-  test("placement, length, thickness, and offset are settable alongside colour and shape", async ({
+  test("length, thickness, and offset are settable alongside colour", async ({
     page,
     network,
   }) => {
@@ -408,16 +407,10 @@ test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry
     await importTextOnEditorLanding(page, "1x my search query");
 
     await openPDFSettings(page);
-    await page
-      .getByTestId("display-export-cut-line-placement")
-      .selectOption("Outside");
     await page.getByTestId("display-export-cut-line-length").fill("5");
     await page.getByTestId("display-export-cut-line-thickness").fill("1");
     await page.getByTestId("display-export-cut-line-offset").fill("0.5");
 
-    await expect(
-      page.getByTestId("display-export-cut-line-placement")
-    ).toHaveValue("Outside");
     await expect(
       page.getByTestId("display-export-cut-line-length")
     ).toHaveValue("5");
@@ -436,9 +429,9 @@ test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry
 
     await openPDFSettings(page);
     const roundCorners = page.getByTestId("display-export-round-corners");
-    await expect(roundCorners).not.toBeChecked();
-    await roundCorners.check();
     await expect(roundCorners).toBeChecked();
+    await roundCorners.uncheck();
+    await expect(roundCorners).not.toBeChecked();
   });
 });
 

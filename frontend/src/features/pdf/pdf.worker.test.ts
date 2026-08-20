@@ -86,8 +86,7 @@ const exposedApi = mockExpose.mock.calls[0]?.[0] as
 
 const makePDFProps = (overrides: Partial<PDFProps> = {}): PDFProps => ({
   cardSelectionMode: "frontsAndBacks",
-  cutLinePlacement: "Inside",
-  cutLineShape: "InsideOnly",
+  showCrossCutLines: false,
   pageSize: "LETTER",
   pageWidth: undefined,
   pageHeight: undefined,

@@ -61,8 +61,6 @@ import {
 import {
   CardSelectionMode,
   computePDFPageCount,
-  CutLinePlacement,
-  CutLineShape,
   DEFAULT_CARD_SELECTION_MODE,
 } from "@/features/pdf/PDF";
 import {
@@ -119,15 +117,18 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   pageRangeEnd: undefined,
   imageDPI: 600,
   jpgQuality: 100,
-  // Matches PagePreview.tsx's own E19 lime corner-only guide (#8ae234, "InsideOnly"), so the
-  // export defaults to looking like the guide the sheet already showed.
+  // Matches PagePreview.tsx's own E19 lime guide colour (#8ae234), so the export's default
+  // outline colour matches what the sheet already showed on screen.
   cutLineColor: "#8ae234",
-  cutLineShape: "InsideOnly",
-  cutLinePlacement: "Inside",
+  // Crosshair corner marks are an opt-in addition to the default dashed trim outline
+  // (PDF.tsx's PDFProps.showCrossCutLines) - off by default.
+  showCrossCutLines: false,
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
-  roundCorners: false,
+  // The dashed trim outline defaults to rounded corners - a real card's die-cut corner is
+  // rounded, so that's the shape the guide should trace by default. Square remains a toggle.
+  roundCorners: true,
   // Matches /print's PDFGenerator.tsx's own default - a guillotine cutting a printed stack
   // relies on these, independent of whether per-card cut lines are also on.
   drawPageCutLines: true,
@@ -521,44 +522,6 @@ export function DisplayExportPDF({
                         setField("cutLineColor", event.target.value)
                       }
                     />
-                    <Form.Select
-                      size="sm"
-                      data-testid="display-export-cut-line-shape"
-                      value={exportSettings.cutLineShape}
-                      onChange={(event) =>
-                        setField(
-                          "cutLineShape",
-                          event.target.value as keyof typeof CutLineShape
-                        )
-                      }
-                    >
-                      {Object.entries(CutLineShape).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </Form.Select>
-                  </div>
-                  <Form.Select
-                    size="sm"
-                    className="mb-2"
-                    aria-label="Cut line placement"
-                    data-testid="display-export-cut-line-placement"
-                    value={exportSettings.cutLinePlacement}
-                    onChange={(event) =>
-                      setField(
-                        "cutLinePlacement",
-                        event.target.value as keyof typeof CutLinePlacement
-                      )
-                    }
-                  >
-                    {Object.keys(CutLinePlacement).map((value) => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </Form.Select>
-                  <div className="d-flex gap-2 align-items-center">
                     <Form.Control
                       type="number"
                       size="sm"
@@ -601,10 +564,22 @@ export function DisplayExportPDF({
                       }}
                     />
                   </div>
-                  <Form.Text className="text-muted">
-                    Colour, shape, placement, then length / thickness / offset
-                    (mm), left to right.
+                  <Form.Text className="text-muted d-block mb-2">
+                    Colour, then length / thickness / offset (mm), left to right
+                    - applies to the dashed trim outline traced on the
+                    card&apos;s cut boundary, and to the crosshair marks below
+                    if enabled.
                   </Form.Text>
+                  <Form.Check
+                    type="switch"
+                    id="display-export-cross-cut-lines"
+                    data-testid="display-export-cross-cut-lines"
+                    label="Also show crosshair corner marks"
+                    checked={exportSettings.showCrossCutLines}
+                    onChange={(event) =>
+                      setField("showCrossCutLines", event.target.checked)
+                    }
+                  />
                 </Form.Group>
               )}
 
