@@ -49,6 +49,7 @@ from cardpicker.question_feed import (
     get_next_question_feed_item,
     get_remaining_estimate,
     is_likely_resolve_printing,
+    warm_feed_supply_cache,
 )
 from cardpicker.question_feed_pools import (
     LANE_COLD,
@@ -727,6 +728,41 @@ class TestGetRemainingEstimateCaching:
             caches["shared"].clear()
             get_remaining_estimate()
             assert resolve.call_count == 2
+
+
+class TestWarmFeedSupplyCache:
+    """`warm_feed_supply_cache` - the scheduled warm behind `warm_question_feed_remaining_
+    estimate` - must leave both 300s-TTL caches (`get_contested_card_ids`'s own,
+    `get_remaining_estimate`'s own) populated with the SAME values a live `views.
+    get_question_feed` request would then read, not merely "some" cached value."""
+
+    def test_populates_both_caches_a_live_request_reads(self, db):
+        caches["shared"].clear()
+        warm_feed_supply_cache()
+
+        with patch("cardpicker.question_feed.get_contested_card_ids") as resolve:
+            # A live request's own call to get_contested_card_ids must be served by the warm
+            # above's cache entry, not recomputed.
+            from cardpicker.printing_consensus import (
+                get_contested_card_ids as real_get_contested_card_ids,
+            )
+
+            resolve.side_effect = AssertionError("should not be called - the warm already cached this")
+            contested = real_get_contested_card_ids()
+        assert contested == []
+
+        with patch("cardpicker.question_feed._tag_review_card_ids_by_status") as tag_review:
+            tag_review.side_effect = AssertionError("should not be called - the warm already cached this")
+            counts = get_remaining_estimate(contested)
+        assert counts.total == 0
+
+    def test_returns_the_same_counts_it_cached(self, db):
+        caches["shared"].clear()
+        CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        returned = warm_feed_supply_cache()
+        cached = get_remaining_estimate()
+        assert returned == cached
+        assert returned.total >= 1
 
 
 class TestGetQuestionFeedView:
