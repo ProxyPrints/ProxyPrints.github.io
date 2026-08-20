@@ -14,17 +14,23 @@ from PIL import Image
 
 import cardpicker.local_art_edge as local_art_edge
 import cardpicker.local_fallback as local_fallback
+from cardpicker.default_tags import seed_default_tags
 from cardpicker.local_art_edge import (
     ART_EDGE_ANONYMOUS_ID,
     ART_EDGE_EXTENDED,
     ART_EDGE_FRAMED,
+    ART_EDGE_FRAMED_SKIP_REASON,
     ART_EDGE_MIXED,
+    ART_EDGE_MIXED_SKIP_REASON,
+    ART_EDGE_NO_EVIDENCE_SKIP_REASON,
+    ART_EDGE_NO_READING_SKIP_REASON,
     cast_art_edge_continuity_vote,
     classify_art_edge_continuity,
+    run_art_edge_continuity_cast,
 )
 from cardpicker.local_phash import ART_CROP_BOX
-from cardpicker.models import VotePolarity, VoteSource
-from cardpicker.tests.factories import CardFactory, TagFactory
+from cardpicker.models import CardScanLog, CardTagVote, VotePolarity, VoteSource
+from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory, TagFactory
 
 # width/height ratio 0.7143 - close enough to TRIM_ASPECT_RATIO (0.7159) to classify as
 # "trimmed" under the 0.03 tolerance, same fixture shape `test_local_fallback.py`'s own
@@ -232,3 +238,133 @@ class TestCastArtEdgeContinuityVote:
         seed_attribute_tags()
         assert Tag.objects.filter(name=local_art_edge.ART_EDGE_CONTINUITY_TAG_NAME).exists()
         assert local_art_edge.ART_EDGE_CONTINUITY_TAG_NAME in ATTRIBUTE_CHIP_TAG_NAMES
+
+
+def _evidence(card, **overrides):
+    """A CURRENT `ImageEvidence` row for `card`, matching `test_stage_e_dispatch._full_evidence`'s
+    own `content_hash=card.content_phash or 0` convention so `current_evidence_queryset` treats it
+    as current."""
+    defaults = dict(content_hash=card.content_phash or 0, extractor_versions={"art_edge": "art-edge-v1"})
+    defaults.update(overrides)
+    return ImageEvidenceFactory(card=card, **defaults)
+
+
+class TestRunArtEdgeContinuityCast:
+    def test_extended_reading_casts_a_vote(self, db):
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _evidence(card, art_edge_class=ART_EDGE_EXTENDED)
+
+        result = run_art_edge_continuity_cast(dry_run=False)
+
+        assert result.cards_considered == 1
+        assert result.votes_would_cast == 1
+        assert result.votes_written == 1
+        vote = CardTagVote.objects.get(card=card, anonymous_id=ART_EDGE_ANONYMOUS_ID)
+        assert vote.tag.name == local_art_edge.ART_EDGE_CONTINUITY_TAG_NAME
+
+    def test_dry_run_counts_without_writing(self, db):
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _evidence(card, art_edge_class=ART_EDGE_EXTENDED)
+
+        result = run_art_edge_continuity_cast(dry_run=True)
+
+        assert result.votes_would_cast == 1
+        assert result.votes_written == 0
+        assert CardTagVote.objects.count() == 0
+        assert CardScanLog.objects.count() == 0
+
+    def test_framed_reading_abstains_with_its_own_skip_reason(self, db):
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _evidence(card, art_edge_class=ART_EDGE_FRAMED)
+
+        result = run_art_edge_continuity_cast(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.skip_counts == {ART_EDGE_FRAMED_SKIP_REASON: 1}
+        scan_log = CardScanLog.objects.get(card=card, anonymous_id=ART_EDGE_ANONYMOUS_ID)
+        assert scan_log.skip_reason == ART_EDGE_FRAMED_SKIP_REASON
+
+    def test_mixed_reading_abstains_with_its_own_skip_reason(self, db):
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _evidence(card, art_edge_class=ART_EDGE_MIXED)
+
+        result = run_art_edge_continuity_cast(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.skip_counts == {ART_EDGE_MIXED_SKIP_REASON: 1}
+        scan_log = CardScanLog.objects.get(card=card, anonymous_id=ART_EDGE_ANONYMOUS_ID)
+        assert scan_log.skip_reason == ART_EDGE_MIXED_SKIP_REASON
+
+    def test_blank_reading_abstains_as_no_reading(self, db):
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _evidence(card, art_edge_class="")
+
+        result = run_art_edge_continuity_cast(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.skip_counts == {ART_EDGE_NO_READING_SKIP_REASON: 1}
+
+    def test_no_current_evidence_abstains_as_no_evidence(self, db):
+        seed_default_tags()
+        CardFactory(content_phash=1)  # no ImageEvidence row at all
+
+        result = run_art_edge_continuity_cast(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.skip_counts == {ART_EDGE_NO_EVIDENCE_SKIP_REASON: 1}
+        assert result.cards_considered == 0  # never reached a usable evidence row
+
+    def test_a_second_run_over_the_same_extended_card_casts_nothing_new(self, db):
+        """Idempotence - once this identity has voted a card, `_eligible_cards_queryset` excludes
+        it from every later invocation."""
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _evidence(card, art_edge_class=ART_EDGE_EXTENDED)
+
+        first = run_art_edge_continuity_cast(dry_run=False)
+        second = run_art_edge_continuity_cast(dry_run=False)
+
+        assert first.votes_written == 1
+        assert second.cards_considered == 0
+        assert second.votes_written == 0
+        assert CardTagVote.objects.filter(anonymous_id=ART_EDGE_ANONYMOUS_ID).count() == 1
+
+    def test_a_second_run_over_the_same_framed_card_does_not_rescan_it(self, db):
+        """`framed`/`mixed` are NOT rescannable skip reasons - a stored non-'extended' reading is
+        a permanent conclusion against this content_hash's current evidence."""
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _evidence(card, art_edge_class=ART_EDGE_FRAMED)
+
+        run_art_edge_continuity_cast(dry_run=False)
+        second = run_art_edge_continuity_cast(dry_run=False)
+
+        assert second.cards_considered == 0
+        assert CardScanLog.objects.filter(card=card, anonymous_id=ART_EDGE_ANONYMOUS_ID).count() == 1
+
+    def test_card_ids_scopes_both_the_outer_query_and_the_scan_log_subquery(self, db):
+        seed_default_tags()
+        in_scope = CardFactory(content_phash=1)
+        out_of_scope = CardFactory(content_phash=2)
+        _evidence(in_scope, art_edge_class=ART_EDGE_EXTENDED)
+        _evidence(out_of_scope, art_edge_class=ART_EDGE_EXTENDED)
+
+        result = run_art_edge_continuity_cast(dry_run=False, card_ids=[in_scope.pk])
+
+        assert result.votes_written == 1
+        assert CardTagVote.objects.filter(card=in_scope, anonymous_id=ART_EDGE_ANONYMOUS_ID).exists()
+        assert not CardTagVote.objects.filter(card=out_of_scope, anonymous_id=ART_EDGE_ANONYMOUS_ID).exists()
+
+    def test_unseeded_tag_raises(self, db):
+        """A MISSING TAG SEED must raise for a direct call - `stage_e_dispatch.
+        _run_evidence_only_calculators` is the caller that catches this and degrades gracefully;
+        this runner itself must not silently swallow it, same convention as
+        `run_bleed_calculator_cast`."""
+        CardFactory(content_phash=1)
+        with pytest.raises(RuntimeError):
+            run_art_edge_continuity_cast(dry_run=False)
