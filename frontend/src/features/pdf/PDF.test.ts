@@ -12,7 +12,6 @@ import {
   computePDFRenderPageCount,
   computePDFRenderWindow,
   createPDFElement,
-  dashSegmentLengthsMM,
   DEFAULT_CARD_SELECTION_MODE,
   PDFProps,
 } from "@/features/pdf/PDF";
@@ -22,7 +21,9 @@ import {
 // pass-through element factories that emit real DOM-ish tags in markup - renderToStaticMarkup
 // then lets the tests count how many <pdf-page> elements PDF/SCMPDF actually produce and demand
 // that count equal computePDFRenderPageCount. Same module-scope mock idea as the displayPdfProps
-// and pagination tests, but structural rather than null so rendering works.
+// and pagination tests, but structural rather than null so rendering works. Svg/Rect (the dashed
+// trim-outline cut guide) need the same pass-through treatment as View/Image - without a mock,
+// PDF.tsx's import of them from the real module would be undefined here.
 jest.mock("@react-pdf/renderer", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   return {
@@ -32,6 +33,9 @@ jest.mock("@react-pdf/renderer", () => {
       React.createElement("pdf-page", null, children),
     View: ({ children }: { children?: React.ReactNode }) =>
       React.createElement("pdf-view", null, children),
+    Svg: ({ children }: { children?: React.ReactNode }) =>
+      React.createElement("pdf-svg", null, children),
+    Rect: () => null,
     Image: () => null,
     StyleSheet: { create: (styles: unknown) => styles },
   };
@@ -54,8 +58,7 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   imageDPI: 600,
   jpgQuality: 100,
   cutLineColor: "#8ae234",
-  cutLineShape: "InsideOnly",
-  cutLinePlacement: "Inside",
+  showCrossCutLines: false,
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
@@ -240,23 +243,5 @@ describe("createPDFElement - the per-batch element pdf() consumes", () => {
     expect(element.props).toStrictEqual(
       expect.objectContaining({ pageRangeStart: undefined })
     );
-  });
-});
-
-describe("dashSegmentLengthsMM - Dashed cut-line shape's segment layout", () => {
-  it("fills the arm with equal-length segments spaced by the fixed segment+gap step", () => {
-    expect(dashSegmentLengthsMM(10)).toEqual([1.5, 1.5, 1.5, 1.5]);
-  });
-
-  it("clips the final segment to whatever length remains, rather than overshooting", () => {
-    expect(dashSegmentLengthsMM(6)).toEqual([1.5, 1.5, 1]);
-  });
-
-  it("an arm shorter than one segment is a single, shorter segment", () => {
-    expect(dashSegmentLengthsMM(1)).toEqual([1]);
-  });
-
-  it("a zero-length arm has no segments", () => {
-    expect(dashSegmentLengthsMM(0)).toEqual([]);
   });
 });

@@ -12,6 +12,13 @@ export const CardWidthMM = 63;
 export const CardHeightMM = 88;
 // 36 pixels (each side) at 300 dpi -> 0.12 inches, convert to MM. ref: https://www.makeplayingcards.com/pops/faq-photo.html
 export const BleedEdgeMM = Math.round(0.12 * 25.4 * 1000) / 1000;
+// Verified (2026-08-20, fix/print-cut-guides) against mtg.wiki's "Card" page
+// (https://mtg.wiki/page/Card), the same source already backing CardWidthMM/CardHeightMM above:
+// "They measure 63 mm x 88 mm ... The corners of the card are cut with a radius of 2.5 mm
+// (approx. 1/10")". Corroborated verbatim by the mtg.fandom.com mirror of the same page. Other
+// web sources round this to a generic "~3mm / 1/8-inch playing card" figure, but that's the
+// industry-generic poker-card convention, not Magic's own documented die spec - 2.5mm is the
+// correct, citable value and this constant was already set to it.
 export const CornerRadiusMM = 2.5;
 
 /**

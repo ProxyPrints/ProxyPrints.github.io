@@ -41,8 +41,9 @@
  * Everything else `PDF.tsx`'s own `PDFProps` interface exposes is now a real control, sourced
  * from either `DisplaySheetExportSettings` (the rail's own sheet state — page size including its
  * `Custom` option, bleed edge, guides) or `DisplayExportSettings` (the export affordance's own
- * settings step — card selection mode, page range, image DPI/JPG quality, cut-line colour/shape/
- * placement/length/thickness/offset, corner rounding, SCM mode and its six sub-settings, and the
+ * settings step — card selection mode, page range, image DPI/JPG quality, cut-line colour/length/
+ * thickness/offset, an opt-in crosshair-marks toggle, corner rounding, SCM mode and its six
+ * sub-settings, and the
  * per-side page-margin override described below).
  *
  * ## Margin-preset vs. per-side override
@@ -68,12 +69,7 @@ import {
 import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
 import { ManualOverride } from "@/features/pdf/bleedNormalize";
 import { getPageSizeMM, PageSize } from "@/features/pdf/pageSize";
-import type {
-  CardSelectionMode,
-  CutLinePlacement,
-  CutLineShape,
-  PDFProps,
-} from "@/features/pdf/PDF";
+import type { CardSelectionMode, PDFProps } from "@/features/pdf/PDF";
 import type {
   ScmPaperSize,
   ScmRegistration,
@@ -133,8 +129,9 @@ export interface DisplayExportSettings {
    * this field is the editor's equivalent. */
   drawPageCutLines: boolean;
   cutLineColor: string;
-  cutLineShape: keyof typeof CutLineShape;
-  cutLinePlacement: keyof typeof CutLinePlacement;
+  /** Optional crosshair corner marks alongside the default dashed trim outline - see
+   * PDFProps.showCrossCutLines' own comment. Default off (DisplayExportPDF.tsx). */
+  showCrossCutLines: boolean;
   cutLineLengthMM: number;
   cutLineThicknessMM: number;
   cutLineOffsetMM: number;
@@ -188,8 +185,7 @@ export const buildDisplayPDFProps = (
   );
   return {
     cardSelectionMode: exportSettings.cardSelectionMode,
-    cutLinePlacement: exportSettings.cutLinePlacement,
-    cutLineShape: exportSettings.cutLineShape,
+    showCrossCutLines: exportSettings.showCrossCutLines,
     pageSize: "CUSTOM",
     pageWidth: portraitSize.height,
     pageHeight: portraitSize.width,
