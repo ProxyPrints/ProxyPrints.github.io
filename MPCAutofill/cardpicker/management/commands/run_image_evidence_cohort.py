@@ -503,7 +503,16 @@ class _FetchOutcome:
     `Card.name` this fetch step already loaded, carried back so `_run_cohort` can resolve the
     card's `card_artist_names` narrowing tuple in the PARENT process (one shared
     `CandidateNameIndex`) rather than in each compute worker (seven of them). Empty string for
-    every terminal outcome that never reaches the compute stage."""
+    every terminal outcome that never reaches the compute stage.
+
+    `stale_extractor_keys`/`stored_evidence_fields` (2026-08-19, perf/per-extractor-reextraction):
+    read here on the fetch thread (a plain DB read, not itself fetch-bound work) from this card's
+    own `current_evidence_queryset` row, if one exists, and carried across so the compute stage
+    can carry forward every non-stale extractor's already-stored values rather than recomputing
+    them - see `image_evidence.compute_card_evidence`'s own docstring for the mechanism. `None`/
+    `None` (a card with no current row yet - e.g. its content_hash just changed, or this is its
+    first-ever pass) means "nothing to carry forward," which `compute_card_evidence` already
+    treats as "every key is stale" via its own `stored_extractor_versions` absence check."""
 
     card_id: int
     content_hash: Optional[int] = None
@@ -513,6 +522,42 @@ class _FetchOutcome:
     fetch_latency_ms: float = 0.0
     outcome: Optional[str] = None
     card_name: str = ""
+    stale_extractor_keys: Optional[frozenset[str]] = None
+    stored_evidence_fields: Optional[dict[str, Any]] = None
+    stored_extractor_versions: Optional[dict[str, Any]] = None
+
+
+def _stale_extractor_keys_and_stored_fields(
+    card: Card,
+) -> "tuple[Optional[frozenset[str]], Optional[dict[str, Any]], Optional[dict[str, Any]]]":
+    """PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction): reads this
+    card's own CURRENT `ImageEvidence` row (`image_evidence.current_evidence_queryset` - the same
+    content_hash+md5 currency rule every other reader of stored evidence uses, imported not
+    reimplemented), diffs its `extractor_versions` against `MANIFEST_EXTRACTOR_CURRENT_VERSIONS`,
+    and returns `(stale_keys, stored_fields, stored_extractor_versions)` for
+    `compute_card_evidence`'s own carry-forward parameters. `(None, None, None)` when there is no
+    current row yet (first-ever pass, or the card's content_hash just changed) -
+    `compute_card_evidence` already treats an absent `stored_extractor_versions` as "every key is
+    stale," so this is the correct "nothing to carry forward" signal, not a special case here.
+
+    Runs on the FETCH thread (a plain DB read, not network I/O, but this function already shares
+    the fetch stage's own thread pool and DB connection - no new connection, no new thread)."""
+    from cardpicker.image_evidence import (
+        EXTRACTOR_OWNED_FIELDS,
+        current_evidence_queryset,
+    )
+
+    owned_field_names = [name for names in EXTRACTOR_OWNED_FIELDS.values() for name in names]
+    row = current_evidence_queryset(card).values("extractor_versions", *owned_field_names).first()
+    if row is None:
+        return None, None, None
+    stored_extractor_versions: dict[str, str] = row.pop("extractor_versions") or {}
+    stale_keys = frozenset(
+        key
+        for key, current_version in MANIFEST_EXTRACTOR_CURRENT_VERSIONS.items()
+        if stored_extractor_versions.get(key) != current_version
+    )
+    return stale_keys, row, stored_extractor_versions
 
 
 def _fetch_one_card(
@@ -562,6 +607,10 @@ def _fetch_one_card(
     from cardpicker.harvest_fetch_limiter import DestinationThrottledError
     from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
 
+    stale_extractor_keys, stored_evidence_fields, stored_extractor_versions = _stale_extractor_keys_and_stored_fields(
+        card
+    )
+
     fetch_started_at = time.monotonic()
     try:
         image_bytes = fetch_card_image_bytes(card, dpi=DEFAULT_FETCH_DPI)
@@ -586,6 +635,9 @@ def _fetch_one_card(
             fetch_latency_ms=(time.monotonic() - fetch_started_at) * 1000,
             outcome=None,
             card_name=card.name,
+            stale_extractor_keys=stale_extractor_keys,
+            stored_evidence_fields=stored_evidence_fields,
+            stored_extractor_versions=stored_extractor_versions,
         )
     except GoogleFetchLockoutError:
         stop_event.set()
@@ -605,6 +657,9 @@ def _fetch_one_card(
         fetch_latency_ms=fetch_latency_ms,
         outcome=None,
         card_name=card.name,
+        stale_extractor_keys=stale_extractor_keys,
+        stored_evidence_fields=stored_evidence_fields,
+        stored_extractor_versions=stored_extractor_versions,
     )
 
 
@@ -621,6 +676,9 @@ def _compute_one_card(
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
     card_artist_names: tuple[str, ...] = (),
+    stale_extractor_keys: Optional[frozenset[str]] = None,
+    stored_evidence_fields: Optional[dict[str, Any]] = None,
+    stored_extractor_versions: Optional[dict[str, Any]] = None,
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Module-level (picklable) compute-only work unit for the process pool - takes plain,
     already-fetched data (never a `Card`/`Image` instance re-fetched or re-decoded elsewhere), and
@@ -665,6 +723,14 @@ def _compute_one_card(
     list stays picklable exactly as `compute_card_evidence`'s own docstring requires. `()` (the
     default) means "don't narrow", byte-identical to the pre-2026-07-29 behaviour.
 
+    `stale_extractor_keys`/`stored_evidence_fields`/`stored_extractor_versions` (2026-08-19,
+    perf/per-extractor-reextraction): resolved on the fetch thread by
+    `_stale_extractor_keys_and_stored_fields` and forwarded straight through to
+    `compute_card_evidence`'s own parameters of the same names - see that function's own docstring
+    for the carry-forward mechanism this drives. All three `None` (a card with no current stored
+    row) means "nothing to carry forward," which `compute_card_evidence` already resolves to
+    "every extractor is stale," i.e. today's full-recompute behaviour.
+
     THE OTHER ARTIST INPUTS ARE PROCESS STATE, NOT ARGUMENTS. `artist_lexicon`,
     `printing_artist_lookup`, and (2026-08-04) `modern_artist_lexicon` are read off
     `_WORKER_ARTIST_LEXICON`/`_WORKER_PRINTING_ARTIST_LOOKUP`/`_WORKER_MODERN_ARTIST_LEXICON`,
@@ -700,6 +766,9 @@ def _compute_one_card(
         modern_artist_lexicon=_WORKER_MODERN_ARTIST_LEXICON,
         md5_checksum=md5_checksum,
         sha256_checksum=sha256_checksum,
+        stale_extractor_keys=stale_extractor_keys,
+        stored_evidence_fields=stored_evidence_fields,
+        stored_extractor_versions=stored_extractor_versions,
     )
     if not dry_run:
         persist_evidence(result, run_id=run_id)
@@ -966,6 +1035,9 @@ def _run_cohort(
                     fetch_result.md5_checksum,
                     fetch_result.sha256_checksum,
                     card_artist_names,
+                    fetch_result.stale_extractor_keys,
+                    fetch_result.stored_evidence_fields,
+                    fetch_result.stored_extractor_versions,
                 )
                 pending[compute_future] = fetch_result.card_id
             _submit_more_fetch()

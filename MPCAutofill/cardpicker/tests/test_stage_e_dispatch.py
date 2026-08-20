@@ -203,6 +203,9 @@ def _stub_compute_card_evidence_ok(**field_overrides: Any):
         modern_artist_lexicon=None,
         md5_checksum=None,
         sha256_checksum=None,
+        stale_extractor_keys=None,
+        stored_evidence_fields=None,
+        stored_extractor_versions=None,
     ):
         fields = {
             "fetch_ok": True,
@@ -989,6 +992,9 @@ class TestForceStageCReextract:
             modern_artist_lexicon=None,
             md5_checksum=None,
             sha256_checksum=None,
+            stale_extractor_keys=None,
+            stored_evidence_fields=None,
+            stored_extractor_versions=None,
         ):
             observed_short_circuit.append(short_circuit)
             return _stub_compute_card_evidence_ok()(
@@ -2230,6 +2236,9 @@ class TestDecoupledFetchAhead:
             modern_artist_lexicon: Any = None,
             md5_checksum: Any = None,
             sha256_checksum: Any = None,
+            stale_extractor_keys: Any = None,
+            stored_evidence_fields: Any = None,
+            stored_extractor_versions: Any = None,
         ) -> Any:
             compute_calls["n"] += 1
             if compute_calls["n"] == 3:
@@ -2349,6 +2358,9 @@ class TestPooledStageC:
             modern_artist_lexicon: Any = None,
             md5_checksum: Any = None,
             sha256_checksum: Any = None,
+            stale_extractor_keys: Any = None,
+            stored_evidence_fields: Any = None,
+            stored_extractor_versions: Any = None,
         ) -> Any:
             compute_calls["n"] += 1
             if compute_calls["n"] == 3:
