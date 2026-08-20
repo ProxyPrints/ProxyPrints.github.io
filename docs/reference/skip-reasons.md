@@ -330,6 +330,20 @@ disagree by more than 2mm rather than picking a side.
 | `method-disagreement` | `BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON` | Both methods produced a number and they disagree by more than the 2mm gate — routed to human review instead of a guess.                                                          | Live, no rows yet |
 | `not-trimmed`         | `BLEED_CALC_NOT_TRIMMED_SKIP_REASON`         | A bleed value WAS produced but this card's `bleed_class` is not `trimmed` — the ordinary ~97.5% case. Negative-only convention, same as `ambiguous` above on the sibling caster. | Live, no rows yet |
 
+## Filename-declaration caster — `MPCAutofill/cardpicker/local_filename_declarations.py`
+
+`anonymous_id` is `filename-declaration-cast-v1`
+(`FILENAME_DECLARATION_CAST_ANONYMOUS_ID`) — parses `Card.name` for
+uploader-declared treatments, `source=VoteSource.DEDUCTION`. No
+`ImageEvidence` dependency at all, so this is the only caster on this page
+with no `no-evidence`/`incomplete-evidence` pair: `Card.name` is present
+and immutable from ingest, so nothing here is rescannable.
+
+| Reason                      | Constant                                | Means                                                                                                                                                                                  | Status            |
+| --------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `no-declaration`            | `NO_DECLARATION_SKIP_REASON`            | No keyword matched anywhere in `Card.name`. A permanent conclusion, not a transient one — the name will not change.                                                                    | Live, no rows yet |
+| `border-axis-contradiction` | `BORDER_AXIS_CONTRADICTION_SKIP_REASON` | Two or more of Black/White/Silver Border/Borderless matched the same name — abstains on the whole axis rather than guessing. Any non-axis chip matched on the same card is still cast. | Live, no rows yet |
+
 ## Art-edge continuity caster — `MPCAutofill/cardpicker/local_art_edge.py`
 
 `anonymous_id` is `art-edge-continuity-v1` (`ART_EDGE_ANONYMOUS_ID`) — the

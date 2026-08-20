@@ -1216,6 +1216,22 @@ buckets:
   card is `trimmed`. Cannot go live until `local_pinline_inset`'s own
   branch merges and its extractor actually runs against production, so
   0 rows here is expected, not a coverage gap, until that lands.
+- **`filename-declaration-cast-v1`** (`local_filename_declarations`, NEW
+  2026-08-19, **0 rows — not yet merged**) — parses `Card.name` (the
+  uploader's own filename-derived title) for treatment keywords
+  (Extended/Showcase/Full Art/Etched/Old Border/Future Frame, plus the
+  Black/White/Silver Border/Borderless axis) and casts the matching
+  attribute-chip vote(s) at `source=VoteSource.DEDUCTION` — zero image
+  fetches, zero `ImageEvidence` dependency at all, unlike every other
+  caster on this list. Can cast several tags for the same card (Extended
+  and Borderless are not exclusive); the four border-colour tags abstain
+  as a group on a self-contradictory filename rather than casting all of
+  them. Measured read-only against production 2026-08-19, 235,912 cards:
+  20,629 distinct cards across 109 sources declare a treatment this way
+  (Extended 13,119 new, Showcase 1,170 new, Full Art 804 new, Old Border
+  366 new, Etched 230 new, Borderless 789 new, Future Frame 24 new) — the
+  Extended figure corroborated at 90.7% agreement against the independent
+  `ImageEvidence.art_edge_class` pixel classifier on the same population.
 
 Both `frame-style-cast-v1` and the now-retired `bleed-edge-cast-v1` were
 created because the 2026-07-29 composition audit found the only casters for
@@ -1229,17 +1245,20 @@ See `docs/features/printing-tags.md`, "Who actually casts the attribute chips".
 ### Wiring status — the streaming conveyor's `_run_stage_d` (2026-08-05, updated 2026-08-15)
 
 The question this section answers: for EVERY identity the roster tether
-derives from code (20 today, 2 of them not real vote-casting calculators —
+derives from code (21 today, 2 of them not real vote-casting calculators —
 `evidence-transfer-v1`/`question-feed-hypothetical-vote`, see
 `CALCULATOR_ROSTER_ALLOWLIST` in `.github/scripts/docs_lint.py` — leaving
-18 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
+19 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
 or the streaming conveyor's own `stage_e_dispatch._run_stage_d`) actually
 INVOKE it, verified by a real call site rather than a name match against
 this file? A prior claim in circulation held that a pass casts on "10 of
-roughly 28" channels — the derived roster is 18 real identities, not ~28,
-and as of this update **12 of 18** are invoked by a real call site (up from
-7 before the 2026-08-05 pass, then 11 before the 2026-08-19 art-edge-vote
-wiring below), 5 are deliberately unwired with a stated reason, and 1
+roughly 28" channels — the derived roster is 19 real identities, not ~28,
+and as of this update **13 of 19** are invoked by a real call site (up from
+7 before the 2026-08-05 pass, then 11 before two 2026-08-19 changes landed
+together: the art-edge vote wiring moved `art-edge-continuity-v1` from the
+unwired set into the wired one, and `filename-declaration-cast-v1` joined
+`_run_attribute_chip_casters` as a nineteenth identity, wired from the
+start). 5 are deliberately unwired with a stated reason, and 1
 (`bleed-edge-cast-v1`) is RETIRED — its wiring slot was taken over by
 `bleed-calculator-cast-v1`, which joins the wired set below.
 
@@ -1254,9 +1273,13 @@ vote-count table. **`bleed-edge-cast-v1` was replaced by
 `bleed-calculator-cast-v1` in the 2026-08-15 replacement pass** — the
 retired identity is no longer invoked by `_run_attribute_chip_casters`
 (now wiring `layout-class-cast-v1`/`frame-style-cast-v1`/
-`bleed-calculator-cast-v1`), so the wired count stays at 11: the calculator
+`bleed-calculator-cast-v1`), so the wired count stayed at 11: the calculator
 took the old identity's slot rather than adding a second channel onto
-`appropriate-bleed`.
+`appropriate-bleed`. **`filename-declaration-cast-v1` joined the same
+`_run_attribute_chip_casters` try/except on 2026-08-19**, taking the wired
+count to 12 — it needs no `ImageEvidence` at all, so it shares the group's
+missing-tag-seed `RuntimeError` handling rather than the group's evidence
+gating.
 
 **Newly wired by this pass (4)** — `ai-art-detector-v1`,
 `lands-artist-decomp-v1`, `residual-classify-v1`, `art-hash-artist-v1`, via

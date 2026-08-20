@@ -164,6 +164,12 @@ EXPECTED_SKIP_REASONS = {
     "no-reading": {"ART_EDGE_NO_READING_SKIP_REASON"},
     "framed": {"ART_EDGE_FRAMED_SKIP_REASON"},
     "mixed": {"ART_EDGE_MIXED_SKIP_REASON"},
+    # Filename-declaration caster — local_filename_declarations.py
+    # (filename-declaration-cast-v1, 2026-08-19). Two values new to the roster: no keyword
+    # matched at all, and the border-colour axis contradiction abstention. Appended after the
+    # art-edge entries, same positional-stability reasoning as every entry above.
+    "no-declaration": {"NO_DECLARATION_SKIP_REASON"},
+    "border-axis-contradiction": {"BORDER_AXIS_CONTRADICTION_SKIP_REASON"},
 }
 
 # The same regex `.github/scripts/docs_lint.py`'s roster tether uses. Kept as a
