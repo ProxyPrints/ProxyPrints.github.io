@@ -2473,6 +2473,76 @@ by an earlier run and merely skipped in this one.
 - `--json` — machine-readable output for a wrapper script.
 - `--no-gate` — report without failing the exit code.
 
+## Per-extractor re-extraction (2026-08-19)
+
+Both Stage C compute engines — `run_image_evidence_cohort.py`'s decoupled
+fetch/compute pool and `stage_e_dispatch._run_stage_c` — used to treat a
+card's re-extraction as all-or-nothing: `image_evidence.compute_card_evidence`
+had no notion of "only some of this row's extractors are stale," so bumping
+any single extractor's version (`MANIFEST_EXTRACTOR_CURRENT_VERSIONS`) forced
+every one of the other twelve to recompute too, including the 6-attempt OCR
+escalation ladder that dominates per-card compute time.
+
+`compute_card_evidence` now accepts three additional, purely-additive
+parameters — `stale_extractor_keys`, `stored_evidence_fields`,
+`stored_extractor_versions` — all `None` by default, which reproduces the
+old full-recompute behaviour byte-for-byte. When a caller passes a
+`frozenset` of stale keys plus the card's current stored row, every
+extractor NOT in that set is **carried forward**: its already-persisted
+field values are copied into this pass's result and its stored version tag
+is kept, without running that extractor's own compute at all. A key absent
+from `stored_extractor_versions` (a row that has never run that extractor)
+is always treated as stale, regardless of `stale_extractor_keys` membership —
+there is nothing to carry forward from.
+
+Both engines resolve `stale_extractor_keys`/`stored_evidence_fields` on the
+FETCH thread, from the card's own `current_evidence_queryset` row (the same
+content*hash+md5 currency rule every other stored-evidence reader uses), and
+carry them across to the compute stage alongside the fetched image bytes —
+see `run_image_evidence_cohort._stale_extractor_keys_and_stored_fields` (the
+single source of truth `stage_e_dispatch.\_stage_c_stale_extractor_keys_and*
+stored*fields`lazily imports rather than reimplements).`force_stage_c*
+reextract`(issue #465) is unaffected:`\_run_stage_c`passes`None` for all
+three whenever it's set, forcing a full recompute exactly as before this
+mechanism existed.
+
+**Dependency ordering, not a dependency graph.** Extractors read each
+other's outputs through the `fields` dict they all write to (`art_edge`
+reads `crop_coordinates`' own `art_crop_px`, `artbox_phash` reads the OCR
+group's `collector_line_collector_number`/`illus_anchor_fired`). The
+carry-forward pass populates `fields` with every non-stale extractor's
+stored values BEFORE any extractor block runs, in the same file order the
+extractors already execute in — so a stale extractor reading a non-stale
+dependency's value from `fields` gets the correct (carried-forward) value
+automatically, with no explicit dependency graph to maintain.
+
+**One exception: the OCR group is one staleness unit.**
+`collector_line_ocr`/`artist_ocr`/`collector_line_tsv` share a single
+tesseract escalation loop and cannot be split — `artist_ocr`'s own
+reuse-before-recompute pass needs every attempt's raw text from that loop,
+not the single stored winning text a carry-forward could offer instead. If
+ANY of the three is stale, the whole group reruns (recomputing the other
+two too, even if their own version didn't change — a bounded, accepted
+redundancy given they're already coupled by construction).
+
+**Measured, not guessed** (2026-08-19, read-only production query): 235,865
+`ImageEvidence` rows exist, 235,848 of them fully current against today's
+13-key manifest. Under the OLD all-or-nothing resume filter, bumping any
+ONE extractor's version (e.g. `art_edge`) would force a full re-extraction
+of all 235,848 rows — 235,848 × 13 = 3,066,024 extractor-computations.
+Under this PR's per-extractor carry-forward, the same pass runs exactly
+235,848 extractor-computations (the one stale extractor per row), skipping
+2,830,176 — a 92.3% reduction in extractor-computations for a single-
+extractor version bump.
+
+**Known limitation, not fixed here.** A carried-forward extractor does not
+run this pass, so it correctly writes no `CardScanLog` row under this run's
+`run_id`. `image_evidence.build_reconciliation_report(run_id=...)` infers
+"voted" from "ran AND no matching run-scoped skip row," so a card whose
+carried-forward value was actually a skip from an earlier run misreports as
+"voted" for a run that only ever carried it forward. The whole-catalogue
+(not run-scoped) report is unaffected.
+
 ## See also
 
 - [`docs/proposals/stage-e-streaming.md`](../proposals/stage-e-streaming.md)

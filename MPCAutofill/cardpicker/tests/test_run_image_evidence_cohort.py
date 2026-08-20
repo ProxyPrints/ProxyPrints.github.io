@@ -130,6 +130,9 @@ def _stub_compute_ok(
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
     card_artist_names: tuple[str, ...] = (),
+    stale_extractor_keys: Optional[frozenset] = None,
+    stored_evidence_fields: Optional[dict] = None,
+    stored_extractor_versions: Optional[dict] = None,
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Replaces the real compute-stage step - no PIL decode, no extractors, no persist_evidence
     call, just the (card_id, outcome, profile, short_circuited) tuple `_run_cohort` consumes.
@@ -521,6 +524,9 @@ class TestPilotRunLedger:
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
             card_artist_names: tuple[str, ...] = (),
+            stale_extractor_keys: Optional[frozenset] = None,
+            stored_evidence_fields: Optional[dict] = None,
+            stored_extractor_versions: Optional[dict] = None,
         ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             return card_id, "ok", None, True
 
@@ -723,6 +729,51 @@ class TestFetchOneCard:
         assert result.card_name == card.name
 
     @pytest.mark.django_db
+    def test_no_stored_row_means_nothing_to_carry_forward(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """perf/per-extractor-reextraction: a card with no CURRENT ImageEvidence row yet (first
+        pass, or its content_hash just changed) carries `(None, None, None)` through - the
+        "recompute everything" signal `compute_card_evidence` already resolves to."""
+        card = CardFactory(content_phash=42)
+        stop_event = threading.Event()
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", lambda card, dpi=None: b"raw-bytes")
+
+        result = cohort_command._fetch_one_card(card_id=card.pk, stop_event=stop_event)
+
+        assert result.stale_extractor_keys is None
+        assert result.stored_evidence_fields is None
+        assert result.stored_extractor_versions is None
+
+    @pytest.mark.django_db
+    def test_stored_row_with_one_stale_extractor_carries_the_rest_forward(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """perf/per-extractor-reextraction, the main deliverable: a card whose stored row is
+        current everywhere except one extractor's version yields exactly that one key in
+        `stale_extractor_keys`, and the full stored row (versions + owned fields) for
+        `compute_card_evidence` to carry the rest forward from."""
+        card = CardFactory(content_phash=42)
+        versions = dict(cohort_command.MANIFEST_EXTRACTOR_CURRENT_VERSIONS)
+        versions["art_edge"] = "art-edge-v0-stale"
+        ImageEvidenceFactory(
+            card=card, content_hash=42, extractor_versions=versions, symbol_phash=999, art_edge_class="framed"
+        )
+        stop_event = threading.Event()
+
+        import cardpicker.image_cdn_fetch as image_cdn_fetch_module
+
+        monkeypatch.setattr(image_cdn_fetch_module, "fetch_card_image_bytes", lambda card, dpi=None: b"raw-bytes")
+
+        result = cohort_command._fetch_one_card(card_id=card.pk, stop_event=stop_event)
+
+        assert result.stale_extractor_keys == frozenset({"art_edge"})
+        assert result.stored_evidence_fields["symbol_phash"] == 999
+        assert result.stored_evidence_fields["art_edge_class"] == "framed"
+        assert result.stored_extractor_versions == versions
+
+    @pytest.mark.django_db
     def test_md5_sibling_transfers_without_ever_fetching(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sibling = CardFactory(md5_checksum="abc123", content_phash=111)
         target = CardFactory(md5_checksum="abc123", content_phash=111)
@@ -843,6 +894,9 @@ class TestComputeOneCard:
             modern_artist_lexicon: Any = None,
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
+            stale_extractor_keys: Optional[frozenset] = None,
+            stored_evidence_fields: Optional[dict] = None,
+            stored_extractor_versions: Optional[dict] = None,
         ) -> Any:
             captured["card_id"] = card_id
             captured["content_hash"] = content_hash
@@ -891,6 +945,9 @@ class TestComputeOneCard:
             modern_artist_lexicon: Any = None,
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
+            stale_extractor_keys: Optional[frozenset] = None,
+            stored_evidence_fields: Optional[dict] = None,
+            stored_extractor_versions: Optional[dict] = None,
         ) -> Any:
             captured["image"] = image
 
@@ -959,6 +1016,9 @@ class TestComputeOneCard:
             modern_artist_lexicon: Any = None,
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
+            stale_extractor_keys: Optional[frozenset] = None,
+            stored_evidence_fields: Optional[dict] = None,
+            stored_extractor_versions: Optional[dict] = None,
         ) -> Any:
             if profile is not None:
                 profile["fetch_ms"] = fetch_latency_ms
@@ -1069,6 +1129,9 @@ class TestRunCohortProfileOutput:
             md5_checksum: Optional[str] = None,
             sha256_checksum: Optional[str] = None,
             card_artist_names: tuple[str, ...] = (),
+            stale_extractor_keys: Optional[frozenset] = None,
+            stored_evidence_fields: Optional[dict] = None,
+            stored_extractor_versions: Optional[dict] = None,
         ) -> tuple[int, str, Optional[dict[str, float]], bool]:
             profile_dict = {"fetch_ms": fetch_latency_ms, "wall_ms": 1.0} if profile else None
             return card_id, "ok", profile_dict, False
@@ -2083,9 +2146,11 @@ class TestRunCohortArtistWiring:
         assert len(compute_pools) == 1
         assert compute_pools[0]["initargs"] == (lexicon, None)
 
-        # `card_artist_names` is the last positional argument of every submission, resolved from
-        # that card's own name in the parent process.
-        assert sorted(args[-1] for args in submitted) == [("artist-for-card-11",), ("artist-for-card-22",)]
+        # `card_artist_names` is submission index 11 (2026-08-19: three more trailing positional
+        # arguments - stale_extractor_keys/stored_evidence_fields/stored_extractor_versions -
+        # follow it now, so it's no longer the LAST one), resolved from that card's own name in
+        # the parent process.
+        assert sorted(args[11] for args in submitted) == [("artist-for-card-11",), ("artist-for-card-22",)]
 
     @pytest.mark.django_db
     def test_no_name_lookup_passes_an_empty_narrowing_tuple(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2113,4 +2178,5 @@ class TestRunCohortArtistWiring:
             stdout_write=lambda _msg: None,
         )
 
-        assert [args[-1] for args in submitted] == [()]
+        # index 11 - see the sibling test above for why this is no longer args[-1].
+        assert [args[11] for args in submitted] == [()]
