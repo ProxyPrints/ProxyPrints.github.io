@@ -1244,12 +1244,39 @@ const RightRailOffcanvas = styled(Offcanvas)`
       width: ${RIGHT_RAIL_WIDTH};
       max-width: ${RIGHT_RAIL_WIDTH};
       flex: 0 0 ${RIGHT_RAIL_WIDTH};
+      /* Bootstrap's own inline-tier CSS (.offcanvas-xl at this same breakpoint) never sets
+         display on the rail itself at this tier - only the DRAWER tier's .offcanvas-xl rule
+         (max-width: 1199.98px) does. Without it, .offcanvas-body's flex-grow: 1 below has no
+         flex container to grow inside, so it silently falls back to its own natural (unbounded)
+         content height regardless of this box's own height/overflow - confirmed via a live
+         getComputedStyle dump (bodyDisplay: flex, bodyFlexGrow: 1, but bodyHeight: 955px against
+         a 454px-tall parent) while chasing the Save/Export-still-invisible-at-a-short-viewport
+         regression this whole rule exists to fix. */
+      display: flex;
+      flex-direction: column;
       position: sticky;
-      top: 0;
-      max-height: 100vh;
-      overflow-y: auto;
+      /* Pin-the-footer fix - this was max-height: 100vh; overflow-y: auto, which let the whole
+         rail (Save/Export's FinishFooter included) scroll as one block instead of the "body
+         scrolls, footer doesn't" the JSX's own comment already describes below. A max-height
+         only CAPS the box; it never gives it a definite size, so the flex-column body's own
+         flex-grow: 1 (below) had nothing real to grow into. Using height (not max-height) fixes
+         that - and Bootstrap's own inline-tier reset (.offcanvas-xl .offcanvas-body at this same
+         breakpoint) sets flex-grow: 0 and overflow-y: visible, which this rule's own
+         .offcanvas-body override below has to reinstate for the fix to actually take effect.
+         top/height both subtract the measured toolbar height (--display-toolbar-height, set
+         below from toolbarHeightPx) rather than a flat 0/100vh - see that state's own comment
+         for why: without it, the rail's un-stuck initial position still runs past a short
+         viewport until the user scrolls the toolbar away. */
+      top: var(--display-toolbar-height, 0px);
+      height: calc(100vh - var(--display-toolbar-height, 0px));
+      overflow: hidden;
       border-left: var(--bs-border-width) solid
         var(--bs-border-color-translucent);
+
+      .offcanvas-body {
+        flex-grow: 1;
+        overflow: hidden;
+      }
     }
   }
 `;
@@ -1291,6 +1318,36 @@ const ActionBarSearchGroup = styled.div`
   @media (max-width: 767.98px) {
     flex-basis: 100%;
     order: 9;
+  }
+`;
+
+// Right-rail density pass - Search Settings moves off the rail (far from what it configures)
+// onto a cog attached to the right edge of the search box itself, merging the input's and the
+// cog's borders (rounded corners on the outer edges only) so it reads as one unit, distinct from
+// the Add/Browse toggle and Import ▾ dropdown either side of it. Standing ruling: the cog opens
+// SearchSettings's own Modal (an overlay, per react-bootstrap - portaled, never reflows), never
+// an inline-expanding panel.
+const SearchBoxWithCog = styled.div`
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+
+  form {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .form-control {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  > button {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    margin-left: -1px;
+    flex-shrink: 0;
   }
 `;
 
@@ -2319,6 +2376,37 @@ export function DisplayPage() {
     return () => observer.disconnect();
   }, [sheetRegionNode]);
 
+  // Pin-the-footer fix's own missing half: `position: sticky; top: 0; height: 100vh` alone still
+  // overflows a short viewport at the page's initial (unscrolled) scroll position, since the
+  // toolbar above DisplayBodyRegion isn't itself sticky - the right rail's un-stuck static
+  // position starts BELOW the toolbar's own height, so a flat 100vh box still runs past the
+  // viewport bottom until the user scrolls the toolbar out of view. Measuring the toolbar's real
+  // rendered height (it wraps/grows - InvalidIdentifiersStatus's own conditional row, phone's
+  // full-width search bar row - so it's never a safe constant) and feeding it into the rail's own
+  // `top`/`height` CSS as a custom property (RightRailOffcanvas below) means the rail's bottom
+  // edge lands exactly at the viewport's own bottom on FIRST paint, not only once scrolled -
+  // mirrors sheetRenderWidthPx's own lazy-ref ResizeObserver pattern immediately above.
+  const [toolbarHeightPx, setToolbarHeightPx] = useState<number>(0);
+  const [toolbarNode, setToolbarNode] = useState<HTMLDivElement | null>(null);
+  const toolbarRef = useCallback((element: HTMLDivElement | null) => {
+    setToolbarNode(element);
+  }, []);
+
+  useEffect(() => {
+    if (toolbarNode == null || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver((entries) => {
+      const measuredHeightPx = entries[0]?.contentRect.height;
+      if (measuredHeightPx == null || measuredHeightPx < 0) {
+        return;
+      }
+      setToolbarHeightPx(Math.round(measuredHeightPx));
+    });
+    observer.observe(toolbarNode);
+    return () => observer.disconnect();
+  }, [toolbarNode]);
+
   // Matches PagePreview's own internal scale-to-fit math exactly (scale = maxWidthPx /
   // pageWidthMM-in-px, height = pageHeightMM-in-px * scale - the px-per-mm factor cancels out),
   // so this estimate is exact, not approximate - RenderIfVisible's defaultHeight/visibleOffset
@@ -2753,6 +2841,7 @@ export function DisplayPage() {
           comment for why ImportText itself stays unaware of Browse mode), and the existing
           Import.tsx dropdown (D15 - Text/XML/CSV/URL, verbatim, unforked). */}
       <div
+        ref={toolbarRef}
         className="d-flex align-items-center flex-wrap gap-2 px-3 py-2 border-bottom"
         data-testid="display-toolbar"
       >
@@ -2797,27 +2886,37 @@ export function DisplayPage() {
             </ToggleButton>
           </ToggleButtonGroup>
 
-          {isBrowseMode ? (
-            // Browse mode: the same shared searchBarText state, bound to a plain controlled
-            // input rather than ImportText - CatalogBrowseResults (mounted in the center region
-            // below) debounces off this value itself, there is no submit step here at all.
-            <Form.Control
-              size="sm"
-              type="text"
-              placeholder="Search the catalog… (e.g. Lightning Bolt)"
-              value={searchBarText}
-              onChange={(event) => setSearchBarText(event.target.value)}
-              aria-label="catalog-browse-search"
-              data-testid="display-browse-search-input"
-            />
-          ) : (
-            <ImportText
-              variant="inline"
-              textValue={searchBarText}
-              onTextChange={setSearchBarText}
-              onImportComplete={() => setSearchBarText("")}
-            />
-          )}
+          <SearchBoxWithCog>
+            {isBrowseMode ? (
+              // Browse mode: the same shared searchBarText state, bound to a plain controlled
+              // input rather than ImportText - CatalogBrowseResults (mounted in the center region
+              // below) debounces off this value itself, there is no submit step here at all.
+              <Form.Control
+                size="sm"
+                type="text"
+                placeholder="Search the catalog… (e.g. Lightning Bolt)"
+                value={searchBarText}
+                onChange={(event) => setSearchBarText(event.target.value)}
+                aria-label="catalog-browse-search"
+                data-testid="display-browse-search-input"
+              />
+            ) : (
+              <ImportText
+                variant="inline"
+                textValue={searchBarText}
+                onTextChange={setSearchBarText}
+                onImportComplete={() => setSearchBarText("")}
+              />
+            )}
+
+            {/* Issue #239 (design doc §5's SearchSettings row) - the same self-contained
+                trigger-plus-modal ProjectEditor.tsx already mounts (same Modal, same
+                searchSettingsSlice read/write, same setLocalStorageSearchSettings persistence
+                path), attached here as its compact `"icon"` trigger instead of the rail's old
+                full-width button - the control that changes searching now lives on the control
+                that searches. */}
+            <SearchSettings variant="icon" />
+          </SearchBoxWithCog>
 
           {/* Design doc ADDENDUM D15 (= §6 T4, restated) - the existing Import.tsx dropdown
               (Text/XML/CSV/URL *Button modal variants), mounted verbatim: no new importer UI,
@@ -3128,6 +3227,7 @@ export function DisplayPage() {
           style={
             {
               "--bs-offcanvas-width": "min(92vw, 320px)",
+              "--display-toolbar-height": `${toolbarHeightPx}px`,
             } as React.CSSProperties
           }
           data-testid="display-print-settings-rail"
@@ -3374,17 +3474,6 @@ export function DisplayPage() {
                     The old single trigger button (CardbackToolbarButton) is retired with this
                     round. */}
                 <CardbackRailControl />
-              </div>
-
-              <div>
-                {/* Issue #239 (design doc §5's SearchSettings row) - the same self-contained
-                    trigger-button-plus-modal ProjectEditor.tsx already mounts, relocated here
-                    unmodified: same Modal, same searchSettingsSlice read/write, same
-                    setLocalStorageSearchSettings persistence path. No section heading (see the
-                    Cardback div above) - the button's own label already reads "Search Settings",
-                    and test-utils.ts's shared openSearchSettingsModal helper uses a plain
-                    getByText(/Search Settings/) that a duplicate heading would make ambiguous. */}
-                <SearchSettings />
               </div>
             </div>
 

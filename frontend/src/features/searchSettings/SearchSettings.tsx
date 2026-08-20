@@ -3,7 +3,9 @@
  *   a) Select precise or fuzzy (forgiving) search type
  *   b) Configure the allowable range for DPI and maximum file size
  *   c) Re-order the Sources to search and choose which Sources are active.
- * A button is exposed in the right-hand panel of the main GUI to show this modal.
+ * The classic editor's right-hand panel shows the default full-width `"button"` trigger; the
+ * unified display page's search box mounts the compact `"icon"` variant instead (see
+ * `SearchSettingsProps` below) - either way opens the same Modal.
  */
 
 import React, { useCallback, useState } from "react";
@@ -19,7 +21,7 @@ import {
   useAppDispatch,
   useAppSelector,
 } from "@/common/types";
-import { RightPaddedIcon } from "@/components/icon";
+import { Icon, RightPaddedIcon } from "@/components/icon";
 import { useCountSearchSettingsVaryingFromDefault } from "@/features/searchSettings/comparison";
 import { FilterSettings as FilterSettingsElement } from "@/features/searchSettings/FilterSettings";
 import { SearchTypeSettings as SearchTypeSettingsElement } from "@/features/searchSettings/SearchTypeSettings";
@@ -32,7 +34,25 @@ import {
   setSourceSettings,
 } from "@/store/slices/searchSettingsSlice";
 
-export function SearchSettings() {
+export interface SearchSettingsProps {
+  /**
+   * Right-rail density pass - the display page attaches this trigger directly to its search
+   * box (a settings cog on the control that changes searching, not a full-width button buried
+   * in the rail) rather than mounting the default block-level `"button"` variant. The Modal
+   * below - the actual overlay this whole component exists to open - is byte-for-byte identical
+   * either way; only the trigger markup differs, so ProjectEditor's own unmodified `<SearchSettings />`
+   * call (the default) is untouched by this addition.
+   */
+  variant?: "button" | "icon";
+  /** Merged onto the icon variant's trigger button - lets a caller visually attach it to an
+   * adjacent control (see DisplayPage.tsx's `SearchBoxWithCog`). No effect on `"button"`. */
+  className?: string;
+}
+
+export function SearchSettings({
+  variant = "button",
+  className,
+}: SearchSettingsProps = {}) {
   const dispatch = useAppDispatch();
   const [show, setShow] = useState<boolean>(false);
   const remoteBackendConfigured = useAppSelector(selectRemoteBackendConfigured);
@@ -76,20 +96,48 @@ export function SearchSettings() {
     handleClose();
   };
 
-  return (
-    <div className="d-grid gap-0">
-      <Button variant="primary" onClick={handleShow}>
-        <RightPaddedIcon bootstrapIconName="gear" />
-        Search Settings
+  const trigger =
+    variant === "icon" ? (
+      <Button
+        variant="outline-light"
+        size="sm"
+        onClick={handleShow}
+        aria-label="Search Settings"
+        title="Search Settings"
+        className={["position-relative", className].filter(Boolean).join(" ")}
+        data-testid="display-search-settings-cog"
+      >
+        <Icon bootstrapIconName="gear" />
         {countSearchSettingsVaryingFromDefault !== 0 && (
-          <>
-            {" "}
-            <Badge bg="success" pill>
-              {countSearchSettingsVaryingFromDefault}
-            </Badge>
-          </>
+          <Badge
+            bg="success"
+            pill
+            className="position-absolute top-0 start-100 translate-middle"
+          >
+            {countSearchSettingsVaryingFromDefault}
+          </Badge>
         )}
       </Button>
+    ) : (
+      <div className="d-grid gap-0">
+        <Button variant="primary" onClick={handleShow}>
+          <RightPaddedIcon bootstrapIconName="gear" />
+          Search Settings
+          {countSearchSettingsVaryingFromDefault !== 0 && (
+            <>
+              {" "}
+              <Badge bg="success" pill>
+                {countSearchSettingsVaryingFromDefault}
+              </Badge>
+            </>
+          )}
+        </Button>
+      </div>
+    );
+
+  return (
+    <>
+      {trigger}
 
       <Modal
         scrollable
@@ -129,6 +177,6 @@ export function SearchSettings() {
           </Button>
         </Modal.Footer>
       </Modal>
-    </div>
+    </>
   );
 }

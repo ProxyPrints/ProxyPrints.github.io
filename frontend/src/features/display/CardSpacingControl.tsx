@@ -118,8 +118,7 @@ export function CardSpacingControl({
         </Form.Group>
       </div>
       <div className="text-muted small">
-        Separate axes ease cutting — 0 horizontal butts columns for strip
-        cutting; a vertical gap suits die cutters.
+        0 horizontal for strip cutting; add vertical gap for die cutters.
       </div>
     </div>
   );

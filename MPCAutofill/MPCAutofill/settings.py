@@ -143,6 +143,14 @@ QUESTION_FEED_POOL_WARM_MINUTES_CONFIRM = env.int("QUESTION_FEED_POOL_WARM_MINUT
 QUESTION_FEED_POOL_WARM_MINUTES_CONTESTED = env.int("QUESTION_FEED_POOL_WARM_MINUTES_CONTESTED", default=60)
 QUESTION_FEED_POOL_WARM_MINUTES_COLD = env.int("QUESTION_FEED_POOL_WARM_MINUTES_COLD", default=240)
 
+# Cadence (minutes) for `warm_question_feed_remaining_estimate` (migration `0115_question_feed_
+# remaining_estimate_schedule.py`) - refreshes `question_feed.get_remaining_estimate`'s and
+# `printing_consensus.get_contested_card_ids`'s own 300s-TTL shared caches on a schedule, so a
+# live request never lands right after both expire and pays their ~9.2s uncached cost (measured
+# 2026-08-16 - see `question_feed.warm_feed_supply_cache`'s own docstring). Default 4: comfortable
+# margin under the 300s (5 minute) TTL both caches share, without warming needlessly often.
+QUESTION_FEED_REMAINING_ESTIMATE_WARM_MINUTES = env.int("QUESTION_FEED_REMAINING_ESTIMATE_WARM_MINUTES", default=4)
+
 # Max candidates materialised per lane per sub-kind (printing/artist/tag) at each warm - bounds
 # both the cache blob size and the read-time random-offset scan cost. A generous cap, not a
 # tuned-to-the-edge number - see cardpicker.question_feed_pools's own module docstring.

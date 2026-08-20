@@ -58,20 +58,31 @@ test.describe("SearchSettings visual tests", () => {
       - text: "/File size: Up to \\\\d+ MB/"
       - slider: /\\d+/
       - text: Languages
-      - button "Choose... ▼":
-        - list:
-          - listitem: Choose...
-        - text: ""
+      - group "Languages":
+        - checkbox "English"
+        - text: English
+        - checkbox "French"
+        - text: French
       - text: Tags which cards must have at least one of
       - button "Choose... ▼":
         - list:
           - listitem: Choose...
-        - text: ""
+        - text: /.*/
       - text: Tags which cards must not have
       - button "Choose... ▼":
         - list:
           - listitem: Choose...
-        - text: ""
+        - text: /.*/
+      - heading "Mature Content" [level=5]
+      - text: Cards the community has confirmed as NSFW are hidden from search by default. This switch drives the NSFW entry in the tag filter above — they're the same setting.
+      - button "Showing Mature Content Hiding Mature Content"
+      - heading "Universe Within" [level=5]
+      - text: Show only cards using original Magic art, hiding cards the community has tagged as borrowing art from an external, non-Magic property. This switch drives the External IP entry in the tag filter above — they're the same setting.
+      - button "Showing Original Magic Art Hiding External IP Art"
+      - heading "Community-Confirmed Printing Attributes" [level=5]
+      - text: These filters only affect cards with a printing the community has confirmed via voting. Cards without a confirmed printing are unknowns, not mismatches — they're never hidden by these filters.
+      - button "Full Art Only Include All Art"
+      - button "Borderless Only Include All Borders"
       - separator
       - heading "Contributors" [level=5]
       - text: Configure the contributors to include in the search results.

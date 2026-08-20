@@ -775,7 +775,12 @@ export const getErrorToast = async (page: Page) => {
 };
 
 export const openSearchSettingsModal = async (page: Page) => {
-  await page.getByText(/Search Settings/).click();
+  // A role/name locator (not the old plain getByText(/Search Settings/)) matches either
+  // SearchSettings.tsx trigger variant: the classic editor's full-width `"button"` (visible text
+  // "Search Settings" IS its accessible name) and the display page's compact `"icon"` cog
+  // (aria-label "Search Settings", no visible text at all) - see that component's own
+  // SearchSettingsProps comment for why the two variants share one Modal.
+  await page.getByRole("button", { name: /Search Settings/ }).click();
   await expect(
     page.getByTestId("search-settings").getByText("Search Settings")
   ).toBeVisible();
@@ -788,24 +793,14 @@ export const enableFuzzySearch = async (page: Page) => {
   await settingsModal.getByRole("button", { name: "Save Changes" }).click();
 };
 
-// SearchSettings parity port (2026-07-23, issue #272 wave 2). SearchSettings.tsx itself is
-// unchanged and unforked (DisplayPage.tsx's own comment: "relocated here unmodified") - it just
-// lives inside the right rail's Offcanvas (`display-print-settings-rail`) instead of the classic
-// toolbar. Below the `xl` breakpoint that Offcanvas starts closed, reachable only via the gear
-// button (`display-gear-button`, itself `d-xl-none` - hidden at `xl`+, where the rail is already
-// inline instead - playwright.config.ts's own `contextOptions.viewport` override doesn't actually
-// take effect, an unrelated pre-existing quirk: Playwright's real viewport for this whole suite is
-// devices["Desktop Chrome"]'s stock 1280x720, which IS above `xl`, so the gear button is normally
-// hidden and the rail already visible here - conditional click, same `isVisible()`-guard pattern
-// as `openAddCardsDropdown`, keeps this helper correct at either width). Once the rail is open,
-// openSearchSettingsModal's own `getByText(/Search Settings/)` trigger click still works verbatim
-// - no duplicate-heading ambiguity here either (see DisplayPage.tsx's own comment on that button).
+// Right-rail density pass - the cog moved out of the right rail's Offcanvas onto the search box
+// itself, in the always-visible toolbar (`display-toolbar`/`display-search-bar-group`), so unlike
+// `openDisplayCardbackGridSelector`/`ensureDisplayRightRailOpen` below it no longer needs the
+// gear-open guard at any viewport tier - it's reachable directly, same as the classic editor's
+// own trigger. Kept as its own named export (rather than inlining `openSearchSettingsModal`
+// everywhere) so existing callers (ChangeQueryModal.spec.ts, SearchSettings.visual.spec.ts) don't
+// need touching.
 export const openDisplaySearchSettingsModal = async (page: Page) => {
-  const rail = page.getByTestId("display-print-settings-rail");
-  if (!(await rail.isVisible())) {
-    await page.getByTestId("display-gear-button").click();
-    await expect(rail).toBeVisible();
-  }
   return openSearchSettingsModal(page);
 };
 

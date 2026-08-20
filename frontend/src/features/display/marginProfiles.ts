@@ -42,19 +42,16 @@ export const MARGIN_PROFILES: Record<
     label: "Borderless (0mm)",
     margins: { top: 0, bottom: 0, left: 0, right: 0 },
     description:
-      "No printer margin at all. Supported to Letter/Legal on the Epson ET-8500/8550 " +
-      "(spec sheet CPD-59931R2) - the only profile that fits the full 3.175mm MPC bleed " +
-      "alongside a 4x2 sheet.",
+      "No margin. Fits full 3.175mm bleed at 4×2 - Epson ET-8500/8550, borderless to " +
+      "Letter/Legal (CPD-59931R2).",
   },
   bordered: {
     key: "bordered",
     label: "Bordered (3mm)",
     margins: { top: 3, bottom: 3, left: 3, right: 3 },
     description:
-      "The ET-8500/8550's own minimum bordered-print margin, all four edges (User's Guide " +
-      "CPD-59879). Caps usable bleed below the 3.175mm MPC default - bleed beyond the cap is " +
-      "trimmed to fit (see the warning above for the exact crop and its cutting-tolerance " +
-      "trade-off).",
+      "ET-8500/8550's min. bordered margin, 3mm all sides (CPD-59879). Caps bleed below " +
+      "3.175mm - excess is cropped to fit.",
   },
   rearFeed: {
     key: "rearFeed",
@@ -65,10 +62,8 @@ export const MARGIN_PROFILES: Record<
     // to a physical left/right since that depends on which way the sheet is loaded.
     margins: { top: 3, bottom: 3, left: 3, right: 20 },
     description:
-      "The rear paper feed's 20mm unprintable zone (User's Guide CPD-59879) lands on the " +
-      "trailing SIDE edge in this page's landscape layout, not top/bottom. Leaves almost no " +
-      "room for bleed at a 4x2 sheet - #301: the trailing edge is trimmed to fit rather than " +
-      "dropping a column (see the warning above for the exact crop).",
+      "Rear feed's 20mm unprintable zone (CPD-59879) lands on the trailing SIDE edge here, " +
+      "not top/bottom. Little room for bleed at 4×2 - trailing edge crops to fit.",
   },
 };
 

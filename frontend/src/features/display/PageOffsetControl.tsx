@@ -73,9 +73,8 @@ export function PageOffsetControl({
         </Form.Group>
       </div>
       <div className="text-muted small">
-        Registration compensation for a printer whose feed lands content
-        off-centre - shifts the whole sheet, never changes how many cards fit or
-        how much bleed they get. Not limited to the page&apos;s own slack.
+        Nudges the whole sheet for printer registration - doesn&apos;t affect
+        fit or bleed.
       </div>
     </div>
   );

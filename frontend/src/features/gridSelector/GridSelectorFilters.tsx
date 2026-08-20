@@ -1,8 +1,9 @@
-import { Ref } from "react";
+import { Ref, useMemo } from "react";
 import Container from "react-bootstrap/Container";
 
 import { Printing } from "@/common/constants";
 import {
+  CardDocument,
   FilterSettings,
   SourceSettings,
   useAppDispatch,
@@ -16,6 +17,7 @@ import { ViewSettings } from "@/features/filters/ViewSettings";
 import { JumpToVersion } from "@/features/gridSelector/JumpToVersion";
 import { FilterSettings as FilterSettingsElement } from "@/features/searchSettings/FilterSettings";
 import { SourceSettings as SourceSettingsElement } from "@/features/searchSettings/SourceSettings";
+import { selectCardDocumentsByIdentifiers } from "@/store/slices/cardDocumentsSlice";
 import {
   selectFilterVisible,
   selectJumpToVersionVisible,
@@ -26,6 +28,27 @@ import {
   toggleSortVisible,
   toggleViewVisible,
 } from "@/store/slices/viewSettingsSlice";
+
+/**
+ * Languages actually present among the current candidate pool, derived the same way
+ * CanonicalCardFilter already derives its own available-printings/available-artists options -
+ * from the same pre-restriction `imageIdentifiers` this component receives, not from the
+ * post-filter result set (which would collapse to just the already-selected language(s) once
+ * one is picked, making it impossible to add a second language). Exported so it can be unit
+ * tested directly (CanonicalCardFilter.test.ts's `resolveSelectedPrintings` precedent) without
+ * pulling in Redux/RTK Query to render the whole filter tree.
+ */
+export function computePresentLanguages(
+  cardDocumentsByIdentifier: Record<string, CardDocument | undefined>
+): Array<string> {
+  const languages = new Set<string>();
+  Object.values(cardDocumentsByIdentifier).forEach((card) => {
+    if (card != null) {
+      languages.add(card.language);
+    }
+  });
+  return Array.from(languages);
+}
 
 interface GridSelectorFiltersProps {
   imageIdentifiers: Array<string>;
@@ -71,15 +94,20 @@ export const GridSelectorFilters = ({
   projectFilter,
   hiddenSections,
 }: GridSelectorFiltersProps) => {
-  // TODO:
-  // constrain languages according to gloabl search settings
-  // do the same for tags
+  // TODO: constrain tags the same way languages are constrained below.
   const dispatch = useAppDispatch();
   const jumpToVersionVisible = useAppSelector(selectJumpToVersionVisible);
   const viewVisible = useAppSelector(selectViewVisible);
   const sortVisible = useAppSelector(selectSortVisible);
   const filterVisible = useAppSelector(selectFilterVisible);
   const hidden = new Set(hiddenSections ?? []);
+  const cardDocumentsByIdentifier = useAppSelector((state) =>
+    selectCardDocumentsByIdentifiers(state, imageIdentifiers)
+  );
+  const presentLanguages = useMemo(
+    () => computePresentLanguages(cardDocumentsByIdentifier),
+    [cardDocumentsByIdentifier]
+  );
 
   return (
     <Container className="px-1">
@@ -150,7 +178,7 @@ export const GridSelectorFilters = ({
               // The rail's chip fieldset already covers these (SPEC-display-left-rail.md) -
               // the rail caller hides the stock duplicates; modal/browse callers keep them.
               showResolvedAttributeFilter={!hidden.has("filter-attributes")}
-              // allowedLanguages={allowedLanguages}
+              allowedLanguages={presentLanguages}
             />
             {!hidden.has("filter-sources") && (
               <SourceSettingsElement
