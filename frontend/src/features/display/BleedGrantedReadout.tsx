@@ -39,11 +39,10 @@ export function BleedGrantedReadout({
       className="text-muted small mt-1"
       data-testid="display-bleed-granted-readout"
     >
-      Requested {requestedBleedMM.toFixed(3)}mm bleed. This page actually grants{" "}
-      <strong>{horizontalMM.toFixed(3)}mm</strong> on the left/right edges
-      {horizontalCropped && " (cropped)"} and{" "}
+      Granted: <strong>{horizontalMM.toFixed(3)}mm</strong> left/right edges
+      {horizontalCropped && " (cropped)"} ·{" "}
       <strong>{verticalMM.toFixed(3)}mm</strong> top/bottom
-      {verticalCropped && " (cropped)"}.
+      {verticalCropped && " (cropped)"}
     </div>
   );
 }
