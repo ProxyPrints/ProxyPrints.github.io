@@ -85,6 +85,23 @@ PRINTING_TAG_IMPLICIT_WEIGHT = env.float("PRINTING_TAG_IMPLICIT_WEIGHT", default
 # ratified 2026-07-22 vote-weight scenario matrix, decision D5/S3). See
 # cardpicker.vote_consensus.resolve_weighted_consensus's own docstring for the full mechanism.
 PRINTING_TAG_IMPLICIT_CAP = env.float("PRINTING_TAG_IMPLICIT_CAP", default=1.0)
+# Hard ceiling on the SUM of machine-derived weight (VoteSource.DEDUCTION/OCR, each at
+# PRINTING_TAG_MACHINE_WEIGHT) counted per (card, tag, polarity) outcome group in
+# resolve_weighted_consensus - the same invariant PRINTING_TAG_IMPLICIT_CAP enforces for implicit
+# weight, applied to its sibling non-human-backed channel: no volume of machine votes on one side
+# may supply a whole group's quorum weight by itself. Default 1.5 = three independent machine
+# channels (0.5 each) still count in full - genuine corroboration from separate evidence sources
+# - while a fourth adds nothing, and a single human vote (weight 1.0) still carries that group on
+# to 2.5, comfortably past the default PRINTING_TAG_MIN_VOTES (2). Strictly below
+# PRINTING_TAG_MIN_VOTES by the same policy as the implicit cap - the assertion below fails
+# loudly if a future env override ever violates that margin. See
+# cardpicker.vote_consensus.resolve_weighted_consensus's own docstring for the full mechanism.
+PRINTING_TAG_MACHINE_CAP = env.float("PRINTING_TAG_MACHINE_CAP", default=1.5)
+assert PRINTING_TAG_MACHINE_CAP < PRINTING_TAG_MIN_VOTES, (
+    f"PRINTING_TAG_MACHINE_CAP ({PRINTING_TAG_MACHINE_CAP}) must be strictly below "
+    f"PRINTING_TAG_MIN_VOTES ({PRINTING_TAG_MIN_VOTES}) - a cap at or above quorum would let "
+    "machine votes alone resolve a card, which is exactly what this cap exists to prevent."
+)
 # Illustration-vote consensus thresholds (see cardpicker.illustration_consensus). Their own
 # settings, DEFAULTING TO THE PRINTING VALUES ABOVE - so this changes nothing anywhere today, and
 # the illustration bar can later be tuned without moving the printing bar with it. Whether an

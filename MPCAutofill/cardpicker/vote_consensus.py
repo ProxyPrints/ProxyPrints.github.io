@@ -15,6 +15,10 @@ from cardpicker.models import AbstractWeightedVote, VoteSource, calculator_famil
 _SOURCE_WEIGHTS: dict[str, float] = {
     VoteSource.USER: 1.0,
     VoteSource.ADMIN: settings.PRINTING_TAG_ADMIN_WEIGHT,
+    # Per-vote weight of a DEDUCTION/OCR vote. `resolve_weighted_consensus` additionally
+    # hard-caps the SUM of machine weight per (outcome, i.e. per polarity side) group at
+    # `PRINTING_TAG_MACHINE_CAP` - see that function's own docstring for why a per-vote weight
+    # alone isn't a strong enough guarantee (the same reasoning IMPLICIT's own cap below is for).
     VoteSource.DEDUCTION: settings.PRINTING_TAG_MACHINE_WEIGHT,
     VoteSource.OCR: settings.PRINTING_TAG_MACHINE_WEIGHT,
     VoteSource.FEDERATED: settings.VOTE_FEDERATED_WEIGHT,
@@ -440,6 +444,11 @@ def resolve_weighted_consensus(
     side can ever supply a whole group's quorum weight by itself (mirrors the human-backed gate's
     own "volume never wins" invariant, for a different failure mode).
 
+    MACHINE weight (DEDUCTION/OCR votes, each at `settings.PRINTING_TAG_MACHINE_WEIGHT`) is
+    capped the same way, per-outcome-group, at `settings.PRINTING_TAG_MACHINE_CAP` - the sibling
+    ceiling to the implicit one above, strictly below `min_weight` by the same policy, so enough
+    independent machine channels agreeing can never clear quorum unaided either.
+
     Two further mechanisms - both owner-ratified 2026-07-22 (see the vote-weight scenario matrix,
     `docs/upstreaming/license-provenance.md` §3's "reimplement from a written description, never
     from source" convention applies here too: this is an original design against that ratified
@@ -500,9 +509,14 @@ def resolve_weighted_consensus(
             group["has_privileged"] = True
 
     implicit_cap = settings.PRINTING_TAG_IMPLICIT_CAP
+    machine_cap = settings.PRINTING_TAG_MACHINE_CAP
 
     def full_weight(group: _VoteGroup) -> float:
-        return group["human_weight"] + group["machine_weight"] + min(group["implicit_weight_raw"], implicit_cap)
+        return (
+            group["human_weight"]
+            + min(group["machine_weight"], machine_cap)
+            + min(group["implicit_weight_raw"], implicit_cap)
+        )
 
     # D1: a live human-vs-human contest is >=2 groups each carrying human-backed weight - not
     # merely >=2 groups existing (a human group vs. a purely-machine/implicit one is NOT this).
