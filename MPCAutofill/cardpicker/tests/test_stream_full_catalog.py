@@ -180,6 +180,9 @@ def _install_ok_stage_c_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         modern_artist_lexicon: Any = None,
         md5_checksum: Any = None,
         sha256_checksum: Any = None,
+        stale_extractor_keys: Any = None,
+        stored_evidence_fields: Any = None,
+        stored_extractor_versions: Any = None,
     ) -> Any:
         return ExtractionResult(
             card_id=card_id,
