@@ -15,6 +15,7 @@ import { MatureContentFilter } from "../filters/MatureContentFilter";
 import { ResolvedAttributeFilter } from "../filters/ResolvedAttributeFilter";
 import { SizeFilter } from "../filters/SizeFilter";
 import { TagFilter } from "../filters/TagFilter";
+import { UniverseWithinFilter } from "../filters/UniverseWithinFilter";
 
 interface FilterSettingsProps {
   filterSettings: FilterSettingsType;
@@ -83,6 +84,11 @@ export function FilterSettings({
       />
       <br />
       <MatureContentFilter
+        filterSettings={filterSettings}
+        setFilterSettings={setFilterSettings}
+      />
+      <br />
+      <UniverseWithinFilter
         filterSettings={filterSettings}
         setFilterSettings={setFilterSettings}
       />
