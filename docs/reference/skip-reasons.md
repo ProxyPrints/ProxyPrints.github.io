@@ -330,6 +330,21 @@ disagree by more than 2mm rather than picking a side.
 | `method-disagreement` | `BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON` | Both methods produced a number and they disagree by more than the 2mm gate — routed to human review instead of a guess.                                                          | Live, no rows yet |
 | `not-trimmed`         | `BLEED_CALC_NOT_TRIMMED_SKIP_REASON`         | A bleed value WAS produced but this card's `bleed_class` is not `trimmed` — the ordinary ~97.5% case. Negative-only convention, same as `ambiguous` above on the sibling caster. | Live, no rows yet |
 
+## Art-edge continuity caster — `MPCAutofill/cardpicker/local_art_edge.py`
+
+`anonymous_id` is `art-edge-continuity-v1` (`ART_EDGE_ANONYMOUS_ID`) — the
+sole machine channel for the pre-existing "Extended" attribute chip. Reads
+`ImageEvidence.art_edge_class`, already populated at Stage C; casts nothing
+on `framed`/`mixed` (see `cast_art_edge_continuity_vote`'s own docstring for
+why an unvalidated class abstains rather than casting a negative).
+
+| Reason        | Constant                           | Means                                                                                                                                                           | Status                             |
+| ------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `no-evidence` | `ART_EDGE_NO_EVIDENCE_SKIP_REASON` | No current `ImageEvidence` row. **Rescannable**.                                                                                                                | Live, no rows yet                  |
+| `no-reading`  | `ART_EDGE_NO_READING_SKIP_REASON`  | `art_edge_class` is blank — the extractor hasn't produced a usable reading for this evidence yet, or `classify_art_edge_continuity` abstained. **Rescannable**. | Live, no rows yet                  |
+| `framed`      | `ART_EDGE_FRAMED_SKIP_REASON`      | A reading was stored, and it is `framed` — a real border survives beside the art.                                                                               | Live, no rows yet (~161k eligible) |
+| `mixed`       | `ART_EDGE_MIXED_SKIP_REASON`       | A reading was stored, and it is `mixed` — the test strip matched exactly one of the two references, the classifier's least-confident outcome.                   | Live, no rows yet (~37k eligible)  |
+
 ## Evidence transfer — `MPCAutofill/cardpicker/evidence_transfer.py`
 
 `anonymous_id` is `evidence-transfer-v1` (`EVIDENCE_TRANSFER_ANONYMOUS_ID`).

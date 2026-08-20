@@ -25,9 +25,12 @@ interface IllustrationQuestionProps {
   onRateLimited?: () => void;
 }
 
+// Plain `minmax(140px, 1fr)` lets a lone candidate's track absorb the entire grid width - with
+// no siblings to share the row, its aspect-ratio'd tile grows just as wide, rendering hugely
+// oversized. `min(220px, 100%)` caps the track's upper bound instead of leaving it unbounded.
 const IllustrationGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, min(220px, 100%)));
   gap: 12px;
   padding: 16px 0;
 `;

@@ -952,10 +952,13 @@ it as an incident.
 
 Caps the number of `dispatch_micro_batch` calls running CONCURRENTLY, across
 every django-q2 worker process on the box, to
-`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (default `5`, env-tunable —
-raised 2026-08-17 from 2: DPI-460 rendering raised the per-card OCR cost of
+`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (default `6`, env-tunable —
+raised 2026-08-17 from 2 to 5: DPI-460 rendering raised the per-card OCR cost of
 each dispatch, and at batch 250 the old 2/3-work settings throttled the
-rescan's throughput below what the 7-core ceiling allows). Motivated by the shakedown incident PR
+rescan's throughput below what the 7-core ceiling allows; raised again
+2026-08-19 from 5 to 6 on measurement that the pass was 67.3% compute-bound
+rather than fetch-bound, still one below the host-load hard ceiling of 7.0).
+Motivated by the shakedown incident PR
 #448 also fixed (the vote-collision half of the same run) — see
 `local_calculate_verdicts._split_new_printing_tag_votes`'s own docstring for
 the full incident numbers: eight concurrent dispatches, all running

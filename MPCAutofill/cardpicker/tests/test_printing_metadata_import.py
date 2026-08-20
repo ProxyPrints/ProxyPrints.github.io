@@ -324,6 +324,45 @@ class TestImportScryfallPrintingMetadata:
         assert metadata.frame_effects == ["showcase"]
         assert metadata.promo_types == ["foil"]
 
+    def test_color_identity_and_type_line_are_persisted(self, db, tmp_path):
+        canonical_card = CanonicalCardFactory()
+        record = _record(
+            id=str(canonical_card.identifier),
+            color_identity=["U", "B"],
+            type_line="Legendary Creature — Human Wizard",
+        )
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=canonical_card)
+        assert metadata.color_identity == ["U", "B"]
+        assert metadata.type_line == "Legendary Creature — Human Wizard"
+
+    def test_color_identity_and_type_line_default_cleanly_when_absent_from_record(self, db, tmp_path):
+        # `_record()`'s base dict never sets these two fields - every other test in this file
+        # exercises this path already; this test just makes the tolerance explicit.
+        canonical_card = CanonicalCardFactory()
+        record = _record(id=str(canonical_card.identifier))
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        import_scryfall_printing_metadata(default_cards_path=path)
+
+        metadata = CanonicalPrintingMetadata.objects.get(canonical_card=canonical_card)
+        assert metadata.color_identity == []
+        assert metadata.type_line == ""
+
+    def test_color_identity_change_alone_is_a_detected_diff(self, db, tmp_path):
+        canonical_card = CanonicalCardFactory()
+        _seed_row_matching_record(canonical_card)
+        record = _record(id=str(canonical_card.identifier), color_identity=["R"])
+        path = _write_bulk_data_file(tmp_path, [record])
+
+        stats = import_scryfall_printing_metadata(default_cards_path=path)
+
+        assert stats["updated"] == 1
+        assert CanonicalPrintingMetadata.objects.get(canonical_card=canonical_card).color_identity == ["R"]
+
 
 class TestGetBackFaceNames:
     """

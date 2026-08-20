@@ -65,14 +65,27 @@ read the fact off. That is what the local-fallback channel is for.
 import math
 import statistics
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Iterable, Optional
+
+from django.db.models import QuerySet
 
 from cardpicker.local_fallback import (
     _BORDER_SAMPLE_BANDS_MM,
     _sample_band,
     project_mm_box_to_fractions,
 )
-from cardpicker.models import Card, CardTagVote, Tag, VotePolarity, VoteSource
+from cardpicker.local_identify_printing_tags import generate_run_id
+from cardpicker.models import (
+    Card,
+    CardScanLog,
+    CardTagVote,
+    Tag,
+    VotePolarity,
+    VoteSource,
+)
+from cardpicker.tag_consensus import resolve_and_persist_tag_votes
+from cardpicker.vote_write import purge_and_write_votes
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -238,11 +251,22 @@ def cast_art_edge_continuity_vote(
     casting a negative "Extended" vote: a negative vote from an unvalidated class is a claim, not
     an abstention, and 'mixed' is by definition the class this classifier is least sure of.
 
-    NOT WIRED INTO ANY VOTE-CASTING RUNNER - deliberately, and this is the honest limit of this
-    PR (issue #830's own "do NOT add a vote in this change" scope note). The self-referential
-    classifier (issue #830 defect 3) is stored as `ImageEvidence.art_edge_class` evidence-only;
-    whether it should ever cast a vote is a separate decision this PR does not make, and depends
-    on that evidence existing first.
+    WIRED, via `run_art_edge_continuity_cast` below - called from `stage_e_dispatch.
+    _run_evidence_only_calculators` (the streaming conveyor) and the standalone
+    `local_art_edge_cast` management command. Issue #721's validation precondition was measured
+    against real catalog images (2026-08-19, read-only) before this vote was wired. Scryfall
+    printing `frame_effects`/`border_color` turned out not to be usable ground truth for it - a
+    printing match describes which artwork the image DEPICTS, not whether the uploader reproduced
+    that printing's frame treatment (see docs/pipeline-fidelity-gate.md's calculator roster and
+    the 2026-08-19 addendum to docs/reference/self-referential-reasoning.md for the full
+    measurement and the general lesson). Against ground truth that does describe the uploaded
+    image instead: human votes on the pre-existing "Extended" attribute chip give recall 87.0%
+    (20/23), false positives 0.0% (0/10), precision 100% (20/20), n=33 cards / 5 voters, 0
+    disputed; uploader-declared filenames corroborate at much larger n, 90.7% agreement over
+    n=13,117, holding per-source across every uploader with n>=15. That evidence is the basis for
+    wiring this vote; the remaining limit is sample size on the human-vote channel (n=33) - a
+    channel that grows on its own as people vote the existing chip, needing no new mechanism to
+    enlarge it.
     """
     if art_edge_class != ART_EDGE_EXTENDED:
         return None
@@ -260,6 +284,159 @@ def cast_art_edge_continuity_vote(
     )
 
 
+# THIS CASTER'S OWN SKIP VOCABULARY (docs/reference/skip-reasons.md's declaration convention).
+# Every string written to `CardScanLog.skip_reason` by `run_art_edge_continuity_cast` is one of
+# these module-level `ART_EDGE_*_SKIP_REASON` constants, own-prefixed the same way
+# `local_bleed_calculator.BLEED_CALC_*_SKIP_REASON` is - a shared bare "no-evidence" would
+# collide with every other calculator's own use of that word under a different `anonymous_id`.
+ART_EDGE_NO_EVIDENCE_SKIP_REASON = "no-evidence"  # no CURRENT ImageEvidence row for this card
+# `art_edge_class` is blank - `local_fallback`'s "same blank-string-as-sentinel convention...
+# for the ambiguous/not-yet-run case" applies here exactly as it does to layout_class/bleed_class
+# (models.py's own field comment): this covers BOTH "the art_edge extractor group has not run
+# against this evidence yet" and "it ran and `classify_art_edge_continuity` abstained" - the
+# stored column cannot distinguish the two, and neither needs a different vote outcome (both are
+# "nothing to vote from").
+ART_EDGE_NO_READING_SKIP_REASON = "no-reading"
+# A reading WAS stored, but it isn't 'extended' - see `cast_art_edge_continuity_vote`'s own
+# docstring for why 'framed'/'mixed' abstain rather than cast a negative. Split into two distinct
+# reasons (not one shared "not-extended") so a CardScanLog audit can tell which population is
+# which - 'framed' is ~4.4x the size of 'mixed' in production and behaves very differently
+# (0.0% measured false-positive rate vs. "by definition the class this classifier is least sure
+# of").
+ART_EDGE_FRAMED_SKIP_REASON = "framed"
+ART_EDGE_MIXED_SKIP_REASON = "mixed"
+
+# Same convention as `BLEED_CALC_RESCANNABLE_SKIP_REASONS`: describes a transient "nothing to
+# look at YET" state a later Stage C pass can change (no evidence row at all, or the art_edge
+# extractor hasn't produced a usable reading for this evidence yet). A stored 'framed'/'mixed'
+# reading is a permanent conclusion against this content_hash's current evidence and is not
+# rescannable until that evidence itself changes - which a fresh `current_evidence_queryset`
+# lookup already re-admits, since it re-reads live evidence every call rather than trusting the
+# scan-log row's own age.
+ART_EDGE_RESCANNABLE_SKIP_REASONS = frozenset({ART_EDGE_NO_EVIDENCE_SKIP_REASON, ART_EDGE_NO_READING_SKIP_REASON})
+
+
+@dataclass
+class ArtEdgeCastResult:
+    dry_run: bool = False
+    run_id: str = ""
+    cards_considered: int = 0
+    votes_would_cast: int = 0
+    votes_written: int = 0
+    skip_counts: dict[str, int] = field(default_factory=dict)
+
+
+def _eligible_cards_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
+    """Every card not already voted on by this caster's own identity, and not already carrying a
+    non-rescannable `CardScanLog` row from a prior invocation - the same
+    `BLEED_CALCULATOR_CAST_ANONYMOUS_ID`-shaped idempotence pattern
+    `local_bleed_calculator._eligible_cards_queryset` establishes, including its `card_ids`
+    push-down into BOTH the outer query and the `CardScanLog` subquery (issue #469/#533 - see
+    that function's own docstring for why the subquery push matters at 2M+ rows). Deliberately
+    unrestricted by `card_type`/`printing_tag_status` - frame treatment is orthogonal to printing
+    identification, same reasoning every sibling caster in this family gives for its own chip."""
+    non_rescannable_scanned_card_ids_qs = CardScanLog.objects.filter(anonymous_id=ART_EDGE_ANONYMOUS_ID).exclude(
+        skip_reason__in=ART_EDGE_RESCANNABLE_SKIP_REASONS
+    )
+    if card_ids is not None:
+        non_rescannable_scanned_card_ids_qs = non_rescannable_scanned_card_ids_qs.filter(card_id__in=card_ids)
+    non_rescannable_scanned_card_ids = non_rescannable_scanned_card_ids_qs.values_list("card_id", flat=True)
+    queryset = (
+        Card.objects.exclude(tag_votes__anonymous_id=ART_EDGE_ANONYMOUS_ID)
+        .exclude(pk__in=non_rescannable_scanned_card_ids)
+        .distinct()
+    )
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
+    return queryset
+
+
+def run_art_edge_continuity_cast(
+    run_id: Optional[str] = None,
+    dry_run: bool = True,
+    chunk_size: int = 500,
+    card_ids: Optional[Iterable[int]] = None,
+) -> ArtEdgeCastResult:
+    """Batch runner over every currently-eligible card with a CURRENT `ImageEvidence` row -
+    reads the already-persisted `art_edge_class` column and calls `cast_art_edge_continuity_vote`
+    on it; fetches no image, runs no OCR, calls no external API (the column is populated entirely
+    by Stage C's `image_evidence.extract_card_evidence`). `dry_run=True` (the default, matching
+    every other Stage 3+ command's own opt-in-to-write convention) computes and counts everything
+    without writing any `CardTagVote`/`CardScanLog` row.
+
+    `current_evidence_queryset` is imported inside this function rather than at module scope:
+    `image_evidence.py` itself imports `classify_art_edge_continuity` from this module at its own
+    top level, so a top-level import the other way would be a circular import between the two
+    modules - the same reason `stage_e_dispatch._run_evidence_only_calculators` imports its own
+    sibling calculators lazily, inside the function, rather than at the top of that file."""
+    from cardpicker.image_evidence import current_evidence_queryset
+
+    run_id = run_id or generate_run_id()
+    result = ArtEdgeCastResult(dry_run=dry_run, run_id=run_id)
+
+    tag = Tag.objects.filter(name=ART_EDGE_CONTINUITY_TAG_NAME).first()
+    if tag is None:
+        raise RuntimeError(
+            f"Tag '{ART_EDGE_CONTINUITY_TAG_NAME}' does not exist yet - run `seed_attribute_tags`/"
+            "`seed_default_tags` before this caster."
+        )
+
+    votes_batch: list[CardTagVote] = []
+    scan_log_batch: list[CardScanLog] = []
+
+    def _skip(card_id: int, reason: str) -> None:
+        result.skip_counts[reason] = result.skip_counts.get(reason, 0) + 1
+        if not dry_run:
+            scan_log_batch.append(
+                CardScanLog(card_id=card_id, anonymous_id=ART_EDGE_ANONYMOUS_ID, run_id=run_id, skip_reason=reason)
+            )
+
+    for card in _eligible_cards_queryset(card_ids=card_ids).iterator(chunk_size=chunk_size):
+        if card.content_phash is None:
+            continue  # no stable hash yet to key a CURRENT ImageEvidence lookup against
+
+        evidence = current_evidence_queryset(card).order_by("-updated_at").first()
+        if evidence is None:
+            _skip(card.pk, ART_EDGE_NO_EVIDENCE_SKIP_REASON)
+            continue
+
+        result.cards_considered += 1
+        art_edge_class = evidence.art_edge_class or None
+
+        if art_edge_class is None:
+            _skip(card.pk, ART_EDGE_NO_READING_SKIP_REASON)
+            continue
+        if art_edge_class == ART_EDGE_FRAMED:
+            _skip(card.pk, ART_EDGE_FRAMED_SKIP_REASON)
+            continue
+        if art_edge_class == ART_EDGE_MIXED:
+            _skip(card.pk, ART_EDGE_MIXED_SKIP_REASON)
+            continue
+
+        result.votes_would_cast += 1
+        if not dry_run:
+            vote = cast_art_edge_continuity_vote(card, art_edge_class, run_id=run_id)
+            assert vote is not None  # art_edge_class == ART_EDGE_EXTENDED, already checked above
+            votes_batch.append(vote)
+
+    if not dry_run:
+        purge_and_write_votes(
+            CardTagVote,
+            votes_batch,
+            anonymous_id=ART_EDGE_ANONYMOUS_ID,
+            target_field="card_id",
+            ignore_conflicts=True,
+        )
+        CardScanLog.objects.bulk_create(scan_log_batch)
+        result.votes_written = len(votes_batch)
+
+        touched_card_ids = [vote.card_id for vote in votes_batch]
+        for touched_card in Card.objects.filter(pk__in=touched_card_ids):
+            resolve_and_persist_tag_votes(touched_card)
+
+    return result
+
+
 __all__ = [
     "ART_EDGE_ANONYMOUS_ID",
     "ART_EDGE_CONTINUITY_TAG_NAME",
@@ -268,6 +445,13 @@ __all__ = [
     "ART_EDGE_EXTENDED",
     "ART_EDGE_MIXED",
     "ART_EDGE_CLASSES",
+    "ART_EDGE_NO_EVIDENCE_SKIP_REASON",
+    "ART_EDGE_NO_READING_SKIP_REASON",
+    "ART_EDGE_FRAMED_SKIP_REASON",
+    "ART_EDGE_MIXED_SKIP_REASON",
+    "ART_EDGE_RESCANNABLE_SKIP_REASONS",
+    "ArtEdgeCastResult",
     "classify_art_edge_continuity",
     "cast_art_edge_continuity_vote",
+    "run_art_edge_continuity_cast",
 ]
