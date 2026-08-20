@@ -43,6 +43,7 @@ from cardpicker.question_feed import (
     _likely_resolve_item,
     _likely_resolve_printing_card,
     _scryfall_illustration_url,
+    _tag_review_card_ids_by_status,
     _tier_1_confirm_suggestion,
     _tier_4_fresh,
     _voter_answered_printing_card_ids,
@@ -415,6 +416,17 @@ class TestGetContestedCardIdsCaching:
         second = get_contested_card_ids()
         assert 999999999 not in second  # the cache serves a fresh copy, unaffected
 
+    def test_force_refresh_skips_the_cache_read_but_still_writes(self, db):
+        """2026-08-20 fix: `force_refresh=True` must bypass a still-valid cache entry (the
+        normal case `warm_feed_supply_cache` hits on its cadence) and recompute, then WRITE the
+        fresh value so a subsequent default call reads it rather than a stale hit."""
+        with patch("cardpicker.printing_consensus.contested_queryset", wraps=contested_queryset) as mock_compute:
+            get_contested_card_ids()  # seed a valid cache entry
+            get_contested_card_ids(force_refresh=True)
+            assert mock_compute.call_count == 2  # force_refresh bypassed the still-valid entry
+            get_contested_card_ids()
+            assert mock_compute.call_count == 2  # the force_refresh call's write landed
+
 
 class TestPhaseCNotOfficialArtRouting:
     """
@@ -729,6 +741,17 @@ class TestGetRemainingEstimateCaching:
             get_remaining_estimate()
             assert resolve.call_count == 2
 
+    def test_force_refresh_skips_the_cache_read_but_still_writes(self, db):
+        """2026-08-20 fix: `force_refresh=True` must bypass a still-valid cache entry (the
+        normal case `warm_feed_supply_cache` hits on its cadence) and recompute, then WRITE the
+        fresh value so a subsequent default call reads it rather than a stale hit."""
+        with patch("cardpicker.question_feed.get_contested_card_ids", return_value=[1, 2, 3]) as resolve:
+            get_remaining_estimate()  # seed a valid cache entry
+            get_remaining_estimate(force_refresh=True)
+            assert resolve.call_count == 2  # force_refresh bypassed the still-valid entry
+            get_remaining_estimate()
+            assert resolve.call_count == 2  # the force_refresh call's write landed
+
 
 class TestWarmFeedSupplyCache:
     """`warm_feed_supply_cache` - the scheduled warm behind `warm_question_feed_remaining_
@@ -763,6 +786,37 @@ class TestWarmFeedSupplyCache:
         cached = get_remaining_estimate()
         assert returned == cached
         assert returned.total >= 1
+
+    def test_warm_recomputes_and_overwrites_a_still_valid_contested_ids_entry(self, db):
+        # 2026-08-20 production fix: the normal case on a warm cadence shorter than the 300s
+        # TTL is that the entry is STILL VALID when the warm runs. Asserts the underlying
+        # compute actually ran, not merely that the return value looks right.
+        get_contested_card_ids()
+        with patch("cardpicker.printing_consensus.contested_queryset", wraps=contested_queryset) as mock_compute:
+            warm_feed_supply_cache()
+            assert mock_compute.call_count == 1
+
+    def test_warm_recomputes_and_overwrites_a_still_valid_remaining_estimate_entry(self, db):
+        contested = get_contested_card_ids()
+        get_remaining_estimate(contested)
+        with patch(
+            "cardpicker.question_feed._tag_review_card_ids_by_status", wraps=_tag_review_card_ids_by_status
+        ) as tag_review:
+            warm_feed_supply_cache()
+            assert tag_review.call_count == 1
+
+    def test_warm_resets_the_ttl_by_writing_both_keys_even_when_entries_are_still_valid(self, db):
+        contested = get_contested_card_ids()
+        get_remaining_estimate(contested)
+        with patch.object(caches["shared"], "set", wraps=caches["shared"].set) as mock_set:
+            warm_feed_supply_cache()
+            assert mock_set.call_count == 2
+
+    def test_a_normal_request_after_a_warm_still_reads_through_without_recomputing(self, db):
+        warm_feed_supply_cache()
+        with patch("cardpicker.printing_consensus.contested_queryset", wraps=contested_queryset) as mock_compute:
+            get_contested_card_ids()
+            assert mock_compute.call_count == 0
 
 
 class TestGetQuestionFeedView:

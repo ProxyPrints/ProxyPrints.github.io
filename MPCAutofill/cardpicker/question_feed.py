@@ -1524,7 +1524,9 @@ def _remaining_estimate_shared_cache() -> Optional[Any]:
         return None
 
 
-def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> QuestionFeedCounts:
+def get_remaining_estimate(
+    contested_card_ids: Optional[list[int]] = None, *, force_refresh: bool = False
+) -> QuestionFeedCounts:
     """
     "Still need help with" counts for the feed header - NOT per-voter (doesn't account for
     own-vote exclusion, which is comparatively cheap to skip here since this is advisory copy,
@@ -1578,10 +1580,18 @@ def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> Qu
     within that TTL - so the digest key stops churning with every vote change and the ~9.2s
     cold body is paid at most once per contested-ids TTL, aligned with the `None`-key path's own
     once-per-300s cadence. Cache miss -> compute -> store, exactly as before otherwise.
+
+    `force_refresh` (2026-08-20, `warm_feed_supply_cache`'s own fix): skips the cache READ
+    so a scheduled warm always recomputes, but still performs the cache WRITE below - a
+    warm that lands while the entry is still valid (the normal case on a warm cadence
+    shorter than the TTL) must still reset the TTL, or the entry keeps expiring 300s after
+    its original write regardless of how often the warm runs. Defaults `False` so every
+    other caller - above all `views.get_question_feed`'s request path - keeps reading the
+    cache exactly as before; only the warm ever passes `True`.
     """
     shared_cache = _remaining_estimate_shared_cache()
     cache_key = _remaining_estimate_cache_key(contested_card_ids)
-    cached = shared_cache.get(cache_key) if shared_cache is not None else None
+    cached = shared_cache.get(cache_key) if shared_cache is not None and not force_refresh else None
     if cached is not None:
         return cached
 
@@ -1645,14 +1655,27 @@ def warm_feed_supply_cache() -> QuestionFeedCounts:
     on a cadence shorter than the 300s TTL (`settings.QUESTION_FEED_REMAINING_ESTIMATE_WARM_
     MINUTES`) keeps both entries from ever lapsing under real traffic gaps.
 
+    Passes force_refresh=True to both calls (2026-08-20 fix): on the normal cadence - a warm
+    interval shorter than the 300s TTL - both entries are still valid when the warm runs, so
+    without force_refresh each call would hit the read-through cache, return the cached value,
+    and write nothing - the entry's expiry stays pinned to its original write and still lapses
+    300s later regardless of how often this runs, so a visitor eventually pays the uncached cost
+    anyway (measured live 2026-08-20: a warm at T+108s returned in 0.23s and wrote nothing; the
+    entry, written at T+0, still expired at T+300s as if the warm had never happened). Forcing
+    the recompute makes every warm actually recompute-and-overwrite, resetting the TTL each time,
+    so the entry can never lapse between warms - see this module's own docstring's "Idempotent
+    and safe to re-run" line, which already asserted this and is now what the code does. Only
+    this warm ever passes force_refresh=True; every other caller (above all views.
+    get_question_feed's request path) keeps reading through the cache exactly as before.
+
     Threads the SAME resolved `contested_card_ids` list into `get_remaining_estimate` that
     `views.get_question_feed` itself threads into it (see that view's own comment on why it
     resolves this once and passes it to both calls) - the digest-keyed cache entry this warm
     writes is therefore the exact key a subsequent live request will read, not a different,
     unreachable one (see `_remaining_estimate_cache_key`'s own docstring for why the key is a
     digest of the list's content rather than a stable constant)."""
-    contested_card_ids = get_contested_card_ids()
-    return get_remaining_estimate(contested_card_ids)
+    contested_card_ids = get_contested_card_ids(force_refresh=True)
+    return get_remaining_estimate(contested_card_ids, force_refresh=True)
 
 
 __all__ = [

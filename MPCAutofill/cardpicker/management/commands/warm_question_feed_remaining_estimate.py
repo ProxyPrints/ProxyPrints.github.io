@@ -15,8 +15,14 @@ happens to land after the gap. Running this command on a cadence shorter than th
 5 minutes) means a scheduled warm always refreshes the entry before it lapses, so that ~9.2s is
 paid on a clock instead of by a visitor.
 
-Idempotent and safe to re-run: `warm_feed_supply_cache` only ever recomputes-and-overwrites,
-same convention as `warm_catalog_stats`/`warm_question_feed_pools`.
+Idempotent and safe to re-run: `warm_feed_supply_cache` passes `force_refresh=True` into both
+`get_contested_card_ids` and `get_remaining_estimate` (2026-08-20), so it only ever
+recomputes-and-overwrites regardless of whether either entry is still valid when the warm
+runs - same convention as `warm_catalog_stats`/`warm_question_feed_pools`. Without this, a warm
+landing on the normal cadence (shorter than the 300s TTL, the common case) would hit the
+read-through cache, return the cached value, and write nothing, leaving the entry's expiry
+pinned to its original write - see `warm_feed_supply_cache`'s own docstring for the production
+measurement that caught this.
 
 On any failure this command exits non-zero and writes nothing new - `warm_feed_supply_cache`
 resolves both values before either `.set()` call it depends on runs, so a failure partway through
