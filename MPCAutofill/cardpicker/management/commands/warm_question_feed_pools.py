@@ -21,11 +21,14 @@ Writes a NAMED `"shared"` cache, not Django's `default` (issue #538/#543) - and 
 isn't configured, same split as `warm_catalog_stats`/`warm_artist_external_links`.
 """
 
+import logging
 from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
-from cardpicker.question_feed_pools import LANES, warm_pool_cache
+from cardpicker.question_feed_pools import LANES, warm_pool_cache, warm_pool_images
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -46,4 +49,21 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f"Question-feed pool warm run failed for lane {lane!r}, cache left untouched: {e}")
 
-        self.stdout.write(self.style.SUCCESS(f"Question-feed pool warmed: lane={lane!r}, {count} candidates."))
+        # Second, separate step (see warm_pool_images's own docstring for why it isn't folded
+        # into warm_pool_cache above): re-images this lane's freshly-cached pool through the
+        # image CDN Worker's small tier, so the R2 bucket entry a voter's next draw would need
+        # is already populated. Best-effort, unlike the pool warm above: the pool cache write
+        # already succeeded by this point and is the part that matters for correctness (a voter
+        # can still be served correctly from an unwarmed image, just slower) - an image-warm
+        # failure is logged, not raised, so it never masks or reverts the pool warm's own success.
+        try:
+            images_warmed = warm_pool_images(lane)
+        except Exception:
+            logger.exception("Question-feed pool image warm failed for lane %r (pool warm itself succeeded)", lane)
+            images_warmed = 0
+
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Question-feed pool warmed: lane={lane!r}, {count} candidates, {images_warmed} images warmed."
+            )
+        )

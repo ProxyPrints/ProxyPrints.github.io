@@ -1634,9 +1634,31 @@ def get_remaining_estimate(contested_card_ids: Optional[list[int]] = None) -> Qu
     return counts
 
 
+def warm_feed_supply_cache() -> QuestionFeedCounts:
+    """Refreshes the two 300s-TTL "shared"-cache entries `views.get_question_feed` reads on
+    every request (`printing_consensus.get_contested_card_ids`'s own cache, then this module's
+    own `get_remaining_estimate` cache) - the body of the `warm_question_feed_remaining_estimate`
+    management command. Both are compute-on-miss caches with the TTL as their only invalidation
+    (see each function's own docstring): whichever request happens to land after either entry
+    has expired pays the uncached cost - measured 2026-08-16 at ~9.2s for `get_remaining_
+    estimate` alone - instead of a scheduled warm paying it off the request path. Calling this
+    on a cadence shorter than the 300s TTL (`settings.QUESTION_FEED_REMAINING_ESTIMATE_WARM_
+    MINUTES`) keeps both entries from ever lapsing under real traffic gaps.
+
+    Threads the SAME resolved `contested_card_ids` list into `get_remaining_estimate` that
+    `views.get_question_feed` itself threads into it (see that view's own comment on why it
+    resolves this once and passes it to both calls) - the digest-keyed cache entry this warm
+    writes is therefore the exact key a subsequent live request will read, not a different,
+    unreachable one (see `_remaining_estimate_cache_key`'s own docstring for why the key is a
+    digest of the list's content rather than a stable constant)."""
+    contested_card_ids = get_contested_card_ids()
+    return get_remaining_estimate(contested_card_ids)
+
+
 __all__ = [
     "get_next_question_feed_item",
     "get_remaining_estimate",
     "is_likely_resolve_printing",
+    "warm_feed_supply_cache",
     "QUICK_NEGATIVE_SKIP_REASONS",
 ]

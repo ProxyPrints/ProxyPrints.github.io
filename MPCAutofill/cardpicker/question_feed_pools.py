@@ -115,6 +115,7 @@ ever builds a pool; a heavy voter, a cold cache, or a not-yet-scheduled environm
 
 from __future__ import annotations
 
+import logging
 import random
 from typing import Any, Iterator, NamedTuple, Optional
 
@@ -123,6 +124,13 @@ from django.core.cache import InvalidCacheBackendError, caches
 from django.db.models import Case, Count, IntegerField, Max, Min, Value, When
 
 from cardpicker.artist_consensus import get_contested_artist_card_ids
+from cardpicker.harvest_fetch_limiter import (
+    GOOGLE_IMAGE,
+    DestinationThrottledError,
+    GoogleFetchLockoutError,
+    rate_limited_get,
+)
+from cardpicker.image_cdn_fetch import get_worker_small_image_url
 from cardpicker.models import (
     ArtistVoteStatus,
     Card,
@@ -135,6 +143,8 @@ from cardpicker.models import (
 )
 from cardpicker.printing_consensus import get_contested_card_ids
 from cardpicker.tag_consensus import get_tag_review_queue_pairs
+
+logger = logging.getLogger(__name__)
 
 # The named cache alias this feature reads/writes - deliberately NOT `default` (per-process
 # LocMemCache, see `MPCAutofill/settings.py`'s own "WHICH CACHE DO I USE?" section). The warm
@@ -678,6 +688,99 @@ def warm_pool_cache(lane: str) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
+# Pool IMAGE warming (warm-time only, separate step from warm_pool_cache above). The question
+# feed shows a served item's subject card via the image CDN Worker's "small" tier
+# (getWorkerImageURL(item.card, "small"), frontend/src/common/image.ts) - the R2 bucket in front
+# of that tier is deliberately demand-filled, never pre-warmed for the catalogue at large (see
+# docs/features/image-cdn.md), but a question-feed pool is the one case that policy doesn't
+# cover: every card a pool serves is, by construction, a card nobody has voted on yet, so its
+# bucket entry is a guaranteed-cold miss on first serve regardless of when it's fetched. Fetching
+# it at WARM time (right after the pool that names it is built) moves that ~0.8s Worker round
+# trip off the request path, exactly like `warm_pool_cache` already does for the DB query it
+# used to pay per-request - the bucket is populated before a voter arrives instead of while one
+# waits.
+#
+# BOUNDED, NOT UNBOUNDED: this warms exactly the cards already sitting in `lane`'s own
+# just-built, size-capped pool (`settings.QUESTION_FEED_POOL_SIZE` per sub-kind) - never a scan
+# of the catalogue. Deduplicated by card id first (a card can appear under more than one
+# `PoolEntry` within a lane - e.g. as both a printing and a tag candidate - and warming its image
+# twice would waste budget for zero benefit), so the number of Worker fetches issued is bounded
+# by the pool's own entry count, not multiplied by it.
+#
+# DELIBERATELY SEPARATE FROM `warm_pool_cache` ABOVE, NOT FOLDED INTO IT: `warm_pool_cache` is a
+# pure DB-only function - `test_question_feed_pools.py`'s many direct calls to it rely on that,
+# and folding a real network fetch into it would turn every one of those tests into a live-HTTP
+# test. `warm_pool_images` instead reads back the pool `warm_pool_cache` just wrote
+# (`_get_cached_pool`) and is exercised (and tested) as its own step - the `warm_question_feed_
+# pools` management command below calls both in sequence, so each lane's own scheduled warm
+# cadence re-images its pool exactly as often as it rebuilds it (see module docstring's
+# "PER-LANE REFRESH CADENCE" - the image warm follows the same per-lane clock, no cadence of its
+# own to configure).
+#
+# PACED VIA THE HARVEST PIPELINE'S OWN `GOOGLE_IMAGE` DESTINATION LIMITER
+# (`cardpicker.harvest_fetch_limiter`), not a bespoke pacer invented here: the Worker's "small"
+# tier resolves a bucket miss by fetching from the SAME Google endpoint
+# (`lh4.googleusercontent.com`, `image-cdn/src/service/GoogleDriveService.ts`) the "full" tier's
+# harvest fetches already govern - it is one physical destination regardless of which Worker
+# route reaches it, and `GOOGLE_IMAGE`'s pacing decision is already coordinated GLOBALLY across
+# every process that calls `rate_limited_get` with it (`harvest_rate_coordinator`, see that
+# limiter's own module docstring), not merely per-process. Routing this warm's fetches through
+# it - rather than a second, uncoordinated local rate object - means the real ceiling this
+# project has already measured and ratified against Google (7 req/s, owner rate ruling
+# 2026-07-30) holds for this traffic too, instead of adding a second budget against the same
+# destination that nothing reconciles against the first. This warm never fetches the Worker's
+# "full" tier itself (image-cdn's own `IMAGE_FULL_TIER_RATE_LIMITER` binding is untouched), only
+# the small tier's R2-backed route - the shared pacing is about the underlying Google endpoint,
+# not about which Cloudflare-side limiter fronts it.
+def _warm_entry_images(entries: list[PoolEntry]) -> int:
+    """Fetches the image CDN Worker's small-tier URL for every DISTINCT card in `entries`, so a
+    subsequent live request serving one of them hits a warm R2 bucket entry instead of the
+    ~0.8s Worker->Google round trip. Best-effort per card: an ordinary fetch failure (a bad
+    identifier, a transient Worker/Google error) is logged and skipped, matching `fetch_card_
+    image_bytes`'s own "one bad card must not abort the batch" contract. A `GoogleFetchLockoutError`
+    (403 - a hard stop, see that exception's own docstring) aborts the REST of this warm rather
+    than continuing to hammer an already-locked-out destination; a `DestinationThrottledError`
+    (429/503 - rate pressure the limiter has already widened its own pacing interval for) is
+    treated as a per-card skip, matching the ruling's own "throttle, don't shut down" contract.
+    Returns the number of cards whose fetch completed with a non-error response."""
+    unique_card_ids = {entry.card_id for entry in entries}
+    if not unique_card_ids:
+        return 0
+    warmed = 0
+    for card in Card.objects.filter(pk__in=unique_card_ids).select_related("source"):
+        url = get_worker_small_image_url(card)
+        if url is None:
+            continue
+        try:
+            response = rate_limited_get(GOOGLE_IMAGE, url, timeout=15)
+        except GoogleFetchLockoutError:
+            logger.error("Question-feed pool image warm aborted: %s destination locked out (403)", GOOGLE_IMAGE.name)
+            break
+        except DestinationThrottledError:
+            continue
+        except Exception:
+            logger.warning("Failed to warm image for card %s", card.pk, exc_info=True)
+            continue
+        if response.status_code < 400:
+            warmed += 1
+    return warmed
+
+
+def warm_pool_images(lane: str) -> int:
+    """Warms the small-tier CDN image for every distinct card in `lane`'s CURRENTLY CACHED pool
+    (see `_warm_entry_images` above for the full reasoning) - the body of the second step
+    `warm_question_feed_pools <lane>` runs, right after `warm_pool_cache`. Reads back whatever
+    `_get_cached_pool(lane)` returns rather than taking the pool as a parameter, so this is
+    exactly what a voter's next draw from `lane` would actually serve - `None`/empty (a lane
+    that hasn't been warmed yet, or a misconfigured `"shared"` backend) is a no-op, same
+    degrade-quietly convention every other cache-miss path in this module already follows."""
+    entries = _get_cached_pool(lane)
+    if not entries:
+        return 0
+    return _warm_entry_images(entries)
+
+
+# ---------------------------------------------------------------------------------------------
 # Pool draws (read-time, per request). Each returns `None` on a cache miss or once this voter's
 # exclusion/staleness filtering has walked every entry with nothing servable - the caller always
 # falls back to the corresponding live tier function in that case (see module docstring's "FAST
@@ -848,6 +951,7 @@ __all__ = [
     "KIND_ILLUSTRATION",
     "PoolEntry",
     "warm_pool_cache",
+    "warm_pool_images",
     "draw_resolution_imminent_card",
     "draw_confirm_card",
     "draw_contested_entry",
