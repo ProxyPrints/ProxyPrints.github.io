@@ -195,15 +195,16 @@ test.describe("SelectVersionSection (issue #167)", () => {
   // the one Filters panel instead of always rendering above the grid; the funnel-head's own
   // active-tag pill row is retired along with the old always-visible arrangement (RD1: the
   // panel's own chip highlight - `data-active` - is the one place active state now shows), so
-  // this test now asserts the chip's own active state instead of a pill. Under the editor-repass
-  // round (item 1) the panel starts OPEN (`initialSettingsVisible={true}`), so these tests no
-  // longer toggle it open first - the toggles that used to precede each funnel test are gone.
+  // this test now asserts the chip's own active state instead of a pill. Filter-panel overlay
+  // round - the panel starts CLOSED, so every test below that reaches into it opens the toggle
+  // first.
   test("the unified Frame+Treatment block's tri-state chips filter the whole grid", async ({
     page,
     network,
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // cardDocument18 (unknown bucket) has a resolved "Full Art" tag and is the ONLY candidate
     // with it in this fixture set - one click cycles the Treatment chip untouched -> include.
@@ -235,14 +236,17 @@ test.describe("SelectVersionSection (issue #167)", () => {
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // Manually activate the "Old Border" funnel chip - cardDocument18 carries a *suggested* (not
     // resolved) Old Border vote, so it should still be filtered in (resolved-OR-suggested when
     // the vote layer is on) and its selection should cast an implicit support vote.
     await page.getByTestId("funnel-chip-Old Border").click();
     await expect(page.getByTestId("funnel-awareness-line")).toBeVisible();
-    // Rail-anchored filters round - the panel no longer covers the grid (it's drawn from the
-    // rail, not a modal-style overlay), so the tile is clickable with the panel still open.
+    // Filter-panel overlay round - the panel now draws ON TOP of the candidate grid, so a tile
+    // underneath it is genuinely covered (not just visually - it intercepts the click). Close
+    // the panel the way a real user would before picking a candidate.
+    await page.getByTestId("funnel-filters-toggle").click();
 
     const tile = page.getByTestId(
       "select-version-tile-1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU"
@@ -254,8 +258,9 @@ test.describe("SelectVersionSection (issue #167)", () => {
     await expect(page.getByTestId("funnel-support-ack")).toContainText(
       "Old Border"
     );
-    // The pick resets the active chips - the panel (still open the whole time now) shows the
-    // Border chip back to untouched, not still active from before the pick.
+    // The pick resets the active chips - reopen the panel to confirm the Border chip is back to
+    // untouched, not still active from before the pick.
+    await page.getByTestId("funnel-filters-toggle").click();
     await expect(page.getByTestId("funnel-awareness-line")).toHaveCount(0);
     await expect(page.getByTestId("funnel-chip-Old Border")).toHaveAttribute(
       "data-active",
@@ -305,11 +310,13 @@ test.describe("SelectVersionSection (issue #167)", () => {
       ...selectVersionHandlers
     );
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // First pick: cardDocument18 (1lL2...), under the active "Old Border" chip - casts support.
-    // Rail-anchored filters round - the panel no longer covers the grid, so the tile stays
-    // clickable with it still open.
+    // Filter-panel overlay round - the panel now draws ON TOP of the candidate grid, so it has to
+    // be closed before either pick below can actually reach its tile.
     await page.getByTestId("funnel-chip-Old Border").click();
+    await page.getByTestId("funnel-filters-toggle").click();
     await page
       .getByTestId("select-version-tile-1lL2mM3nN4oO5pP6qQ7rR8sS9tT0uU")
       .locator(".mpccard")
@@ -397,10 +404,9 @@ test.describe("SelectVersionSection (issue #167)", () => {
 
     // No suggested chip for "Old Border" at all - the only candidate that carries it
     // (cardDocument19) does so via tagVoteStatuses only, which the funnel no longer consults for
-    // the suggested read.
+    // the suggested read. This asserts DOM absence, not visibility, so it holds regardless of
+    // whether the Filters panel is open or closed - no toggle click needed.
     await expect(page.getByTestId("funnel-chip-Old Border")).toHaveCount(0);
-    // Rail-anchored filters round - the panel no longer covers the grid, so the tile stays
-    // clickable with it still open.
 
     // Activate a DIFFERENT axis (Treatment has no membership here since none of these three carry
     // a Treatment tag at all) isn't available, so instead: pick cardDocument19 directly with NO
@@ -475,6 +481,7 @@ test.describe("SelectVersionSection (issue #167)", () => {
   }) => {
     network.use(...selectVersionHandlers);
     await openSelectVersionSection(page);
+    await page.getByTestId("funnel-filters-toggle").click();
 
     // Nudging a DPI range filter input triggers the same debounced re-filter
     // `search.displaySpinner` gates on - drag the min-DPI slider up.

@@ -82,7 +82,10 @@ import {
 } from "@/features/attributeChips/attributeChips";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { DeckbuilderConfirmAffordance } from "@/features/card/DeckbuilderConfirmAffordance";
-import { GridSelectorFilters } from "@/features/gridSelector/GridSelectorFilters";
+import {
+  computePresentLanguages,
+  GridSelectorFilters,
+} from "@/features/gridSelector/GridSelectorFilters";
 import {
   groupSelectVersionCandidates,
   RequestedPrinting,
@@ -596,15 +599,16 @@ const UnifiedFilterDivider = styled.span`
 `;
 
 /**
- * Rail-anchored filters round - the desktop/tablet Filters panel used to be a `ReactDOM.
+ * Filter-panel overlay round - the desktop/tablet Filters panel used to be a `ReactDOM.
  * createPortal(..., document.body)` node with its own page-darkening `.fscrim` backdrop (a
  * de-facto modal the owner rejected live: "I don't want a massive background darkening box").
- * The panel is now drawn from the rail itself at every viewport tier: one in-tree `Collapse`
- * (below, in the render body), reusing the SAME `.fpanel.inline`/`.fset`/`.fsep`/`.implicit-note`
- * classes `RailRoot` (DisplayPage.tsx) already defined for the phone tier - there is no longer a
- * float/scrim variant to keep in lockstep with. `LeftRailOffcanvas` widens itself while the panel
- * is open (DisplayPage.tsx's own `$filtersOpen` prop) so the funnel's chips and the candidate
- * grid both stay visible without one covering the other.
+ * The panel is drawn from the rail itself at every viewport tier: one in-tree `Collapse` (below,
+ * in the render body), reusing the SAME `.fpanel.inline`/`.fset`/`.fsep`/`.implicit-note` classes
+ * `RailRoot` (DisplayPage.tsx) already defined for the phone tier. It starts CLOSED and draws as
+ * an absolutely-positioned overlay anchored to `.svheadwrap` when opened (DisplayPage.tsx's own
+ * `.fpanel-overlay-anchor`/`.svheadwrap` rules) - the rail keeps a constant width, the centre
+ * sheet never moves, and nothing below the panel in the rail's own flow shifts down; the panel
+ * simply draws on top of the candidate grid instead.
  */
 
 //# endregion
@@ -1297,10 +1301,6 @@ interface SelectVersionResultsProps {
    * the sidebar/modal layout (which never had a voteLayer concept - moment (c)'s ConfirmChip is
    * its own, separate, unchanged vote path). */
   voteLayer?: VoteLayerProps;
-  /** Rail-anchored filters round - only meaningful on `layout==="stacked"`. Lets the caller
-   * (DisplayPage.tsx) widen the rail itself while this component's own Filters panel is open, so
-   * the panel reads as the rail expanding rather than something floating over it. */
-  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 export function SelectVersionResults({
@@ -1313,7 +1313,6 @@ export function SelectVersionResults({
   backendURL,
   layout = "sidebar",
   voteLayer,
-  onFiltersOpenChange,
 }: SelectVersionResultsProps) {
   const getTagDisplayName = useTagDisplayName();
   // Editor-completion package, E4/L9 (Bkg 4) - this component's one caller is the /display rail
@@ -1322,6 +1321,20 @@ export function SelectVersionResults({
   // at the "hero" tier (<=2 survivors) - see `compressed` below.
   const cardDocumentsByIdentifier = useAppSelector((state) =>
     selectCardDocumentsByIdentifiers(state, search.sortedFilteredIdentifiers)
+  );
+  // Filter-panel overlay round - the stacked layout's own advanced-filters fieldset used to pass
+  // no `allowedLanguages` at all (unlike GridSelectorFilters.tsx's sidebar/modal path, which
+  // already scopes this the same way), so LanguageFilter fell back to the FULL language catalog
+  // instead of just what this slot's candidates actually carry - a dozen mostly-empty chips
+  // where 1-2 belonged. `computePresentLanguages` needs the pre-filter identifier pool (the same
+  // discipline GridSelectorFilters.tsx's own call already documents), not `sortedFilteredIdentifiers`
+  // above (which would collapse to just the already-selected language once one is picked).
+  const unfilteredCardDocumentsByIdentifier = useAppSelector((state) =>
+    selectCardDocumentsByIdentifiers(state, imageIdentifiers)
+  );
+  const presentLanguages = useMemo(
+    () => computePresentLanguages(unfilteredCardDocumentsByIdentifier),
+    [unfilteredCardDocumentsByIdentifier]
   );
 
   const [activeAttributeTags, setActiveAttributeTags] = useState<Set<string>>(
@@ -1362,9 +1375,6 @@ export function SelectVersionResults({
     },
     []
   );
-  useEffect(() => {
-    onFiltersOpenChange?.(search.settingsVisible);
-  }, [search.settingsVisible, onFiltersOpenChange]);
 
   const toggleAttributeTag = (tagName: string) =>
     setActiveAttributeTags((previous) => {
@@ -2187,6 +2197,7 @@ export function SelectVersionResults({
           minDPILowerBound={search.projectFilter?.minimumDPI}
           maxDPIUpperBound={search.projectFilter?.maximumDPI}
           maxSizeUpperBound={search.projectFilter?.maximumSize}
+          allowedLanguages={presentLanguages}
           showBoilerplate={false}
           showResolvedAttributeFilter={false}
         />
@@ -2197,103 +2208,108 @@ export function SelectVersionResults({
 
     return (
       <div data-testid="select-version-section" data-funnel-tier={tier}>
-        {/* item 2 (RD2) - the SV header row: [N versions] [Sort ▾] [Filters ▾], replacing the
-            old always-visible count+pills bar. */}
-        <div className="svhead" data-testid="svhead">
-          <span data-testid="funnel-count">
-            <span className="n">
-              {filteredIdentifiers.length.toLocaleString()}
-            </span>{" "}
-            version
-            {filteredIdentifiers.length !== 1 ? "s" : ""}
-          </span>
-          <span style={{ flex: "1 1 auto" }} />
-          {/* EP7 (SPEC-editor-polish.md §D.4 `.sortsel`, REV RD2/O5, amendment 2) - the
-              backend-driven 6-option `SortByOptions` select is replaced, on this surface, by the
-              five client-side orderings (see this file's own "item 7" region comment above);
-              "Community vote weight" (Q1) renders nothing until the confidence-numeric seam
-              lands, per the amendment's explicit ruling. */}
-          <Form.Select
-            size="sm"
-            className="sortsel"
-            aria-label="Sort versions"
-            value={clientSort}
-            onChange={(event) =>
-              setClientSort(event.target.value as ClientSortKey)
-            }
-            data-testid="funnel-sort-select"
-          >
-            {(Object.keys(CLIENT_SORT_LABELS) as ClientSortKey[]).map((key) => (
-              <option key={key} value={key}>
-                {CLIENT_SORT_LABELS[key]}
-              </option>
-            ))}
-          </Form.Select>
-          {/* Ruling 5 - one control, cycling compact/comfortable/large; each click both resizes
-              tiles AND (since nothing unmounts, only re-flows) reveals more of what was already
-              rendered below the fold, without resetting scroll position. */}
-          <CompactButton
-            variant="outline-light"
-            size="sm"
-            className="filtersbtn densitybtn"
-            onClick={() => {
-              const next = nextCandidateDensity(effectiveDensity);
-              setCandidateDensity(next);
-              setStoredCandidateDensity(next);
-            }}
-            aria-label={`Candidate tile size: ${CANDIDATE_DENSITY_LABEL[effectiveDensity]}. Click to change.`}
-            data-testid="funnel-density-toggle"
-          >
-            <i className="bi bi-grid-3x3-gap" />{" "}
-            {CANDIDATE_DENSITY_LABEL[effectiveDensity]}
-          </CompactButton>
-          {/* Owner fix round (2026-07-23, SPEC-display-left-rail.md §8 "buttons-look-like-
-              buttons" audit) - a real button, not underlined text (this performs an action). */}
-          <CompactButton
-            variant="outline-light"
-            size="sm"
-            className="filtersbtn"
-            aria-expanded={search.settingsVisible}
-            onClick={() => search.setSettingsVisible((v) => !v)}
-            data-testid="funnel-filters-toggle"
-          >
-            <i
-              className={`bi bi-chevron-${
-                search.settingsVisible ? "left" : "right"
-              }`}
-            />{" "}
-            Filters
-          </CompactButton>
-        </div>
-
-        {/* Rail-anchored filters round - ONE in-tree panel, every viewport tier: an in-rail
-            `Collapse` that expands the SAME `.fpanel.inline` (RailRoot's own rules, DisplayPage.tsx)
-            phone already used, no page-darkening scrim and no `document.body` portal any more.
-            `onFiltersOpenChange` (above) tells DisplayPage to widen the rail itself while this is
-            open, so the panel reads as the rail expanding rather than something floating over the
-            page - the candidate grid below stays fully in-flow, never covered. */}
-        <Collapse in={search.settingsVisible}>
-          <div>
-            <div
-              className="fpanel inline"
-              role="group"
-              aria-label="Version filters"
-              data-testid="filters-panel-inline"
+        <div className="svheadwrap">
+          {/* item 2 (RD2) - the SV header row: [N versions] [Sort ▾] [Filters ▾], replacing the
+              old always-visible count+pills bar. */}
+          <div className="svhead" data-testid="svhead">
+            <span data-testid="funnel-count">
+              <span className="n">
+                {filteredIdentifiers.length.toLocaleString()}
+              </span>{" "}
+              version
+              {filteredIdentifiers.length !== 1 ? "s" : ""}
+            </span>
+            <span style={{ flex: "1 1 auto" }} />
+            {/* EP7 (SPEC-editor-polish.md §D.4 `.sortsel`, REV RD2/O5, amendment 2) - the
+                backend-driven 6-option `SortByOptions` select is replaced, on this surface, by the
+                five client-side orderings (see this file's own "item 7" region comment above);
+                "Community vote weight" (Q1) renders nothing until the confidence-numeric seam
+                lands, per the amendment's explicit ruling. */}
+            <Form.Select
+              size="sm"
+              className="sortsel"
+              aria-label="Sort versions"
+              value={clientSort}
+              onChange={(event) =>
+                setClientSort(event.target.value as ClientSortKey)
+              }
+              data-testid="funnel-sort-select"
             >
-              <div className="fptitle">
-                <span>Filters — refine versions</span>
-                <button
-                  type="button"
-                  onClick={closeFilters}
-                  data-testid="filters-panel-close"
-                >
-                  Close ✕
-                </button>
-              </div>
-              <div className="fpwrap">{filterFieldsetsBody}</div>
-            </div>
+              {(Object.keys(CLIENT_SORT_LABELS) as ClientSortKey[]).map(
+                (key) => (
+                  <option key={key} value={key}>
+                    {CLIENT_SORT_LABELS[key]}
+                  </option>
+                )
+              )}
+            </Form.Select>
+            {/* Ruling 5 - one control, cycling compact/comfortable/large; each click both resizes
+                tiles AND (since nothing unmounts, only re-flows) reveals more of what was already
+                rendered below the fold, without resetting scroll position. */}
+            <CompactButton
+              variant="outline-light"
+              size="sm"
+              className="filtersbtn densitybtn"
+              onClick={() => {
+                const next = nextCandidateDensity(effectiveDensity);
+                setCandidateDensity(next);
+                setStoredCandidateDensity(next);
+              }}
+              aria-label={`Candidate tile size: ${CANDIDATE_DENSITY_LABEL[effectiveDensity]}. Click to change.`}
+              data-testid="funnel-density-toggle"
+            >
+              <i className="bi bi-grid-3x3-gap" />{" "}
+              {CANDIDATE_DENSITY_LABEL[effectiveDensity]}
+            </CompactButton>
+            {/* Owner fix round (2026-07-23, SPEC-display-left-rail.md §8 "buttons-look-like-
+                buttons" audit) - a real button, not underlined text (this performs an action). */}
+            <CompactButton
+              variant="outline-light"
+              size="sm"
+              className="filtersbtn"
+              aria-expanded={search.settingsVisible}
+              onClick={() => search.setSettingsVisible((v) => !v)}
+              data-testid="funnel-filters-toggle"
+            >
+              <i
+                className={`bi bi-chevron-${
+                  search.settingsVisible ? "left" : "right"
+                }`}
+              />{" "}
+              Filters
+            </CompactButton>
           </div>
-        </Collapse>
+
+          {/* Filter-panel overlay round - ONE in-tree panel, every viewport tier: an in-rail
+              `Collapse` that expands the SAME `.fpanel.inline` (RailRoot's own rules, DisplayPage.tsx)
+              phone already used, no page-darkening scrim and no `document.body` portal any more.
+              `.fpanel-overlay-anchor` (the Collapse's own direct child, DisplayPage.tsx's rules)
+              positions the panel absolutely against `.svheadwrap` above, so opening it draws on
+              top of the candidate grid below instead of pushing the grid or the rest of the rail
+              down. */}
+          <Collapse in={search.settingsVisible}>
+            <div className="fpanel-overlay-anchor">
+              <div
+                className="fpanel inline"
+                role="group"
+                aria-label="Version filters"
+                data-testid="filters-panel-inline"
+              >
+                <div className="fptitle">
+                  <span>Filters — refine versions</span>
+                  <button
+                    type="button"
+                    onClick={closeFilters}
+                    data-testid="filters-panel-close"
+                  >
+                    Close ✕
+                  </button>
+                </div>
+                <div className="fpwrap">{filterFieldsetsBody}</div>
+              </div>
+            </div>
+          </Collapse>
+        </div>
 
         {/* post-pick ack (F4c). */}
         {votesOn && justSupportedTags != null && (
