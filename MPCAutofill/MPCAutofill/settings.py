@@ -645,7 +645,17 @@ STAGE_E_MICRO_BATCH_SIZE = env.int("STAGE_E_MICRO_BATCH_SIZE", default=None)
 # sitting under that ceiling with room for other concurrent host activity (Stage C's own bulk
 # driver, image-cdn fetch threads, etc.). Env-tunable without a code change, matching
 # STAGE_E_MICRO_BATCH_SIZE's own convention immediately above.
-STAGE_E_MAX_CONCURRENT_DISPATCHES = env.int("STAGE_E_MAX_CONCURRENT_DISPATCHES", default=5)
+#
+# Default raised 5 -> 6 (2026-08-19): the host has 8 cores, shared with Postgres, Elasticsearch
+# and this same qcluster worker set - measured, the pass was compute-bound (67.3% of per-card
+# wall time) rather than fetch-bound (1.367 cards/s achieved against a 4.18 cards/s fetch-alone
+# ceiling at concurrency 5), so the lever that raises throughput here is concurrency, up to the
+# point cores saturate. 6, not higher: `operating_envelope.HOST_LOAD_CEILING` (7.0) is the hard
+# trip, unmoved by this change, and a default that routinely reaches it converts throughput into
+# halted passes rather than more of it - 6 leaves headroom under that ceiling for the rest of
+# this host's concurrent load (the AIMD load governor above still adapts within that ceiling; this
+# constant is only its seed - see STAGE_E_GOVERNOR_CONCURRENCY_CAP below).
+STAGE_E_MAX_CONCURRENT_DISPATCHES = env.int("STAGE_E_MAX_CONCURRENT_DISPATCHES", default=6)
 
 # Host-load AIMD governor (2026-08-13, replacing the 2026-08-05 three-band soft brake - see
 # cardpicker/stage_e_load_brake.py's own module docstring for the full control law and the

@@ -33,6 +33,10 @@ from cardpicker.attribute_tags import seed_attribute_tags
 from cardpicker.default_tags import seed_default_tags
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import ExtractionResult
+from cardpicker.local_art_edge import (
+    ART_EDGE_ANONYMOUS_ID,
+    ART_EDGE_CONTINUITY_TAG_NAME,
+)
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.local_detect_ai_art import AI_ART_ANONYMOUS_ID, AI_GENERATED_TAG_NAME
 from cardpicker.local_filename_declarations import (
@@ -763,6 +767,40 @@ class TestEvidenceOnlyCalculators:
         assert outcome.stage_d_lands_votes == 1
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=LANDS_ANONYMOUS_ID)
         assert vote.printing_id == printing.pk
+
+    @STREAMING_ON
+    def test_art_edge_continuity_fires_on_an_extended_reading(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _full_evidence(card, art_edge_class="extended")
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("evidence-backed card should never re-fetch for Stage C")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_art_edge_votes == 1
+        vote = CardTagVote.objects.get(card=card, anonymous_id=ART_EDGE_ANONYMOUS_ID)
+        assert vote.tag.name == ART_EDGE_CONTINUITY_TAG_NAME
+
+        ledger = PilotRunLedger.objects.get(command="stage_e_streaming_dispatch")
+        assert ledger.counters["stage_d_art_edge_votes"] == 1
+
+    @STREAMING_ON
+    def test_art_edge_continuity_abstains_on_a_framed_reading(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        seed_default_tags()
+        card = CardFactory(content_phash=2)
+        _full_evidence(card, art_edge_class="framed")
+        _install_stage_c_stub(monkeypatch, fetch_result=lambda card, dpi=None: (_ for _ in ()).throw(AssertionError))
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_art_edge_votes == 0
+        assert not CardTagVote.objects.filter(card=card, anonymous_id=ART_EDGE_ANONYMOUS_ID).exists()
 
 
 class TestFilenameDeclarationCasterInDispatch:

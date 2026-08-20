@@ -344,6 +344,21 @@ and immutable from ingest, so nothing here is rescannable.
 | `no-declaration`            | `NO_DECLARATION_SKIP_REASON`            | No keyword matched anywhere in `Card.name`. A permanent conclusion, not a transient one — the name will not change.                                                                    | Live, no rows yet |
 | `border-axis-contradiction` | `BORDER_AXIS_CONTRADICTION_SKIP_REASON` | Two or more of Black/White/Silver Border/Borderless matched the same name — abstains on the whole axis rather than guessing. Any non-axis chip matched on the same card is still cast. | Live, no rows yet |
 
+## Art-edge continuity caster — `MPCAutofill/cardpicker/local_art_edge.py`
+
+`anonymous_id` is `art-edge-continuity-v1` (`ART_EDGE_ANONYMOUS_ID`) — the
+sole machine channel for the pre-existing "Extended" attribute chip. Reads
+`ImageEvidence.art_edge_class`, already populated at Stage C; casts nothing
+on `framed`/`mixed` (see `cast_art_edge_continuity_vote`'s own docstring for
+why an unvalidated class abstains rather than casting a negative).
+
+| Reason        | Constant                           | Means                                                                                                                                                           | Status                             |
+| ------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `no-evidence` | `ART_EDGE_NO_EVIDENCE_SKIP_REASON` | No current `ImageEvidence` row. **Rescannable**.                                                                                                                | Live, no rows yet                  |
+| `no-reading`  | `ART_EDGE_NO_READING_SKIP_REASON`  | `art_edge_class` is blank — the extractor hasn't produced a usable reading for this evidence yet, or `classify_art_edge_continuity` abstained. **Rescannable**. | Live, no rows yet                  |
+| `framed`      | `ART_EDGE_FRAMED_SKIP_REASON`      | A reading was stored, and it is `framed` — a real border survives beside the art.                                                                               | Live, no rows yet (~161k eligible) |
+| `mixed`       | `ART_EDGE_MIXED_SKIP_REASON`       | A reading was stored, and it is `mixed` — the test strip matched exactly one of the two references, the classifier's least-confident outcome.                   | Live, no rows yet (~37k eligible)  |
+
 ## Evidence transfer — `MPCAutofill/cardpicker/evidence_transfer.py`
 
 `anonymous_id` is `evidence-transfer-v1` (`EVIDENCE_TRANSFER_ANONYMOUS_ID`).

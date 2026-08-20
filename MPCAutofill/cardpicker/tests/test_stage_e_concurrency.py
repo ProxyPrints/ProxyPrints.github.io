@@ -178,8 +178,8 @@ class TestTryAcquireSlot:
             raw_b.close()
             raw_c.close()
 
-    def test_default_cap_is_five(self, db: Any) -> None:
-        assert stage_e_concurrency._slot_count() == 5
+    def test_default_cap_is_six(self, db: Any) -> None:
+        assert stage_e_concurrency._slot_count() == 6
 
     @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=0)
     def test_a_zero_configured_cap_floors_to_one_and_warns(self, db: Any, caplog: Any) -> None:

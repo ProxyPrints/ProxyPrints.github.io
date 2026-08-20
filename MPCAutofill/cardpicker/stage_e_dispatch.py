@@ -305,6 +305,13 @@ class DispatchOutcome:
     stage_d_lands_already_voted: int = 0
     stage_d_residual_artist_votes: int = 0
     stage_d_residual_tag_votes: int = 0
+    # ART-EDGE CONTINUITY CASTER (2026-08-19, closing issue #721's own wiring gate -
+    # `art-edge-continuity-v1`/`cardpicker.local_art_edge.run_art_edge_continuity_cast`). Reads
+    # `ImageEvidence.art_edge_class`, already populated at Stage C, and fetches nothing - same
+    # FREE reasoning `_run_evidence_only_calculators`' own docstring gives for the four channels
+    # above. Casts the pre-existing "Extended" attribute chip only on an `extended` reading;
+    # `framed`/`mixed` abstain (see `cast_art_edge_continuity_vote`'s own docstring).
+    stage_d_art_edge_votes: int = 0
     # Stream B (md5 verdict-transfer gate): how many cards in this batch had their Stage D verdict
     # satisfied via propagation from a same-md5 sibling's existing CardPrintingTag row instead of
     # running through the four calculators and three chips. Zero when the gate found nothing to
@@ -1290,23 +1297,31 @@ def _run_evidence_only_calculators(
     never runs and a channel that runs and casts zero votes are indistinguishable from the
     outside, which is the whole defect this wiring closes.
 
-    WHY THESE FOUR AND NOT THE OTHER SIX UNWIRED IDENTITIES the same audit found (`docs/
-    pipeline-fidelity-gate.md`'s roster has the full accounting): every one of these four reads
-    ONLY data this pass has already stored - `ImageEvidence` OCR text, `Card.content_phash`,
-    already-resolved artist/printing chains - and fetches no image, runs no tesseract, calls no
-    external API. `run_frame_mismatch_recovery`/`run_lands_identify` each accept an OCR/fallback
-    refetch budget for the LIVE-FETCH portion of their own pipeline; both are called here with
-    every such budget forced to 0, which their own docstrings document as "the scoped, genuinely
-    free [...] path" - the live-fetch branches stay unreachable from this conveyor, exactly like
-    every other calculator's own fetch work stays inside Stage C, never Stage D.
-    `deductive-backfill-v1`/`local-name-frequency-v1` were the other two candidates that looked
-    fetch-free on the same reading; both were left OUT because neither has a `card_ids` parameter
-    at all - each rebuilds a whole-catalogue in-memory index (`CanonicalNameIndex`,
+    A FIFTH CHANNEL WIRED HERE 2026-08-19: `art-edge-continuity-v1`
+    (`local_art_edge.run_art_edge_continuity_cast`) - reads the already-stored
+    `ImageEvidence.art_edge_class` and casts the pre-existing "Extended" attribute chip on an
+    `extended` reading. Left deliberately unwired at the 2026-08-05 pass behind issue #721's own
+    validation precondition, which has since been measured against real catalog images (see
+    `local_art_edge.cast_art_edge_continuity_vote`'s own docstring for the numbers and
+    `docs/pipeline-fidelity-gate.md`'s calculator roster for the full measurement).
+
+    WHY THESE FIVE AND NOT THE OTHER FIVE UNWIRED IDENTITIES the same audit found (`docs/
+    pipeline-fidelity-gate.md`'s roster has the full accounting): every one of these five reads
+    ONLY data this pass has already stored - `ImageEvidence` OCR/pixel-derived fields,
+    `Card.content_phash`, already-resolved artist/printing chains - and fetches no image, runs no
+    tesseract, calls no external API. `run_frame_mismatch_recovery`/`run_lands_identify` each
+    accept an OCR/fallback refetch budget for the LIVE-FETCH portion of their own pipeline; both
+    are called here with every such budget forced to 0, which their own docstrings document as
+    "the scoped, genuinely free [...] path" - the live-fetch branches stay unreachable from this
+    conveyor, exactly like every other calculator's own fetch work stays inside Stage C, never
+    Stage D. `deductive-backfill-v1`/`local-name-frequency-v1` were the other two candidates that
+    looked fetch-free on the same reading; both were left OUT because neither has a `card_ids`
+    parameter at all - each rebuilds a whole-catalogue in-memory index (`CanonicalNameIndex`,
     113k+ `CanonicalCard` rows) from scratch on every call, so wiring either one here would mean
     paying that full-catalogue rebuild on every single micro-batch rather than once per pass. See
-    `docs/pipeline-fidelity-gate.md` for that finding and the other four EXPENSIVE identities
-    (`art-edge-continuity-v1`, `local-ocr-v1`, `local-phash-v1`, `local-fallback-v1`) this same
-    audit left deliberately unwired, with a reason and a tracked issue for each.
+    `docs/pipeline-fidelity-gate.md` for that finding and the three remaining EXPENSIVE identities
+    (`local-ocr-v1`, `local-phash-v1`, `local-fallback-v1`) this same audit left deliberately
+    unwired, with a reason and a tracked issue for each.
 
     ORDER: `run_frame_mismatch_recovery` runs BEFORE `run_d0_sibling_artist_propagation`
     deliberately - the former calls `resolve_and_persist_artist` on every card it recovers, and a
@@ -1316,18 +1331,21 @@ def _run_evidence_only_calculators(
     later in the SAME batch. Getting this backwards costs nothing this batch cannot recover next
     time it revisits the same card, but costs one batch's worth of reach for free. Otherwise order
     is irrelevant here, same reasoning as `_run_attribute_chip_casters`' own docstring: none of
-    these four reads any other NEW calculator's output, only stored evidence and pre-existing
+    these five reads any other NEW calculator's output, only stored evidence and pre-existing
     resolved fields.
 
     A MISSING TAG SEED MUST NOT DESTROY A MICRO-BATCH, same discipline as
-    `_run_attribute_chip_casters`. Only `run_ai_art_detector` can raise for this (a missing
-    "AI-Generated" `Tag` row) - `run_frame_mismatch_recovery` already degrades gracefully when
-    "altered-frame" is unseeded (skips the tag vote, still casts the artist vote; see its own
-    docstring), and the other two calculators here have no `Tag` dependency at all. By the time
-    this runs, the four printing calculators and the three attribute chips above have already
-    written their votes, so letting a `RuntimeError` out would fail the WHOLE dispatch over an
-    operator setup gap in one advisory tag - caught, logged, `stage_d_ai_art_votes` stays 0.
+    `_run_attribute_chip_casters`. `run_ai_art_detector` (a missing "AI-Generated" `Tag` row) and
+    `run_art_edge_continuity_cast` (a missing "Extended" `Tag` row, in practice never seen in
+    production since that tag is a pre-existing `DEFAULT_TAGS` row) both raise `RuntimeError` for
+    this - `run_frame_mismatch_recovery` already degrades gracefully when "altered-frame" is
+    unseeded (skips the tag vote, still casts the artist vote; see its own docstring), and the
+    other two calculators here have no `Tag` dependency at all. By the time this runs, the four
+    printing calculators and the three attribute chips above have already written their votes, so
+    letting a `RuntimeError` out would fail the WHOLE dispatch over an operator setup gap in one
+    advisory tag - caught, logged, the affected counter stays 0.
     """
+    from cardpicker.local_art_edge import run_art_edge_continuity_cast
     from cardpicker.local_detect_ai_art import run_ai_art_detector
     from cardpicker.local_lands_identify import run_lands_identify
     from cardpicker.local_residual_classify import (
@@ -1343,6 +1361,19 @@ def _run_evidence_only_calculators(
             "AI-art detector skipped for run_id=%s: %s Stage D's printing votes for this batch "
             "are unaffected and already written. Run `seed_default_tags` to close this - until "
             "then stage_d_ai_art_votes stays at zero on every dispatch.",
+            run_id,
+            exc,
+        )
+
+    try:
+        art_edge_result = run_art_edge_continuity_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_art_edge_votes = art_edge_result.votes_written
+    except RuntimeError as exc:
+        logger.error(
+            "Art-edge continuity caster skipped for run_id=%s: %s Stage D's printing votes for "
+            "this batch are unaffected and already written. Run `seed_default_tags`/"
+            "`seed_attribute_tags` to close this - until then stage_d_art_edge_votes stays at "
+            "zero on every dispatch.",
             run_id,
             exc,
         )
@@ -1828,6 +1859,7 @@ def dispatch_micro_batch(
                     "stage_d_lands_already_voted": outcome.stage_d_lands_already_voted,
                     "stage_d_residual_artist_votes": outcome.stage_d_residual_artist_votes,
                     "stage_d_residual_tag_votes": outcome.stage_d_residual_tag_votes,
+                    "stage_d_art_edge_votes": outcome.stage_d_art_edge_votes,
                     "stage_d_verdict_transfer_votes": outcome.stage_d_verdict_transfer_votes,
                     "peak_rss_mb": peak_rss_mb,
                     "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,

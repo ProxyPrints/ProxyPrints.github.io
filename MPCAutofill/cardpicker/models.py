@@ -202,6 +202,19 @@ class CanonicalPrintingMetadata(models.Model):
     border_color = models.CharField(max_length=20, blank=True)
     frame = models.CharField(max_length=10, blank=True)
     frame_effects = models.JSONField(default=list, blank=True)
+    # Scryfall's own colour identity, copied verbatim (e.g. `["W", "U"]`, `[]` for colourless) -
+    # same JSONField shape as frame_effects above. Motivation: a card's frame colour treatment
+    # varies with its colour identity, which makes any fixed-position colour measurement of frame
+    # geometry uninterpretable without it (a colour-homogeneous group of cards measured a
+    # within-group colour spread of 8.8 at a fixed coordinate against a colour-diverse group's
+    # 87.2 at the identical coordinate). Not consumed by any calculator yet - data availability
+    # only, see printing_metadata_import.PrintingMetadataRow.color_identity.
+    color_identity = models.JSONField(default=list, blank=True)
+    # Scryfall's own type line verbatim (e.g. "Basic Land — Forest") - same CharField convention
+    # as border_color/frame above. Identifies lands, the most colour-homogeneous group and
+    # therefore the cleanest to measure colour identity's effect against (see color_identity
+    # above). Not consumed by any calculator yet - data availability only.
+    type_line = models.CharField(max_length=255, blank=True, default="")
     # Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme") -
     # the same value `printing_metadata_import.PrintingMetadataRow.layout` already parses and
     # was, until issue #693, discarded after being checked against `DOUBLE_FACED_LAYOUTS`.

@@ -103,6 +103,7 @@ EXPECTED_SKIP_REASONS = {
         "LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON",
         "CHIP_NO_EVIDENCE_SKIP_REASON",
         "BLEED_CALC_NO_EVIDENCE_SKIP_REASON",
+        "ART_EDGE_NO_EVIDENCE_SKIP_REASON",
     },
     "eliminated": {
         "FALLBACK_ELIMINATED_SKIP_REASON",
@@ -155,10 +156,18 @@ EXPECTED_SKIP_REASONS = {
     # case). Appended at the end, same positional-stability reasoning as the CHIP entry above.
     "method-disagreement": {"BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON"},
     "not-trimmed": {"BLEED_CALC_NOT_TRIMMED_SKIP_REASON"},
+    # Art-edge continuity caster — local_art_edge.py (art-edge-continuity-v1, 2026-08-19).
+    # "no-reading" is genuinely new; "framed"/"mixed" are this caster's own abstain-outcome
+    # values (an unvalidated non-'extended' reading), not shared with any other calculator's
+    # vocabulary. Appended at the end, same positional-stability reasoning as the two entries
+    # above.
+    "no-reading": {"ART_EDGE_NO_READING_SKIP_REASON"},
+    "framed": {"ART_EDGE_FRAMED_SKIP_REASON"},
+    "mixed": {"ART_EDGE_MIXED_SKIP_REASON"},
     # Filename-declaration caster — local_filename_declarations.py
     # (filename-declaration-cast-v1, 2026-08-19). Two values new to the roster: no keyword
-    # matched at all, and the border-colour axis contradiction abstention. Appended at the end,
-    # same positional-stability reasoning as the two entries above.
+    # matched at all, and the border-colour axis contradiction abstention. Appended after the
+    # art-edge entries, same positional-stability reasoning as every entry above.
     "no-declaration": {"NO_DECLARATION_SKIP_REASON"},
     "border-axis-contradiction": {"BORDER_AXIS_CONTRADICTION_SKIP_REASON"},
 }
