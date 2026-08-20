@@ -93,6 +93,7 @@ from cardpicker.image_evidence import (
     COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
     COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
     CROP_COORDINATES_EXTRACTOR_VERSION,
+    EXTRACTOR_OWNED_FIELDS,
     FETCH_HEALTH_EXTRACTOR_VERSION,
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
     LAYOUT_CLASS_EXTRACTOR_VERSION,
@@ -102,6 +103,7 @@ from cardpicker.image_evidence import (
     SYMBOL_REGION_EXTRACTOR_VERSION,
     ExtractionResult,
     build_reconciliation_report,
+    compute_card_evidence,
     fetch_and_compute_card_evidence_for_tests,
     persist_evidence,
 )
@@ -2717,3 +2719,186 @@ class TestBuildReconciliationReport:
         assert report.voted == 0
         assert report.dropped == 1
         assert report.is_consistent()
+
+
+class TestPerExtractorReextraction:
+    """perf/per-extractor-reextraction (2026-08-19): `compute_card_evidence`'s
+    `stale_extractor_keys`/`stored_evidence_fields`/`stored_extractor_versions` carry-forward
+    path. Every test here poisons its stubs between the "stored" pass and the "current" pass -
+    each stub returns a DIFFERENT value the second time - so a field that ends up matching the
+    STORED value proves it was genuinely carried forward, not recomputed and coincidentally
+    identical."""
+
+    def _stub_everything(self, monkeypatch, border_color, art_edge, collector_raw_text, symbol_phash, blur):
+        _stub_border_color(monkeypatch, border_color)
+        _stub_art_edge(monkeypatch, art_edge)
+        _stub_ocr(monkeypatch, collector_raw_text)
+        _stub_symbol_region(monkeypatch, symbol_phash)
+        _stub_quality_signals(monkeypatch, blur=blur)
+        _stub_pinline_inset(monkeypatch, result=_a_pinline_inset_result())
+
+    def _compute(self, card, image, **overrides):
+        return compute_card_evidence(card.pk, card.content_phash, image, fetch_latency_ms=1.0, **overrides)
+
+    def test_non_stale_extractors_are_carried_forward_byte_identical(self, db, monkeypatch):
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+
+        # Every stub now returns something ELSE - if any non-stale extractor actually reran, its
+        # field would pick up one of these instead of the stored value below.
+        self._stub_everything(
+            monkeypatch,
+            border_color="white",
+            art_edge="mixed",
+            collector_raw_text="200/287 M MOM EN",
+            symbol_phash=999,
+            blur=1000.0,
+        )
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset({"art_edge"}),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert result.extractor_versions == stored.extractor_versions
+        # art_edge is the one stale key - it alone reflects the fresh (poisoned) stub.
+        assert result.fields["art_edge_class"] == "mixed"
+        assert stored.fields["art_edge_class"] == "framed"
+        # every other extractor's owned fields are byte-identical to the stored pass, proving
+        # they were carried forward rather than recomputed against the poisoned stubs.
+        for extractor_key, owned in EXTRACTOR_OWNED_FIELDS.items():
+            if extractor_key == "art_edge":
+                continue
+            for field_name in owned:
+                assert result.fields.get(field_name) == stored.fields.get(field_name), field_name
+        # skip_reasons is NOT carried forward - a carried-forward extractor did not run THIS
+        # pass, so it must not write a fresh CardScanLog row claiming it did (persist_evidence
+        # writes one row per ExtractionResult.skip_reasons entry); art_edge is the only key that
+        # ran, and it produced a real value ("mixed"), not a skip.
+        assert result.skip_reasons == {}
+
+    def test_stale_extractor_reads_a_carried_forward_dependency(self, db, monkeypatch):
+        """art_edge reads crop_coordinates' own art_crop_px - proves a stale extractor sees its
+        non-stale dependency's value from storage, not from a fresh (never-run) computation."""
+        card = CardFactory(content_phash=12345)
+        received_boxes = []
+        monkeypatch.setattr(
+            module,
+            "classify_art_edge_continuity",
+            lambda image, art_crop_px: received_boxes.append(art_crop_px) or "framed",
+        )
+        _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch, result=_a_pinline_inset_result())
+        stored = self._compute(card, _BLEED_IMAGE)
+        assert stored.fields["art_crop_px"]
+
+        received_boxes.clear()
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset({"art_edge"}),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert received_boxes == [stored.fields["art_crop_px"]]
+        assert result.fields["collector_line_crop_px"] == stored.fields["collector_line_crop_px"]
+        assert "crop_coordinates" not in (result.extractor_versions.keys() - stored.extractor_versions.keys())
+
+    def test_ocr_group_is_one_staleness_unit(self, db, monkeypatch):
+        """collector_line_ocr/artist_ocr/collector_line_tsv share one tesseract escalation loop -
+        marking only artist_ocr stale must still rerun (and therefore reflect fresh text in)
+        collector_line_ocr/collector_line_tsv too, since there is no stored per-attempt text to
+        carry forward artist_ocr's own reuse-before-recompute pass from."""
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+        assert stored.fields["collector_line_collector_number"] == "158"
+
+        _stub_ocr(monkeypatch, "200/287 M MOM EN")
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset({"artist_ocr"}),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert result.fields["collector_line_collector_number"] == "200"
+
+    def test_whole_card_carry_forward_recomputes_nothing(self, db, monkeypatch):
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+
+        calls = {"n": 0}
+        monkeypatch.setattr(
+            module, "classify_bleed_edge", lambda image: calls.__setitem__("n", calls["n"] + 1) or "bleed"
+        )
+
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset(),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert calls["n"] == 0
+        assert result.fields == stored.fields
+        assert result.extractor_versions == stored.extractor_versions
+        # Nothing ran this pass, so skip_reasons is empty - see the sibling test above for why.
+        assert result.skip_reasons == {}
+
+    def test_a_key_missing_from_stored_versions_is_treated_as_stale(self, db, monkeypatch):
+        """An extractor this row has never run (no stored version at all) cannot be carried
+        forward from nothing - it must compute, regardless of stale_extractor_keys membership."""
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+        incomplete_versions = {k: v for k, v in stored.extractor_versions.items() if k != "art_edge"}
+
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset(),  # caller says "nothing is stale"...
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=incomplete_versions,  # ...but art_edge was never stored
+        )
+
+        assert result.extractor_versions["art_edge"] == ART_EDGE_EXTRACTOR_VERSION
+        assert result.fields["art_edge_class"] == "framed"

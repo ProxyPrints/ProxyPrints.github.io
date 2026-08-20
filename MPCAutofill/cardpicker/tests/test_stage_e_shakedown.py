@@ -210,6 +210,9 @@ def _install_ok_stage_c_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         modern_artist_lexicon=None,
         md5_checksum=None,
         sha256_checksum=None,
+        stale_extractor_keys=None,
+        stored_evidence_fields=None,
+        stored_extractor_versions=None,
     ):
         fields = {
             "fetch_ok": True,

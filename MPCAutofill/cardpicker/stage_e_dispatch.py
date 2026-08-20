@@ -178,6 +178,21 @@ def _stage_c_manifest_versions() -> "dict[str, str]":
     return MANIFEST_EXTRACTOR_CURRENT_VERSIONS
 
 
+def _stage_c_stale_extractor_keys_and_stored_fields(
+    card: "Card",
+) -> "tuple[Optional[frozenset[str]], Optional[dict[str, Any]], Optional[dict[str, Any]]]":
+    """PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction): same lazy-import
+    posture as `_stage_c_manifest_versions`/`_stage_c_manifest_extractor_keys` immediately above -
+    imports and calls `run_image_evidence_cohort._stale_extractor_keys_and_stored_fields` (the
+    single source of truth for this diff, imported not duplicated) rather than re-deriving it
+    here."""
+    from cardpicker.management.commands.run_image_evidence_cohort import (
+        _stale_extractor_keys_and_stored_fields,
+    )
+
+    return _stale_extractor_keys_and_stored_fields(card)
+
+
 class _FetchOutcomeWindow:
     """
     The rolling fetch-outcome window `dispatch_micro_batch` samples
@@ -785,6 +800,9 @@ def _stage_c_compute_one_card(
     card_name: str,
     run_id: str,
     dry_run: bool,
+    stale_extractor_keys: "Optional[frozenset[str]]" = None,
+    stored_evidence_fields: "Optional[dict[str, Any]]" = None,
+    stored_extractor_versions: "Optional[dict[str, Any]]" = None,
 ) -> "tuple[bool, Optional[Exception]]":
     """Picklable per-card compute function for the ProcessPoolExecutor.
 
@@ -798,6 +816,12 @@ def _stage_c_compute_one_card(
     modern_artist_lexicon, short_circuit) are read from process-global module variables set by
     _stage_c_compute_worker_init — no second build, no imports at call time beyond PIL and the
     two evidence functions themselves.
+
+    `stale_extractor_keys`/`stored_evidence_fields`/`stored_extractor_versions` (2026-08-19,
+    perf/per-extractor-reextraction): forwarded straight through to `compute_card_evidence`'s own
+    parameters of the same names - see that function's own docstring for the carry-forward
+    mechanism. `_run_stage_c` is the caller that decides what to pass here, including forcing all
+    three to `None` under `force_stage_c_reextract` - see that function's own docstring.
     """
     from io import BytesIO
 
@@ -821,6 +845,9 @@ def _stage_c_compute_one_card(
             modern_artist_lexicon=_compute_pool_modern_artist_lexicon,
             md5_checksum=md5_checksum,
             sha256_checksum=sha256_checksum,
+            stale_extractor_keys=stale_extractor_keys,
+            stored_evidence_fields=stored_evidence_fields,
+            stored_extractor_versions=stored_extractor_versions,
         )
         if not dry_run:
             with suppress_evidence_change_echo():
@@ -888,6 +915,11 @@ def _stage_c_fetch_one(card: "Card") -> "_StageCFetchOutcome":
         )
 
     fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
+    (
+        stale_extractor_keys,
+        stored_evidence_fields,
+        stored_extractor_versions,
+    ) = _stage_c_stale_extractor_keys_and_stored_fields(card)
     return _StageCFetchOutcome(
         card_id=card.pk,
         content_hash=card.content_phash,
@@ -896,6 +928,9 @@ def _stage_c_fetch_one(card: "Card") -> "_StageCFetchOutcome":
         image_bytes=image_bytes,
         fetch_latency_ms=fetch_latency_ms,
         card_name=card.name,
+        stale_extractor_keys=stale_extractor_keys,
+        stored_evidence_fields=stored_evidence_fields,
+        stored_extractor_versions=stored_extractor_versions,
     )
 
 
@@ -946,6 +981,14 @@ class _StageCFetchOutcome:
     # let sustained rate pressure trip `EnvelopeTrip.Bar.FETCH_FAILURE_RATE` and hard-stop the
     # whole unattended pass.
     throttled: bool = False
+    # PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction) - resolved by
+    # `_stage_c_fetch_one` from this card's own current `ImageEvidence` row, if one exists, and
+    # forwarded to `_stage_c_compute_one_card` -> `compute_card_evidence`'s own carry-forward
+    # parameters of the same names. All `None` (no current row yet) means "recompute everything,"
+    # `compute_card_evidence`'s own existing default behaviour.
+    stale_extractor_keys: "Optional[frozenset[str]]" = None
+    stored_evidence_fields: "Optional[dict[str, Any]]" = None
+    stored_extractor_versions: "Optional[dict[str, Any]]" = None
 
 
 def _run_stage_c(
@@ -1153,6 +1196,13 @@ def _run_stage_c(
                 fetch_outcome.card_name,
                 run_id,
                 dry_run,
+                # `force_stage_c_reextract` keeps meaning "ignore versions, recompute EVERYTHING"
+                # (see this function's own docstring) - passing `None` here is what makes
+                # `compute_card_evidence` treat every extractor as stale, exactly as before this
+                # per-extractor carry-forward mechanism existed.
+                None if force_stage_c_reextract else fetch_outcome.stale_extractor_keys,
+                None if force_stage_c_reextract else fetch_outcome.stored_evidence_fields,
+                None if force_stage_c_reextract else fetch_outcome.stored_extractor_versions,
             )
             pending_compute[cf] = fetch_outcome.card_id
 
