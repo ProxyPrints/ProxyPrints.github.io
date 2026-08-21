@@ -1195,7 +1195,8 @@ export async function APIGetPrintingTagQueue(
 export async function APIGetQuestionFeed(
   backendURL: string,
   anonymousId: string,
-  credentials: RequestCredentials = "same-origin"
+  credentials: RequestCredentials = "same-origin",
+  signal?: AbortSignal
 ): Promise<QuestionFeedResponse> {
   const rawResponse = await fetch(
     formatURL(
@@ -1206,6 +1207,7 @@ export async function APIGetQuestionFeed(
       method: "GET",
       credentials,
       headers: getCSRFHeader(),
+      signal,
     }
   );
   return rawResponse.json().then((content) => {
