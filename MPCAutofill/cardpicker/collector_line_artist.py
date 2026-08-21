@@ -124,8 +124,13 @@ Name resolution is NOT reimplemented here. `NameArtistLookup` delegates entirely
 three-tier normaliser (`to_searchable`, filename-duplicate-suffix strip, de-concatenation
 fallback) - and Stage D skips even that, reading the artists straight off the name-scoped
 `list[CandidatePrinting]` it has already resolved via `_resolve_candidates_for_card`. A private
-second normaliser would put the two halves of one predicate in different name spaces, which is
-exactly what made `local-name-frequency-v1` 79.8% unsound.
+second normaliser here would put the two halves of one predicate in different name spaces - a
+real hazard on its own engineering merits, and one `local-name-frequency-v1` still carries today
+(it groups its eligible-card count by the raw `Card.name` while resolving candidate printings
+through the normalised `to_searchable` key). A read-only backtest against this catalogue's own
+confirmed matches found that calculator's structural double gate wrong on 64.9% of its checkable
+outcomes (1,945/2,996 simulated firings) - see
+`docs/reports/2026-08-21-name-frequency-elimination-soundness.md` for the method and its bounds.
 
 COMPATIBLE NAMES, NOT ONE NAME - the single most important design decision here, and the reason
 this module returns a SET. A truncated read is frequently, and irreducibly, compatible with more
@@ -745,8 +750,9 @@ class NameArtistLookup:
     existing three-tier normaliser (`to_searchable`, then a filename-duplicate-suffix strip, then
     the de-concatenation fallback), and reads `CandidatePrinting.artist_name` off whatever that
     returns. A second, private normaliser here would be a name-space mismatch between the two
-    halves of one predicate - exactly the defect that made `local-name-frequency-v1` unsound - and
-    is why this class contains no string handling at all.
+    halves of one predicate - the same class of hazard `local-name-frequency-v1` still carries
+    today (see the module docstring's NAME RESOLUTION paragraph) - and is why this class contains
+    no string handling at all.
 
     Uploader-decorated names ("Vorpal Sword (NormalPlus Alessandra Pisano)") and genuinely custom
     cards resolve to zero candidates; that is reported honestly as an EMPTY tuple, which every
