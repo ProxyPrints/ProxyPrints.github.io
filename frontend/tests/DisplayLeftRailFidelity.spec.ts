@@ -175,14 +175,21 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(filtersToggle).toHaveCSS("font-size", "14px");
     await expect(filtersToggle).toHaveCSS("padding", "4px 8px");
     expect(await filtersToggle.evaluate((el) => el.tagName)).toBe("BUTTON");
-    // E3/X2 (Bkg 5) - editor-repass round (item 1): the panel now starts OPEN
-    // (`initialSettingsVisible={true}`), so the toggle's initial aria-expanded is "true".
+    // Filter-panel overlay round (owner live-use report, reversing editor-repass item 1) - the
+    // panel now starts CLOSED (`initialSettingsVisible={false}`), so the toggle's initial
+    // aria-expanded is "false" and the panel itself isn't in the DOM's visible state yet.
+    await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
+    const inlinePanel = page.getByTestId("filters-panel-inline");
+    await expect(inlinePanel).not.toBeVisible();
+
+    await filtersToggle.click();
     await expect(filtersToggle).toHaveAttribute("aria-expanded", "true");
 
-    // Rail-anchored filters round - the Filters panel is the SAME in-rail panel the phone tier
+    // Filter-panel overlay round - the Filters panel is the SAME in-rail panel the phone tier
     // already used (`.fpanel.inline`) - there is no separate float/scrim variant any more, and
-    // no page-darkening backdrop appears anywhere; the panel is open on load, not after a tap.
-    const inlinePanel = page.getByTestId("filters-panel-inline");
+    // no page-darkening backdrop appears anywhere. It now draws as an absolutely-positioned
+    // overlay (not `position: fixed`) anchored to the head row above it, rather than pushing the
+    // rail wider or the grid below it down.
     await expect(inlinePanel).toBeVisible();
     await expect(inlinePanel).not.toHaveCSS("position", "fixed");
     await expect(page.getByTestId("filters-panel-float")).toHaveCount(0);
@@ -199,15 +206,14 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
       inlinePanel.getByTestId("funnel-frame-treatment-row")
     ).toHaveCSS("gap", "6px");
 
-    // Rail-anchored filters round - the candidate grid stays visible while the panel is open (the
-    // whole point of a rail-drawn panel over a covering dialog): nothing overlays it.
+    // Filter-panel overlay round - the candidate grid stays in the DOM and visible while the
+    // panel is open (it draws on top of it rather than pushing it out of the viewport).
     await expect(
       page.getByTestId("select-version-continuous-grid")
     ).toBeVisible();
 
     // The panel closes via its own Close button, same as it always could - it just no longer has
-    // a backdrop to also close it via; and the toggle still reopens it (item 1 only changed the
-    // INITIAL state, not the open/close mechanics).
+    // a backdrop to also close it via; and the toggle still reopens it.
     await page.getByTestId("filters-panel-close").click();
     await expect(inlinePanel).not.toBeVisible();
     await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
@@ -406,9 +412,12 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
 
     const filtersToggle = page.getByTestId("funnel-filters-toggle");
     await expect(filtersToggle).toBeVisible();
-    // Editor-repass round (item 1) - the panel is already open on load, but the toggle still
-    // closes/reopens it; exercise both directions here so the phone tier's in-place behavior is
-    // asserted against an actual open/close cycle, not just the initial state.
+    // Filter-panel overlay round - the panel starts closed at every tier now; exercise a real
+    // open/close cycle here so the phone tier's in-place behavior is asserted against actual
+    // toggling, not just the initial state.
+    await expect(page.getByTestId("filters-panel-inline")).not.toBeVisible();
+    await filtersToggle.click();
+    await expect(page.getByTestId("filters-panel-inline")).toBeVisible();
     await filtersToggle.click();
     await expect(page.getByTestId("filters-panel-inline")).not.toBeVisible();
     await filtersToggle.click();

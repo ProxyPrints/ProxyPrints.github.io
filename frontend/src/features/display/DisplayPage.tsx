@@ -797,12 +797,15 @@ const PromotedZone = ({
 // Editor-completion package, E2/E3/L4 (Bkg 1/2/4/5) - promoted to the always-visible, always-open
 // art surface (renamed "Select Version", no AutofillCollapse wrapper at all - it's no longer a
 // collapsible section, "Choose Image" as an accordion key is gone from AccordionSectionKey
-// entirely). `initialSettingsVisible={true}` on useGridSelectorSearch and `layout="stacked"` on
-// SelectVersionResults: the Filters panel starts OPEN (editor-repass round, item 1), and
-// LeftRailOffcanvas widens to 640px while it's open (SelectVersionResults' onFiltersOpenChange) -
-// so the redline's Bkg 2/4/5 breakages (filters auto-opening cramped inside the 380px rail,
-// "Jump to Version" wrapping vertically, bottom controls clipping at the rail edge) are answered
-// by the wider rail rather than by collapsing the panel - see those two files' own prop comments.
+// entirely). `layout="stacked"` on SelectVersionResults.
+//
+// Filter-panel overlay round (owner live-use report, reversing editor-repass item 1): the Filters
+// panel now starts CLOSED (`initialSettingsVisible={false}`) - open-by-default cost the rail's
+// whole height before the user asked for anything. It also no longer widens the rail or pushes
+// the sheet/rail content when opened - it draws as an in-rail overlay instead (see
+// SelectVersionResults.tsx's own module comment and DisplayPage.tsx's own `.fpanel.inline`/
+// `.fpanel-overlay-anchor` CSS below). The rail-widening `onFiltersOpenChange` thread this used
+// to drive (LeftRailOffcanvas's own `$filtersOpen`) is removed entirely, not just disconnected.
 
 /* A slot whose query has no results yet resolves to this shared reference rather than a fresh
    `[]`. A new array each render misses `selectCardDocumentsByIdentifiers`' size-1 memo, which
@@ -827,10 +830,6 @@ interface SelectVersionSectionProps {
     candidateIdentifier: string,
     supportTagNames: string[]
   ) => void;
-  /** Rail-anchored filters round - forwarded straight through to SelectVersionResults' own prop
-   * of the same name (see its comment); lets LeftRailOffcanvas widen while the Filters panel is
-   * open. */
-  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 // Reuses the same real search/filter machinery GridSelectorModal itself now delegates to
@@ -849,7 +848,6 @@ const SelectVersionSection = ({
   selectedImage,
   backendURL,
   onImplicitSupport,
-  onFiltersOpenChange,
 }: SelectVersionSectionProps) => {
   const dispatch = useAppDispatch();
   const getTagDisplayName = useTagDisplayName();
@@ -899,16 +897,14 @@ const SelectVersionSection = ({
       )
     ) ?? EMPTY_SEARCH_RESULTS;
   const focusRef = useRef<HTMLInputElement>(null);
-  // E3/X2 (Bkg 5) - the rail now starts with Filters OPEN at every viewport width, regardless of
-  // the rail's current width (the modal's own GridSelectorModal caller doesn't pass this, so its
-  // width-based default is unchanged). The initial open fires `onFiltersOpenChange` on mount
-  // (SelectVersionResults' own effect), so LeftRailOffcanvas widens to 640px alongside it - the
-  // redline's "filters auto-opening cramped inside the 380px rail" breakage is answered by the
-  // wider rail, not by collapsing the panel.
+  // Filter-panel overlay round - the rail starts with Filters CLOSED (the modal's own
+  // GridSelectorModal caller doesn't pass this, so its width-based default is unchanged); the
+  // panel draws as an in-rail overlay when opened rather than widening the rail, so there's no
+  // "cramped inside a narrow rail" breakage left to answer by starting open.
   const search = useGridSelectorSearch({
     imageIdentifiers: searchResultsForQuery,
     active: true,
-    initialSettingsVisible: true,
+    initialSettingsVisible: false,
   });
 
   const onSelectImage = (identifier: string) => {
@@ -970,7 +966,6 @@ const SelectVersionSection = ({
         backendURL={backendURL}
         layout="stacked"
         voteLayer={voteLayer}
-        onFiltersOpenChange={onFiltersOpenChange}
       />
     </>
   );
@@ -1182,11 +1177,8 @@ const DisplayBodyRegion = styled.div`
 // hasn't reached its cap yet), so growing a rail there would come directly out of the sheet's
 // own render width, not out of dead space - confirmed against the wide-viewport sheet-region
 // assertion in DisplayPage.spec.ts (1400px, well under this threshold, is untouched by the clamps
-// below). RAIL_GROWTH_THRESHOLD_FILTERS_OPEN_PX is the same derivation with the left rail's own
-// wider floor (640, not 380): 640 + 300 + 960 + 32 = 1932.
+// below).
 const RAIL_GROWTH_THRESHOLD_PX = 380 + 300 + SHEET_MAX_WIDTH_PX + 32;
-const RAIL_GROWTH_THRESHOLD_FILTERS_OPEN_PX =
-  640 + 300 + SHEET_MAX_WIDTH_PX + 32;
 
 // Past its own threshold, each rail claims a fixed share of the extra viewport width beyond it -
 // 60% to the left rail, 40% to the right. The left rail gets the bigger share because it's the
@@ -1196,19 +1188,14 @@ const RAIL_GROWTH_THRESHOLD_FILTERS_OPEN_PX =
 // at a cap chosen so neither rail turns into a full sidebar on an ultrawide monitor - past the
 // cap, residual dead space on very wide viewports is an accepted trade for not overgrowing the
 // rails.
-const leftRailWidth = (filtersOpen: boolean) =>
-  filtersOpen
-    ? `clamp(640px, calc(640px + (100vw - ${RAIL_GROWTH_THRESHOLD_FILTERS_OPEN_PX}px) * 0.6), 820px)`
-    : `clamp(380px, calc(380px + (100vw - ${RAIL_GROWTH_THRESHOLD_PX}px) * 0.6), 560px)`;
+const LEFT_RAIL_WIDTH = `clamp(380px, calc(380px + (100vw - ${RAIL_GROWTH_THRESHOLD_PX}px) * 0.6), 560px)`;
 const RIGHT_RAIL_WIDTH = `clamp(300px, calc(300px + (100vw - ${RAIL_GROWTH_THRESHOLD_PX}px) * 0.4), 420px)`;
 
-// Rail-anchored filters round - `$filtersOpen` (SelectVersionResults.tsx's own
-// `onFiltersOpenChange`, threaded through Rail/SelectVersionSection below) widens this SAME rail
-// column instead of floating a separate panel over the page: the inline (`lg`+) sticky column and
-// the tablet `start` drawer both grow from their normal width while the funnel's Filters panel is
-// open, so its fieldsets and the candidate grid underneath both fit without one covering the
-// other. Phone's `bottom` sheet is untouched - it's already full-viewport width.
-const LeftRailOffcanvas = styled(Offcanvas)<{ $filtersOpen?: boolean }>`
+// Filter-panel overlay round - the rail's own width is now constant whether the Filters panel is
+// open or closed, at every tier: `400px` tablet drawer, `LEFT_RAIL_WIDTH` inline column. The
+// panel draws as an in-rail overlay instead (SelectVersionResults.tsx's own `.fpanel.inline`),
+// so there's no width to widen here any more.
+const LeftRailOffcanvas = styled(Offcanvas)`
   &.offcanvas-bottom {
     height: 72vh;
     border-top-left-radius: 0.75rem;
@@ -1216,16 +1203,15 @@ const LeftRailOffcanvas = styled(Offcanvas)<{ $filtersOpen?: boolean }>`
   }
 
   &.offcanvas-start {
-    width: ${(props) => (props.$filtersOpen ? "min(640px, 92vw)" : "400px")};
-    max-width: ${(props) =>
-      props.$filtersOpen ? "min(640px, 92vw)" : "400px"};
+    width: 400px;
+    max-width: 400px;
   }
 
   @media (min-width: 992px) {
     &.offcanvas-lg {
-      width: ${(props) => leftRailWidth(props.$filtersOpen ?? false)};
-      max-width: ${(props) => leftRailWidth(props.$filtersOpen ?? false)};
-      flex: 0 0 ${(props) => leftRailWidth(props.$filtersOpen ?? false)};
+      width: ${LEFT_RAIL_WIDTH};
+      max-width: ${LEFT_RAIL_WIDTH};
+      flex: 0 0 ${LEFT_RAIL_WIDTH};
       position: sticky;
       top: 0;
       max-height: 100vh;
@@ -1871,27 +1857,41 @@ const RailRoot = styled.div`
     color: var(--theme-btn-ink);
   }
 
-  /* Rail-anchored filters round - ONE panel now, every viewport tier: this .fpanel.inline,
-     expanded in place via an in-rail Collapse (SelectVersionResults.tsx) - no page-darkening
-     backdrop, no document.body portal any more (the old .fpanel.float/.fscrim pair is retired).
-     The left accent border reads it as belonging to this rail, not a dialog floating over the
-     page; LeftRailOffcanvas widens itself while it's open (this component's own $filtersOpen
-     prop, below) so the funnel's chips and the candidate grid stay visible together instead of
-     one covering the other. */
+  /* Filter-panel overlay round - the panel draws ON TOP of the candidate grid and the rail's
+     other blocks instead of pushing them: svheadwrap (the head row's own wrapper,
+     SelectVersionResults.tsx) is the positioned anchor, fpanel-overlay-anchor (the Collapse's
+     own direct child - Collapse animates ITS height/overflow, not the panel's) hangs off it
+     absolutely, and fpanel.inline caps its own height with internal scroll so it never grows
+     to cover the whole rail. No page-darkening backdrop, no document.body portal - the left
+     accent border and box-shadow read it as this rail's own panel lifting off the surface below
+     it, not a dialog floating over the page. */
+  .svheadwrap {
+    position: relative;
+  }
+  .fpanel-overlay-anchor {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 20;
+  }
   .fpanel {
     background: var(--theme-raised-bg);
     border: 1px solid var(--theme-divider);
     padding: 0;
   }
   .fpanel.inline {
-    margin-bottom: 8px;
+    margin-top: 4px;
     border-left: 3px solid var(--bs-primary);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
+    max-height: min(55vh, 380px);
+    overflow-y: auto;
   }
   .fptitle {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
+    padding: 6px 12px;
     background: var(--theme-card-header-bg);
     font-size: 12px;
     font-weight: 700;
@@ -1908,11 +1908,11 @@ const RailRoot = styled.div`
     font-size: 12px;
   }
   .fpwrap {
-    padding: 8px;
+    padding: 6px 8px;
   }
   .fset {
     border: none;
-    margin: 0 0 9px;
+    margin: 0 0 6px;
     padding: 0;
   }
   .fset:last-child {
@@ -1924,17 +1924,17 @@ const RailRoot = styled.div`
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--theme-muted);
-    margin-bottom: 4px;
+    margin-bottom: 3px;
   }
   .fsep {
     height: 1px;
     background: var(--theme-divider);
-    margin: 9px -8px;
+    margin: 6px -8px;
   }
   .implicit-note {
     font-size: 10px;
     color: var(--theme-muted);
-    margin-top: 7px;
+    margin-top: 5px;
     display: flex;
     gap: 5px;
     align-items: flex-start;
@@ -2034,9 +2034,6 @@ interface RailProps {
     candidateIdentifier: string,
     supportTagNames: string[]
   ) => void;
-  /** Rail-anchored filters round - threaded straight through to SelectVersionSection/
-   * SelectVersionResults; see SelectVersionResults' own prop comment. */
-  onFiltersOpenChange?: (open: boolean) => void;
 }
 
 const Rail = ({
@@ -2045,7 +2042,6 @@ const Rail = ({
   backendURL,
   onSlotDeleted,
   onImplicitSupport,
-  onFiltersOpenChange,
 }: RailProps) => {
   // Rail-delegacy round - the old six-key `expandedSections` accordion state is gone with the
   // grey sections it drove; the two remaining disclosures ("More details", the D14 identify
@@ -2192,7 +2188,6 @@ const Rail = ({
           selectedImage={selectedImage}
           backendURL={backendURL}
           onImplicitSupport={onImplicitSupport}
-          onFiltersOpenChange={onFiltersOpenChange}
         />
       </div>
       {/* Rail restructure ruling 2 - the per-slot cardback control proposes a DIFFERENT card
@@ -2311,11 +2306,6 @@ export function DisplayPage() {
     viewportTier === "phone" ? "bottom" : "start";
   const [leftRailOpen, setLeftRailOpen] = useState(false);
   const [rightRailOpen, setRightRailOpen] = useState(false);
-  // Rail-anchored filters round - SelectVersionResults' own Filters panel, reported up through
-  // Rail/SelectVersionSection (see their own `onFiltersOpenChange` prop comments). Drives
-  // LeftRailOffcanvas's `$filtersOpen` width below - the panel is drawn from this rail by widening
-  // it, not by floating a separate darkened dialog over the page.
-  const [railFiltersOpen, setRailFiltersOpen] = useState(false);
   // Design doc §4's "two overlays, one screen" invariant - opening either rail closes the other,
   // so they never stack below their own inline tier. Harmless to call at inline tiers too:
   // Offcanvas ignores `show` there entirely (see its own source - `hideResponsiveOffcanvas`
@@ -2976,7 +2966,6 @@ export function DisplayPage() {
           onHide={() => setLeftRailOpen(false)}
           responsive="lg"
           placement={leftPlacement}
-          $filtersOpen={railFiltersOpen}
           data-testid="display-rail"
           aria-label="Card details and art selection"
         >
@@ -3025,7 +3014,6 @@ export function DisplayPage() {
               cardDocumentsByIdentifier={cardDocumentsByIdentifier}
               backendURL={backendURL ?? ""}
               onSlotDeleted={() => setSelectedSlotRef(null)}
-              onFiltersOpenChange={setRailFiltersOpen}
               onImplicitSupport={
                 selectedSlotRef != null
                   ? (candidateIdentifier, supportTagNames) =>
