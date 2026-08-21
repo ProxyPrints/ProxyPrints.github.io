@@ -80,7 +80,7 @@ def make_one_vote_from_resolving_card() -> tuple:
     return card, printing
 
 
-_COMPLETE_EVIDENCE_TYPES = ("border", "artist", "symbol")
+_COMPLETE_EVIDENCE_TYPES = ("border", "artist", "collector_line")
 
 
 def make_ai_suggested_card(
