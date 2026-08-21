@@ -949,18 +949,18 @@ def _candidates_split_on_border(candidates: Sequence[PrintingCandidate]) -> bool
     return len(border_colors) > 1
 
 
-def _likely_resolve_item(card: Card) -> QuestionFeedItem:
+def _likely_resolve_item(card: Card, allow_narrowing: bool = True) -> QuestionFeedItem:
     """
     For the LIKELY-RESOLVE pool (a printing question one more agreeing human vote would
     resolve, per `is_likely_resolve_printing`): serves the MOST DISCRIMINATING question for
     THIS card rather than always a printing confirmation, per
     docs/features/wtc-question-model.md's routing rule -
 
-    1. If `card`'s own candidates split on border colour AND that colour hasn't been recorded
-       yet (`_card_border_unrecorded`/`_candidates_split_on_border`), a border answer narrows
-       this card's own candidate set - serve `border`.
-    2. Otherwise, if `card`'s illustration identity is still unresolved, serve the illustration
-       question.
+    1. If `allow_narrowing` and `card`'s own candidates split on border colour AND that colour
+       hasn't been recorded yet (`_card_border_unrecorded`/`_candidates_split_on_border`), a
+       border answer narrows this card's own candidate set - serve `border`.
+    2. Otherwise, if `allow_narrowing` and `card`'s illustration identity is still unresolved,
+       serve the illustration question.
     3. Otherwise, fall through to the pre-existing behaviour: a `confirm_suggestion` (it has a
        live machine-sourced suggestion to confirm - the common shape within this pool, the data
        brief's 45,154-of-46,310 single-candidate split) or a bare `identify_printing` question
@@ -969,19 +969,29 @@ def _likely_resolve_item(card: Card) -> QuestionFeedItem:
     The likely-resolve pool changes WHICH card gets served first; this routing changes WHAT
     QUESTION is asked about that card - narrowing candidates resolves the card faster than an
     unconditional printing confirmation whenever a cheaper, narrowing answer is available.
+
+    `allow_narrowing` (default `True`, so every existing per-card routing test above is
+    unaffected) is `get_next_question_feed_item`'s session-level valve, not a property of the
+    card: no border-colour tag has ever reached RESOLVED_APPLY catalogue-wide (measured
+    2026-08-21), so step 1's own condition is true for essentially every card whose candidates
+    split on border, and step 2 absorbs most of what step 1 doesn't - uncapped, this pool never
+    reaches step 3, the printing question the pool exists to serve. See
+    `_likely_resolve_narrowing_ratio`/`settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO`
+    for the cap that sets this to `False` once a session's own narrowing share is high enough.
     """
     candidates = get_ranked_printing_candidates(card, card.name)
     serialised_candidates = [candidate.serialise_as_printing_candidate() for candidate in candidates]
-    if _card_border_unrecorded(card) and _candidates_split_on_border(serialised_candidates):
-        return _border_item(card)
-    # Gated on actually carrying illustration data (mirrors `_tier_4_fresh`'s own
-    # `illustration_id__isnull=False` filter), not merely UNRESOLVED - that status is the
-    # model default for every card, so an ungated check would route almost every likely-resolve
-    # card through here regardless of whether an illustration question is even answerable for it.
-    if card.illustration_vote_status == IllustrationVoteStatus.UNRESOLVED and any(
-        candidate.illustrationId is not None for candidate in serialised_candidates
-    ):
-        return _illustration_item(card)
+    if allow_narrowing:
+        if _card_border_unrecorded(card) and _candidates_split_on_border(serialised_candidates):
+            return _border_item(card)
+        # Gated on actually carrying illustration data (mirrors `_tier_4_fresh`'s own
+        # `illustration_id__isnull=False` filter), not merely UNRESOLVED - that status is the
+        # model default for every card, so an ungated check would route almost every likely-resolve
+        # card through here regardless of whether an illustration question is even answerable for it.
+        if card.illustration_vote_status == IllustrationVoteStatus.UNRESOLVED and any(
+            candidate.illustrationId is not None for candidate in serialised_candidates
+        ):
+            return _illustration_item(card)
     item = _confirm_suggestion_item(card)
     if item is not None:
         return item
@@ -1277,6 +1287,36 @@ def _served_mix_ratio(anonymous_id: str) -> float:
     return likely_resolve_count / total
 
 
+# Narrowing question types `_likely_resolve_narrowing_ratio` counts against a LIKELY-RESOLVE
+# serving - the two `_likely_resolve_item` can serve instead of a printing question
+# (confirm_suggestion/identify_printing) when `allow_narrowing` is `True`.
+_NARROWING_QUESTION_TYPES = frozenset({TypeEnum.border.value, TypeEnum.illustration.value})
+
+
+def _likely_resolve_narrowing_ratio(anonymous_id: str) -> float:
+    """
+    `_likely_resolve_item`'s own analogue of `_served_mix_ratio` above: the share of this
+    `anonymous_id`'s own LIKELY_RESOLVE-pool servings so far that were a narrowing question
+    (border/illustration) rather than a printing question (confirm_suggestion/
+    identify_printing) - the ratio `get_next_question_feed_item` checks against
+    `settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO` before calling
+    `_likely_resolve_item(card, allow_narrowing=...)`. Same "0.0 for no history yet" convention
+    as `_served_mix_ratio`: a fresh session's first likely-resolve question still gets to try
+    the most-discriminating-question routing before the cap applies.
+    """
+    total = QuestionFeedServedLog.objects.filter(
+        anonymous_id=anonymous_id, pool=QuestionFeedServedPool.LIKELY_RESOLVE
+    ).count()
+    if total == 0:
+        return 0.0
+    narrowing_count = QuestionFeedServedLog.objects.filter(
+        anonymous_id=anonymous_id,
+        pool=QuestionFeedServedPool.LIKELY_RESOLVE,
+        question_type__in=_NARROWING_QUESTION_TYPES,
+    ).count()
+    return narrowing_count / total
+
+
 # The remainder waterfall's try-order (issue #766: replaces the deleted weighted rotation -
 # see this module's own "Evidence-gated printing-confirmation policy" docstring section for why
 # a ratio is no longer the right tool once tier 1 is gated rather than ranked). Fixed, not
@@ -1421,7 +1461,11 @@ def get_next_question_feed_item(
             answered_card_ids, hidden_card_ids=hidden_card_ids
         )
         if likely_resolve_card is not None:
-            item = _likely_resolve_item(likely_resolve_card)
+            allow_narrowing = (
+                _likely_resolve_narrowing_ratio(anonymous_id)
+                < settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO
+            )
+            item = _likely_resolve_item(likely_resolve_card, allow_narrowing=allow_narrowing)
             return _log_served(
                 anonymous_id, item, QuestionFeedServedPool.LIKELY_RESOLVE, "printing_one_vote_from_resolving"
             )

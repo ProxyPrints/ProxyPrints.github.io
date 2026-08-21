@@ -105,6 +105,17 @@ ILLUSTRATION_MIN_SHARE = env.float("ILLUSTRATION_MIN_SHARE", default=PRINTING_TA
 # weight/threshold/gate. See docs/features/printing-tags.md's "Unified question feed" section.
 QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO = env.float("QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO", default=0.51)
 
+# Ceiling share of a session's own LIKELY-RESOLVE-pool servings that may be a narrowing
+# question (border/illustration) rather than a printing question (confirm_suggestion/
+# identify_printing) - see cardpicker.question_feed._likely_resolve_narrowing_ratio. No card
+# in the catalogue carries a RESOLVED_APPLY border-colour tag (measured 2026-08-21), so
+# uncapped, the border/illustration branches preempt a printing question for nearly every
+# likely-resolve card. 0.5 keeps both question types reachable rather than 0.0 (deletes
+# narrowing questions) or 1.0 (today's unbounded behavior).
+QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO = env.float(
+    "QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO", default=0.5
+)
+
 # QUESTION_FEED_CONFIRM_MIX_WEIGHT/_CONTESTED_MIX_WEIGHT/_COLD_MIX_WEIGHT (2026-08-10, defaults
 # 3/2/1) removed (issue #766): they rationed a fixed SHARE of a session's questions to
 # confirm_suggestion regardless of whether the machine's own evidence justified asking it. The
