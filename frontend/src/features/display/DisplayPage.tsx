@@ -365,6 +365,15 @@ interface DisplaySheetSettings {
   customPageHeightMM?: number;
   bleedEdgeMM: number;
   showCutLines: boolean;
+  // Guide appearance (rail section below, next to the Guides toggle) - only meaningful while
+  // showCutLines is true, moved from DisplayExportPDF.tsx's own settings step for the same
+  // reason imageDPI/jpgQuality/roundCorners moved: printed-artifact appearance, not a one-off
+  // export-run choice (see displayPdfProps.ts's DisplaySheetExportSettings comment).
+  cutLineColor: string;
+  showCrossCutLines: boolean;
+  cutLineLengthMM: number;
+  cutLineThicknessMM: number;
+  cutLineOffsetMM: number;
   // Registration compensation (PageOffsetControl.tsx) - plain, unpersisted component state, same
   // as every other field here (see this file's own "known gap" note on why Page Setup state
   // doesn't survive to the classic PDFGenerator). Defaults to 0: no correction until the user
@@ -391,6 +400,13 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   pageSize: "LETTER",
   bleedEdgeMM: STANDARD_BLEED_MARGIN_MM,
   showCutLines: true,
+  // Matches the old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS values this migrated from,
+  // unchanged - the lime colour matches PagePreview.tsx's own E19 screen-side guide colour.
+  cutLineColor: "#8ae234",
+  showCrossCutLines: false,
+  cutLineLengthMM: 3,
+  cutLineThicknessMM: 0.6,
+  cutLineOffsetMM: 0,
   offsetXMM: 0,
   offsetYMM: 0,
   // Same full-res 600 DPI/100% pipeline PDFGenerator.tsx's own download path uses - matches the
@@ -3394,6 +3410,104 @@ export function DisplayPage() {
                     }))
                   }
                 />
+
+                {/* Guide appearance - moved from DisplayExportPDF.tsx's own settings step (this
+                    PR), same migration as Print quality below. Only rendered while Guides is on -
+                    with no lines drawn there's nothing for these to style, matching the old
+                    export dialog's own gating (DisplayExportPDF.tsx used to key this same block
+                    off sheetSettings.showCutLines). Colour + the three geometry numbers stay on
+                    one row (aria-labels carry what each field is - no separate caption line,
+                    kept tight to hold the rail under its pre-trim height cap). */}
+                {settings.showCutLines && (
+                  // Closes Bootstrap's default form-check bottom margin above this block -
+                  // Tailwind/Bootstrap spacing utilities bottom out at 4px steps, which left the
+                  // rail 4-6px over its 1131px pre-trim height cap; this is the last lever short
+                  // of dropping a control.
+                  <div style={{ marginTop: -6 }}>
+                    <div className="d-flex gap-2 align-items-center mb-0">
+                      <Form.Control
+                        type="color"
+                        size="sm"
+                        aria-label="Guide colour"
+                        data-testid="display-cut-line-color"
+                        value={settings.cutLineColor}
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            cutLineColor: event.target.value,
+                          }))
+                        }
+                      />
+                      <Form.Control
+                        type="number"
+                        size="sm"
+                        step={0.1}
+                        min={0}
+                        aria-label="Cut line length (mm)"
+                        data-testid="display-cut-line-length"
+                        value={settings.cutLineLengthMM}
+                        onChange={(event) => {
+                          const value = parseFloat(event.target.value);
+                          if (!Number.isNaN(value)) {
+                            setSettings((previous) => ({
+                              ...previous,
+                              cutLineLengthMM: value,
+                            }));
+                          }
+                        }}
+                      />
+                      <Form.Control
+                        type="number"
+                        size="sm"
+                        step={0.1}
+                        min={0}
+                        aria-label="Cut line thickness (mm)"
+                        data-testid="display-cut-line-thickness"
+                        value={settings.cutLineThicknessMM}
+                        onChange={(event) => {
+                          const value = parseFloat(event.target.value);
+                          if (!Number.isNaN(value)) {
+                            setSettings((previous) => ({
+                              ...previous,
+                              cutLineThicknessMM: value,
+                            }));
+                          }
+                        }}
+                      />
+                      <Form.Control
+                        type="number"
+                        size="sm"
+                        step={0.1}
+                        aria-label="Cut line offset (mm)"
+                        data-testid="display-cut-line-offset"
+                        value={settings.cutLineOffsetMM}
+                        onChange={(event) => {
+                          const value = parseFloat(event.target.value);
+                          if (!Number.isNaN(value)) {
+                            setSettings((previous) => ({
+                              ...previous,
+                              cutLineOffsetMM: value,
+                            }));
+                          }
+                        }}
+                      />
+                    </div>
+                    <Form.Check
+                      type="switch"
+                      id="display-cross-cut-lines-toggle"
+                      className="mb-0"
+                      data-testid="display-cross-cut-lines"
+                      label="Crosshair marks"
+                      checked={settings.showCrossCutLines}
+                      onChange={(event) =>
+                        setSettings((previous) => ({
+                          ...previous,
+                          showCrossCutLines: event.target.checked,
+                        }))
+                      }
+                    />
+                  </div>
+                )}
 
                 {/* D19 (proposal-h-display-layout-spec.md ADDENDUM) - Horizontal (X ->
                     spacing.col) / Vertical (Y -> spacing.row) numeric inputs + a link/unlink

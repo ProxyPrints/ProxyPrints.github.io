@@ -231,27 +231,22 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    await openPDFSettings(page);
-    await expect(
-      page.getByTestId("display-export-cut-line-color")
-    ).toBeVisible();
-    const crossToggle = page.getByTestId("display-export-cross-cut-lines");
+    // These now live in the rail next to the Guides toggle they depend on, not the export
+    // dialog - no dialog to open for this check.
+    await expect(page.getByTestId("display-cut-line-color")).toBeVisible();
+    const crossToggle = page.getByTestId("display-cross-cut-lines");
     await expect(crossToggle).toBeVisible();
     await expect(crossToggle).not.toBeChecked();
-    await page.getByTestId("display-export-cut-line-color").fill("#ff0000");
+    await page.getByTestId("display-cut-line-color").fill("#ff0000");
     await crossToggle.check();
-    await expect(page.getByTestId("display-export-cut-line-color")).toHaveValue(
+    await expect(page.getByTestId("display-cut-line-color")).toHaveValue(
       "#ff0000"
     );
     await expect(crossToggle).toBeChecked();
-    await page.getByRole("button", { name: "Cancel" }).click();
 
     // Guides off -> the colour/cross-marks controls have nothing to style, so they don't render.
     await page.getByLabel("Guides").uncheck();
-    await openPDFSettings(page);
-    await expect(
-      page.getByTestId("display-export-cut-line-color")
-    ).not.toBeVisible();
+    await expect(page.getByTestId("display-cut-line-color")).not.toBeVisible();
   });
 
   test("the bleed-will-be-generated badge appears on the editor sheet for a forced-trimmed eligible card", async ({
@@ -411,20 +406,18 @@ test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    await openPDFSettings(page);
-    await page.getByTestId("display-export-cut-line-length").fill("5");
-    await page.getByTestId("display-export-cut-line-thickness").fill("1");
-    await page.getByTestId("display-export-cut-line-offset").fill("0.5");
+    // Rail controls now, next to the Guides toggle (on by default) - no dialog involved.
+    await page.getByTestId("display-cut-line-length").fill("5");
+    await page.getByTestId("display-cut-line-thickness").fill("1");
+    await page.getByTestId("display-cut-line-offset").fill("0.5");
 
-    await expect(
-      page.getByTestId("display-export-cut-line-length")
-    ).toHaveValue("5");
-    await expect(
-      page.getByTestId("display-export-cut-line-thickness")
-    ).toHaveValue("1");
-    await expect(
-      page.getByTestId("display-export-cut-line-offset")
-    ).toHaveValue("0.5");
+    await expect(page.getByTestId("display-cut-line-length")).toHaveValue("5");
+    await expect(page.getByTestId("display-cut-line-thickness")).toHaveValue(
+      "1"
+    );
+    await expect(page.getByTestId("display-cut-line-offset")).toHaveValue(
+      "0.5"
+    );
   });
 
   test("round/square corners toggle is settable", async ({ page, network }) => {
