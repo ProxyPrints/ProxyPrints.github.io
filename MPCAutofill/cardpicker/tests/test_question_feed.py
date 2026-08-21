@@ -1,6 +1,7 @@
 import uuid
 from unittest.mock import patch
 
+from django.conf import settings
 from django.core.cache import caches
 from django.urls import reverse
 
@@ -41,6 +42,7 @@ from cardpicker.question_feed import (
     _evidence_justifies_confirmation,
     _illustration_item,
     _likely_resolve_item,
+    _likely_resolve_narrowing_ratio,
     _likely_resolve_printing_card,
     _scryfall_illustration_url,
     _tag_review_card_ids_by_status,
@@ -1614,6 +1616,104 @@ class TestLikelyResolveRouting:
         item = _likely_resolve_item(card)
 
         assert item.type.value == "confirm_suggestion"
+
+
+def _make_border_split_likely_resolve_card(name: str = "Brainstorm"):
+    """A card that is BOTH `is_likely_resolve_printing` (two agreeing OCR votes on one
+    printing) AND has candidates that split on border colour with border unrecorded - the
+    production shape (measured 2026-08-21: no card in the catalogue carries a RESOLVED_APPLY
+    border-colour tag) that makes `_likely_resolve_item`'s border branch fire for every
+    likely-resolve card whose candidates split on border, uncapped."""
+    card = CardFactory(
+        name=name, printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
+    )
+    black_printing = CanonicalCardFactory(name=name)
+    CanonicalPrintingMetadataFactory(canonical_card=black_printing, border_color="black")
+    CanonicalPrintingMetadataFactory(canonical_card=CanonicalCardFactory(name=name), border_color="white")
+    CardPrintingTagFactory(card=card, printing=black_printing, source=VoteSource.OCR, anonymous_id="bot-1")
+    CardPrintingTagFactory(card=card, printing=black_printing, source=VoteSource.OCR, anonymous_id="bot-2")
+    return card
+
+
+class TestLikelyResolveNarrowingCap:
+    """`QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO`: caps how much of a session's own
+    LIKELY-RESOLVE-pool servings may be a narrowing question (border/illustration) rather than
+    a printing question (confirm_suggestion/identify_printing) - the pool whose entire purpose
+    is serving a printing question one more vote would resolve. No card in the catalogue
+    carries a RESOLVED_APPLY border-colour tag (measured 2026-08-21), so `_card_border_
+    unrecorded` is true for every card and, uncapped, `_likely_resolve_item` serves `border`
+    for every likely-resolve card whose candidates split on border - see
+    `test_uncapped_routing_serves_zero_printing_questions_over_a_session` below, which
+    reproduces that with `allow_narrowing` forced `True` the way the pre-fix code always ran."""
+
+    def test_narrowing_ratio_is_zero_with_no_served_log_yet(self, db):
+        assert _likely_resolve_narrowing_ratio("anon-1") == 0.0
+
+    def test_narrowing_ratio_counts_only_likely_resolve_pool_rows(self, db):
+        for _ in range(3):
+            QuestionFeedServedLog.objects.create(
+                anonymous_id="anon-1",
+                pool=QuestionFeedServedPool.LIKELY_RESOLVE,
+                question_type="border",
+                origin_reason="printing_one_vote_from_resolving",
+            )
+        for _ in range(2):
+            QuestionFeedServedLog.objects.create(
+                anonymous_id="anon-1",
+                pool=QuestionFeedServedPool.LIKELY_RESOLVE,
+                question_type="identify_printing",
+                origin_reason="printing_one_vote_from_resolving",
+            )
+        # a REMAINDER-pool row must not shift this ratio either way
+        QuestionFeedServedLog.objects.create(
+            anonymous_id="anon-1",
+            pool=QuestionFeedServedPool.REMAINDER,
+            question_type="border",
+            origin_reason="tier_4_fresh_printing",
+        )
+
+        assert _likely_resolve_narrowing_ratio("anon-1") == 3 / 5
+
+    def test_allow_narrowing_false_forces_a_printing_question_despite_a_border_split(self, db):
+        card = _make_border_split_likely_resolve_card()
+
+        item = _likely_resolve_item(card, allow_narrowing=False)
+
+        assert item.type.value in ("confirm_suggestion", "identify_printing")
+
+    def test_uncapped_routing_serves_zero_printing_questions_over_a_session(self, db):
+        """Fails against the pre-fix code (no `allow_narrowing` gate existed - this always ran
+        as if it were `True`): with the production shape (border split, border unrecorded) every
+        one of 20 likely-resolve servings comes back `border`, never a printing question."""
+        card = _make_border_split_likely_resolve_card()
+
+        served_types = [_likely_resolve_item(card, allow_narrowing=True).type.value for _ in range(20)]
+
+        assert served_types == ["border"] * 20
+        assert not any(t in ("confirm_suggestion", "identify_printing") for t in served_types)
+
+    def test_capped_session_reaches_printing_questions_and_keeps_narrowing_present(self, db):
+        """The fixed pipeline, end to end: `get_next_question_feed_item` over a 20-request
+        session, with `_served_mix_ratio` forced to 0.0 so every request actually reaches the
+        likely-resolve branch (isolating this test to the within-pool routing this change fixes,
+        not the separate, already-covered `TestMixComposition` pool-selection ratio)."""
+        _make_border_split_likely_resolve_card()
+        _warm_all_lanes()
+
+        with patch("cardpicker.question_feed._served_mix_ratio", return_value=0.0):
+            served_types = [get_next_question_feed_item("anon-session").type.value for _ in range(20)]
+
+        printing_types = {"confirm_suggestion", "identify_printing"}
+        narrowing_types = {"border", "illustration"}
+        printing_count = sum(1 for t in served_types if t in printing_types)
+        narrowing_count = sum(1 for t in served_types if t in narrowing_types)
+
+        assert printing_count > 0, f"expected non-zero printing questions, got {served_types}"
+        assert narrowing_count > 0, f"expected narrowing questions to still appear, got {served_types}"
+        # the cap bounds the LONG-RUN share at QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO
+        # (0.5 by default); at N=20 the running ratio can overshoot by at most one serving's
+        # worth before the next request's check reins it back in.
+        assert narrowing_count / len(served_types) <= settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO + 0.05
 
 
 class TestTier4FreshServesIllustration:
