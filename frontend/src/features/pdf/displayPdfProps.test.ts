@@ -26,10 +26,16 @@ jest.mock("@react-pdf/renderer", () => ({
 const LETTER_PORTRAIT = getPageSizeMM("LETTER", undefined, undefined);
 // Includes the rail's "Print quality" defaults (imageDPI/jpgQuality/roundCorners) - migrated
 // here from DisplayExportPDF.tsx's own settings step, see displayPdfProps.ts's own comment.
+// The same lime guide colour PagePreview.tsx's E19 screen-side guides render with.
 const DEFAULT_SHEET_SETTINGS = {
   pageSize: "LETTER" as const,
   bleedEdgeMM: 3.175,
   showCutLines: true,
+  cutLineColor: "#8ae234",
+  showCrossCutLines: false,
+  cutLineLengthMM: 3,
+  cutLineThicknessMM: 0.6,
+  cutLineOffsetMM: 0,
   offsetXMM: 0,
   offsetYMM: 0,
   imageDPI: 600,
@@ -37,17 +43,11 @@ const DEFAULT_SHEET_SETTINGS = {
   roundCorners: true,
 };
 
-// The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS) - the
-// same lime guide colour PagePreview.tsx's E19 screen-side guides render with.
+// The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS).
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
-  cutLineColor: "#8ae234",
-  showCrossCutLines: false,
-  cutLineLengthMM: 3,
-  cutLineThicknessMM: 0.6,
-  cutLineOffsetMM: 0,
   drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,
@@ -187,11 +187,11 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
     expect(props.drawPageCutLines).toBe(false);
   });
 
-  it("cut line colour, cross-marks toggle, and geometry all map straight through from export settings", () => {
+  it("cut line colour, cross-marks toggle, and geometry all map straight through from the rail's sheet settings", () => {
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: {
-        ...DEFAULT_EXPORT_SETTINGS,
+      sheetSettings: {
+        ...DEFAULT_SHEET_SETTINGS,
         cutLineColor: "#ff0000",
         showCrossCutLines: true,
         cutLineLengthMM: 5,

@@ -40,12 +40,12 @@
  *
  * Everything else `PDF.tsx`'s own `PDFProps` interface exposes is now a real control, sourced
  * from either `DisplaySheetExportSettings` (the rail's own sheet state - page size including its
- * `Custom` option, bleed edge, guides, image DPI/JPG quality, and corner rounding - the last two
- * moved here from the export step's own settings so they're editable next to the live sheet they
- * govern, see `DisplayPage.tsx`'s own "Print quality" rail section) or `DisplayExportSettings`
- * (the export affordance's own settings step - card selection mode, page range, cut-line colour/
- * length/thickness/offset, an opt-in crosshair-marks toggle, SCM mode and its six sub-settings,
- * and the per-side page-margin override described below).
+ * `Custom` option, bleed edge, guides and their colour/length/thickness/offset geometry plus an
+ * opt-in crosshair-marks toggle, image DPI/JPG quality, and corner rounding - the last five moved
+ * here from the export step's own settings so they're editable next to the live sheet they govern,
+ * see `DisplayPage.tsx`'s own "Guides" and "Print quality" rail sections) or `DisplayExportSettings`
+ * (the export affordance's own settings step - card selection mode, page range, SCM mode and its
+ * six sub-settings, and the per-side page-margin override described below).
  *
  * ## Margin-preset vs. per-side override
  *
@@ -101,6 +101,19 @@ export interface DisplaySheetExportSettings {
   customPageHeightMM?: number;
   bleedEdgeMM: number;
   showCutLines: boolean;
+  /** Guide appearance - only meaningful while `showCutLines` is true (see `DisplayPage.tsx`'s
+   * rail, which hides these controls whenever Guides is off). Moved here from the export step's
+   * own `DisplayExportSettings` (this module's own comment) - the guides' printed appearance is a
+   * property of the artifact, not a one-off export-run choice, so it lives in the rail next to
+   * the Guides toggle it depends on rather than behind the Export PDF dialog. Applies to both the
+   * dashed trim outline and, when enabled, the crosshair corner marks below. */
+  cutLineColor: string;
+  /** Optional crosshair corner marks alongside the default dashed trim outline - see
+   * `PDFProps.showCrossCutLines`'s own comment. Default off (`DisplayPage.tsx`). */
+  showCrossCutLines: boolean;
+  cutLineLengthMM: number;
+  cutLineThicknessMM: number;
+  cutLineOffsetMM: number;
   offsetXMM: number;
   offsetYMM: number;
   /** Moved here from the export step's own `DisplayExportSettings` (this module's own comment) -
@@ -134,13 +147,6 @@ export interface DisplayExportSettings {
    * at all. `/print`'s `PDFGenerator.tsx` exposes this as its own "Page Cut Guide Lines" toggle;
    * this field is the editor's equivalent. */
   drawPageCutLines: boolean;
-  cutLineColor: string;
-  /** Optional crosshair corner marks alongside the default dashed trim outline - see
-   * PDFProps.showCrossCutLines' own comment. Default off (DisplayExportPDF.tsx). */
-  showCrossCutLines: boolean;
-  cutLineLengthMM: number;
-  cutLineThicknessMM: number;
-  cutLineOffsetMM: number;
   /** `undefined` = use the rail's current margin profile unchanged (the default). See the module
    * comment's "Margin-preset vs. per-side override" section. */
   marginOverride?: PageMarginOverride;
@@ -190,7 +196,7 @@ export const buildDisplayPDFProps = (
   );
   return {
     cardSelectionMode: exportSettings.cardSelectionMode,
-    showCrossCutLines: exportSettings.showCrossCutLines,
+    showCrossCutLines: sheetSettings.showCrossCutLines,
     pageSize: "CUSTOM",
     pageWidth: portraitSize.height,
     pageHeight: portraitSize.width,
@@ -198,10 +204,10 @@ export const buildDisplayPDFProps = (
     roundCorners: sheetSettings.roundCorners,
     drawCardCutLines: sheetSettings.showCutLines,
     drawPageCutLines: exportSettings.drawPageCutLines,
-    cutLineLengthMM: exportSettings.cutLineLengthMM,
-    cutLineOffsetMM: exportSettings.cutLineOffsetMM,
-    cutLineThicknessMM: exportSettings.cutLineThicknessMM,
-    cutLineColor: exportSettings.cutLineColor,
+    cutLineLengthMM: sheetSettings.cutLineLengthMM,
+    cutLineOffsetMM: sheetSettings.cutLineOffsetMM,
+    cutLineThicknessMM: sheetSettings.cutLineThicknessMM,
+    cutLineColor: sheetSettings.cutLineColor,
     cardSpacingRowMM: input.cardSpacing.row,
     cardSpacingColMM: input.cardSpacing.col,
     pageMarginTopMM: margins.top,

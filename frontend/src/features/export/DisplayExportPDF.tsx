@@ -17,13 +17,14 @@
  * the draft-flush, cardback-reminder, and save-before-export gate that used to run only ahead of
  * a `/print` navigation.
  *
- * Export-time settings (card selection mode, page range, cut-line geometry, an advanced
- * page-margin override, and Silhouette/SCM cutting mode) are choices about a single export RUN,
- * not the sheet's own layout, so they live here - alongside the export affordance itself, in a
- * small settings step between clicking "PDF" and the actual download - rather than joining the
- * right rail's Page Setup section, which governs what the live sheet shows. Image DPI/JPG quality
- * and corner rounding moved OUT of this step into the rail's own "Print quality" section (they
- * govern the printed card's own appearance, not a one-off run choice like a page range) - see
+ * Export-time settings (card selection mode, page range, an advanced page-margin override, and
+ * Silhouette/SCM cutting mode) are choices about a single export RUN, not the sheet's own layout,
+ * so they live here - alongside the export affordance itself, in a small settings step between
+ * clicking "PDF" and the actual download - rather than joining the right rail's Page Setup
+ * section, which governs what the live sheet shows. Image DPI/JPG quality, corner rounding, and
+ * the guide colour/length/thickness/offset/crosshair controls moved OUT of this step into the
+ * rail (the last five sit next to the Guides toggle they depend on) - they govern the printed
+ * artifact's own appearance, not a one-off run choice like a page range - see
  * `displayPdfProps.ts`'s `DisplaySheetExportSettings` for where they live now. Plain Bootstrap
  * form controls only (no `AutofillCollapse`/`StyledDropdownTreeSelect`/`NumericField` from
  * `PDFGenerator.tsx`) so this component stays free of that file's own import graph.
@@ -117,15 +118,6 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
-  // Matches PagePreview.tsx's own E19 lime guide colour (#8ae234), so the export's default
-  // outline colour matches what the sheet already showed on screen.
-  cutLineColor: "#8ae234",
-  // Crosshair corner marks are an opt-in addition to the default dashed trim outline
-  // (PDF.tsx's PDFProps.showCrossCutLines) - off by default.
-  showCrossCutLines: false,
-  cutLineLengthMM: 3,
-  cutLineThicknessMM: 0.6,
-  cutLineOffsetMM: 0,
   // Matches /print's PDFGenerator.tsx's own default - a guillotine cutting a printed stack
   // relies on these, independent of whether per-card cut lines are also on.
   drawPageCutLines: true,
@@ -472,79 +464,6 @@ export function DisplayExportPDF({
                 Guide lines across the whole sheet for cutting a printed stack
                 with a guillotine - independent of the per-card cut lines below.
               </Form.Text>
-
-              {sheetSettings.showCutLines && (
-                <Form.Group className="mb-3">
-                  <Form.Label>Cut line</Form.Label>
-                  <div className="d-flex gap-2 align-items-center mb-2">
-                    <Form.Control
-                      type="color"
-                      data-testid="display-export-cut-line-color"
-                      value={exportSettings.cutLineColor}
-                      onChange={(event) =>
-                        setField("cutLineColor", event.target.value)
-                      }
-                    />
-                    <Form.Control
-                      type="number"
-                      size="sm"
-                      step={0.1}
-                      min={0}
-                      aria-label="Cut line length (mm)"
-                      data-testid="display-export-cut-line-length"
-                      value={exportSettings.cutLineLengthMM}
-                      onChange={(event) => {
-                        const value = parseFloat(event.target.value);
-                        if (!Number.isNaN(value))
-                          setField("cutLineLengthMM", value);
-                      }}
-                    />
-                    <Form.Control
-                      type="number"
-                      size="sm"
-                      step={0.1}
-                      min={0}
-                      aria-label="Cut line thickness (mm)"
-                      data-testid="display-export-cut-line-thickness"
-                      value={exportSettings.cutLineThicknessMM}
-                      onChange={(event) => {
-                        const value = parseFloat(event.target.value);
-                        if (!Number.isNaN(value))
-                          setField("cutLineThicknessMM", value);
-                      }}
-                    />
-                    <Form.Control
-                      type="number"
-                      size="sm"
-                      step={0.1}
-                      aria-label="Cut line offset (mm)"
-                      data-testid="display-export-cut-line-offset"
-                      value={exportSettings.cutLineOffsetMM}
-                      onChange={(event) => {
-                        const value = parseFloat(event.target.value);
-                        if (!Number.isNaN(value))
-                          setField("cutLineOffsetMM", value);
-                      }}
-                    />
-                  </div>
-                  <Form.Text className="text-muted d-block mb-2">
-                    Colour, then length / thickness / offset (mm), left to right
-                    - applies to the dashed trim outline traced on the
-                    card&apos;s cut boundary, and to the crosshair marks below
-                    if enabled.
-                  </Form.Text>
-                  <Form.Check
-                    type="switch"
-                    id="display-export-cross-cut-lines"
-                    data-testid="display-export-cross-cut-lines"
-                    label="Also show crosshair corner marks"
-                    checked={exportSettings.showCrossCutLines}
-                    onChange={(event) =>
-                      setField("showCrossCutLines", event.target.checked)
-                    }
-                  />
-                </Form.Group>
-              )}
 
               <Form.Group className="mb-3">
                 <Form.Check
