@@ -1,4 +1,7 @@
 import inspect
+import os
+import subprocess
+import sys
 from importlib import import_module
 
 import pytest
@@ -703,3 +706,130 @@ class TestImplicitVoteCapForm:
         # it fails loudly here rather than silently reopening the "implicit alone forms quorum"
         # failure mode.
         assert settings.PRINTING_TAG_IMPLICIT_CAP < settings.PRINTING_TAG_MIN_VOTES
+
+
+class TestMachineVoteCapForm:
+    """The sibling cap to TestImplicitVoteCapForm's, for the OTHER non-human-backed weight
+    channel: DEDUCTION/OCR votes, each at settings.PRINTING_TAG_MACHINE_WEIGHT (default 0.5).
+    Machine weight is capped in SUM per outcome group at settings.PRINTING_TAG_MACHINE_CAP
+    (default 1.0, strictly below min_weight=2).
+
+    Unlike an implicit vote, a DEDUCTION/OCR vote IS a deliberate evidence-channel assertion, not
+    a passive by-product of a pick. Several independent machine channels agreeing is real
+    corroboration, worth counting in full - but this cap is not what stops them from resolving a
+    card with zero human involvement (mechanism (a) below does that, unconditionally, at any cap
+    value). What the cap bounds is how far machine weight can carry a group TOWARD quorum
+    alongside a real human vote, and how much it can inflate that group's share of the total
+    weight once one is present - the "no machine tipping of a human contest" mechanism
+    (formerly labeled D1 in the owner-ratified 2026-07-22 vote-weight scenario matrix,
+    docs/reference/vote-weight-matrix.md).
+
+    Same two-mechanism split as TestImplicitVoteCapForm (see that class's own docstring for the
+    full argument): (a) the human-backed gate, independent of any cap, decides a cell with no
+    human vote at all; (b) the cap itself only matters once a real human vote has already
+    satisfied (a) and the question is whether a machine-weight pile can finish the job.
+    """
+
+    def test_machine_votes_alone_never_resolve_no_matter_how_many(self):
+        # Mechanism (a), the human-backed gate - not the cap. With no human-backed weight
+        # anywhere, the resolver returns None at the has_human_backed check whatever full_weight
+        # computed.
+        weight = settings.PRINTING_TAG_MACHINE_WEIGHT
+        votes = [VT("X", weight, False) for _ in range(10)]
+        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) is None
+
+    def test_machine_agreeing_with_an_already_resolved_side_changes_nothing(self):
+        weight = settings.PRINTING_TAG_MACHINE_WEIGHT
+        votes = [VT("A", 1.0, True)] * 2 + [VT("A", weight, False) for _ in range(5)]
+        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
+
+    def test_machine_votes_cannot_finish_the_quorum_one_real_voter_started(self):
+        # SCENARIO: one person deliberately voted for A. A pile of independent machine channels
+        # then also agreed with A. The pile alone must not be able to finish the quorum that one
+        # human vote started - min_weight raised to 3 for the same reason
+        # TestImplicitVoteCapForm's own passive_acceptances test raises it: at min_weight=2, one
+        # human vote plus a fully-capped pile lands exactly on quorum (a real, separate D2
+        # ruling), which would make this cell unable to isolate the cap.
+        weight = settings.PRINTING_TAG_MACHINE_WEIGHT
+        cap = settings.PRINTING_TAG_MACHINE_CAP
+        machine_votes = int(4 * cap / weight)  # raw sum = 4x the cap
+        votes = [VT("A", 1.0, True)] + [VT("A", weight, False) for _ in range(machine_votes)]
+        assert resolve_weighted_consensus(votes, min_weight=3, min_share=0.6) is None
+
+    def test_machine_votes_cannot_outrank_the_one_person_who_actually_voted(self):
+        # One person voted for A, a capped pile of machine votes also backs A; meanwhile ten
+        # times that many machine votes back B, with no human ever asserting B. A must still win.
+        weight = settings.PRINTING_TAG_MACHINE_WEIGHT
+        cap = settings.PRINTING_TAG_MACHINE_CAP
+        at_cap = int(cap / weight)
+        votes = (
+            [VT("A", 1.0, True)]
+            + [VT("A", weight, False) for _ in range(at_cap)]
+            + [VT("B", weight, False) for _ in range(at_cap * 10)]
+        )
+        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
+
+    def test_machine_weight_at_the_cap_plus_one_human_vote_still_resolves(self):
+        # One human vote (1.0) + machine weight fully at the cap reaches exactly the default
+        # min_weight=2 (>= clears it) - the cap does not block a real, human-backed resolution.
+        weight = settings.PRINTING_TAG_MACHINE_WEIGHT
+        cap = settings.PRINTING_TAG_MACHINE_CAP
+        at_cap = int(cap / weight)
+        votes = [VT("A", 1.0, True)] + [VT("A", weight, False) for _ in range(at_cap)]
+        assert resolve_weighted_consensus(votes, min_weight=1.0 + cap, min_share=0.6) == "A"
+
+    def test_the_implicit_cap_and_the_machine_cap_apply_independently(self):
+        # Regression: the two caps are applied separately inside full_weight, not against some
+        # shared/combined bound - a fully-capped implicit pile plus a fully-capped machine pile,
+        # alongside one human vote, sums to exactly what each cap's own ceiling predicts:
+        # 1.0 (human) + implicit_cap + machine_cap.
+        implicit_weight = settings.PRINTING_TAG_IMPLICIT_WEIGHT
+        implicit_cap = settings.PRINTING_TAG_IMPLICIT_CAP
+        machine_weight = settings.PRINTING_TAG_MACHINE_WEIGHT
+        machine_cap = settings.PRINTING_TAG_MACHINE_CAP
+        at_implicit_cap = int(4 * implicit_cap / implicit_weight)
+        at_machine_cap = int(4 * machine_cap / machine_weight)
+        votes = (
+            [VT("A", 1.0, True)]
+            + [VT("A", implicit_weight, False, is_implicit=True) for _ in range(at_implicit_cap)]
+            + [VT("A", machine_weight, False) for _ in range(at_machine_cap)]
+        )
+        total_at_cap = 1.0 + implicit_cap + machine_cap
+        assert resolve_weighted_consensus(votes, min_weight=total_at_cap, min_share=0.6) == "A"
+        assert resolve_weighted_consensus(votes, min_weight=total_at_cap + 0.1, min_share=0.6) is None
+
+    def test_machine_cap_is_configured_strictly_below_min_votes(self):
+        # Same margin requirement as PRINTING_TAG_IMPLICIT_CAP's own pinned test, for its sibling
+        # constant - pinned directly against the configured settings values so a future settings
+        # change that violates it fails loudly here too, not just at import time.
+        assert settings.PRINTING_TAG_MACHINE_CAP < settings.PRINTING_TAG_MIN_VOTES
+
+
+class TestMachineCapGuard:
+    """PRINTING_TAG_MACHINE_CAP's own settings-load-time guard: a future env override that sets
+    the cap at or above PRINTING_TAG_MIN_VOTES must fail loudly when settings load, not silently
+    widen this channel's influence on quorum/share past the margin its sibling
+    PRINTING_TAG_IMPLICIT_CAP is held to. Exercised via a real subprocess import of the settings
+    module (importlib.reload cannot safely re-run a Django settings module already loaded into
+    this process) with the env var set to an invalid value.
+    """
+
+    def _import_settings_with_env(self, machine_cap: float) -> subprocess.CompletedProcess:
+        bad_env = {**os.environ, "PRINTING_TAG_MACHINE_CAP": str(machine_cap)}
+        return subprocess.run(
+            [sys.executable, "-c", "import MPCAutofill.settings"],
+            cwd=settings.BASE_DIR,
+            env=bad_env,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_a_cap_equal_to_min_votes_fails_settings_import(self):
+        result = self._import_settings_with_env(settings.PRINTING_TAG_MIN_VOTES)
+        assert result.returncode != 0
+        assert "PRINTING_TAG_MACHINE_CAP" in result.stderr
+
+    def test_a_cap_above_min_votes_fails_settings_import(self):
+        result = self._import_settings_with_env(settings.PRINTING_TAG_MIN_VOTES + 1)
+        assert result.returncode != 0
+        assert "PRINTING_TAG_MACHINE_CAP" in result.stderr

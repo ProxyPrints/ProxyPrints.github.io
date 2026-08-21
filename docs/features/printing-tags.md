@@ -224,7 +224,23 @@ printings, artists, tags, and moderation from one screen.
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
   one non-machine vote — `vote_consensus.is_human_backed_source()` is the one
   place that knows which `VoteSource` values are machine-derived, so no
-  volume of machine-only votes can resolve a card alone. The shared core
+  volume of machine-only votes can resolve a card alone — that gate alone
+  closes the "machine-only resolution" hole, unconditionally, at any cap
+  value. The SUM of machine weight per (card, tag, polarity) outcome group
+  is additionally hard-capped at `PRINTING_TAG_MACHINE_CAP` (default 1.0,
+  strictly below `PRINTING_TAG_MIN_VOTES`) — the sibling ceiling to the
+  implicit cap below, but for a narrower purpose: bounding how far machine
+  weight can carry a group TOWARD quorum alongside real human votes, and
+  how much it can inflate that group's share of the total weight — the
+  [no machine tipping of a human-vs-human contest](#human-contest-machine-weight-drop)
+  mechanism described below (formerly labeled _D1_ in the
+  [owner-ratified vote-weight matrix](../reference/vote-weight-matrix.md)).
+  The matrix ratifies no machine-cap value
+  directly; the default of 1.0 mirrors the one cap it does ratify (the
+  sibling implicit cap at w=0.25/cap=1.0) rather than reasoning a
+  fresh number for an unratified constant: two agreeing channels (0.5 each)
+  still count in full, a third adds nothing, and one human vote still
+  carries the group to the default quorum of 2. The shared core
   (`vote_consensus.resolve_weighted_consensus`, used by printing/artist/tag
   alike) additionally implements two owner-ratified mechanisms from the
   2026-07-22 vote-weight scenario matrix (owner-ratified 2026-07-22, PR
