@@ -886,9 +886,22 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
     if (backendURL == null) {
       return;
     }
+    // Stale-response guard - without this, a second effect run (a genuine dependency change,
+    // or React re-invoking the effect for its own reasons e.g. StrictMode) leaves the FIRST
+    // fetch in flight with nothing stopping its eventual response from landing after the
+    // second one and silently replacing whatever the user is now looking at with no action on
+    // their part. Aborting the previous request on every re-run (and on unmount) makes that
+    // structurally impossible - the abort turns the superseded fetch into a rejected promise
+    // routed to the ignored branch below, rather than a competing resolved one.
+    const controller = new AbortController();
     setLoading(true);
     setFetchError(false);
-    APIGetQuestionFeed(backendURL, getOrCreateAnonymousId())
+    APIGetQuestionFeed(
+      backendURL,
+      getOrCreateAnonymousId(),
+      undefined,
+      controller.signal
+    )
       .then((response) => {
         const newItem = response.item ?? null;
         setItem(newItem);
@@ -941,12 +954,20 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
         setSameArtButActive(false);
       })
       .catch(() => {
+        if (controller.signal.aborted) {
+          return;
+        }
         voteInFlightRef.current = false;
         setSubmitting(false);
         setItem(null);
         setFetchError(true);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, fetchToken]);
 

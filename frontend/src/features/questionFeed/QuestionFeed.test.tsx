@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import React from "react";
 import { Provider } from "react-redux";
 
@@ -1884,5 +1884,79 @@ describe("QuestionFeed", () => {
 
     await waitFor(() => expect(feedFetchCount).toBe(2));
     expect(abstentionBody).toBeUndefined();
+  });
+
+  it("a stale in-flight fetch can never overwrite an already-rendered question (regression: WTC auto-skip)", async () => {
+    // React's StrictMode intentionally double-invokes an effect with no cleanup on mount,
+    // firing this effect's fetch twice - a real, reproducible way for two requests to be in
+    // flight at once for the same question. Without a stale-response guard, whichever response
+    // resolves LAST wins regardless of which request was newer - here the first (StrictMode-
+    // discarded) request is the slow one, so an unguarded effect would silently swap the
+    // already-rendered "Fresh Card" back to "Stale Card" moments later, with no user action.
+    let feedFetchCount = 0;
+    const remainingEstimate = {
+      total: 1,
+      confirmable: 0,
+      contested: 0,
+      fresh: 1,
+    };
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), async () => {
+        feedFetchCount += 1;
+        if (feedFetchCount === 1) {
+          await delay(50);
+          return HttpResponse.json(
+            {
+              item: {
+                ...identifyPrintingItem,
+                card: {
+                  ...identifyPrintingItem.card,
+                  identifier: "card-stale",
+                  name: "Stale Card",
+                },
+              },
+              remainingEstimate,
+            },
+            { status: 200 }
+          );
+        }
+        return HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              card: {
+                ...identifyPrintingItem.card,
+                identifier: "card-fresh",
+                name: "Fresh Card",
+              },
+            },
+            remainingEstimate,
+          },
+          { status: 200 }
+        );
+      })
+    );
+    server.use(tagsNoResults);
+    const store = setupStore({ backend: localBackend });
+    render(
+      <React.StrictMode>
+        <Provider store={store}>
+          <QuestionFeed />
+        </Provider>
+      </React.StrictMode>
+    );
+
+    await waitFor(() => expect(feedFetchCount).toBeGreaterThanOrEqual(2));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("question-feed-subject-art-title")
+      ).toHaveTextContent("Fresh Card")
+    );
+
+    // let the slower, superseded first request's response land and confirm it never applies.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(
+      screen.getByTestId("question-feed-subject-art-title")
+    ).toHaveTextContent("Fresh Card");
   });
 });

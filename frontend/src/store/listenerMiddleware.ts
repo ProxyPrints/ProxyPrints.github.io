@@ -91,9 +91,19 @@ export const recalculateSearchResults = async (
   });
 };
 
+// WTC load-time waterfall fix - /whatsthat renders QuestionFeed, which is entirely
+// self-contained off its own questionFeed/cards/tags endpoints and has no cardback picker, no
+// search UI, and nothing that reads sourceDocuments. Fetching sources+cardbacks here anyway
+// cost every WTC page load two round trips (~450ms each in production) it can never use;
+// skipping them on this one route leaves every other caller of fetchSources (which does need
+// both, for the cardback picker and search-settings hydration) unaffected.
+const routeNeedsSourcesAndCardbacks = (): boolean =>
+  typeof window === "undefined" ||
+  !window.location.pathname.startsWith("/whatsthat");
+
 export const fetchSources = async (state: RootState, dispatch: AppDispatch) => {
   const isRemoteBackendConfigured = selectRemoteBackendConfigured(state);
-  if (isRemoteBackendConfigured) {
+  if (isRemoteBackendConfigured && routeNeedsSourcesAndCardbacks()) {
     await fetchSourceDocumentsAndReportError(dispatch).then(() =>
       fetchCardbacksAndReportError(dispatch)
     );
