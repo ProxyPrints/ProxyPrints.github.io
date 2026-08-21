@@ -289,3 +289,13 @@ coverage-ack: frontend/tests/ContrastAudit.spec.ts::Contrast audit - editor mobi
 # Playwright titles below that named the retired shape/placement selects directly.
 coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - editor export controls > cut-line colour and shape controls are only shown when the rail's Guides toggle is on, and map through to the export — renamed to "cut-line colour and cross-marks toggle are only shown when the rail's Guides toggle is on, and map through to the export": the cut-line-shape select is retired (CutLineShape deleted, PDF.tsx now always draws a dashed trim outline), replaced by the display-export-cross-cut-lines toggle (PDFProps.showCrossCutLines); the guides-on/off gating assertion is unchanged, now exercised against the new toggle.
 coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - corner rounding and extended cut-line geometry > placement, length, thickness, and offset are settable alongside colour and shape — renamed to "length, thickness, and offset are settable alongside colour": the cut-line-placement select is retired (CutLinePlacement deleted - the trim outline has one correct position, on the trim boundary, not a user choice); the length/thickness/offset assertions are unchanged and kept.
+
+# Export-settings-to-rail round - image DPI, JPG quality, and corner rounding moved out of
+# DisplayExportPDF.tsx's own settings step into the right rail's new "Print quality" section
+# (they govern the printed card's own appearance, not a one-off export-run choice like a page
+# range or cut-line geometry), so their testids and the one test that drives them by testid
+# changed with the move. Same signal asserted (the actual dpi/jpgQuality query params on the
+# downstream image-worker request), now set via the rail's display-image-dpi/display-jpg-quality
+# controls before opening the export dialog instead of via the dialog's own (now-removed)
+# display-export-image-dpi/display-export-jpg-quality controls.
+coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - editor export controls > DPI and JPG quality sliders set the actual image-worker request's dpi/jpgQuality query params — renamed to "the rail's DPI and JPG quality controls set the actual image-worker request's dpi/jpgQuality query params" when the two controls moved from the export dialog into the right rail's "Print quality" section; same dpi/jpgQuality query-param assertion, now driven through the rail's own testids ahead of opening the export dialog (the dialog's backdrop blocks the rail behind it while open).

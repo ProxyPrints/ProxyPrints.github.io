@@ -17,14 +17,16 @@
  * the draft-flush, cardback-reminder, and save-before-export gate that used to run only ahead of
  * a `/print` navigation.
  *
- * Export-time settings (card selection mode, page range, image quality, cut-line geometry,
- * corner rounding, an advanced page-margin override, and Silhouette/SCM cutting mode) are choices
- * about the OUTPUT FILE, not the sheet's own layout, so they live here - alongside the export
- * affordance itself, in a small settings step between clicking "PDF" and the actual download -
- * rather than joining the right rail's Page Setup section, which governs what the live sheet
- * shows, not what a given export run produces. Plain Bootstrap form controls only (no
- * `AutofillCollapse`/`StyledDropdownTreeSelect`/`NumericField` from `PDFGenerator.tsx`) so this
- * component stays free of that file's own import graph.
+ * Export-time settings (card selection mode, page range, cut-line geometry, an advanced
+ * page-margin override, and Silhouette/SCM cutting mode) are choices about a single export RUN,
+ * not the sheet's own layout, so they live here - alongside the export affordance itself, in a
+ * small settings step between clicking "PDF" and the actual download - rather than joining the
+ * right rail's Page Setup section, which governs what the live sheet shows. Image DPI/JPG quality
+ * and corner rounding moved OUT of this step into the rail's own "Print quality" section (they
+ * govern the printed card's own appearance, not a one-off run choice like a page range) - see
+ * `displayPdfProps.ts`'s `DisplaySheetExportSettings` for where they live now. Plain Bootstrap
+ * form controls only (no `AutofillCollapse`/`StyledDropdownTreeSelect`/`NumericField` from
+ * `PDFGenerator.tsx`) so this component stays free of that file's own import graph.
  *
  * ## Grouping
  *
@@ -33,8 +35,8 @@
  * component returns early into `<SCMPDF>` and never touches card selection, cut-line geometry,
  * corner rounding, or page margins for that render), so the settings step swaps its body between
  * two mutually-exclusive panels rather than appending SCM's six sub-settings to the existing
- * list. Only image quality (DPI/JPG) is genuinely shared between both panels - `SCMCard` reads it
- * exactly like the standard grid's own card image does - so it stays visible in both.
+ * list. Image quality (DPI/JPG, now the rail's) is read by `SCMCard` exactly like the standard
+ * grid's own card image, so both panels agree on it without either one rendering a control here.
  */
 import React, { useMemo, useState } from "react";
 import Button from "react-bootstrap/Button";
@@ -115,8 +117,6 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
-  imageDPI: 600,
-  jpgQuality: 100,
   // Matches PagePreview.tsx's own E19 lime guide colour (#8ae234), so the export's default
   // outline colour matches what the sheet already showed on screen.
   cutLineColor: "#8ae234",
@@ -126,9 +126,6 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
-  // The dashed trim outline defaults to rounded corners - a real card's die-cut corner is
-  // rounded, so that's the shape the guide should trace by default. Square remains a toggle.
-  roundCorners: true,
   // Matches /print's PDFGenerator.tsx's own default - a guillotine cutting a printed stack
   // relies on these, independent of whether per-card cut lines are also on.
   drawPageCutLines: true,
@@ -454,40 +451,6 @@ export function DisplayExportPDF({
             </>
           )}
 
-          <Form.Group className="mb-3">
-            <Form.Label>
-              Card image DPI: <b>{exportSettings.imageDPI} DPI</b>
-            </Form.Label>
-            <Form.Range
-              min={100}
-              max={1500}
-              step={100}
-              value={exportSettings.imageDPI}
-              data-testid="display-export-image-dpi"
-              onChange={(event) =>
-                setField("imageDPI", parseInt(event.target.value, 10))
-              }
-            />
-            <Form.Label>
-              JPG quality: <b>{exportSettings.jpgQuality}%</b>
-            </Form.Label>
-            <Form.Range
-              min={5}
-              max={100}
-              step={5}
-              value={exportSettings.jpgQuality}
-              data-testid="display-export-jpg-quality"
-              onChange={(event) =>
-                setField("jpgQuality", parseInt(event.target.value, 10))
-              }
-            />
-            <Form.Text className="text-muted">
-              Higher DPI and quality print sharper but produce a much larger
-              file and a slower export - 600 DPI / 100% matches a real print
-              run; drop both for a quick proof copy.
-            </Form.Text>
-          </Form.Group>
-
           {!exportSettings.scmMode && (
             <>
               <Form.Check
@@ -582,22 +545,6 @@ export function DisplayExportPDF({
                   />
                 </Form.Group>
               )}
-
-              <Form.Check
-                type="switch"
-                id="display-export-round-corners"
-                className="mb-3"
-                data-testid="display-export-round-corners"
-                label={
-                  exportSettings.roundCorners
-                    ? "Round corners"
-                    : "Square corners"
-                }
-                checked={exportSettings.roundCorners}
-                onChange={(event) =>
-                  setField("roundCorners", event.target.checked)
-                }
-              />
 
               <Form.Group className="mb-3">
                 <Form.Check

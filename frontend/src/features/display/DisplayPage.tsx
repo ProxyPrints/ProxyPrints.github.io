@@ -348,10 +348,12 @@ import {
 //# region local, page-only settings state
 //
 // A deliberately small subset of PDFGenerator.tsx's full settings panel - just enough to drive
-// a genuinely live sheet (real computeLayout() inputs, not fake ones). The rest of that panel
-// (card selection mode, cut-line geometry, quality/DPI, SCM mode, spacing/margins) stays on the
-// classic PDF tab for now; relocating all of it here is Step 3 (switchover) in the design doc's
-// §6 sequencing, not Step 1.
+// a genuinely live sheet (real computeLayout() inputs, not fake ones), plus the print-quality
+// controls (image DPI/JPG quality, corner rounding) that later joined them once they moved out
+// of the export settings step (see displayPdfProps.ts's own DisplaySheetExportSettings comment).
+// The rest of PDFGenerator.tsx's panel (card selection mode, cut-line geometry, SCM mode) stays
+// on the export settings step (DisplayExportPDF.tsx) for now; relocating it here too is Step 3
+// (switchover) in the design doc's §6 sequencing, not Step 1.
 
 interface DisplaySheetSettings {
   pageSize: keyof typeof PageSize;
@@ -369,6 +371,12 @@ interface DisplaySheetSettings {
   // asks for one.
   offsetXMM: number;
   offsetYMM: number;
+  // Print quality (rail section below) - moved from DisplayExportPDF.tsx's own settings step so
+  // they're editable next to the live sheet they govern rather than behind the Export PDF dialog
+  // (see displayPdfProps.ts's DisplaySheetExportSettings comment for the full rationale).
+  imageDPI: number;
+  jpgQuality: number;
+  roundCorners: boolean;
 }
 
 // Proposal H D1/D4/D6 (docs/proposals/proposal-h-display-layout-spec.md, amended by issue #286's
@@ -385,6 +393,13 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   showCutLines: true,
   offsetXMM: 0,
   offsetYMM: 0,
+  // Same full-res 600 DPI/100% pipeline PDFGenerator.tsx's own download path uses - matches the
+  // old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS values this migrated from, unchanged.
+  imageDPI: 600,
+  jpgQuality: 100,
+  // A real card's die-cut corner is rounded, so that's the shape the dashed trim outline
+  // traces by default - matches the old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS default.
+  roundCorners: true,
 };
 
 // Upper bound, in real CSS px, on every sheet's rendered width - was PagePreview's own fixed
@@ -3418,6 +3433,67 @@ export function DisplayPage() {
                     setSettings((previous) => ({
                       ...previous,
                       offsetYMM: value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="mb-3">
+                {/* Moved from DisplayExportPDF.tsx's own settings step (this PR) - image DPI/JPG
+                    quality and corner rounding govern the printed card's own appearance, not a
+                    one-off export-run choice, so they're editable here next to the live sheet
+                    they affect instead of behind the Export PDF dialog. Same Form.Range/Form.Check
+                    markup and copy the export dialog used, so nothing degrades to a bare control
+                    on the move - see displayPdfProps.ts's DisplaySheetExportSettings comment. */}
+                <h6 className="rail-section-heading">Print quality</h6>
+                <Form.Group className="mb-2">
+                  <Form.Label className="small mb-1">
+                    Card image DPI: <b>{settings.imageDPI} DPI</b>
+                  </Form.Label>
+                  <Form.Range
+                    min={100}
+                    max={1500}
+                    step={100}
+                    value={settings.imageDPI}
+                    aria-label="Card image DPI"
+                    data-testid="display-image-dpi"
+                    onChange={(event) =>
+                      setSettings((previous) => ({
+                        ...previous,
+                        imageDPI: parseInt(event.target.value, 10),
+                      }))
+                    }
+                  />
+                  <Form.Label className="small mb-1">
+                    JPG quality: <b>{settings.jpgQuality}%</b>
+                  </Form.Label>
+                  <Form.Range
+                    min={5}
+                    max={100}
+                    step={5}
+                    value={settings.jpgQuality}
+                    aria-label="JPG quality"
+                    data-testid="display-jpg-quality"
+                    onChange={(event) =>
+                      setSettings((previous) => ({
+                        ...previous,
+                        jpgQuality: parseInt(event.target.value, 10),
+                      }))
+                    }
+                  />
+                </Form.Group>
+                <Form.Check
+                  type="switch"
+                  id="display-round-corners-toggle"
+                  data-testid="display-round-corners"
+                  label={
+                    settings.roundCorners ? "Round corners" : "Square corners"
+                  }
+                  checked={settings.roundCorners}
+                  onChange={(event) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      roundCorners: event.target.checked,
                     }))
                   }
                 />

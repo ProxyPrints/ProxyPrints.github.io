@@ -49,20 +49,20 @@ const DEFAULT_SHEET_SETTINGS = {
   showCutLines: true,
   offsetXMM: 0,
   offsetYMM: 0,
+  imageDPI: 600,
+  jpgQuality: 100,
+  roundCorners: false,
 };
 
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
-  imageDPI: 600,
-  jpgQuality: 100,
   cutLineColor: "#8ae234",
   showCrossCutLines: false,
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
-  roundCorners: false,
   drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,

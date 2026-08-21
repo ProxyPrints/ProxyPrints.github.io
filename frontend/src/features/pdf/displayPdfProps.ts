@@ -36,15 +36,16 @@
  *
  * - `imageQuality: "full-resolution"` — same full-res export pipeline `PDFGenerator.tsx`'s own
  *   download path uses (`fullResolutionPDFProps`). DPI and JPG quality themselves are real
- *   controls (`DisplayExportSettings.imageDPI`/`jpgQuality`), not defaulted here.
+ *   controls (`DisplaySheetExportSettings.imageDPI`/`jpgQuality`), not defaulted here.
  *
  * Everything else `PDF.tsx`'s own `PDFProps` interface exposes is now a real control, sourced
- * from either `DisplaySheetExportSettings` (the rail's own sheet state — page size including its
- * `Custom` option, bleed edge, guides) or `DisplayExportSettings` (the export affordance's own
- * settings step — card selection mode, page range, image DPI/JPG quality, cut-line colour/length/
- * thickness/offset, an opt-in crosshair-marks toggle, corner rounding, SCM mode and its six
- * sub-settings, and the
- * per-side page-margin override described below).
+ * from either `DisplaySheetExportSettings` (the rail's own sheet state - page size including its
+ * `Custom` option, bleed edge, guides, image DPI/JPG quality, and corner rounding - the last two
+ * moved here from the export step's own settings so they're editable next to the live sheet they
+ * govern, see `DisplayPage.tsx`'s own "Print quality" rail section) or `DisplayExportSettings`
+ * (the export affordance's own settings step - card selection mode, page range, cut-line colour/
+ * length/thickness/offset, an opt-in crosshair-marks toggle, SCM mode and its six sub-settings,
+ * and the per-side page-margin override described below).
  *
  * ## Margin-preset vs. per-side override
  *
@@ -102,6 +103,13 @@ export interface DisplaySheetExportSettings {
   showCutLines: boolean;
   offsetXMM: number;
   offsetYMM: number;
+  /** Moved here from the export step's own `DisplayExportSettings` (this module's own comment) -
+   * a print-quality choice, not an export-run-only one, so it lives next to the sheet it governs
+   * in the rail's "Print quality" section rather than behind the Export PDF dialog. */
+  imageDPI: number;
+  jpgQuality: number;
+  /** Same migration as `imageDPI`/`jpgQuality` above. */
+  roundCorners: boolean;
 }
 
 /** An explicit per-side override for `DisplayExportSettings.marginOverride` — see the module
@@ -121,8 +129,6 @@ export interface DisplayExportSettings {
   cardSelectionMode: keyof typeof CardSelectionMode;
   pageRangeStart?: number;
   pageRangeEnd?: number;
-  imageDPI: number;
-  jpgQuality: number;
   /** The guillotine-cut page guide lines (as opposed to `sheetSettings.showCutLines`'s per-card
    * trim marks) - a full sheet's own cut guides, independent of whether card cut lines are drawn
    * at all. `/print`'s `PDFGenerator.tsx` exposes this as its own "Page Cut Guide Lines" toggle;
@@ -135,7 +141,6 @@ export interface DisplayExportSettings {
   cutLineLengthMM: number;
   cutLineThicknessMM: number;
   cutLineOffsetMM: number;
-  roundCorners: boolean;
   /** `undefined` = use the rail's current margin profile unchanged (the default). See the module
    * comment's "Margin-preset vs. per-side override" section. */
   marginOverride?: PageMarginOverride;
@@ -190,7 +195,7 @@ export const buildDisplayPDFProps = (
     pageWidth: portraitSize.height,
     pageHeight: portraitSize.width,
     bleedEdgeMM: sheetSettings.bleedEdgeMM,
-    roundCorners: exportSettings.roundCorners,
+    roundCorners: sheetSettings.roundCorners,
     drawCardCutLines: sheetSettings.showCutLines,
     drawPageCutLines: exportSettings.drawPageCutLines,
     cutLineLengthMM: exportSettings.cutLineLengthMM,
@@ -211,8 +216,8 @@ export const buildDisplayPDFProps = (
     projectMembers: input.projectMembers,
     projectCardback: input.projectCardback,
     imageQuality: "full-resolution",
-    imageDPI: exportSettings.imageDPI,
-    jpgQuality: exportSettings.jpgQuality,
+    imageDPI: sheetSettings.imageDPI,
+    jpgQuality: sheetSettings.jpgQuality,
     bleedOverrides: input.manualOverrides,
     scmMode: exportSettings.scmMode,
     scmPaperSize: exportSettings.scmPaperSize,

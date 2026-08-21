@@ -20,13 +20,14 @@ import {
 } from "./test-utils";
 
 // The editor's real Export ▾ -> PDF settings step (DisplayExportPDF.tsx) - every control that
-// replaced a named default in displayPdfProps.ts (card selection, page range, image quality,
-// cut-line colour/geometry, an opt-in crosshair-marks toggle, corner rounding, an advanced per-side margin
-// override, SCM cutting mode, and the rail's own Custom page-size option), plus the
-// willGenerateBleed signal on the sheet itself. Reads back the actual downloaded PDF bytes
-// (pdfjs-dist, page-count/page-dimension metadata only - no canvas/rendering needed for that)
-// rather than trusting the wiring by inspection, per this feature's own "a control that renders
-// but doesn't affect the export" failure mode.
+// replaced a named default in displayPdfProps.ts (card selection, page range, cut-line colour/
+// geometry, an opt-in crosshair-marks toggle, an advanced per-side margin override, SCM cutting
+// mode), plus the rail's own Page Setup / Print quality controls it shares an export pipeline
+// with (Custom page size, image quality, corner rounding), and the willGenerateBleed signal on
+// the sheet itself. Reads back the actual downloaded PDF bytes (pdfjs-dist, page-count/page-
+// dimension metadata only - no canvas/rendering needed for that) rather than trusting the wiring
+// by inspection, per this feature's own "a control that renders but doesn't affect the export"
+// failure mode.
 test.describe.configure({ timeout: 60_000 });
 
 const IMAGE_WORKER_URL_PATTERN = /^https:\/\/cdn\.proxyprints\.ca\//;
@@ -186,7 +187,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     expect(await readNumPages(readFileSync(backsOnlyPath))).toBe(1);
   });
 
-  test("DPI and JPG quality sliders set the actual image-worker request's dpi/jpgQuality query params", async ({
+  test("the rail's DPI and JPG quality controls set the actual image-worker request's dpi/jpgQuality query params", async ({
     page,
     network,
   }) => {
@@ -199,11 +200,14 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
+    // These two now live in the rail's own "Print quality" section, not the export dialog - set
+    // before opening it, since the dialog's backdrop blocks the rail behind it while it's open.
+    await page.getByTestId("display-image-dpi").fill("100");
+    await page.getByTestId("display-jpg-quality").fill("5");
+
     await openPDFSettings(page);
     await page.getByTestId("display-export-page-range-start").fill("1");
     await page.getByTestId("display-export-page-range-end").fill("1");
-    await page.getByTestId("display-export-image-dpi").fill("100");
-    await page.getByTestId("display-export-jpg-quality").fill("5");
 
     const requestPromise = page.waitForRequest(
       (request) =>
@@ -361,9 +365,10 @@ test.describe("DisplayExportPDF - SCM cutting mode", () => {
     await expect(
       page.getByTestId("display-export-scm-offset-angle")
     ).toBeVisible();
-    // Image quality is the one group shared by both panels - SCMCard reads it exactly like the
-    // standard grid's own card image does.
-    await expect(page.getByTestId("display-export-image-dpi")).toBeVisible();
+    // Image quality now lives in the rail, not this dialog - stays visible and unaffected by
+    // which panel (standard/SCM) is showing. SCMCard reads it exactly like the standard grid's
+    // own card image does.
+    await expect(page.getByTestId("display-image-dpi")).toBeVisible();
   });
 
   test("an SCM export is a structurally different document from the standard export", async ({
@@ -427,11 +432,14 @@ test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    await openPDFSettings(page);
-    const roundCorners = page.getByTestId("display-export-round-corners");
+    // Now a rail control ("Print quality" section) - no dialog to open. Defaults to checked
+    // (roundCorners defaults to true - see DEFAULT_SHEET_SETTINGS).
+    const roundCorners = page.getByTestId("display-round-corners");
     await expect(roundCorners).toBeChecked();
     await roundCorners.uncheck();
     await expect(roundCorners).not.toBeChecked();
+    await roundCorners.check();
+    await expect(roundCorners).toBeChecked();
   });
 });
 
