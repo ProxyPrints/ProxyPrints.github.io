@@ -445,9 +445,13 @@ def resolve_weighted_consensus(
     own "volume never wins" invariant, for a different failure mode).
 
     MACHINE weight (DEDUCTION/OCR votes, each at `settings.PRINTING_TAG_MACHINE_WEIGHT`) is
-    capped the same way, per-outcome-group, at `settings.PRINTING_TAG_MACHINE_CAP` - the sibling
-    ceiling to the implicit one above, strictly below `min_weight` by the same policy, so enough
-    independent machine channels agreeing can never clear quorum unaided either.
+    capped the same way, per-outcome-group, at `settings.PRINTING_TAG_MACHINE_CAP`. Unlike the
+    implicit cap above, this is not what stops a machine-only group from resolving - the
+    `has_human_backed` gate at the end of this function does that unconditionally, regardless of
+    this cap's value. What this cap bounds is how far machine weight can carry a group TOWARD
+    quorum alongside a real human vote, and how much it can inflate that group's share of the
+    total weight once one is present - the "no machine tipping of a human contest" mechanism
+    below (formerly labeled D1 in the ratification matrix).
 
     Two further mechanisms - both owner-ratified 2026-07-22 (see the vote-weight scenario matrix,
     `docs/upstreaming/license-provenance.md` §3's "reimplement from a written description, never

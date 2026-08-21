@@ -712,15 +712,17 @@ class TestMachineVoteCapForm:
     """The sibling cap to TestImplicitVoteCapForm's, for the OTHER non-human-backed weight
     channel: DEDUCTION/OCR votes, each at settings.PRINTING_TAG_MACHINE_WEIGHT (default 0.5).
     Machine weight is capped in SUM per outcome group at settings.PRINTING_TAG_MACHINE_CAP
-    (default 1.5, strictly below min_weight=2) - the same "no volume of non-human weight may
-    supply quorum alone" invariant PRINTING_TAG_IMPLICIT_CAP enforces for implicit weight.
+    (default 1.0, strictly below min_weight=2).
 
     Unlike an implicit vote, a DEDUCTION/OCR vote IS a deliberate evidence-channel assertion, not
     a passive by-product of a pick. Several independent machine channels agreeing is real
-    corroboration, worth counting in full - but enough of them agreeing must still never resolve
-    a card with zero human involvement: at the default PRINTING_TAG_MACHINE_WEIGHT (0.5), four
-    agreeing machine votes reach a PRINTING_TAG_MIN_VOTES=2 quorum entirely unaided, which is the
-    defect this cap closes.
+    corroboration, worth counting in full - but this cap is not what stops them from resolving a
+    card with zero human involvement (mechanism (a) below does that, unconditionally, at any cap
+    value). What the cap bounds is how far machine weight can carry a group TOWARD quorum
+    alongside a real human vote, and how much it can inflate that group's share of the total
+    weight once one is present - the "no machine tipping of a human contest" mechanism
+    (formerly labeled D1 in the owner-ratified 2026-07-22 vote-weight scenario matrix,
+    docs/reference/vote-weight-matrix.md).
 
     Same two-mechanism split as TestImplicitVoteCapForm (see that class's own docstring for the
     full argument): (a) the human-backed gate, independent of any cap, decides a cell with no
@@ -768,19 +770,19 @@ class TestMachineVoteCapForm:
         assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
 
     def test_machine_weight_at_the_cap_plus_one_human_vote_still_resolves(self):
-        # One human vote (1.0) + machine weight fully at the cap (1.5) = 2.5, comfortably past
-        # the default min_weight=2 - the cap does not block a real, human-backed resolution.
+        # One human vote (1.0) + machine weight fully at the cap reaches exactly the default
+        # min_weight=2 (>= clears it) - the cap does not block a real, human-backed resolution.
         weight = settings.PRINTING_TAG_MACHINE_WEIGHT
         cap = settings.PRINTING_TAG_MACHINE_CAP
         at_cap = int(cap / weight)
         votes = [VT("A", 1.0, True)] + [VT("A", weight, False) for _ in range(at_cap)]
-        assert resolve_weighted_consensus(votes, min_weight=2, min_share=0.6) == "A"
+        assert resolve_weighted_consensus(votes, min_weight=1.0 + cap, min_share=0.6) == "A"
 
     def test_the_implicit_cap_and_the_machine_cap_apply_independently(self):
         # Regression: the two caps are applied separately inside full_weight, not against some
         # shared/combined bound - a fully-capped implicit pile plus a fully-capped machine pile,
         # alongside one human vote, sums to exactly what each cap's own ceiling predicts:
-        # 1.0 (human) + 1.0 (implicit, capped) + 1.5 (machine, capped) = 3.5.
+        # 1.0 (human) + implicit_cap + machine_cap.
         implicit_weight = settings.PRINTING_TAG_IMPLICIT_WEIGHT
         implicit_cap = settings.PRINTING_TAG_IMPLICIT_CAP
         machine_weight = settings.PRINTING_TAG_MACHINE_WEIGHT
@@ -792,8 +794,9 @@ class TestMachineVoteCapForm:
             + [VT("A", implicit_weight, False, is_implicit=True) for _ in range(at_implicit_cap)]
             + [VT("A", machine_weight, False) for _ in range(at_machine_cap)]
         )
-        assert resolve_weighted_consensus(votes, min_weight=3.5, min_share=0.6) == "A"
-        assert resolve_weighted_consensus(votes, min_weight=3.6, min_share=0.6) is None
+        total_at_cap = 1.0 + implicit_cap + machine_cap
+        assert resolve_weighted_consensus(votes, min_weight=total_at_cap, min_share=0.6) == "A"
+        assert resolve_weighted_consensus(votes, min_weight=total_at_cap + 0.1, min_share=0.6) is None
 
     def test_machine_cap_is_configured_strictly_below_min_votes(self):
         # Same margin requirement as PRINTING_TAG_IMPLICIT_CAP's own pinned test, for its sibling
@@ -805,9 +808,10 @@ class TestMachineVoteCapForm:
 class TestMachineCapGuard:
     """PRINTING_TAG_MACHINE_CAP's own settings-load-time guard: a future env override that sets
     the cap at or above PRINTING_TAG_MIN_VOTES must fail loudly when settings load, not silently
-    reopen the "machine votes alone form quorum" hole. Exercised via a real subprocess import of
-    the settings module (importlib.reload cannot safely re-run a Django settings module already
-    loaded into this process) with the env var set to an invalid value.
+    widen this channel's influence on quorum/share past the margin its sibling
+    PRINTING_TAG_IMPLICIT_CAP is held to. Exercised via a real subprocess import of the settings
+    module (importlib.reload cannot safely re-run a Django settings module already loaded into
+    this process) with the env var set to an invalid value.
     """
 
     def _import_settings_with_env(self, machine_cap: float) -> subprocess.CompletedProcess:

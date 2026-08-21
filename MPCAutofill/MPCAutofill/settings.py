@@ -88,19 +88,27 @@ PRINTING_TAG_IMPLICIT_CAP = env.float("PRINTING_TAG_IMPLICIT_CAP", default=1.0)
 # Hard ceiling on the SUM of machine-derived weight (VoteSource.DEDUCTION/OCR, each at
 # PRINTING_TAG_MACHINE_WEIGHT) counted per (card, tag, polarity) outcome group in
 # resolve_weighted_consensus - the same invariant PRINTING_TAG_IMPLICIT_CAP enforces for implicit
-# weight, applied to its sibling non-human-backed channel: no volume of machine votes on one side
-# may supply a whole group's quorum weight by itself. Default 1.5 = three independent machine
-# channels (0.5 each) still count in full - genuine corroboration from separate evidence sources
-# - while a fourth adds nothing, and a single human vote (weight 1.0) still carries that group on
-# to 2.5, comfortably past the default PRINTING_TAG_MIN_VOTES (2). Strictly below
-# PRINTING_TAG_MIN_VOTES by the same policy as the implicit cap - the assertion below fails
-# loudly if a future env override ever violates that margin. See
+# weight, applied to its sibling non-human-backed channel. This is NOT what stops a machine-only
+# group from resolving a card - `has_human_backed` is a separate, hard gate in
+# resolve_weighted_consensus that does that unconditionally, at any cap value. What this cap
+# bounds is how far machine weight can carry a group TOWARD quorum alongside a real human vote,
+# and how much it can inflate that group's share of the total weight once one is present - the
+# "no machine tipping of a human contest" mechanism (formerly labeled D1 in the owner-ratified
+# 2026-07-22 vote-weight scenario matrix, docs/reference/vote-weight-matrix.md). The matrix
+# ratifies no machine-cap value directly; the default of 1.0 mirrors the one cap it does ratify
+# (decision D5/S3, the sibling implicit cap at w=0.25/cap=1.0) rather than reasoning a fresh
+# number for an unratified constant: two independent machine channels (0.5 each) still count in
+# full - genuine corroboration from separate evidence sources - while a third adds nothing, and a
+# single human vote (weight 1.0) still carries that group to the default PRINTING_TAG_MIN_VOTES
+# quorum (2). Strictly below PRINTING_TAG_MIN_VOTES by the same policy as the implicit cap - the
+# assertion below fails loudly if a future env override ever violates that margin. See
 # cardpicker.vote_consensus.resolve_weighted_consensus's own docstring for the full mechanism.
-PRINTING_TAG_MACHINE_CAP = env.float("PRINTING_TAG_MACHINE_CAP", default=1.5)
+PRINTING_TAG_MACHINE_CAP = env.float("PRINTING_TAG_MACHINE_CAP", default=1.0)
 assert PRINTING_TAG_MACHINE_CAP < PRINTING_TAG_MIN_VOTES, (
     f"PRINTING_TAG_MACHINE_CAP ({PRINTING_TAG_MACHINE_CAP}) must be strictly below "
-    f"PRINTING_TAG_MIN_VOTES ({PRINTING_TAG_MIN_VOTES}) - a cap at or above quorum would let "
-    "machine votes alone resolve a card, which is exactly what this cap exists to prevent."
+    f"PRINTING_TAG_MIN_VOTES ({PRINTING_TAG_MIN_VOTES}) - the same margin policy applied to "
+    "PRINTING_TAG_IMPLICIT_CAP, keeping this non-human-backed weight channel's influence on "
+    "quorum and share bounded on the same terms as its sibling."
 )
 # Illustration-vote consensus thresholds (see cardpicker.illustration_consensus). Their own
 # settings, DEFAULTING TO THE PRINTING VALUES ABOVE - so this changes nothing anywhere today, and
