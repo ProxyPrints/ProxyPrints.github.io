@@ -1,7 +1,8 @@
 # Card-location landmark: STEP 1 gate result (NOT MET — no replacement shipped)
 
-2026-08-06. Follow-on to `docs/reports/2026-08-06-crop-geometry-audit.md` (issue #735/#736),
-which measured that `classify_border_color`'s fixed-fraction bands land on canvas rather than the
+2026-08-06. Follow-on to the 2026-08-06 crop-geometry audit (issue #735/#736, external to this
+repo — not a path in this tree), which measured that `classify_border_color`'s fixed-fraction
+bands land on canvas rather than the
 printed card on 8/8 directly-viewed images. This session attempted the fix that audit's own
 acceptance criteria called for — locate the card's own rectangle inside the image using an
 internal landmark (the rules-text-box's bottom edge), then rebuild bleed measurement and border/
