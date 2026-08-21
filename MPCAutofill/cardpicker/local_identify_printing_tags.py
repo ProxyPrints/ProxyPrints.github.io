@@ -354,11 +354,12 @@ def _has_interior_capital(name: str) -> bool:
 
 class CandidateNameIndex:
     """
-    Like cardpicker.deductive_backfill.CanonicalNameIndex, but keyed on the same to_searchable
-    name normalisation and carrying (expansion_code, collector_number, edhrec_rank) per candidate
-    instead of just a catalogued_printings_count - both engines here need to check a
-    parsed/matched value against a candidate's actual identity, not just count how many
-    candidates exist. Built once,
+    In-memory index over every `CanonicalCard`, keyed on `to_searchable` name normalisation and
+    carrying (expansion_code, collector_number, edhrec_rank, artist_name) per candidate - both
+    engines here need to check a parsed/matched value against a candidate's actual identity, not
+    just count how many candidates exist. `cardpicker.deductive_backfill`'s D1/D2 selectors
+    (issue #722) also resolve this SAME index, through `local_calculate_verdicts.
+    _get_cached_candidate_name_index()`, rather than keeping their own separate one. Built once,
     reused across the whole scan (one query over CanonicalCard's 113k+ rows, not one per card).
 
     issue #372: also carries a secondary "de-concatenated" index (`_by_concat`) used only as a

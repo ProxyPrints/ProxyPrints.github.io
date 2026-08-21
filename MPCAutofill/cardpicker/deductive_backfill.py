@@ -30,7 +30,6 @@ vote. The frozen cohort is identified by its stamped `run_id`, not by this modul
 `generate_run_id` below and `vote_consensus.DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID`.
 """
 
-import collections
 import itertools
 import uuid
 from dataclasses import dataclass, field
@@ -39,14 +38,9 @@ from typing import Iterable, Literal, Optional
 from django.db.models import QuerySet
 from django.utils import timezone
 
-from cardpicker.models import (
-    CanonicalCard,
-    Card,
-    CardPrintingTag,
-    PrintingTagStatus,
-    VoteSource,
-)
-from cardpicker.search.sanitisation import to_searchable
+from cardpicker.local_calculate_verdicts import _get_cached_candidate_name_index
+from cardpicker.local_identify_printing_tags import CandidateNameIndex
+from cardpicker.models import Card, CardPrintingTag, PrintingTagStatus, VoteSource
 from cardpicker.vote_consensus import DEDUCTIVE_BACKFILL_ZERO_WEIGHT_RUN_ID
 from cardpicker.vote_write import purge_and_write_votes
 
@@ -105,40 +99,7 @@ class DeductiveVote:
         return CONFIDENCE_BY_TIER[self.tier]
 
 
-class CanonicalNameIndex:
-    """
-    In-memory index over every `CanonicalCard`, built once and reused across the whole scan -
-    `to_searchable` isn't a SQL function, so per-card exact-name and (name, expansion) lookups
-    have to happen in Python against a prebuilt structure rather than as a query per card
-    (which would be 113k+ queries per backfill run).
-    """
-
-    def __init__(self) -> None:
-        by_name: dict[str, list[tuple[int, int]]] = collections.defaultdict(list)
-        by_name_expansion: dict[tuple[str, str], list[tuple[int, int]]] = collections.defaultdict(list)
-        rows = CanonicalCard.objects.select_related("expansion", "printing_metadata").values_list(
-            "pk", "name", "expansion__code", "printing_metadata__catalogued_printings_count"
-        )
-        for pk, name, expansion_code, catalogued_printings_count in rows:
-            normalised = to_searchable(name)
-            # catalogued_printings_count can be null if a CanonicalCard predates the metadata
-            # import (`printing_metadata` is a nullable reverse OneToOne) - mapped to -1 so it
-            # can never be mistaken for a real count of 1. In the live catalogue on 2026-07-29
-            # this branch is unreachable: all 113,224 CanonicalCard rows carry a metadata row.
-            count = catalogued_printings_count if catalogued_printings_count is not None else -1
-            by_name[normalised].append((pk, count))
-            by_name_expansion[(normalised, expansion_code.lower())].append((pk, count))
-        self._by_name = dict(by_name)
-        self._by_name_expansion = dict(by_name_expansion)
-
-    def exact_matches(self, name: str) -> list[tuple[int, int]]:
-        return self._by_name.get(to_searchable(name), [])
-
-    def exact_matches_in_expansion(self, name: str, expansion_code_lower: str) -> list[tuple[int, int]]:
-        return self._by_name_expansion.get((to_searchable(name), expansion_code_lower), [])
-
-
-def _eligible_base_queryset() -> "QuerySet[Card]":
+def _eligible_base_queryset(card_ids: Optional[Iterable[int]] = None) -> "QuerySet[Card]":
     """
     Shared base pool for both tiers: unresolved, no confirmed indexing match, no vote of any
     kind yet (not just no *deductive* vote - see docs/features/printing-tags.md's Stage 4
@@ -158,8 +119,17 @@ def _eligible_base_queryset() -> "QuerySet[Card]":
     name-matching pipeline compares against `CanonicalCard.name`, which is Scryfall's English
     oracle name; a coincidental text match against a foreign-language card's name isn't a
     trustworthy signal about which specific printing it depicts).
+
+    BATCH SCOPING (`card_ids`, issue #722): when given, narrows the outer `Card` query itself
+    (`.filter(pk__in=card_ids)`) rather than letting a caller filter the yielded `DeductiveVote`s
+    afterward - the same "push into the SQL" convention
+    `local_identify_printing_tags._eligible_base_queryset`'s own `card_ids` docstring establishes,
+    and for the same reason: this queryset walks the full unresolved pool
+    (`printing_tag_status=UNRESOLVED, canonical_card__isnull=True`, currently ~135,000+ rows), and
+    a caller that already knows which cards it wants has no reason to pay a scan over the rest of
+    it. `card_ids=None` (every existing caller) is byte-identical to before.
     """
-    return (
+    queryset = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
             canonical_card__isnull=True,
@@ -169,64 +139,81 @@ def _eligible_base_queryset() -> "QuerySet[Card]":
         .exclude(tags__contains=["Custom"])
         .select_related("source")
     )
+    if card_ids is not None:
+        queryset = queryset.filter(pk__in=card_ids)
+    return queryset
 
 
-def select_d1_candidates(index: "CanonicalNameIndex | None" = None) -> Iterable[DeductiveVote]:
+def select_d1_candidates(
+    index: "CandidateNameIndex | None" = None, card_ids: Optional[Iterable[int]] = None
+) -> Iterable[DeductiveVote]:
     """
-    D1: the card's name matches exactly one `CanonicalCard` row in our catalogue.
+    D1: the card's name matches exactly one `CanonicalCard` row in our catalogue. That is the
+    whole test - it IS "our table happens to have one row", and nothing corroborates it
+    externally (see the module docstring's correction and issue #600).
 
-    THE SECOND CONDITION EXCLUDES NOTHING - it is entailed by the first (2026-07-29). It is left
-    in place, labelled, rather than silently deleted, because deleting it would erase the evidence
-    that D1's advertised external corroboration was never implemented; issue #600 tracks the
-    decision about what replaces it. Do not read it as a safety net.
+    THE INDEX (2026-07-30, issue #722): resolved through
+    `local_calculate_verdicts._get_cached_candidate_name_index()` - the SAME per-worker-process,
+    version-stamped `CandidateNameIndex` cache `run_join_key_calculator`/`run_fallback_calculator`/
+    `run_illustration_calculator`/`run_frame_mismatch_recovery`/`run_lands_identify` already use,
+    not a second, module-private index rebuilt from scratch on every call (the defect this module
+    used to have: `CanonicalNameIndex.__init__` scanned all 113k+ `CanonicalCard` rows, several
+    queries, every single invocation).
 
-    Why it is entailed: `catalogued_printings_count` is the number of `CanonicalCard` rows sharing
-    this row's `canonical_id` (oracle id). Rows sharing an oracle id share that oracle card's
-    name, so an oracle group of size N > 1 puts N rows under the same normalised name and
-    `len(matches) == 1` has already rejected the card. Rows with a NULL `canonical_id` are stored
-    as 1 by the importer. Either way, `len(matches) == 1` implies the count is 1.
-
-    Measured against the live catalogue 2026-07-29, both directions:
-      - 14,893 normalised names have exactly one `CanonicalCard` row; all 14,893 of those rows
-        have `catalogued_printings_count == 1`. Zero have > 1. Zero are NULL.
-      - 137 cards in the eligible pool (104,969) reach this condition; 137 pass it.
-
-    What the condition was MEANT to catch - "Scryfall publishes more printings of this card than
-    we have imported, so a unique local match is not proof of anything" - is real and is NOT
-    caught here. Counting the bulk-data file directly on 2026-07-29 finds 2 oracle ids where we
-    hold one row and Scryfall publishes more. This predicate cannot see them, because it is
-    computed from the same table whose incompleteness it is supposed to detect.
+    THE catalogued_printings_count CROSS-CHECK IS GONE, not merely stopped being read (2026-07-30).
+    It used to re-verify `len(matches) == 1` against a second field, `CanonicalPrintingMetadata.
+    catalogued_printings_count`, that `CandidateNameIndex`'s own scan does not carry (that index
+    is shared with engines that have no use for it - see its own docstring). Losing it costs
+    nothing real: `catalogued_printings_count` is the number of `CanonicalCard` rows sharing this
+    row's `canonical_id` (oracle id), rows sharing an oracle id share that oracle card's name, so
+    an oracle group of size N > 1 already puts N rows under the same normalised name and
+    `len(matches) == 1` above has already rejected the card - the count check could only ever
+    re-confirm what the name-uniqueness test already proved, never catch anything it missed
+    (measured against the live catalogue 2026-07-29: 137 candidates before the removed check, 137
+    after). What the removed check was never able to catch either - "Scryfall publishes more
+    printings of this card than we have imported, so a unique local match is not proof of
+    anything" - remains real and remains uncaught; issue #600 tracks what a genuine external check
+    would look like.
     """
-    index = index or CanonicalNameIndex()
-    for card in _eligible_base_queryset().only("pk", "name", "source_id").iterator(chunk_size=5000):
-        matches = index.exact_matches(card.name)
+    index = index or _get_cached_candidate_name_index()
+    for card in _eligible_base_queryset(card_ids=card_ids).only("pk", "name", "source_id").iterator(chunk_size=5000):
+        matches = index.candidates_for(card.name)
         if len(matches) == 1:
-            printing_pk, catalogued_printings_count = matches[0]
-            # Entailed by `len(matches) == 1` above - see this function's docstring. Not a gate.
-            if catalogued_printings_count == 1:
-                yield DeductiveVote(card_id=card.pk, printing_id=printing_pk, tier="d1")
+            yield DeductiveVote(card_id=card.pk, printing_id=matches[0].pk, tier="d1")
 
 
-def select_d2_candidates(index: "CanonicalNameIndex | None" = None) -> Iterable[DeductiveVote]:
-    index = index or CanonicalNameIndex()
-    for card in _eligible_base_queryset().only("pk", "name", "expansion_hint", "source_id").iterator(chunk_size=5000):
+def select_d2_candidates(
+    index: "CandidateNameIndex | None" = None, card_ids: Optional[Iterable[int]] = None
+) -> Iterable[DeductiveVote]:
+    """D2: the card's name matches more than one `CanonicalCard` row (D1's territory otherwise),
+    but the card's own `expansion_hint` (already lowercased at parse time - see `tags.py::Tags.
+    extract()`) narrows `index.candidates_for(card.name)` to exactly one `expansion_code` match.
+    Same shared, process-cached `CandidateNameIndex` as `select_d1_candidates` - see that
+    function's own docstring."""
+    index = index or _get_cached_candidate_name_index()
+    for card in (
+        _eligible_base_queryset(card_ids=card_ids)
+        .only("pk", "name", "expansion_hint", "source_id")
+        .iterator(chunk_size=5000)
+    ):
         if not card.expansion_hint:
             continue
-        matches = index.exact_matches(card.name)
+        matches = index.candidates_for(card.name)
         if len(matches) <= 1:
             continue  # D1's territory, or no match at all - not D2
-        narrowed = index.exact_matches_in_expansion(card.name, card.expansion_hint)
+        narrowed = [candidate for candidate in matches if candidate.expansion_code == card.expansion_hint]
         if len(narrowed) == 1:
-            printing_pk, _catalogued_printings_count = narrowed[0]
-            yield DeductiveVote(card_id=card.pk, printing_id=printing_pk, tier="d2")
+            yield DeductiveVote(card_id=card.pk, printing_id=narrowed[0].pk, tier="d2")
 
 
-def select_candidates(tier: Literal["d1", "d2", "all"]) -> Iterable[DeductiveVote]:
-    index = CanonicalNameIndex()
+def select_candidates(
+    tier: Literal["d1", "d2", "all"], card_ids: Optional[Iterable[int]] = None
+) -> Iterable[DeductiveVote]:
+    index = _get_cached_candidate_name_index()
     if tier in ("d1", "all"):
-        yield from select_d1_candidates(index)
+        yield from select_d1_candidates(index, card_ids=card_ids)
     if tier in ("d2", "all"):
-        yield from select_d2_candidates(index)
+        yield from select_d2_candidates(index, card_ids=card_ids)
 
 
 @dataclass
@@ -280,6 +267,7 @@ def run_backfill(
     dry_run: bool = False,
     batch_size: int = 2000,
     progress_every: int = 20000,
+    card_ids: Optional[Iterable[int]] = None,
 ) -> BackfillResult:
     """
     Selects candidates for `tier`, writes them in `batch_size` chunks (so an interrupted run
@@ -292,8 +280,15 @@ def run_backfill(
     threaded through the whole run (`generate_run_id`'s own docstring covers why, and why it can
     never collide with the frozen 2026-07-14 cohort's stamp). Votes written by this run carry
     ordinary machine weight - see the module docstring.
+
+    `card_ids` (issue #722) is threaded straight through to `select_candidates` ->
+    `_eligible_base_queryset`, where it is pushed into the SQL rather than filtered here in
+    Python - see that function's own docstring. `card_ids=None` (the management command's only
+    calling shape) is byte-identical to before. NOT wired into any Stage E dispatch path yet -
+    that is a deliberate, separate decision pending a measured per-card cost at micro-batch
+    granularity, not an oversight; see issue #722's own acceptance criteria.
     """
-    votes: Iterable[DeductiveVote] = select_candidates(tier)
+    votes: Iterable[DeductiveVote] = select_candidates(tier, card_ids=card_ids)
     if limit is not None:
         votes = itertools.islice(votes, limit)
 
@@ -359,7 +354,6 @@ __all__ = [
     "generate_run_id",
     "CONFIDENCE_BY_TIER",
     "DeductiveVote",
-    "CanonicalNameIndex",
     "BackfillResult",
     "select_d1_candidates",
     "select_d2_candidates",
