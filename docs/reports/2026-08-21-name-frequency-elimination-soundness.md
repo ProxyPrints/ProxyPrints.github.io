@@ -151,24 +151,31 @@ entirely different, unrelated `Card` row of a different name — see Method).
 
 ## Bounds on generalising this measurement
 
-Two catalogue-wide facts already established elsewhere bound how far this
-figure travels:
+Two catalogue-wide facts bound how far this figure travels:
 
-- only ~48% of uploaded names match a canonical name exactly;
+- measured 2026-08-21, read-only, against production, via `to_searchable`
+  (the same normaliser `CandidateNameIndex` itself uses) checked for an
+  exact match against `CanonicalCard.name`: of 227,473 `card_type='CARD'`
+  rows, 220,170 (96.8%) match; counted by distinct normalised name instead
+  of by row, 29,716 of 32,416 (91.7%) match. Two independent measurement
+  paths (a raw set-membership test and `CandidateNameIndex.candidates_for`
+  itself) reached the identical figures. (An earlier version of this bullet
+  claimed ~48% match with no supporting measurement; both denominators
+  above refute it.)
 - upstream illustration/printing metadata exists for ~28% of distinct names
   (34,869 of 124,052).
 
-This report's ground-truth population (23,203 confirmed-match cards) is, by
+This report's ground-truth population (23,203 confirmed-match cases) is, by
 construction, the subset of the catalogue that _already_ resolved
-successfully — a systematically easier population than the ~204,000 still-
-unresolved cards the calculator would actually run against, where the
-name-match and coverage failure rates are structurally worse (only 3.9% of
-this report's ground truth got zero candidates at all, far below the ~52%
-non-exact-match rate the wider catalogue carries). The 35.1%/64.9% split
-above should be read as measured on the _favourable_ end of this
-catalogue's population, not as a catalogue-wide estimate — if anything, a
-figure measured on the harder, still-unresolved population would likely be
-worse, not better.
+successfully — that much is measured and holds on its own terms, independent
+of the bullet above. What the corrected figures do NOT support is a
+direction for how the 35.1%/64.9% split would move on the ~204,000
+still-unresolved cards: the argument this section previously built for
+"structurally worse, likely worse" rested on the wrong 48% figure and does
+not survive its correction. No measurement here establishes whether the
+still-unresolved population's precision would be better, worse, or the same.
+The split above should be read as measured on this ground-truth slice only,
+with no claim about which direction it would move elsewhere.
 
 ## Conclusion
 

@@ -422,8 +422,9 @@ class TestCardNameNarrowing:
 
     def test_an_empty_intersection_falls_back_to_the_unnarrowed_set(self):
         """A decorated or genuinely custom card name resolves to artists that have nothing to do
-        with the read (only 48% of uploaded names match a canonical name exactly). That must never
-        cost the recovery - it falls back, it does not abstain and it does not force a wrong name."""
+        with the read (3.2% of card rows do not match a canonical name exactly, measured via
+        `to_searchable` against `CanonicalCard.name`). That must never cost the recovery - it falls
+        back, it does not abstain and it does not force a wrong name."""
         unnarrowed = recover_artist_from_collector_line("059/274R\nDMR ¢ EN RON SPEA", LEXICON)
         fallen_back = recover_artist_from_collector_line(
             "059/274R\nDMR ¢ EN RON SPEA", LEXICON, allowed_artist_names=["Rebecca Guay"]

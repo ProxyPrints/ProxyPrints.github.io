@@ -113,8 +113,9 @@ out of that shape, all of them load-bearing:
     (a SET, stored only when exactly one member fits) is preserved rather than forced to one;
   - an empty intersection FALLS BACK to the unnarrowed set rather than abstaining, which is what
     keeps a decorated (`Vorpal Sword (NormalPlus Alessandra Pisano)`) or genuinely custom name -
-    only 48% of uploaded names match a canonical name exactly - from silently losing artist
-    recovery.
+    3.2% of card rows (7,192 of 227,473, measured via the same `to_searchable` normaliser this
+    lookup delegates through, against `CanonicalCard.name`) do not match a canonical name exactly
+    - from silently losing artist recovery.
 The narrowing is deliberately applied BEFORE the `MAX_COMPATIBLE` abstention, not after: a reading
 that fits eight artists carries no information globally but is decisive once scoped to one card's
 name, and narrowing after the cap would discard exactly that population.
