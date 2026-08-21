@@ -884,7 +884,7 @@ def _contested_card_ids_shared_cache() -> Optional[Any]:
         return None
 
 
-def get_contested_card_ids() -> list[int]:
+def get_contested_card_ids(*, force_refresh: bool = False) -> list[int]:
     """
     IDs of cards with conflicting printing-tag votes on record: more than one distinct
     printing voted for, or both a printing vote and a no-match vote. Coarser than
@@ -911,9 +911,17 @@ def get_contested_card_ids() -> list[int]:
     a fresh list COPY every time, so a caller that holds or mutates the returned list can
     never poison the cached value for the next caller. A cache miss computes and stores,
     exactly as before otherwise.
+
+    `force_refresh` (2026-08-20, `question_feed.warm_feed_supply_cache`'s own fix): skips
+    the cache READ so a scheduled warm always recomputes, but still performs the cache
+    WRITE - a warm that lands while the entry is still valid (the normal case on a warm
+    cadence shorter than the TTL) must still reset the TTL, or the entry keeps expiring
+    300s after its original write regardless of how often the warm runs. Defaults `False`
+    so every other caller - above all `views.get_question_feed`'s request path - keeps
+    reading the cache exactly as before; only the warm ever passes `True`.
     """
     shared_cache = _contested_card_ids_shared_cache()
-    cached = shared_cache.get(_CONTESTED_CARD_IDS_CACHE_KEY) if shared_cache is not None else None
+    cached = shared_cache.get(_CONTESTED_CARD_IDS_CACHE_KEY) if shared_cache is not None and not force_refresh else None
     if cached is not None:
         return list(cached)
     contested = contested_queryset(
