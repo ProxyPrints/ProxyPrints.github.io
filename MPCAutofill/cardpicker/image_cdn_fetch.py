@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # hash-at-ingest deliberately overrides it with a much smaller size (see local_phash's
 # INGEST_HASH_FETCH_DPI) since phash's own internal downsampling makes the extra resolution
 # unnecessary for hashing specifically.
-DEFAULT_FETCH_DPI: Optional[int] = 250
+DEFAULT_FETCH_DPI: Optional[int] = 460
 
 
 def get_worker_image_url(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional[str]:
@@ -67,6 +67,23 @@ def get_worker_image_url(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -
         return None
     dpi_param = f"&dpi={dpi}" if dpi is not None else ""
     return f"{settings.IMAGE_WORKER_URL}/images/google_drive/full/{card.identifier}.jpg?jpgQuality=100{dpi_param}"
+
+
+def get_worker_small_image_url(card: "Card") -> Optional[str]:
+    """
+    The card's image via the image CDN Worker's "small" tier - the same route `2/questionFeed/`'s
+    frontend hits for a served item's subject image (`getWorkerImageURL(item.card, "small")`,
+    frontend/src/common/image.ts, called from frontend/src/features/questionFeed/QuestionFeed.tsx).
+    Unlike `get_worker_image_url`'s "full" tier above, this route is backed by the Worker's R2
+    bucket cache (image-cdn/src/service/R2Service.ts's `getThumbnail`) - a GET here either serves
+    an existing bucket object or, on a miss, proxies to Google Drive AND writes the bucket entry in
+    the background (`ctx.waitUntil(this.putImage(...))`), so issuing this fetch is what warms that
+    bucket entry for the next real request. Google Drive sources only, matching the Worker's
+    current scope - same restriction as `get_worker_image_url`.
+    """
+    if card.get_source_type_choices() != SourceTypeChoices.GOOGLE_DRIVE:
+        return None
+    return f"{settings.IMAGE_WORKER_URL}/images/google_drive/small/{card.identifier}.jpg?jpgQuality=100"
 
 
 def fetch_card_image_bytes(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Optional[bytes]:
@@ -142,4 +159,10 @@ def fetch_card_image(card: "Card", dpi: Optional[int] = DEFAULT_FETCH_DPI) -> Op
     return Image.open(BytesIO(data))
 
 
-__all__ = ["DEFAULT_FETCH_DPI", "get_worker_image_url", "fetch_card_image", "fetch_card_image_bytes"]
+__all__ = [
+    "DEFAULT_FETCH_DPI",
+    "get_worker_image_url",
+    "get_worker_small_image_url",
+    "fetch_card_image",
+    "fetch_card_image_bytes",
+]

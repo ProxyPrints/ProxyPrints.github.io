@@ -5,11 +5,17 @@ from django.db import migrations
 
 def create_schedules(apps, schema_editor):  # type: ignore  # TODO
     Schedule = apps.get_model("django_q", "Schedule")
-    Schedule.objects.create(
+    # `get_or_create`, not `create`: 0106 adds a UNIQUE constraint on Schedule.name, so a plain
+    # `create` against an already-present row (a rebuilt/squashed history re-running this
+    # migration) would raise IntegrityError instead of being a no-op. Same convention as
+    # 0093/0094/0105.
+    Schedule.objects.get_or_create(
         name="import_canonical_card_data",
-        func="django.core.management.call_command",
-        args="'import_canonical_card_data'",
-        schedule_type="W",
+        defaults=dict(
+            func="django.core.management.call_command",
+            args="'import_canonical_card_data'",
+            schedule_type="W",
+        ),
     )
 
 

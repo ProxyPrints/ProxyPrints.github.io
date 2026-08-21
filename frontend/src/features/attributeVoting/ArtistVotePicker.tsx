@@ -6,8 +6,7 @@
  * thumbnail image) rather than thumbnail buttons.
  */
 
-import React, { useEffect, useState } from "react";
-import Button from "react-bootstrap/Button";
+import React, { useEffect, useRef, useState } from "react";
 import Col from "react-bootstrap/Col";
 import Form from "react-bootstrap/Form";
 import Row from "react-bootstrap/Row";
@@ -19,6 +18,7 @@ import {
   CanonicalArtist,
 } from "@/common/schema_types";
 import { useAppDispatch } from "@/common/types";
+import { ActionButton } from "@/features/attributeVoting/ActionButton";
 import {
   APIGetArtistCandidates,
   APIGetArtistConsensus,
@@ -57,6 +57,12 @@ interface ArtistVotePickerProps {
    * this component needing to know anything about that surface's own UI. Omitted (this
    * component's other caller, AttributeVotingPanel): unchanged behavior, nothing extra rendered. */
   onArtistConfirmed?: (artistName: string) => void;
+  /** Called after ANY artist vote succeeds - a named candidate OR "Unknown artist". Lets a
+   * funnel-style caller (QuestionFeed.tsx) gate its own "you're done" affordance on a real
+   * vote existing at all, which onArtistConfirmed alone cannot do (it never fires for the
+   * Unknown-artist answer). Omitted (this component's other caller, AttributeVotingPanel):
+   * unchanged behavior, nothing extra rendered. */
+  onVoteCast?: () => void;
 }
 
 export function ArtistVotePicker({
@@ -66,6 +72,7 @@ export function ArtistVotePicker({
   onRateLimited,
   voteSurface,
   onArtistConfirmed,
+  onVoteCast,
 }: ArtistVotePickerProps) {
   const dispatch = useAppDispatch();
 
@@ -77,6 +84,10 @@ export function ArtistVotePicker({
   const [loading, setLoading] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [revealPickerAnyway, setRevealPickerAnyway] = useState<boolean>(false);
+  // Issue #715 - same synchronous in-flight guard as QueueTagQuestion: `disabled={submitting}`
+  // lags a fast double-tap by a render, so the ref drops the second entry before it can cast
+  // the artist vote twice.
+  const inFlightRef = useRef<boolean>(false);
 
   useEffect(() => {
     APIGetArtistConsensus(backendURL, cardIdentifier)
@@ -99,6 +110,10 @@ export function ArtistVotePicker({
   }, [backendURL, cardIdentifier, query]);
 
   const submit = (artistName: string | undefined, isUnknown: boolean) => {
+    if (inFlightRef.current) {
+      return;
+    }
+    inFlightRef.current = true;
     setSubmitting(true);
     APISubmitArtistVote(
       backendURL,
@@ -110,6 +125,7 @@ export function ArtistVotePicker({
     )
       .then((response) => {
         setConsensus(response);
+        onVoteCast?.();
         dispatch(
           setNotification([
             Math.random().toString(),
@@ -140,7 +156,10 @@ export function ArtistVotePicker({
           ])
         );
       })
-      .finally(() => setSubmitting(false));
+      .finally(() => {
+        inFlightRef.current = false;
+        setSubmitting(false);
+      });
   };
 
   if (confidentlyKnownArtistName != null && !revealPickerAnyway) {
@@ -191,29 +210,29 @@ export function ArtistVotePicker({
       ) : (
         <Row className="g-2 mt-1" xs={2} md={3}>
           <Col>
-            <Button
-              variant={consensus?.isUnknown ? "success" : "outline-secondary"}
-              className="w-100"
+            <ActionButton
+              className={
+                consensus?.isUnknown ? "success w-100" : "secondary w-100"
+              }
               disabled={submitting}
               onClick={() => submit(undefined, true)}
             >
               Unknown artist
-            </Button>
+            </ActionButton>
           </Col>
           {candidates.map((candidate) => (
             <Col key={candidate.name}>
-              <Button
-                variant={
+              <ActionButton
+                className={
                   consensus?.resolvedArtist?.name === candidate.name
-                    ? "success"
-                    : "outline-secondary"
+                    ? "success w-100"
+                    : "secondary w-100"
                 }
-                className="w-100"
                 disabled={submitting}
                 onClick={() => submit(candidate.name, false)}
               >
                 {candidate.name}
-              </Button>
+              </ActionButton>
             </Col>
           ))}
         </Row>

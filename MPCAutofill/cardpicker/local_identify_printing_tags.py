@@ -75,7 +75,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Optional, cast
+from typing import Any, Callable, Iterable, Literal, Optional, cast
 
 from PIL import Image
 
@@ -475,7 +475,8 @@ class SelectedCard:
 # addendum item 4 (2026-07-15): the empirical resolution floor from the 6-way dpi sweep
 # (docs/features/printing-tags.md "Resolution floor + payload reduction") - dpi<=150 degrades
 # OCR yield below the native-resolution baseline, dpi>=200 matches or exceeds it. This is the
-# FLOOR itself (200), not DEFAULT_FETCH_DPI (250, a safety margin above the floor) - applied
+# FLOOR itself (200), not DEFAULT_FETCH_DPI (460 as of 2026-08-14, a safety margin above the
+# floor - see that constant's own comment) - applied
 # against Card.dpi (computed once at catalog-import time from the source image's own pixel
 # height - cardpicker.sources.update_database.transform_image_into_object) so a source image
 # that's ALREADY below the floor is never fetched at all: no CDN request, no OCR/phash cost,
@@ -813,12 +814,16 @@ def select_candidates(
 # genuinely degrades OCR yield (3/30, 7/30 vs. an 8/30 native-resolution baseline), while
 # dpi>=200 matches or EXCEEDS the native baseline (12/30, 10/30, 9/30) despite a 2-4x smaller
 # payload - smaller re-encoded JPEGs plausibly render small text more cleanly than a full-res
-# original in some cases, though 30 cards is too small a sample to fully explain that. 250 is a
-# safety margin above the empirically-best 200, not the raw optimum - hedges against small-
-# sample noise while still keeping most of the bandwidth win (mean 728KB vs. 1.84MB native, a
-# 2.5x reduction). PILOT-ONLY: this constant is local_identify_printing_tags' own default, not
-# shared with frontend/src/features/pdf/ or .../download/, which need full print resolution by
-# design and are untouched by this change.
+# original in some cases, though 30 cards is too small a sample to fully explain that. 250 was
+# this constant's original value: a safety margin above the empirically-best 200, not the raw
+# optimum - hedged against small-sample noise while still keeping most of the bandwidth win
+# (mean 728KB vs. 1.84MB native, a 2.5x reduction at that dpi). Since 2026-08-14 this re-export
+# instead inherits image_cdn_fetch.DEFAULT_FETCH_DPI directly (now 460), raised for downstream
+# geometric-measurement precision (see that constant's own comment), not a new OCR-yield sweep -
+# 460 still clears this module's 200 floor with room to spare, so the OCR-yield conclusion above
+# still holds, it's just no longer the number that set the value. PILOT-ONLY: this constant is
+# local_identify_printing_tags' own default, not shared with frontend/src/features/pdf/ or
+# .../download/, which need full print resolution by design and are untouched by this change.
 #
 # get_worker_image_url/fetch_card_image moved to cardpicker.image_cdn_fetch (2026-07-16,
 # hash-at-ingest work) - re-imported below since a second, non-pilot caller
@@ -1173,7 +1178,7 @@ def _compute_card(
             outcome.disagreement = True
 
     if image is not None:
-        outcome.border_color = local_fallback.classify_border_color(image, bleed_class)
+        outcome.border_color = local_fallback.classify_border_color(image)
         illus_anchor_fired, _artist_name = local_fallback.detect_illus_anchor(image, ocr_raw_texts, bleed_class)
         # "unknown-set-code" (2026-07-23, the SET-CODE LEXICON GATE - see run_ocr_for_card's own
         # known_set_codes docstring paragraph) is included alongside "parsed-but-no-match" here
@@ -2328,6 +2333,36 @@ def verify_zero_resolutions(card_ids: list[int], batch_size: int = 2000) -> list
     return violations
 
 
+def run_fidelity_gate(
+    *,
+    run_id: str,
+    write: Callable[[str], None],
+    style_error: Optional[Callable[[str], str]] = None,
+) -> list[int]:
+    """
+    THE SHARED STAGE D FIDELITY GATE. Answers one question over every card a run_id cast a
+    CardPrintingTag vote for: did any of them reach a RESOLVED printing state on machine votes
+    alone? The answer must be zero. This is verify_zero_resolutions (above) plus the run-scoping
+    query that selects which cards to check it against, factored out so run_pipeline and
+    backfill_survivor_pks share ONE gate rather than each keeping its own copy that could drift.
+
+    Never rolls back, purges, or retracts anything - every row either command wrote stays written.
+    A violation is reported (via write, and returned so the caller can exit non-zero on it) - a
+    loud "read this run before trusting it", not an undo.
+    """
+    card_ids = list(CardPrintingTag.objects.filter(run_id=run_id).values_list("card_id", flat=True).distinct())
+    if not card_ids:
+        write("FIDELITY GATE: this run cast no printing votes - nothing to check.")
+        return []
+    violations = verify_zero_resolutions(card_ids)
+    if violations:
+        message = f"FIDELITY GATE VIOLATION: {len(violations)} card(s): {violations[:20]}"
+        write(style_error(message) if style_error is not None else message)
+    else:
+        write(f"FIDELITY GATE: clear over {len(card_ids)} cards.")
+    return violations
+
+
 __all__ = [
     "OCR_ANONYMOUS_ID",
     "UNFETCHABLE_IMAGE_SKIP_REASON",
@@ -2373,5 +2408,6 @@ __all__ = [
     "NameFrequencyResult",
     "run_name_frequency_elimination",
     "verify_zero_resolutions",
+    "run_fidelity_gate",
     "generate_run_id",
 ]

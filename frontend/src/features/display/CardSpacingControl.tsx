@@ -70,7 +70,7 @@ export function CardSpacingControl({
         <span className="small">Card spacing (mm)</span>
         <Button
           size="sm"
-          variant={linked ? "primary" : "outline-secondary"}
+          variant={linked ? "primary" : "outline-light"}
           onClick={toggleLinked}
           aria-pressed={linked}
           data-testid="display-spacing-link-toggle"
@@ -118,8 +118,7 @@ export function CardSpacingControl({
         </Form.Group>
       </div>
       <div className="text-muted small">
-        Separate axes ease cutting — 0 horizontal butts columns for strip
-        cutting; a vertical gap suits die cutters.
+        0 horizontal for strip cutting; add vertical gap for die cutters.
       </div>
     </div>
   );

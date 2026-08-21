@@ -5,12 +5,25 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import React from "react";
 import { Provider } from "react-redux";
 
-import { localBackend, localBackendURL } from "@/common/test-constants";
-import { submitTagVoteResolvesToApply, tagsNoResults } from "@/mocks/handlers";
+import {
+  cardDocument9,
+  localBackend,
+  localBackendURL,
+} from "@/common/test-constants";
+import { AUTO_DERIVED_TAG_VOTE_SURFACE } from "@/features/attributeChips/attributeChips";
+import {
+  artistCandidatesTwoResults,
+  artistConsensusUnresolved,
+  questionFeedBorder,
+  reportCardSuccess,
+  submitArtistVoteResolvesToCanonicalArtist1,
+  submitTagVoteResolvesToApply,
+  tagsNoResults,
+} from "@/mocks/handlers";
 import { server } from "@/mocks/server";
 import { setupStore } from "@/store/store";
 
@@ -134,6 +147,63 @@ describe("QuestionFeed", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders the shared report panel for the question's card and submits through the existing report flow", async () => {
+    server.use(questionFeedOnce(), reportCardSuccess);
+    renderFeed();
+
+    // The WTC page reuses the card-detail modal's ReportCardPanel unchanged - the button
+    // sits in the QPanel adjacent to the question's own action row (below Skip etc.), and
+    // its accessible name is the component's visible label, same as on the legacy page.
+    const reportButton = await screen.findByTestId("report-card-button");
+    expect(reportButton).toBeInTheDocument();
+    expect(reportButton).toHaveTextContent("Report this card");
+
+    fireEvent.click(reportButton);
+    expect(screen.getByTestId("report-card-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("report-chip-low_quality")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("report-chip-low_quality"));
+    await waitFor(() =>
+      expect(screen.getByTestId("report-card-thanks")).toBeInTheDocument()
+    );
+  });
+
+  it("the feed's filter panel hides exclusion-group siblings of an explicit positive (context-dependent disqualification)", async () => {
+    server.use(
+      questionFeedOnce(),
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          tagName: string;
+          polarity: number;
+        };
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: body.polarity,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+    await revealCard();
+    await screen.findByTestId("attribute-chip-Black Border");
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("attribute-chip-Black Border")
+          .getAttribute("data-chip-state")
+      ).toBe("positive")
+    );
+    // the contradicted siblings are pruned from the feed's panel, not just dimmed
+    expect(screen.queryByTestId("attribute-chip-White Border")).toBeNull();
+    expect(screen.queryByTestId("attribute-chip-Silver Border")).toBeNull();
+  });
+
   it("clicking 'None of these' submits a no-match printing vote", async () => {
     server.use(questionFeedOnce());
     let submittedIsNoMatch: boolean | undefined;
@@ -196,14 +266,23 @@ describe("QuestionFeed", () => {
         )
       )
     );
-    const autoTagCalls: Array<{ tagName: string; polarity: number }> = [];
+    const autoTagCalls: Array<{
+      tagName: string;
+      polarity: number;
+      voteSurface?: string;
+    }> = [];
     server.use(
       http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
         const body = (await request.json()) as {
           tagName: string;
           polarity: number;
+          voteSurface?: string;
         };
-        autoTagCalls.push({ tagName: body.tagName, polarity: body.polarity });
+        autoTagCalls.push({
+          tagName: body.tagName,
+          polarity: body.polarity,
+          voteSurface: body.voteSurface,
+        });
         return HttpResponse.json(
           {
             tagName: body.tagName,
@@ -226,14 +305,21 @@ describe("QuestionFeed", () => {
         ["Borderless", "Full Art", "Modern Border", "Showcase"].sort()
       )
     );
-    // printing-2's borderColor is "borderless" - outside the Black/White/Silver taxonomy, so
-    // no Border Color chip auto-fires for it (see attributeChips.test.ts's
-    // getOpenExclusionGroups coverage - this is exactly what routes the feed to Level 3
-    // instead of advancing, covered separately in QuestionFeed.spec.ts).
+    // printing-2's borderColor is "borderless" - none of Black/White/Silver match it, so no
+    // "Black Border" auto-tag is derived (Borderless is its own Border Color chip instead) -
+    // see attributeChips.test.ts's getAutoTagChips coverage.
     expect(autoTagCalls.map((call) => call.tagName)).not.toContain(
       "Black Border"
     );
     expect(autoTagCalls.every((call) => call.polarity === 1)).toBe(true);
+    // issue #790: a candidate-pick auto-tag carries its own surface, distinct from
+    // "question-feed" (which is reserved for a voter's own deliberate tag-question answer),
+    // so the backend can recast these as VoteSource.IMPLICIT.
+    expect(
+      autoTagCalls.every(
+        (call) => call.voteSurface === AUTO_DERIVED_TAG_VOTE_SURFACE
+      )
+    ).toBe(true);
   });
 
   it("selecting a candidate derives only its matched exclusion-group chips when every standalone attribute is false", async () => {
@@ -276,10 +362,15 @@ describe("QuestionFeed", () => {
       )
     );
     const autoTagCalls: string[] = [];
+    const autoTagVoteSurfaces: Array<string | undefined> = [];
     server.use(
       http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
-        const body = (await request.json()) as { tagName: string };
+        const body = (await request.json()) as {
+          tagName: string;
+          voteSurface?: string;
+        };
         autoTagCalls.push(body.tagName);
+        autoTagVoteSurfaces.push(body.voteSurface);
         return HttpResponse.json(
           {
             tagName: body.tagName,
@@ -310,6 +401,11 @@ describe("QuestionFeed", () => {
     expect(autoTagCalls.sort()).toEqual(
       ["Black Border", "Modern Border"].sort()
     );
+    expect(
+      autoTagVoteSurfaces.every(
+        (surface) => surface === AUTO_DERIVED_TAG_VOTE_SURFACE
+      )
+    ).toBe(true);
   });
 
   it("shows a distinct error state (not 'all caught up') on a fetch failure, with a working retry", async () => {
@@ -385,7 +481,244 @@ describe("QuestionFeed", () => {
     ).toHaveTextContent("Suggested match");
   });
 
-  it("shows the suggested printing's own reference image on Level 1 (regression: dropped when Level 1 was introduced in #49)", async () => {
+  it("confirm_suggestion's own question renders no chip panel and no candidate grid (composition contract)", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              type: "confirm_suggestion",
+              suggestedPrinting: identifyPrintingItem.candidates[0],
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    expect(
+      await screen.findByTestId("question-feed-suggestion-yes")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("attribute-chip-panel")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("question-feed-candidate-grid-ungrouped")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("question-feed-illustration-groups")
+    ).not.toBeInTheDocument();
+  });
+
+  it("'Not this art' summons the candidate-grid identification question, where a rejected suggestion stays reachable as a de-emphasised, re-selectable tile (issue #748)", async () => {
+    // #748 - rejecting the suggested printing must not drop it from the surface: the
+    // suggestion slot gives way to the "you said not this one" context, and the candidate
+    // grid gains the rejected candidate as a de-emphasised (`data-rejected`) tile that stays
+    // fully selectable - tapping it re-casts the candidate as a real pick.
+    const confirmSuggestionItem = {
+      ...identifyPrintingItem,
+      type: "confirm_suggestion",
+      suggestedPrinting: identifyPrintingItem.candidates[0],
+    };
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: confirmSuggestionItem,
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    let submittedIdentifier: string | undefined;
+    server.use(
+      http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          printingIdentifier?: string;
+        };
+        submittedIdentifier = body.printingIdentifier;
+        return HttpResponse.json(
+          { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+    await revealCard();
+
+    // Before "Not this art": no candidate grid at all (composition contract, tested above).
+    expect(
+      screen.queryByTestId("question-feed-candidate-grid-ungrouped")
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      await screen.findByTestId("question-feed-suggestion-not-this-art")
+    );
+    expect(
+      await screen.findByTestId("question-feed-rejected-context")
+    ).toHaveTextContent("You said: not");
+    const grid = await screen.findByTestId(
+      "question-feed-candidate-grid-ungrouped"
+    );
+    expect(within(grid).getAllByRole("button")).toHaveLength(2);
+    const rejectedNote = await screen.findByTestId(
+      "question-feed-rejected-tile-note"
+    );
+    expect(rejectedNote).toHaveTextContent("you said no");
+    const rejectedTile = rejectedNote.closest("button");
+    expect(rejectedTile).not.toBeNull();
+    expect(rejectedTile!.getAttribute("data-rejected")).toBe("true");
+
+    // The reconsider path: tapping the rejected tile casts it as a real pick.
+    fireEvent.click(rejectedTile!);
+    await waitFor(() => expect(submittedIdentifier).toBe("printing-1"));
+  });
+
+  it("'Same art, but...' casts the suggested printing's illustration vote on tap, then summons the border/frame attribute chips", async () => {
+    const suggested = {
+      ...identifyPrintingItem.candidates[0],
+      illustrationId: "22222222-2222-2222-2222-222222222222",
+    };
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              type: "confirm_suggestion",
+              suggestedPrinting: suggested,
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    let illustrationVoteBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitIllustrationVote/"),
+        async ({ request }) => {
+          illustrationVoteBody = (await request.json()) as Record<
+            string,
+            unknown
+          >;
+          return HttpResponse.json(
+            {
+              illustrationId: suggested.illustrationId,
+              isUnknown: false,
+              printingVoteCast: false,
+              artistVoteCast: true,
+            },
+            { status: 200 }
+          );
+        }
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    fireEvent.click(
+      await screen.findByTestId("question-feed-suggestion-same-art-but")
+    );
+
+    await waitFor(() => expect(illustrationVoteBody).toBeDefined());
+    expect(illustrationVoteBody).toMatchObject({
+      identifier: identifyPrintingItem.card.identifier,
+      illustrationId: suggested.illustrationId,
+      isUnknown: false,
+    });
+    expect(
+      await screen.findByTestId("attribute-chip-Full Art")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("question-feed-candidate-grid-ungrouped")
+    ).not.toBeInTheDocument();
+  });
+
+  it("'Not this art' submits the suggested printing's illustrationId to /2/submitIllustrationRejection/ and collapses the suggestion slot", async () => {
+    const confirmSuggestionItem = {
+      ...identifyPrintingItem,
+      type: "confirm_suggestion",
+      suggestedPrinting: {
+        ...identifyPrintingItem.candidates[0],
+        illustrationId: "illustration-rejected",
+      },
+    };
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: confirmSuggestionItem,
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    let submittedBody:
+      | { identifier?: string; illustrationId?: string }
+      | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitIllustrationRejection/"),
+        async ({ request }) => {
+          submittedBody = (await request.json()) as typeof submittedBody;
+          return HttpResponse.json(
+            { illustrationId: "illustration-rejected" },
+            { status: 200 }
+          );
+        }
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    fireEvent.click(
+      await screen.findByTestId("question-feed-suggestion-not-this-art")
+    );
+
+    await waitFor(() =>
+      expect(submittedBody).toEqual({
+        identifier: "card-1",
+        anonymousId: expect.any(String),
+        illustrationId: "illustration-rejected",
+        voteSurface: undefined,
+      })
+    );
+    // Same slot-collapse as the #770 answer set - "Not this art" reuses the rejected-context
+    // rendering rather than inventing a separate transition.
+    expect(
+      await screen.findByTestId("question-feed-rejected-context")
+    ).toHaveTextContent("You said: not");
+  });
+
+  it("shows the suggested printing's own reference image on the suggested-match question (regression: dropped when the suggestion slot was introduced in #49)", async () => {
     server.use(
       http.get(buildRoute("2/questionFeed/"), () =>
         HttpResponse.json(
@@ -410,7 +743,7 @@ describe("QuestionFeed", () => {
     await revealCard();
 
     const referenceImage = within(
-      await screen.findByTestId("question-feed-level1-reference-image")
+      await screen.findByTestId("question-feed-suggestion-reference-image")
     ).getByRole("img");
     expect(referenceImage).toHaveAttribute(
       "src",
@@ -430,6 +763,7 @@ describe("QuestionFeed", () => {
 
   it("shows a submitting indicator only on the tapped candidate, not the others or 'No match'", async () => {
     server.use(questionFeedOnce());
+    server.use(submitTagVoteResolvesToApply);
     let resolveSubmit: () => void = () => undefined;
     const submitPromise = new Promise<void>((resolve) => {
       resolveSubmit = resolve;
@@ -447,7 +781,7 @@ describe("QuestionFeed", () => {
     await revealCard();
 
     const tappedCandidate = await screen.findByAltText("xyz 42");
-    fireEvent.click(tappedCandidate);
+    fireEvent.click(tappedCandidate.closest("button") || tappedCandidate);
 
     await waitFor(() =>
       expect(
@@ -832,6 +1166,7 @@ describe("QuestionFeed", () => {
           );
         })
       );
+      server.use(submitTagVoteResolvesToApply);
       renderFeed();
       await revealCard();
 
@@ -1030,34 +1365,197 @@ describe("QuestionFeed", () => {
     });
   });
 
-  // Issue #712 - "Not sure" and "Skip" used to be indistinguishable no-ops; this locks in the
-  // split: "Not sure" records an abstention, "Skip" still writes nothing.
-  describe("Not sure vs. Skip (issue #712)", () => {
+  // Issue #790 - a border chip must narrow WITHIN an illustration, never delete the
+  // illustration outright, and a candidate that stays visible only because of that
+  // narrowing must never have its own (chip-contradicting) attribute auto-tagged onto the
+  // upload.
+  describe("illustration-axis independence (issue #790)", () => {
+    const sharedIllustrationId = "22222222-2222-2222-2222-222222222222";
+    const whitePrinting = {
+      ...identifyPrintingItem.candidates[0],
+      identifier: "printing-white",
+      borderColor: "white",
+      illustrationId: sharedIllustrationId,
+    };
+    const silverPrinting = {
+      ...identifyPrintingItem.candidates[1],
+      identifier: "printing-silver",
+      fullArt: false,
+      isBorderless: false,
+      isShowcase: false,
+      isExtendedArt: false,
+      isEtched: false,
+      borderColor: "silver",
+      illustrationId: sharedIllustrationId,
+    };
+
+    it("a border chip that matches no printing of an illustration keeps the illustration in the grid instead of removing it", async () => {
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: {
+                ...identifyPrintingItem,
+                candidates: [whitePrinting, silverPrinting],
+              },
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      server.use(submitTagVoteResolvesToApply);
+      renderFeed();
+      await revealCard();
+
+      fireEvent.click(
+        await screen.findByTestId("attribute-chip-Black Border-yes")
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId("attribute-chip-Black Border")
+            .getAttribute("data-chip-state")
+        ).toBe("positive")
+      );
+
+      // Neither printing is black-bordered - under the old filter the illustration would
+      // vanish from the grid entirely. Both members must still be here, unnarrowed.
+      const group = await screen.findByTestId(
+        "question-feed-illustration-group"
+      );
+      expect(
+        within(group).getByText("Same illustration - 2 printings")
+      ).toBeInTheDocument();
+    });
+
+    it("reconsidering a rejected candidate that survived only via illustration-group preservation does not auto-tag the attribute that contradicted the active chip", async () => {
+      const confirmSuggestionItem = {
+        ...identifyPrintingItem,
+        type: "confirm_suggestion",
+        suggestedPrinting: whitePrinting,
+        candidates: [whitePrinting, silverPrinting],
+      };
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: confirmSuggestionItem,
+              remainingEstimate: {
+                total: 1,
+                confirmable: 1,
+                contested: 0,
+                fresh: 0,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      server.use(
+        http.post(buildRoute("2/submitPrintingTag/"), () =>
+          HttpResponse.json(
+            { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+            { status: 200 }
+          )
+        )
+      );
+      server.use(
+        http.post(buildRoute("2/submitIllustrationRejection/"), () =>
+          HttpResponse.json(
+            { illustrationId: sharedIllustrationId },
+            { status: 200 }
+          )
+        )
+      );
+      const autoTagCalls: string[] = [];
+      server.use(
+        http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+          const body = (await request.json()) as { tagName: string };
+          autoTagCalls.push(body.tagName);
+          return HttpResponse.json(
+            {
+              tagName: body.tagName,
+              resolvedPolarity: 1,
+              netPolarity: 1,
+              tally: [],
+            },
+            { status: 200 }
+          );
+        })
+      );
+      renderFeed();
+      await revealCard();
+
+      fireEvent.click(
+        await screen.findByTestId("question-feed-suggestion-not-this-art")
+      );
+      const rejectedNote = await screen.findByTestId(
+        "question-feed-rejected-tile-note"
+      );
+      const rejectedTile = rejectedNote.closest("button");
+      expect(rejectedTile).not.toBeNull();
+
+      fireEvent.click(screen.getByTestId("question-feed-filter-toggle"));
+      fireEvent.click(
+        await screen.findByTestId("attribute-chip-Black Border-yes")
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getByTestId("attribute-chip-Black Border")
+            .getAttribute("data-chip-state")
+        ).toBe("positive")
+      );
+
+      // The rejected (white-bordered) tile is still reachable - kept alive by the same
+      // illustration-group preservation exercised above - even though it contradicts the
+      // active "Black Border" chip.
+      fireEvent.click(rejectedTile!);
+
+      // "Modern Border" (frame 2015) is derived too and doesn't contradict anything the
+      // voter tapped - waiting for it proves the auto-tag batch actually ran before
+      // asserting the contradicting chip was dropped from it.
+      await waitFor(() => expect(autoTagCalls).toContain("Modern Border"));
+      expect(autoTagCalls).not.toContain("White Border");
+    });
+  });
+
+  // Issue #712 - "Not sure" and "Skip" used to be indistinguishable no-ops. confirm_suggestion's
+  // new 4-answer set (Yes / Same art, but... / Not this art / Skip) folds "Not sure" into
+  // Skip, which now records the abstention itself; identify_printing's own bottom-row Skip is
+  // unrelated to this answer set and keeps writing nothing.
+  describe("Skip records an abstention on confirm_suggestion (issue #712)", () => {
     const confirmSuggestionItem = {
       ...identifyPrintingItem,
       type: "confirm_suggestion",
       suggestedPrinting: identifyPrintingItem.candidates[0],
     };
 
-    function serveConfirmSuggestionOnce() {
-      return http.get(buildRoute("2/questionFeed/"), () =>
-        HttpResponse.json(
-          {
-            item: confirmSuggestionItem,
-            remainingEstimate: {
-              total: 1,
-              confirmable: 1,
-              contested: 0,
-              fresh: 0,
+    it("tapping confirm_suggestion's 'Skip' POSTs an abstention for this card and question type, then advances to the next question", async () => {
+      let feedFetchCount = 0;
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () => {
+          feedFetchCount += 1;
+          return HttpResponse.json(
+            {
+              item: confirmSuggestionItem,
+              remainingEstimate: {
+                total: 1,
+                confirmable: 1,
+                contested: 0,
+                fresh: 0,
+              },
             },
-          },
-          { status: 200 }
-        )
+            { status: 200 }
+          );
+        })
       );
-    }
-
-    it("tapping Level 1 'Not sure' POSTs an abstention for this card and question type, then advances to Level 2", async () => {
-      server.use(serveConfirmSuggestionOnce());
       let abstentionBody: Record<string, unknown> | undefined;
       server.use(
         http.post(
@@ -1072,7 +1570,7 @@ describe("QuestionFeed", () => {
       await revealCard();
 
       fireEvent.click(
-        await screen.findByTestId("question-feed-level1-not-sure")
+        await screen.findByTestId("question-feed-suggestion-skip")
       );
 
       await waitFor(() => expect(abstentionBody).toBeDefined());
@@ -1080,13 +1578,11 @@ describe("QuestionFeed", () => {
         identifier: confirmSuggestionItem.card.identifier,
         questionType: "confirm_suggestion",
       });
-      expect(
-        await screen.findByTestId("question-feed-level2")
-      ).toBeInTheDocument();
+      await waitFor(() => expect(feedFetchCount).toBe(2));
     });
 
-    it("tapping Level 1 'Skip' never calls submitQuestionAbstention", async () => {
-      server.use(serveConfirmSuggestionOnce());
+    it("identify_printing's own bottom-row 'Skip' never calls submitQuestionAbstention", async () => {
+      server.use(questionFeedOnce());
       let abstentionCalls = 0;
       server.use(
         http.post(buildRoute("2/submitQuestionAbstention/"), () => {
@@ -1097,10 +1593,370 @@ describe("QuestionFeed", () => {
       renderFeed();
       await revealCard();
 
-      fireEvent.click(await screen.findByTestId("question-feed-level1-skip"));
+      fireEvent.click(await screen.findByTestId("question-feed-skip"));
       await revealCard();
 
       expect(abstentionCalls).toBe(0);
     });
+  });
+
+  // Border question type (per-element question types branch): the answer surface is the four
+  // BORDER_COLOR_GROUP chips plus the Full Art chip (the "No border — full art." answer, a
+  // standalone toggle that co-occurs with every border value), rendered through the shared
+  // useTagVoting machinery (see BorderColorQuestion.tsx) - a tap casts a real CardTagVote on
+  // the existing /2/submitTagVote/ path with voteSurface "question-feed", not a new vote model.
+  // The ActionRow's "Can't tell from this scan." answer records an abstention with reason
+  // `cannot-tell` on the existing abstention write instead. And like the other non-candidate
+  // question types (artist/tag), the subject card renders with no reveal treatment - no
+  // revealCard() here.
+  it("renders the border-colour chips for a border question and casts a tag vote on tap", async () => {
+    server.use(questionFeedBorder);
+    let tagVoteBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        tagVoteBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(
+          {
+            tagName: "Black Border",
+            resolvedPolarity: 1,
+            netPolarity: 1,
+            tally: [{ polarity: 1, count: 1 }],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+
+    // the border question's answer surface is the four BORDER_COLOR_GROUP chips plus the Full
+    // Art chip - "No border — full art." is a real answer here, cast through the same chip
+    // machinery, because Full Art is an independent toggle that co-occurs with any border colour.
+    expect(
+      await screen.findByTestId("attribute-chip-Black Border")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("attribute-chip-White Border")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("attribute-chip-Silver Border")
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("attribute-chip-Borderless")).toBeInTheDocument();
+    expect(screen.getByTestId("attribute-chip-Full Art")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
+
+    await waitFor(() => expect(tagVoteBody).toBeDefined());
+    expect(tagVoteBody).toMatchObject({
+      identifier: cardDocument9.identifier,
+      tagName: "Black Border",
+      polarity: 1,
+      voteSurface: "question-feed",
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("attribute-chip-Black Border")).toHaveAttribute(
+        "data-chip-state",
+        "positive"
+      )
+    );
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Full Art-yes"));
+
+    await waitFor(() => expect(tagVoteBody?.tagName).toBe("Full Art"));
+    expect(tagVoteBody).toMatchObject({
+      identifier: cardDocument9.identifier,
+      tagName: "Full Art",
+      polarity: 1,
+      voteSurface: "question-feed",
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("attribute-chip-Full Art")).toHaveAttribute(
+        "data-chip-state",
+        "positive"
+      )
+    );
+  });
+
+  it("'Can't tell from this scan.' records the border abstention with reason and advances", async () => {
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return HttpResponse.json(
+          {
+            item: {
+              type: "border",
+              card: cardDocument9,
+              tagConfidence: {
+                "Black Border": 0.8,
+                "White Border": 0,
+                "Silver Border": 0,
+                Borderless: 0,
+                "Full Art": 0,
+              },
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        );
+      })
+    );
+    let abstentionBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitQuestionAbstention/"),
+        async ({ request }) => {
+          abstentionBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        }
+      )
+    );
+    renderFeed();
+
+    fireEvent.click(await screen.findByTestId("question-feed-cant-tell"));
+
+    await waitFor(() => expect(abstentionBody).toBeDefined());
+    expect(abstentionBody).toMatchObject({
+      identifier: cardDocument9.identifier,
+      questionType: "border",
+      reason: "cannot-tell",
+    });
+    await waitFor(() => expect(feedFetchCount).toBe(2));
+  });
+
+  it("'Continue' appears on border questions only after a chip vote, and advances carrying the vote without recording an abstention", async () => {
+    // counting feed: the first fetch serves the border question, the second reports
+    // caught-up so the advance's own re-fetch is observable.
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return feedFetchCount === 1
+          ? HttpResponse.json(
+              {
+                item: {
+                  type: "border",
+                  card: cardDocument9,
+                  tagConfidence: {
+                    "Black Border": 0.8,
+                    "White Border": 0,
+                    "Silver Border": 0,
+                    Borderless: 0,
+                    "Full Art": 0,
+                  },
+                },
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
+              { status: 200 }
+            )
+          : HttpResponse.json(
+              {
+                remainingEstimate: {
+                  total: 0,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 0,
+                },
+              },
+              { status: 200 }
+            );
+      })
+    );
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as { tagName: string };
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: 1,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    let abstentionBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitQuestionAbstention/"),
+        async ({ request }) => {
+          abstentionBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        }
+      )
+    );
+    renderFeed();
+
+    expect(
+      screen.queryByTestId("question-feed-border-continue")
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      await screen.findByTestId("attribute-chip-Black Border-yes")
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("question-feed-border-continue")
+      ).toBeInTheDocument()
+    );
+
+    fireEvent.click(screen.getByTestId("question-feed-border-continue"));
+
+    await waitFor(() => expect(feedFetchCount).toBe(2));
+    expect(abstentionBody).toBeUndefined();
+  });
+
+  it("'Confirm' appears on artist questions only after a vote lands, and advances carrying the vote without recording an abstention", async () => {
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return feedFetchCount === 1
+          ? HttpResponse.json(
+              {
+                item: {
+                  type: "artist",
+                  card: cardDocument9,
+                  confidentlyKnownArtistName: null,
+                  scryfallIllustrationUrl: null,
+                },
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
+              { status: 200 }
+            )
+          : HttpResponse.json(
+              {
+                remainingEstimate: {
+                  total: 0,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 0,
+                },
+              },
+              { status: 200 }
+            );
+      })
+    );
+    server.use(artistCandidatesTwoResults, artistConsensusUnresolved);
+    server.use(submitArtistVoteResolvesToCanonicalArtist1);
+    let abstentionBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitQuestionAbstention/"),
+        async ({ request }) => {
+          abstentionBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        }
+      )
+    );
+    renderFeed();
+
+    expect(
+      screen.queryByTestId("question-feed-artist-confirm")
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Some Artist" }));
+
+    // onVoteCast fires only after the vote POST resolves, so Confirm gates on the landed vote
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("question-feed-artist-confirm")
+      ).toBeInTheDocument()
+    );
+
+    fireEvent.click(screen.getByTestId("question-feed-artist-confirm"));
+
+    await waitFor(() => expect(feedFetchCount).toBe(2));
+    expect(abstentionBody).toBeUndefined();
+  });
+
+  it("a stale in-flight fetch can never overwrite an already-rendered question (regression: WTC auto-skip)", async () => {
+    // React's StrictMode intentionally double-invokes an effect with no cleanup on mount,
+    // firing this effect's fetch twice - a real, reproducible way for two requests to be in
+    // flight at once for the same question. Without a stale-response guard, whichever response
+    // resolves LAST wins regardless of which request was newer - here the first (StrictMode-
+    // discarded) request is the slow one, so an unguarded effect would silently swap the
+    // already-rendered "Fresh Card" back to "Stale Card" moments later, with no user action.
+    let feedFetchCount = 0;
+    const remainingEstimate = {
+      total: 1,
+      confirmable: 0,
+      contested: 0,
+      fresh: 1,
+    };
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), async () => {
+        feedFetchCount += 1;
+        if (feedFetchCount === 1) {
+          await delay(50);
+          return HttpResponse.json(
+            {
+              item: {
+                ...identifyPrintingItem,
+                card: {
+                  ...identifyPrintingItem.card,
+                  identifier: "card-stale",
+                  name: "Stale Card",
+                },
+              },
+              remainingEstimate,
+            },
+            { status: 200 }
+          );
+        }
+        return HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              card: {
+                ...identifyPrintingItem.card,
+                identifier: "card-fresh",
+                name: "Fresh Card",
+              },
+            },
+            remainingEstimate,
+          },
+          { status: 200 }
+        );
+      })
+    );
+    server.use(tagsNoResults);
+    const store = setupStore({ backend: localBackend });
+    render(
+      <React.StrictMode>
+        <Provider store={store}>
+          <QuestionFeed />
+        </Provider>
+      </React.StrictMode>
+    );
+
+    await waitFor(() => expect(feedFetchCount).toBeGreaterThanOrEqual(2));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("question-feed-subject-art-title")
+      ).toHaveTextContent("Fresh Card")
+    );
+
+    // let the slower, superseded first request's response land and confirm it never applies.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(
+      screen.getByTestId("question-feed-subject-art-title")
+    ).toHaveTextContent("Fresh Card");
   });
 });

@@ -259,6 +259,7 @@ from cardpicker.collector_line_artist import (
 )
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image
+from cardpicker.local_art_edge import classify_art_edge_continuity
 from cardpicker.local_fallback import (
     ARTIST_CROP_BOX,
     SYMBOL_STRIP_BOX,
@@ -286,6 +287,7 @@ from cardpicker.local_ocr import (
     run_tesseract_text_and_words,
 )
 from cardpicker.local_phash import ART_CROP_BOX
+from cardpicker.local_pinline_inset import measure_pinline_inset
 from cardpicker.models import Card, CardScanLog, ImageEvidence
 from cardpicker.modern_artist_credit import LexiconIndex, recognize_artist_credit
 from cardpicker.utils import twos_complement
@@ -327,6 +329,7 @@ COLLECTOR_LINE_TSV_EXTRACTOR_VERSION = "collector-line-tsv-v3"
 # NOT bumped: symbol_region is a raw phash of a crop region (imagehash, no tesseract call at all)
 # - engine-independent by construction.
 SYMBOL_REGION_EXTRACTOR_VERSION = "symbol-region-v1"
+ART_EDGE_EXTRACTOR_VERSION = "art-edge-v1"
 # v1 -> v2, same reasoning as the three OCR extractors above: legal_line reads through
 # `local_ocr.run_tesseract` (issue #423's engine seam covers this call site too, not just
 # `run_tesseract_text_and_words`), so its stored `legal_line_raw_text`/`legal_line_copyright_year`/
@@ -337,6 +340,64 @@ LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v2"
 # engine-independent by construction, same reasoning as symbol_region above.
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
 ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v1"
+# NOT bumped: pinline_inset (local_pinline_inset.measure_pinline_inset) is a pure colour-
+# distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
+# quality_signals above.
+PINLINE_INSET_EXTRACTOR_VERSION = "pinline-inset-v1"
+
+# PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction): which `ImageEvidence`
+# columns each extractor OWNS - the set `compute_card_evidence`'s carry-forward path copies from a
+# stored row into `fields` when that extractor's `stale_extractor_keys` membership says "skip it,
+# reuse what's already there" rather than recompute. This is the SAME thirteen keys
+# `run_image_evidence_cohort.MANIFEST_EXTRACTOR_CURRENT_VERSIONS` versions, restated here as a
+# field-ownership map rather than a version map - the two dicts must stay key-for-key in sync
+# (enforced the same way `EXTRACTOR_OWNERSHIP`'s own totality check enforces its own roster: a
+# key present in one map and not the other is a bug, not a style choice).
+#
+# `collector_line_ocr`/`artist_ocr`/`collector_line_tsv` are deliberately treated as ONE staleness
+# unit by `compute_card_evidence` below even though they are three separately-versioned entries
+# here - see that function's own `_ocr_group_is_stale` docstring paragraph for why: they share a
+# single tesseract escalation loop, and `artist_ocr`'s own reuse-before-recompute pass needs every
+# attempt's raw text from that loop, not just the one stored `collector_line_raw_text` winner.
+# `fetch_latency_ms` is deliberately NOT listed under `fetch_health` - it is a real per-pass fetch
+# measurement (this pass's own fetch just happened, whether or not `fetch_health` itself is stale),
+# not extractor-computed data subject to carry-forward, and `compute_card_evidence` always re-stamps
+# it fresh, matching `md5_checksum`/`sha256_checksum`'s own "always re-stamp, never carry forward"
+# convention (see this function's own docstring for those two).
+EXTRACTOR_OWNED_FIELDS: dict[str, tuple[str, ...]] = {
+    "fetch_health": ("fetch_ok", "fetch_error_class", "fetch_image_format"),
+    "geometry_bleed": ("width", "height", "aspect_ratio", "bleed_class", "bleed_diff_mm"),
+    "layout_class": ("layout_class",),
+    "crop_coordinates": ("collector_line_crop_px", "artist_crop_px", "art_crop_px"),
+    "art_edge": ("art_edge_class",),
+    "collector_line_ocr": (
+        "collector_line_raw_text",
+        "collector_line_set_code",
+        "collector_line_collector_number",
+    ),
+    "collector_line_tsv": ("collector_line_word_boxes",),
+    "artist_ocr": ("artist_ocr_raw_text", "artist_ocr_name", "illus_anchor_fired"),
+    "artbox_phash": ("artbox_crop_px", "artbox_frame_class", "artbox_phash"),
+    "symbol_region": ("symbol_crop_px", "symbol_phash"),
+    "legal_line": (
+        "legal_line_crop_px",
+        "legal_line_raw_text",
+        "legal_line_copyright_year",
+        "legal_line_proxy_marker_detected",
+    ),
+    "quality_signals": ("image_is_truncated", "blur_variance", "image_entropy"),
+    "pinline_inset": (
+        "pinline_inset_frac_top",
+        "pinline_inset_frac_bottom",
+        "pinline_inset_frac_left",
+        "pinline_inset_frac_right",
+        "pinline_inset_call_top",
+        "pinline_inset_call_bottom",
+        "pinline_inset_call_left",
+        "pinline_inset_call_right",
+        "pinline_inset_verdict",
+    ),
+}
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
 # _hash_to_int/_HASH_BITS exactly (imagehash's default hash_size=8 -> a 64-bit hash), reproduced
@@ -809,6 +870,9 @@ def compute_card_evidence(
     modern_artist_lexicon: Optional[LexiconIndex] = None,
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
+    stale_extractor_keys: Optional[frozenset[str]] = None,
+    stored_evidence_fields: Optional[dict[str, Any]] = None,
+    stored_extractor_versions: Optional[dict[str, str]] = None,
 ) -> ExtractionResult:
     """
     Compute-only continuation of `fetch_and_compute_card_evidence_for_tests` above - everything that function does
@@ -1009,9 +1073,40 @@ def compute_card_evidence(
     `evidence_transfer.transfer_evidence`'s own docstring) happened to carry - this is the
     "computed-once-forever, but re-extraction always re-stamps the truth" half of the staleness fix
     the transfer half's own stamping mirrors.
+
+    `stale_extractor_keys`/`stored_evidence_fields`/`stored_extractor_versions` (2026-08-19,
+    perf/per-extractor-reextraction): PER-EXTRACTOR RE-EXTRACTION. `stale_extractor_keys=None`
+    (the default, and every pre-2026-08-19 caller) is byte-identical to before - every extractor
+    below runs unconditionally, exactly as it always has. When a caller passes a `frozenset` of
+    `EXTRACTOR_OWNED_FIELDS` keys instead, every extractor NOT in that set is CARRIED FORWARD from
+    `stored_evidence_fields`/`stored_extractor_versions` (the calling card's current `ImageEvidence`
+    row, read by the caller before this function runs) rather than recomputed - the caller's own
+    job is to diff that row's `extractor_versions` against the current manifest and pass in exactly
+    the keys that differ (or a key `stored_extractor_versions` doesn't have at all, which this
+    function treats as stale regardless of `stale_extractor_keys` membership - an extractor this
+    row has never run cannot be carried forward from nothing). See `EXTRACTOR_OWNED_FIELDS`'s own
+    comment for the field-ownership map this carry-forward copies from, and this function's own
+    `_ocr_group_is_stale` local for the one place three extractor keys are deliberately treated as
+    one staleness unit. The image fetch still happens once regardless - this only ever changes
+    which COMPUTE below runs, never whether a fetch is needed.
+
+    KNOWN RECONCILIATION-REPORT LIMITATION: a carried-forward extractor does not run this pass,
+    so it correctly writes no `skip_reasons` entry - `persist_evidence` therefore writes no fresh
+    `CardScanLog` row for it under THIS run's `run_id`. `build_reconciliation_report(run_id=...)`
+    infers "voted" from "extractor_versions has the key AND no matching run-scoped CardScanLog
+    row", so a card whose stored value for that extractor was actually a skip from an EARLIER run
+    will misreport as "voted" for a run that only ever carried it forward. The whole-catalogue,
+    not-run-id-scoped report is unaffected. Not fixed here - see the perf/per-extractor-
+    reextraction PR body for why this is an accepted, disclosed tradeoff rather than a silent one.
     """
     if short_circuit is None:
         short_circuit = _short_circuit_enabled_by_env()
+
+    stored_evidence_fields = stored_evidence_fields or {}
+    stored_extractor_versions = stored_extractor_versions or {}
+
+    def _stale(key: str) -> bool:
+        return stale_extractor_keys is None or key in stale_extractor_keys or key not in stored_extractor_versions
 
     fields: dict[str, Any] = {
         "fetch_latency_ms": fetch_latency_ms,
@@ -1020,69 +1115,128 @@ def compute_card_evidence(
     }
     extractor_versions: dict[str, str] = {}
     skip_reasons: dict[str, str] = {}
+
+    # CARRY FORWARD every non-stale extractor's owned fields + version tag BEFORE any extractor
+    # block below runs, so a block that reads a sibling extractor's output via `fields` (art_edge
+    # reading crop_coordinates' art_crop_px, artbox_phash reading the OCR group's
+    # collector_line_collector_number/illus_anchor_fired) sees the carried-forward value exactly
+    # as if it had just been computed - no special-casing needed at each read site. No-op when
+    # `stale_extractor_keys` is None (nothing is ever "not stale").
+    for extractor_key, owned_field_names in EXTRACTOR_OWNED_FIELDS.items():
+        if _stale(extractor_key):
+            continue
+        for field_name in owned_field_names:
+            if field_name in stored_evidence_fields:
+                fields[field_name] = stored_evidence_fields[field_name]
+        extractor_versions[extractor_key] = stored_extractor_versions[extractor_key]
+
+    # `bleed_class`/`width`/`height`/`legal_line_raw_text` are read by later blocks as bare local
+    # variables, not via `fields.get(...)` - restored here from whatever the carry-forward loop
+    # above just placed in `fields` (or left absent, if geometry_bleed/legal_line are themselves
+    # stale and about to compute these fresh a few lines down). Blank-string-as-sentinel fields
+    # (`bleed_class`) are converted back to `None` to match `classify_bleed_edge`'s own return
+    # convention, which every downstream reader of the bare local expects.
+    # No explicit type annotations here on purpose - `fields` is `dict[str, Any]`, so mypy already
+    # infers `Any` for each of these, matching every downstream read site's own existing
+    # (unannotated) expectation that `width`/`height`/`bleed_class` are concrete once `image` is
+    # not None. An explicit `Optional[int]`/`Optional[str]` annotation here would be honest about
+    # this dict-carried value's static type but would break narrowing at every one of those
+    # pre-existing `if image is None: ... else: <use width>` call sites, none of which this PR
+    # otherwise touches.
+    bleed_class = fields.get("bleed_class") or None
+    width = fields.get("width")
+    height = fields.get("height")
+    legal_line_raw_text = fields.get("legal_line_raw_text", "")
+
     if profile is not None:
         profile["fetch_ms"] = fetch_latency_ms
     extraction_started_at = time.monotonic()
 
-    if image is None:
-        fields["fetch_ok"] = False
-        fields["fetch_error_class"] = "fetch_failed"
-        fields["fetch_image_format"] = ""
-        skip_reasons["fetch_health"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    else:
-        fields["fetch_ok"] = True
-        fields["fetch_error_class"] = ""
-        fields["fetch_image_format"] = getattr(image, "format", None) or ""
-    # Set even on skip - fetch_health RAN TO COMPLETION either way, it just didn't find a
-    # positive result. Omitted only if this function raises before reaching here.
-    extractor_versions["fetch_health"] = FETCH_HEALTH_EXTRACTOR_VERSION
+    if _stale("fetch_health"):
+        if image is None:
+            fields["fetch_ok"] = False
+            fields["fetch_error_class"] = "fetch_failed"
+            fields["fetch_image_format"] = ""
+            skip_reasons["fetch_health"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            fields["fetch_ok"] = True
+            fields["fetch_error_class"] = ""
+            fields["fetch_image_format"] = getattr(image, "format", None) or ""
+        # Set even on skip - fetch_health RAN TO COMPLETION either way, it just didn't find a
+        # positive result. Omitted only if this function raises before reaching here.
+        extractor_versions["fetch_health"] = FETCH_HEALTH_EXTRACTOR_VERSION
 
     # geometry_bleed (task #147): depends on the same fetched image - if the fetch itself
     # failed, this extractor never gets to run either, but that's a named skip (same root cause
     # fetch_health already recorded), not a crash, so it still gets its own extractor_versions
     # entry - matching fetch_health's own "ran to completion, found nothing" convention above.
-    if image is None:
-        skip_reasons["geometry_bleed"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    else:
-        width, height = image.size
-        fields["width"] = width
-        fields["height"] = height
-        fields["aspect_ratio"] = (width / height) if height else None
-        bleed_class = classify_bleed_edge(image)
-        fields["bleed_class"] = bleed_class or ""
-        fields["bleed_diff_mm"] = compute_bleed_diff_mm(image)
-        if bleed_class is None:
-            # classify_bleed_edge's own documented "genuinely non-standard image" outcome -
-            # "ambiguous" is the pipeline's own pre-existing skip-reason vocabulary
-            # (docs/features/catalog-completion-plan.md's CardScanLog section), not a new string.
-            skip_reasons["geometry_bleed"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
-    extractor_versions["geometry_bleed"] = GEOMETRY_BLEED_EXTRACTOR_VERSION
+    if _stale("geometry_bleed"):
+        if image is None:
+            skip_reasons["geometry_bleed"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            width, height = image.size
+            fields["width"] = width
+            fields["height"] = height
+            fields["aspect_ratio"] = (width / height) if height else None
+            bleed_class = classify_bleed_edge(image)
+            fields["bleed_class"] = bleed_class or ""
+            fields["bleed_diff_mm"] = compute_bleed_diff_mm(image)
+            if bleed_class is None:
+                # classify_bleed_edge's own documented "genuinely non-standard image" outcome -
+                # "ambiguous" is the pipeline's own pre-existing skip-reason vocabulary
+                # (docs/features/catalog-completion-plan.md's CardScanLog section), not a new string.
+                skip_reasons["geometry_bleed"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        extractor_versions["geometry_bleed"] = GEOMETRY_BLEED_EXTRACTOR_VERSION
 
     # layout_class (issue #148): reuses this same fetched image + the bleed_class just computed
     # above - see module docstring for why classify_border_color, not classify_frame_style.
-    if image is None:
-        skip_reasons["layout_class"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    else:
-        layout_class = classify_border_color(image, bleed_class)
-        fields["layout_class"] = layout_class or ""
-        if layout_class is None:
-            # classify_border_color's own documented ambiguous outcome (non-uniform sample or a
-            # color outside this taxonomy) - "ambiguous" is the same pre-existing skip-reason
-            # vocabulary geometry_bleed's own abstention above uses, not a new string.
-            skip_reasons["layout_class"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
-    extractor_versions["layout_class"] = LAYOUT_CLASS_EXTRACTOR_VERSION
+    if _stale("layout_class"):
+        if image is None:
+            skip_reasons["layout_class"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            layout_class = classify_border_color(image)
+            fields["layout_class"] = layout_class or ""
+            if layout_class is None:
+                # classify_border_color's own documented ambiguous outcome (non-uniform sample or a
+                # color outside this taxonomy) - "ambiguous" is the same pre-existing skip-reason
+                # vocabulary geometry_bleed's own abstention above uses, not a new string.
+                skip_reasons["layout_class"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        extractor_versions["layout_class"] = LAYOUT_CLASS_EXTRACTOR_VERSION
 
     # crop_coordinates (issue #148): three existing fixed-fraction crop-box constants, remapped
     # via normalize_crop_box (a no-op for 'bleed'/None) and scaled to this image's own pixel
     # space. Unlike layout_class/geometry_bleed, normalize_crop_box never abstains - there is no
     # "ambiguous" outcome here, only fetch_failed.
-    if image is None:
-        skip_reasons["crop_coordinates"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    else:
-        fields["collector_line_crop_px"] = _crop_box_to_pixels(DEFAULT_CROP_BOX, bleed_class, width, height)
-        fields["artist_crop_px"] = _crop_box_to_pixels(ARTIST_CROP_BOX, bleed_class, width, height)
-        fields["art_crop_px"] = _crop_box_to_pixels(ART_CROP_BOX, bleed_class, width, height)
-    extractor_versions["crop_coordinates"] = CROP_COORDINATES_EXTRACTOR_VERSION
+    if _stale("crop_coordinates"):
+        if image is None:
+            skip_reasons["crop_coordinates"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            # width/height are `Any` per the carry-forward block's own comment above - narrowed
+            # for mypy here, true by construction whenever image is not None (either just
+            # assigned by geometry_bleed's own `image.size` unpacking a few lines up, or carried
+            # forward from a stored row that could only have been written against a real image).
+            assert isinstance(width, int) and isinstance(height, int)
+            fields["collector_line_crop_px"] = _crop_box_to_pixels(DEFAULT_CROP_BOX, bleed_class, width, height)
+            fields["artist_crop_px"] = _crop_box_to_pixels(ARTIST_CROP_BOX, bleed_class, width, height)
+            fields["art_crop_px"] = _crop_box_to_pixels(ART_CROP_BOX, bleed_class, width, height)
+        extractor_versions["crop_coordinates"] = CROP_COORDINATES_EXTRACTOR_VERSION
+
+    # art_edge (issue #830 defect 3): the self-referential extended-art classifier, consuming
+    # crop_coordinates' own art_crop_px above - no new crop box, no re-fetch. EVIDENCE-ONLY, same
+    # convention as artbox_frame_class/etc: stored on every card that reaches a verdict, never
+    # voted on here (see local_art_edge.cast_art_edge_continuity_vote's own docstring for why).
+    # "ambiguous" covers every abstain path classify_art_edge_continuity documents (a degenerate
+    # art_crop_px, or any of its three regions failing to sample) - the same shared skip-reason
+    # vocabulary layout_class's own abstention above uses.
+    if _stale("art_edge"):
+        if image is None:
+            skip_reasons["art_edge"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            art_edge_class = classify_art_edge_continuity(image, fields.get("art_crop_px"))
+            fields["art_edge_class"] = art_edge_class or ""
+            if art_edge_class is None:
+                skip_reasons["art_edge"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        extractor_versions["art_edge"] = ART_EDGE_EXTRACTOR_VERSION
 
     # legal_line COMPUTE, hoisted ahead of the OCR group (2026-07-29 - see `_extract_legal_line`'s
     # own docstring for the full rationale). Its RESULTS are still stored at this extractor's own
@@ -1091,269 +1245,280 @@ def compute_card_evidence(
     # print row the collector-line crop clips at 35% - is already in hand when the OCR group below
     # needs it to recover an untruncated artist credit.
     _legal_line_started_at = time.monotonic()
-    legal_line: Optional[_LegalLineOutcome] = (
-        None if image is None else _extract_legal_line(image, bleed_class, width, height)
-    )
+    legal_line: Optional[_LegalLineOutcome] = None
+    if _stale("legal_line") and image is not None:
+        assert isinstance(width, int) and isinstance(height, int)  # see crop_coordinates' own comment above
+        legal_line = _extract_legal_line(image, bleed_class, width, height)
     _legal_line_elapsed_ms = (time.monotonic() - _legal_line_started_at) * 1000
-    legal_line_raw_text = legal_line.raw_text if legal_line is not None else ""
+    # `legal_line_raw_text` was already restored from carry-forward above (or left "" if
+    # legal_line is stale, or if there is no stored row yet) - a fresh compute overrides it here;
+    # a carried-forward, non-stale legal_line leaves it exactly as carry-forward set it.
+    if legal_line is not None:
+        legal_line_raw_text = legal_line.raw_text
 
     # collector_line_ocr / artist_ocr / collector_line_tsv (issue #149, the OCR-group): consume
     # the *_crop_px pixel boxes crop_coordinates just computed above rather than recomputing them
     # - see module docstring. No candidate matching happens here (Stage D's job).
     _ocr_group_started_at = time.monotonic()
     card_short_circuited = False
-    if image is None:
-        skip_reasons["collector_line_ocr"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-        skip_reasons["artist_ocr"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-        skip_reasons["collector_line_tsv"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    else:
-        collector_crop = image.crop(tuple(fields["collector_line_crop_px"]))
+    # Treated as ONE staleness unit (not three independent ones) - see `EXTRACTOR_OWNED_FIELDS`'s
+    # own comment for why: all three share this single tesseract escalation loop, and
+    # `artist_ocr`'s reuse-before-recompute pass below needs every attempt's raw text from THIS
+    # run of the loop, not a single stored winning text a carry-forward could offer instead.
+    _ocr_group_is_stale = _stale("collector_line_ocr") or _stale("artist_ocr") or _stale("collector_line_tsv")
+    if _ocr_group_is_stale:
+        if image is None:
+            skip_reasons["collector_line_ocr"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+            skip_reasons["artist_ocr"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+            skip_reasons["collector_line_tsv"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            collector_crop = image.crop(tuple(fields["collector_line_crop_px"]))
 
-        # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md):
-        # previously this ran run_tesseract (image_to_string) on EVERY variant unconditionally,
-        # then a SEPARATE run_tesseract_tsv (image_to_data) call on whichever variant won - up to
-        # 3 tesseract invocations per card for this one extractor. Now: one
-        # run_tesseract_text_and_words call per variant TRIED (a single image_to_data call
-        # yielding both the raw text and the word boxes at once - see that function's own
-        # docstring), and the loop stops at the FIRST variant whose text parses a collector
-        # number rather than always computing every variant - matches this same loop's own
-        # pre-existing "first variant that produces something" precedence, just applied to WHEN
-        # each variant gets OCR'd, not only to which one's result is kept.
-        #
-        # `_collector_line_ocr_attempts` (issue #259) supplies the FULL, lazily-evaluated
-        # attempt order - the original two `preprocess_variants` polarities first (unchanged, the
-        # happy path), then two fallback tiers (heavier-preprocessed variants, then an alternate
-        # PSM re-try) that are only ever reached - and only ever cost a tesseract call - once
-        # every earlier attempt has already failed to parse a collector number. See that
-        # function's own docstring for the full tier breakdown and worst-case cost.
-        #
-        # Pre-classification short-circuit (2026-07-21, docs/features/catalog-completion-plan.md's
-        # "Recovery-arc lessons" item 1; tightened 2026-07-22, parity replay #154 - see
-        # `_confidently_digit_free`'s own docstring for the full autopsy): once both tier-1
-        # attempts are exhausted with no parse, a card whose tier-1 texts are BOTH non-blank and
-        # digit-free skips tier 2 entirely rather than paying for 4 more tesseract calls to
-        # re-read the same non-collector-number text more clearly. A digit-bearing tier-1 read
-        # that still fails to parse always escalates exactly as before - `_contains_digit` is a
-        # coarser, cheaper check than `_COLLECTOR_NUMBER_RE` itself (see that helper's own
-        # docstring) - and so does a BLANK tier-1 read (2026-07-22: blank is a read FAILURE, not a
-        # confident "nothing here" signal, so it no longer qualifies either). This can only ever
-        # short-circuit a STRICT SUBSET of cards that would have ended in "no-text" anyway, never
-        # a card that could have parsed at tier 1. This gate governs whether escalation STARTS
-        # (i.e. whether tier 2 runs at all) - entirely independent of the lexicon-validity
-        # acceptance criterion immediately below, which governs whether a tier's parse is allowed
-        # to STOP escalation once it's already running.
-        #
-        # SET-CODE LEXICON GATE (2026-07-23, issue #370's own recorded follow-up - see
-        # `compute_card_evidence`'s own `known_set_codes` docstring paragraph for the full
-        # autopsy/structural finding this responds to): a tier's parse used to terminate
-        # escalation the instant ANY `collector_number` was found, regardless of whether the
-        # paired `set_code` was a real one - `_parse_is_lexicon_valid` now gates that acceptance
-        # instead. A `collector_number`-bearing parse that fails the gate is remembered as the
-        # running "best invalid candidate" (`best_invalid_index`/`best_invalid_parse` - the FIRST
-        # such parse, by tier order) rather than accepted, and the loop keeps escalating; if no
-        # attempt across every tier ever produces a lexicon-valid parse, the best invalid
-        # candidate becomes the stored outcome below - identical to what pre-gate code already
-        # stored for this bucket (see that paragraph for why the two are provably the same).
-        #
-        # COLLECTOR-LINE ARTIST GATE (2026-07-29 - see `compute_card_evidence`'s own
-        # `artist_lexicon` docstring paragraph for the full autopsy, and
-        # `_parse_artist_is_contradicted` for the decision itself): the SECOND half of the same
-        # acceptance criterion, and the half that catches what the set-code axis structurally
-        # cannot - a MISREAD NUMBER paired with a correctly-read set code, which passes
-        # `_parse_is_lexicon_valid` and terminates escalation before tiers 2-8 ever run. A parse
-        # whose resulting printing's artist CONTRADICTS the artist printed in that same attempt's
-        # own collector line no longer stops the loop; it is remembered in its own
-        # `best_contradicted_*` slot (the FIRST such parse, by tier order) and escalation
-        # CONTINUES. This is deliberately a gate on CONTINUING, not merely on casting a vote -
-        # suppressing the vote alone would leave the pipeline having flagged a read as suspect
-        # with nothing better to offer.
-        collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
-        selected_index = 0
-        parsed = parse_collector_line("")
-        matched = False
-        short_circuited = False
-        tier1_raw_texts: list[str] = []
-        best_invalid_index: Optional[int] = None
-        best_invalid_parse: Any = None
-        best_contradicted_index: Optional[int] = None
-        best_contradicted_parse: Any = None
-        for i, (variant, config, tier) in enumerate(_collector_line_ocr_attempts(collector_crop)):
-            raw_text, word_boxes = run_tesseract_text_and_words(variant, config=config)
-            collector_texts_and_words.append((raw_text, word_boxes))
-            candidate_parse = parse_collector_line(raw_text)
-            if candidate_parse.collector_number is not None:
-                if _parse_is_lexicon_valid(candidate_parse, known_set_codes):
-                    if not _parse_artist_is_contradicted(
-                        candidate_parse,
-                        raw_text,
-                        artist_lexicon,
-                        printing_artist_lookup,
-                        legal_line_raw_text=legal_line_raw_text,
-                        card_artist_names=card_artist_names,
+            # OCR call-cost reduction (docs/reports/2026-07-20-pipeline-compute-profile.md):
+            # previously this ran run_tesseract (image_to_string) on EVERY variant unconditionally,
+            # then a SEPARATE run_tesseract_tsv (image_to_data) call on whichever variant won - up to
+            # 3 tesseract invocations per card for this one extractor. Now: one
+            # run_tesseract_text_and_words call per variant TRIED (a single image_to_data call
+            # yielding both the raw text and the word boxes at once - see that function's own
+            # docstring), and the loop stops at the FIRST variant whose text parses a collector
+            # number rather than always computing every variant - matches this same loop's own
+            # pre-existing "first variant that produces something" precedence, just applied to WHEN
+            # each variant gets OCR'd, not only to which one's result is kept.
+            #
+            # `_collector_line_ocr_attempts` (issue #259) supplies the FULL, lazily-evaluated
+            # attempt order - the original two `preprocess_variants` polarities first (unchanged, the
+            # happy path), then two fallback tiers (heavier-preprocessed variants, then an alternate
+            # PSM re-try) that are only ever reached - and only ever cost a tesseract call - once
+            # every earlier attempt has already failed to parse a collector number. See that
+            # function's own docstring for the full tier breakdown and worst-case cost.
+            #
+            # Pre-classification short-circuit (2026-07-21, docs/features/catalog-completion-plan.md's
+            # "Recovery-arc lessons" item 1; tightened 2026-07-22, parity replay #154 - see
+            # `_confidently_digit_free`'s own docstring for the full autopsy): once both tier-1
+            # attempts are exhausted with no parse, a card whose tier-1 texts are BOTH non-blank and
+            # digit-free skips tier 2 entirely rather than paying for 4 more tesseract calls to
+            # re-read the same non-collector-number text more clearly. A digit-bearing tier-1 read
+            # that still fails to parse always escalates exactly as before - `_contains_digit` is a
+            # coarser, cheaper check than `_COLLECTOR_NUMBER_RE` itself (see that helper's own
+            # docstring) - and so does a BLANK tier-1 read (2026-07-22: blank is a read FAILURE, not a
+            # confident "nothing here" signal, so it no longer qualifies either). This can only ever
+            # short-circuit a STRICT SUBSET of cards that would have ended in "no-text" anyway, never
+            # a card that could have parsed at tier 1. This gate governs whether escalation STARTS
+            # (i.e. whether tier 2 runs at all) - entirely independent of the lexicon-validity
+            # acceptance criterion immediately below, which governs whether a tier's parse is allowed
+            # to STOP escalation once it's already running.
+            #
+            # SET-CODE LEXICON GATE (2026-07-23, issue #370's own recorded follow-up - see
+            # `compute_card_evidence`'s own `known_set_codes` docstring paragraph for the full
+            # autopsy/structural finding this responds to): a tier's parse used to terminate
+            # escalation the instant ANY `collector_number` was found, regardless of whether the
+            # paired `set_code` was a real one - `_parse_is_lexicon_valid` now gates that acceptance
+            # instead. A `collector_number`-bearing parse that fails the gate is remembered as the
+            # running "best invalid candidate" (`best_invalid_index`/`best_invalid_parse` - the FIRST
+            # such parse, by tier order) rather than accepted, and the loop keeps escalating; if no
+            # attempt across every tier ever produces a lexicon-valid parse, the best invalid
+            # candidate becomes the stored outcome below - identical to what pre-gate code already
+            # stored for this bucket (see that paragraph for why the two are provably the same).
+            #
+            # COLLECTOR-LINE ARTIST GATE (2026-07-29 - see `compute_card_evidence`'s own
+            # `artist_lexicon` docstring paragraph for the full autopsy, and
+            # `_parse_artist_is_contradicted` for the decision itself): the SECOND half of the same
+            # acceptance criterion, and the half that catches what the set-code axis structurally
+            # cannot - a MISREAD NUMBER paired with a correctly-read set code, which passes
+            # `_parse_is_lexicon_valid` and terminates escalation before tiers 2-8 ever run. A parse
+            # whose resulting printing's artist CONTRADICTS the artist printed in that same attempt's
+            # own collector line no longer stops the loop; it is remembered in its own
+            # `best_contradicted_*` slot (the FIRST such parse, by tier order) and escalation
+            # CONTINUES. This is deliberately a gate on CONTINUING, not merely on casting a vote -
+            # suppressing the vote alone would leave the pipeline having flagged a read as suspect
+            # with nothing better to offer.
+            collector_texts_and_words: list[tuple[str, list[dict[str, Any]]]] = []
+            selected_index = 0
+            parsed = parse_collector_line("")
+            matched = False
+            short_circuited = False
+            tier1_raw_texts: list[str] = []
+            best_invalid_index: Optional[int] = None
+            best_invalid_parse: Any = None
+            best_contradicted_index: Optional[int] = None
+            best_contradicted_parse: Any = None
+            for i, (variant, config, tier) in enumerate(_collector_line_ocr_attempts(collector_crop)):
+                raw_text, word_boxes = run_tesseract_text_and_words(variant, config=config)
+                collector_texts_and_words.append((raw_text, word_boxes))
+                candidate_parse = parse_collector_line(raw_text)
+                if candidate_parse.collector_number is not None:
+                    if _parse_is_lexicon_valid(candidate_parse, known_set_codes):
+                        if not _parse_artist_is_contradicted(
+                            candidate_parse,
+                            raw_text,
+                            artist_lexicon,
+                            printing_artist_lookup,
+                            legal_line_raw_text=legal_line_raw_text,
+                            card_artist_names=card_artist_names,
+                        ):
+                            parsed = candidate_parse
+                            selected_index = i
+                            matched = True
+                            break
+                        if best_contradicted_index is None:
+                            best_contradicted_index = i
+                            best_contradicted_parse = candidate_parse
+                    elif best_invalid_index is None:
+                        best_invalid_index = i
+                        best_invalid_parse = candidate_parse
+                if tier == 1:
+                    tier1_raw_texts.append(raw_text)
+                    if (
+                        short_circuit
+                        and len(tier1_raw_texts) == _COLLECTOR_LINE_TIER1_ATTEMPT_COUNT
+                        and _confidently_digit_free(tier1_raw_texts)
                     ):
-                        parsed = candidate_parse
-                        selected_index = i
-                        matched = True
+                        short_circuited = True
                         break
-                    if best_contradicted_index is None:
-                        best_contradicted_index = i
-                        best_contradicted_parse = candidate_parse
-                elif best_invalid_index is None:
-                    best_invalid_index = i
-                    best_invalid_parse = candidate_parse
-            if tier == 1:
-                tier1_raw_texts.append(raw_text)
-                if (
-                    short_circuit
-                    and len(tier1_raw_texts) == _COLLECTOR_LINE_TIER1_ATTEMPT_COUNT
-                    and _confidently_digit_free(tier1_raw_texts)
-                ):
-                    short_circuited = True
-                    break
-        if not matched:
-            if best_contradicted_index is not None:
-                # COLLECTOR-LINE ARTIST GATE fallback, precedence step 1 (see
-                # `compute_card_evidence`'s own `artist_lexicon` docstring paragraph): no attempt
-                # was ever both lexicon-valid AND artist-consistent, so keep the first
-                # lexicon-valid-but-contradicted parse. Preferred over the lexicon-INVALID slot
-                # below because its set code is at least a real one - the strictly better of two
-                # imperfect artifacts - and Stage D
-                # (`local_calculate_verdicts._apply_agreement_checks`) applies the same artist
-                # check to it there and abstains rather than casting a wrong vote. Unreachable
-                # unless the gate is wired, so the pre-2026-07-29 precedence below is untouched
-                # for every existing caller.
-                parsed = best_contradicted_parse
-                selected_index = best_contradicted_index
-            elif best_invalid_index is not None:
-                # every attempt either found nothing or a lexicon-invalid parse - keep the BEST
-                # invalid candidate (the first collector_number-bearing parse by tier order,
-                # matching exactly what pre-2026-07-23 code already stored for this bucket, since
-                # old code never distinguished valid from invalid - see this loop's own comment
-                # above and compute_card_evidence's own known_set_codes docstring paragraph).
-                parsed = best_invalid_parse
-                selected_index = best_invalid_index
-            elif collector_texts_and_words:
-                # no attempt ever produced ANY collector_number at all (the true "no-text" case) -
-                # keep the first attempt's (empty-ish) parse as the deterministic stored artifact,
-                # matching the pre-existing fallback precedence. Safe to reuse unconditionally on
-                # a short-circuit exit too: `_contains_digit` false for both tier-1 texts means
-                # `_COLLECTOR_NUMBER_RE` (a strict subset check - see `_contains_digit`'s own
-                # docstring) cannot have matched either, so re-parsing text[0] here can only ever
-                # reproduce the same collector_number=None outcome already implied.
-                parsed = parse_collector_line(collector_texts_and_words[0][0])
-        card_short_circuited = short_circuited
+            if not matched:
+                if best_contradicted_index is not None:
+                    # COLLECTOR-LINE ARTIST GATE fallback, precedence step 1 (see
+                    # `compute_card_evidence`'s own `artist_lexicon` docstring paragraph): no attempt
+                    # was ever both lexicon-valid AND artist-consistent, so keep the first
+                    # lexicon-valid-but-contradicted parse. Preferred over the lexicon-INVALID slot
+                    # below because its set code is at least a real one - the strictly better of two
+                    # imperfect artifacts - and Stage D
+                    # (`local_calculate_verdicts._apply_agreement_checks`) applies the same artist
+                    # check to it there and abstains rather than casting a wrong vote. Unreachable
+                    # unless the gate is wired, so the pre-2026-07-29 precedence below is untouched
+                    # for every existing caller.
+                    parsed = best_contradicted_parse
+                    selected_index = best_contradicted_index
+                elif best_invalid_index is not None:
+                    # every attempt either found nothing or a lexicon-invalid parse - keep the BEST
+                    # invalid candidate (the first collector_number-bearing parse by tier order,
+                    # matching exactly what pre-2026-07-23 code already stored for this bucket, since
+                    # old code never distinguished valid from invalid - see this loop's own comment
+                    # above and compute_card_evidence's own known_set_codes docstring paragraph).
+                    parsed = best_invalid_parse
+                    selected_index = best_invalid_index
+                elif collector_texts_and_words:
+                    # no attempt ever produced ANY collector_number at all (the true "no-text" case) -
+                    # keep the first attempt's (empty-ish) parse as the deterministic stored artifact,
+                    # matching the pre-existing fallback precedence. Safe to reuse unconditionally on
+                    # a short-circuit exit too: `_contains_digit` false for both tier-1 texts means
+                    # `_COLLECTOR_NUMBER_RE` (a strict subset check - see `_contains_digit`'s own
+                    # docstring) cannot have matched either, so re-parsing text[0] here can only ever
+                    # reproduce the same collector_number=None outcome already implied.
+                    parsed = parse_collector_line(collector_texts_and_words[0][0])
+            card_short_circuited = short_circuited
 
-        collector_raw_texts = [text for text, _words in collector_texts_and_words]
-        fields["collector_line_raw_text"] = (
-            collector_texts_and_words[selected_index][0] if collector_texts_and_words else ""
-        )
-        fields["collector_line_set_code"] = parsed.set_code or ""
-        fields["collector_line_collector_number"] = parsed.collector_number or ""
-        if parsed.collector_number is None:
-            skip_reasons["collector_line_ocr"] = EXTRACTOR_NO_TEXT_SKIP_REASON
+            collector_raw_texts = [text for text, _words in collector_texts_and_words]
+            fields["collector_line_raw_text"] = (
+                collector_texts_and_words[selected_index][0] if collector_texts_and_words else ""
+            )
+            fields["collector_line_set_code"] = parsed.set_code or ""
+            fields["collector_line_collector_number"] = parsed.collector_number or ""
+            if parsed.collector_number is None:
+                skip_reasons["collector_line_ocr"] = EXTRACTOR_NO_TEXT_SKIP_REASON
 
-        # TSV word boxes: same winning variant the text parse above came from (computed by the
-        # SAME tesseract call as that variant's raw text, not a second call) - so the word boxes
-        # and the parsed text always describe the same underlying tesseract read.
-        fields["collector_line_word_boxes"] = (
-            collector_texts_and_words[selected_index][1] if collector_texts_and_words else []
-        )
+            # TSV word boxes: same winning variant the text parse above came from (computed by the
+            # SAME tesseract call as that variant's raw text, not a second call) - so the word boxes
+            # and the parsed text always describe the same underlying tesseract read.
+            fields["collector_line_word_boxes"] = (
+                collector_texts_and_words[selected_index][1] if collector_texts_and_words else []
+            )
 
-        # artist OCR: reuse collector_line_ocr's own raw texts first (see module docstring),
-        # only cropping+OCR-ing artist_crop_px if none of those already contain an "Illus." match.
-        # `collector_raw_texts` only contains as many entries as the loop above actually computed
-        # (short-circuited once a collector number was found) - a real card whose collector-line
-        # crop legitimately carries an "Illus." credit (old-border only, per this module's own
-        # artist_ocr section) never has a genuine collector number to short-circuit on in the
-        # first place, so the loop above runs to completion (computing every variant) for exactly
-        # the population where this reuse would otherwise matter; verified against
-        # TestExtractCardEvidenceArtistOcr's real-tesseract reuse test, not just argued.
-        artist_name: Optional[str] = None
-        artist_raw_text = ""
-        for raw_text in collector_raw_texts:
-            artist_name = extract_artist_name(raw_text)
-            if artist_name is not None:
-                artist_raw_text = raw_text
-                break
-        if artist_name is None:
-            artist_crop = image.crop(tuple(fields["artist_crop_px"]))
-            for variant in preprocess_variants(artist_crop):
-                raw_text = run_tesseract(variant)
-                if not artist_raw_text:
-                    artist_raw_text = raw_text  # keep at least one attempt as a stored artifact
+            # artist OCR: reuse collector_line_ocr's own raw texts first (see module docstring),
+            # only cropping+OCR-ing artist_crop_px if none of those already contain an "Illus." match.
+            # `collector_raw_texts` only contains as many entries as the loop above actually computed
+            # (short-circuited once a collector number was found) - a real card whose collector-line
+            # crop legitimately carries an "Illus." credit (old-border only, per this module's own
+            # artist_ocr section) never has a genuine collector number to short-circuit on in the
+            # first place, so the loop above runs to completion (computing every variant) for exactly
+            # the population where this reuse would otherwise matter; verified against
+            # TestExtractCardEvidenceArtistOcr's real-tesseract reuse test, not just argued.
+            artist_name: Optional[str] = None
+            artist_raw_text = ""
+            for raw_text in collector_raw_texts:
                 artist_name = extract_artist_name(raw_text)
                 if artist_name is not None:
                     artist_raw_text = raw_text
                     break
+            if artist_name is None:
+                artist_crop = image.crop(tuple(fields["artist_crop_px"]))
+                for variant in preprocess_variants(artist_crop):
+                    raw_text = run_tesseract(variant)
+                    if not artist_raw_text:
+                        artist_raw_text = raw_text  # keep at least one attempt as a stored artifact
+                    artist_name = extract_artist_name(raw_text)
+                    if artist_name is not None:
+                        artist_raw_text = raw_text
+                        break
 
-        fields["artist_ocr_raw_text"] = artist_raw_text
-        fields["artist_ocr_name"] = artist_name or ""
-        # whether the "Illus." anchor was found at all, independent of whether the extracted name
-        # would go on to fuzzy-match a real candidate (that's Stage D's job) - same convention as
-        # local_fallback.detect_illus_anchor's own (fired, name) return.
-        fields["illus_anchor_fired"] = artist_name is not None
-        if artist_name is None:
-            skip_reasons["artist_ocr"] = EXTRACTOR_NO_TEXT_SKIP_REASON
+            fields["artist_ocr_raw_text"] = artist_raw_text
+            fields["artist_ocr_name"] = artist_name or ""
+            # whether the "Illus." anchor was found at all, independent of whether the extracted name
+            # would go on to fuzzy-match a real candidate (that's Stage D's job) - same convention as
+            # local_fallback.detect_illus_anchor's own (fired, name) return.
+            fields["illus_anchor_fired"] = artist_name is not None
+            if artist_name is None:
+                skip_reasons["artist_ocr"] = EXTRACTOR_NO_TEXT_SKIP_REASON
 
-        # COLLECTOR-LINE ARTIST RECOVERY (2026-07-29 - `cardpicker.collector_line_artist`), the
-        # storage half of the same feature the escalation gate above uses for its own decision.
-        # Fills `artist_ocr_name` from the card's own bottom print row when, and only when, the
-        # "Illus." anchor found nothing - the anchor's own reading always wins, this can never
-        # overwrite it. Measured read-only against production, 2026-07-29: `artist_ocr_name` is
-        # blank on 93.7% of the 220,669 evidence rows, and this recovers a single unambiguous
-        # canonical artist for a large fraction of that blank population from strings already in
-        # hand.
-        #
-        # READS BOTH STORED READS OF THAT ROW (2026-07-29, `collector_line_artist`'s WIDENING THE
-        # READ): the winning collector-line text AND `legal_line_raw_text`, which is the SAME
-        # y band at the FULL card width and therefore carries the artist credit whole where the
-        # collector crop clips it. NARROWED BY CARD NAME (`card_artist_names`) so a read that is
-        # globally ambiguous between several real artists resolves against the one or two who
-        # actually illustrated this card. Still zero extra image work: both strings were already
-        # computed by extractors this function already runs.
-        #
-        # WHY THE EXISTING FIELD RATHER THAN A NEW PARALLEL ONE (owner preference, 2026-07-29):
-        # `artist_ocr_name` already has live consumers - `local_calculate_verdicts.
-        # _apply_agreement_checks`'s artist-OCR corroboration and `local_identify_printing_tags`'
-        # equivalent - so every name recovered here flows into printing identification with no
-        # new wiring, and a new column would mean a migration on a 220k-row table for a value with
-        # identical semantics ("the artist this card's own pixels name"). It also keeps this
-        # consistent with `modern_artist_credit`'s own backfill, which already writes
-        # previously-blank `artist_ocr_name` values from a re-read of a different stored string.
-        # `illus_anchor_fired`, `artist_ocr_raw_text` and the `artist_ocr` skip reason are all
-        # deliberately left EXACTLY as the anchor pass set them: they describe the artist_ocr
-        # extractor's own outcome, which this recovery neither performs nor changes, and
-        # `illus_anchor_fired` in particular is a real downstream input (`classify_frame_style`)
-        # that must keep meaning "the Illus. anchor fired", nothing else. No extractor_versions
-        # key is added and no version bumped, deliberately - either would invalidate every
-        # existing row against `run_image_evidence_cohort.MANIFEST_EXTRACTOR_CURRENT_VERSIONS` and
-        # force a full 220k-card Stage C re-extraction.
-        if artist_name is None:
-            recovered_artist = None
-            if artist_lexicon is not None:
-                recovered_artist = recover_artist_from_card_text(
-                    fields["collector_line_raw_text"],
-                    legal_line_raw_text,
-                    artist_lexicon,
-                    allowed_artist_names=card_artist_names,
-                )
-            if recovered_artist is not None and recovered_artist.canonical_name is not None:
-                # `canonical_name` is a verbatim `CanonicalArtist.name` and is `None` unless the
-                # reading is compatible with exactly one of them - fuzzy MATCHING is permitted,
-                # fuzzy STORAGE is not (owner ruling, 2026-07-29).
-                fields["artist_ocr_name"] = recovered_artist.canonical_name
-            elif modern_artist_lexicon is not None:
-                # ARTIST-CROP FALLBACK (2026-08-04) - see this function's own `modern_artist_
-                # lexicon` docstring paragraph. Re-reads `artist_raw_text` (the artist-crop OCR
-                # text this extractor already computed above), the one stored string the
-                # collector/legal-line recovery above structurally cannot reach.
-                recognized_artist = recognize_artist_credit(artist_raw_text, modern_artist_lexicon)
-                if recognized_artist is not None:
-                    fields["artist_ocr_name"] = recognized_artist.matched_name
+            # COLLECTOR-LINE ARTIST RECOVERY (2026-07-29 - `cardpicker.collector_line_artist`), the
+            # storage half of the same feature the escalation gate above uses for its own decision.
+            # Fills `artist_ocr_name` from the card's own bottom print row when, and only when, the
+            # "Illus." anchor found nothing - the anchor's own reading always wins, this can never
+            # overwrite it. Measured read-only against production, 2026-07-29: `artist_ocr_name` is
+            # blank on 93.7% of the 220,669 evidence rows, and this recovers a single unambiguous
+            # canonical artist for a large fraction of that blank population from strings already in
+            # hand.
+            #
+            # READS BOTH STORED READS OF THAT ROW (2026-07-29, `collector_line_artist`'s WIDENING THE
+            # READ): the winning collector-line text AND `legal_line_raw_text`, which is the SAME
+            # y band at the FULL card width and therefore carries the artist credit whole where the
+            # collector crop clips it. NARROWED BY CARD NAME (`card_artist_names`) so a read that is
+            # globally ambiguous between several real artists resolves against the one or two who
+            # actually illustrated this card. Still zero extra image work: both strings were already
+            # computed by extractors this function already runs.
+            #
+            # WHY THE EXISTING FIELD RATHER THAN A NEW PARALLEL ONE (owner preference, 2026-07-29):
+            # `artist_ocr_name` already has live consumers - `local_calculate_verdicts.
+            # _apply_agreement_checks`'s artist-OCR corroboration and `local_identify_printing_tags`'
+            # equivalent - so every name recovered here flows into printing identification with no
+            # new wiring, and a new column would mean a migration on a 220k-row table for a value with
+            # identical semantics ("the artist this card's own pixels name"). It also keeps this
+            # consistent with `modern_artist_credit`'s own backfill, which already writes
+            # previously-blank `artist_ocr_name` values from a re-read of a different stored string.
+            # `illus_anchor_fired`, `artist_ocr_raw_text` and the `artist_ocr` skip reason are all
+            # deliberately left EXACTLY as the anchor pass set them: they describe the artist_ocr
+            # extractor's own outcome, which this recovery neither performs nor changes, and
+            # `illus_anchor_fired` in particular is a real downstream input (`classify_frame_style`)
+            # that must keep meaning "the Illus. anchor fired", nothing else. No extractor_versions
+            # key is added and no version bumped, deliberately - either would invalidate every
+            # existing row against `run_image_evidence_cohort.MANIFEST_EXTRACTOR_CURRENT_VERSIONS` and
+            # force a full 220k-card Stage C re-extraction.
+            if artist_name is None:
+                recovered_artist = None
+                if artist_lexicon is not None:
+                    recovered_artist = recover_artist_from_card_text(
+                        fields["collector_line_raw_text"],
+                        legal_line_raw_text,
+                        artist_lexicon,
+                        allowed_artist_names=card_artist_names,
+                    )
+                if recovered_artist is not None and recovered_artist.canonical_name is not None:
+                    # `canonical_name` is a verbatim `CanonicalArtist.name` and is `None` unless the
+                    # reading is compatible with exactly one of them - fuzzy MATCHING is permitted,
+                    # fuzzy STORAGE is not (owner ruling, 2026-07-29).
+                    fields["artist_ocr_name"] = recovered_artist.canonical_name
+                elif modern_artist_lexicon is not None:
+                    # ARTIST-CROP FALLBACK (2026-08-04) - see this function's own `modern_artist_
+                    # lexicon` docstring paragraph. Re-reads `artist_raw_text` (the artist-crop OCR
+                    # text this extractor already computed above), the one stored string the
+                    # collector/legal-line recovery above structurally cannot reach.
+                    recognized_artist = recognize_artist_credit(artist_raw_text, modern_artist_lexicon)
+                    if recognized_artist is not None:
+                        fields["artist_ocr_name"] = recognized_artist.matched_name
 
-    extractor_versions["collector_line_ocr"] = COLLECTOR_LINE_OCR_EXTRACTOR_VERSION
-    extractor_versions["artist_ocr"] = ARTIST_OCR_EXTRACTOR_VERSION
-    extractor_versions["collector_line_tsv"] = COLLECTOR_LINE_TSV_EXTRACTOR_VERSION
+        extractor_versions["collector_line_ocr"] = COLLECTOR_LINE_OCR_EXTRACTOR_VERSION
+        extractor_versions["artist_ocr"] = ARTIST_OCR_EXTRACTOR_VERSION
+        extractor_versions["collector_line_tsv"] = COLLECTOR_LINE_TSV_EXTRACTOR_VERSION
     if profile is not None:
         profile["ocr_group_ms"] = (time.monotonic() - _ocr_group_started_at) * 1000
 
@@ -1364,49 +1529,53 @@ def compute_card_evidence(
     # stand-in. Shares symbol_region's own "ambiguous" skip-reason vocabulary for both an
     # unclassifiable frame and a degenerate crop box (see module docstring for why one string
     # covers both here).
-    if image is None:
-        skip_reasons["artbox_phash"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    else:
-        parsed_a_collector_number = bool(fields.get("collector_line_collector_number"))
-        illus_anchor_fired_value = bool(fields.get("illus_anchor_fired"))
-        frame_class = classify_frame_style(parsed_a_collector_number, illus_anchor_fired_value)
-        fields["artbox_frame_class"] = frame_class or ""
-        if frame_class is None:
-            skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+    if _stale("artbox_phash"):
+        if image is None:
+            skip_reasons["artbox_phash"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
         else:
-            artbox_box = ARTBOX_MODERN_CROP_BOX if frame_class == "modern" else ARTBOX_OLD_CROP_BOX
-            artbox_crop_px = _crop_box_to_pixels(artbox_box, bleed_class, width, height)
-            left, top, right, bottom = artbox_crop_px
-            if right <= left or bottom <= top:
-                # Same real, non-fabricated "sub-floor" guard symbol_region's own degenerate-crop-
-                # box check exists for - not expected to fire against real fetched images either.
+            parsed_a_collector_number = bool(fields.get("collector_line_collector_number"))
+            illus_anchor_fired_value = bool(fields.get("illus_anchor_fired"))
+            frame_class = classify_frame_style(parsed_a_collector_number, illus_anchor_fired_value)
+            fields["artbox_frame_class"] = frame_class or ""
+            if frame_class is None:
                 skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
             else:
-                fields["artbox_crop_px"] = artbox_crop_px
-                fields["artbox_phash"] = _compute_region_phash(image, artbox_crop_px)
-    extractor_versions["artbox_phash"] = ARTBOX_PHASH_EXTRACTOR_VERSION
+                assert isinstance(width, int) and isinstance(height, int)  # see crop_coordinates' own comment above
+                artbox_box = ARTBOX_MODERN_CROP_BOX if frame_class == "modern" else ARTBOX_OLD_CROP_BOX
+                artbox_crop_px = _crop_box_to_pixels(artbox_box, bleed_class, width, height)
+                left, top, right, bottom = artbox_crop_px
+                if right <= left or bottom <= top:
+                    # Same real, non-fabricated "sub-floor" guard symbol_region's own degenerate-crop-
+                    # box check exists for - not expected to fire against real fetched images either.
+                    skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+                else:
+                    fields["artbox_crop_px"] = artbox_crop_px
+                    fields["artbox_phash"] = _compute_region_phash(image, artbox_crop_px)
+        extractor_versions["artbox_phash"] = ARTBOX_PHASH_EXTRACTOR_VERSION
 
     # symbol_region (issue #160, "Part 4b: symbol harness"): SYMBOL_STRIP_BOX turned into pixel
     # coordinates the same way crop_coordinates derives its own three boxes, then a raw phash of
     # that region only - see module docstring for why this is a raw signal (Stage D's job to
     # compare against a candidate's rendered glyph), not a verdict, and why the only named skip is
     # a degenerate crop box rather than a tuned classification threshold.
-    if image is None:
-        skip_reasons["symbol_region"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    else:
-        symbol_crop_px = _crop_box_to_pixels(SYMBOL_STRIP_BOX, bleed_class, width, height)
-        left, top, right, bottom = symbol_crop_px
-        if right <= left or bottom <= top:
-            # A degenerate (zero/negative-area) crop box - the same "sub-floor" input category
-            # geometry_bleed's own zero-height guard handles for its aspect-ratio division (see
-            # module docstring) - guarded here before PIL.Image.crop/imagehash.phash would raise
-            # on an empty region. Real fetched images essentially never hit this; not expected to
-            # fire against the golden set (see module docstring).
-            skip_reasons["symbol_region"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+    if _stale("symbol_region"):
+        if image is None:
+            skip_reasons["symbol_region"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
         else:
-            fields["symbol_crop_px"] = symbol_crop_px
-            fields["symbol_phash"] = _compute_region_phash(image, symbol_crop_px)
-    extractor_versions["symbol_region"] = SYMBOL_REGION_EXTRACTOR_VERSION
+            assert isinstance(width, int) and isinstance(height, int)  # see crop_coordinates' own comment above
+            symbol_crop_px = _crop_box_to_pixels(SYMBOL_STRIP_BOX, bleed_class, width, height)
+            left, top, right, bottom = symbol_crop_px
+            if right <= left or bottom <= top:
+                # A degenerate (zero/negative-area) crop box - the same "sub-floor" input category
+                # geometry_bleed's own zero-height guard handles for its aspect-ratio division (see
+                # module docstring) - guarded here before PIL.Image.crop/imagehash.phash would raise
+                # on an empty region. Real fetched images essentially never hit this; not expected to
+                # fire against the golden set (see module docstring).
+                skip_reasons["symbol_region"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+            else:
+                fields["symbol_crop_px"] = symbol_crop_px
+                fields["symbol_phash"] = _compute_region_phash(image, symbol_crop_px)
+        extractor_versions["symbol_region"] = SYMBOL_REGION_EXTRACTOR_VERSION
 
     # legal_line (issue #151, task #159's extractor half): a NEW, dedicated crop region (not a
     # reuse of collector_line_crop_px - see module docstring), OCR'd fresh (no reuse-before-
@@ -1419,16 +1588,17 @@ def compute_card_evidence(
     # STORAGE ONLY (2026-07-29): the compute itself was hoisted above the OCR group - see
     # `_extract_legal_line`'s own docstring - so this block writes exactly the same fields, in
     # exactly the same order, from an outcome already in hand.
-    if legal_line is None:
-        skip_reasons["legal_line"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    else:
-        fields["legal_line_crop_px"] = legal_line.crop_px
-        fields["legal_line_raw_text"] = legal_line.raw_text
-        fields["legal_line_copyright_year"] = legal_line.copyright_year
-        fields["legal_line_proxy_marker_detected"] = legal_line.proxy_marker_detected
-        if not legal_line.found_something:
-            skip_reasons["legal_line"] = EXTRACTOR_NO_TEXT_SKIP_REASON
-    extractor_versions["legal_line"] = LEGAL_LINE_EXTRACTOR_VERSION
+    if _stale("legal_line"):
+        if legal_line is None:
+            skip_reasons["legal_line"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            fields["legal_line_crop_px"] = legal_line.crop_px
+            fields["legal_line_raw_text"] = legal_line.raw_text
+            fields["legal_line_copyright_year"] = legal_line.copyright_year
+            fields["legal_line_proxy_marker_detected"] = legal_line.proxy_marker_detected
+            if not legal_line.found_something:
+                skip_reasons["legal_line"] = EXTRACTOR_NO_TEXT_SKIP_REASON
+        extractor_versions["legal_line"] = LEGAL_LINE_EXTRACTOR_VERSION
     if profile is not None:
         profile["legal_line_ms"] = _legal_line_elapsed_ms
 
@@ -1440,21 +1610,55 @@ def compute_card_evidence(
     # pixel decode). blur_variance/image_entropy are only computed when the image loaded cleanly
     # - a truncated image's partial pixel data would produce meaningless numbers, not a real
     # reading.
-    if image is None:
-        skip_reasons["quality_signals"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-    elif width <= 0 or height <= 0:
-        skip_reasons["quality_signals"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
-    else:
-        truncated = is_image_truncated(image)
-        fields["image_is_truncated"] = truncated
-        if truncated:
-            # Shares fetch_health's own "fetch_failed" skip reason - see module docstring for
-            # why this isn't a new, separately-invented skip-reason string.
+    if _stale("quality_signals"):
+        if image is None:
             skip_reasons["quality_signals"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
         else:
-            fields["blur_variance"] = compute_blur_variance(image)
-            fields["image_entropy"] = compute_entropy(image)
-    extractor_versions["quality_signals"] = QUALITY_SIGNALS_EXTRACTOR_VERSION
+            assert isinstance(width, int) and isinstance(height, int)  # see crop_coordinates' own comment above
+            if width <= 0 or height <= 0:
+                skip_reasons["quality_signals"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+            else:
+                truncated = is_image_truncated(image)
+                fields["image_is_truncated"] = truncated
+                if truncated:
+                    # Shares fetch_health's own "fetch_failed" skip reason - see module docstring
+                    # for why this isn't a new, separately-invented skip-reason string.
+                    skip_reasons["quality_signals"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+                else:
+                    fields["blur_variance"] = compute_blur_variance(image)
+                    fields["image_entropy"] = compute_entropy(image)
+        extractor_versions["quality_signals"] = QUALITY_SIGNALS_EXTRACTOR_VERSION
+
+    # pinline_inset: see local_pinline_inset.py's own module docstring for the algorithm.
+    # MEASURES AND PERSISTS ONLY - no existing crop box computation above reads these fields,
+    # and this block changes none of them. Shares quality_signals' own degenerate width/height
+    # guard immediately above (the same real, mechanical sub-floor condition, not a new one).
+    if _stale("pinline_inset"):
+        if image is None:
+            skip_reasons["pinline_inset"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            assert isinstance(width, int) and isinstance(height, int)  # see crop_coordinates' own comment above
+            if width <= 0 or height <= 0:
+                skip_reasons["pinline_inset"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+            else:
+                pinline_inset = measure_pinline_inset(image)
+                if pinline_inset is None:
+                    # measure_pinline_inset's own degenerate-input guard - unreachable here in
+                    # practice (width/height already confirmed positive above), kept for the same
+                    # defense-in-depth reason artbox_phash's degenerate-crop-box guard is kept
+                    # even though real fetched images essentially never hit it.
+                    skip_reasons["pinline_inset"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+                else:
+                    fields["pinline_inset_frac_top"] = pinline_inset.top.inset_frac
+                    fields["pinline_inset_frac_bottom"] = pinline_inset.bottom.inset_frac
+                    fields["pinline_inset_frac_left"] = pinline_inset.left.inset_frac
+                    fields["pinline_inset_frac_right"] = pinline_inset.right.inset_frac
+                    fields["pinline_inset_call_top"] = pinline_inset.top.call
+                    fields["pinline_inset_call_bottom"] = pinline_inset.bottom.call
+                    fields["pinline_inset_call_left"] = pinline_inset.left.call
+                    fields["pinline_inset_call_right"] = pinline_inset.right.call
+                    fields["pinline_inset_verdict"] = pinline_inset.verdict
+        extractor_versions["pinline_inset"] = PINLINE_INSET_EXTRACTOR_VERSION
 
     if profile is not None:
         profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000
@@ -1652,4 +1856,5 @@ __all__ = [
     "ARTBOX_PHASH_EXTRACTOR_VERSION",
     "ARTBOX_MODERN_CROP_BOX",
     "ARTBOX_OLD_CROP_BOX",
+    "PINLINE_INSET_EXTRACTOR_VERSION",
 ]

@@ -171,7 +171,10 @@ export function SourcesAccordion() {
         // CSS-fidelity source-map pass (SPEC-display-left-rail.md §2/§4) - see
         // DisplayPage.tsx's RailSection's own identical `headerPadding` comment; this shell is
         // the other AutofillCollapse mount in the rail ("shell = AutofillCollapse", §4).
-        headerPadding="7px 10px"
+        // Rail restructure ruling (editor-repass round, item 2) - REV: 7px 10px -> 8px 8px,
+        // matching the 8px8px scale the rest of the rail's blocks use (`.rail-head`/`.d14`/
+        // `.detid-row`), instead of a slightly looser, asymmetric value unique to this section.
+        headerPadding="8px 8px"
         // EP3 (SPEC-editor-polish.md §D.3) - de-greys the shared component's own `#4E5D6B`
         // default for this ONE caller only (see AutofillCollapse.tsx's own comment).
         headerBackground="var(--theme-raised-bg)"
@@ -225,7 +228,7 @@ export function SourcesAccordion() {
             aria-label="Filter sources"
             value={filterQuery}
             onChange={(event) => setFilterQuery(event.target.value)}
-            className="mb-2"
+            className="mb-1"
             // Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) -
             // `Form.Control` is a genuinely global Bootstrap classname (`.form-control`), so this
             // is fixed via an inline style on THIS specific input (component-scoped) rather than
@@ -277,7 +280,7 @@ export function SourcesAccordion() {
               Invert
             </Button>
           </div>
-          <div className="mb-2">
+          <div className="mb-1">
             {/* #353 seam - account-tied preferred sources aren't built yet; disabled, not hidden,
                 so the affordance is discoverable ahead of that shipping. */}
             <Button

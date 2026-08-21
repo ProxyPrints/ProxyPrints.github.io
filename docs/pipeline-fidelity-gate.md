@@ -1185,35 +1185,82 @@ buckets:
   command. Derivable population measured read-only 2026-07-29: 133,627
   `Modern Border` + 9,006 `Old Border`.
 - **`bleed-edge-cast-v1`** (`local_attribute_chip_cast`, NEW 2026-07-30,
-  **0 rows — never run**) — same module, same pass, separate identity;
-  casts `appropriate-bleed` at polarity `NOT_APPLICABLE` for a confidently
-  `trimmed` `bleed_class`. NEGATIVE-ONLY by design: absence of a vote is the
-  documented convention for normal bleed, so a persistently low row count
-  here is correct, not a coverage gap. The identity is separate from
-  `frame-style-cast-v1` precisely because of that — under one shared
-  identity a card's frame vote would read as "already handled" and
-  permanently strand its bleed chip. Derivable population 2026-07-29: 2,786.
+  **RETIRED 2026-08-15 — superseded by `bleed-calculator-cast-v1` below**) —
+  the module's bleed half, which cast `appropriate-bleed` at polarity
+  `NOT_APPLICABLE` for a confidently `trimmed` `bleed_class` from Stage C's
+  single `bleed_class` signal alone. RETIRED rather than deleted — same
+  convention as `scryfall-tagger-v1` further down: the constant and this
+  entry are kept so a reader meeting the string in an old report, run log or
+  database column can find out what it was. It is replaced, not
+  supplemented: `bleed-calculator-cast-v1` now casts the same tag as the
+  SOLE machine channel, and running both would defeat the calculator's
+  abstention — the calculator withholds a vote when its independent
+  measurement contradicts Stage C's `trimmed` reading past the gate, and
+  the old caster voted on exactly those cards, so a concurrent pass would
+  re-cast the very votes the calculator was built to withhold. Wrote **0
+  rows in production**; derivable population (never backfilled, measured
+  read-only 2026-07-29): 2,786.
+- **`bleed-calculator-cast-v1`** (`local_bleed_calculator`, NEW, stacked on
+  #819/canvas-padding-stage-c-extractor, **0 rows — not yet mergeable**) —
+  the SOLE machine channel onto `appropriate-bleed`, having REPLACED the
+  retired `bleed-edge-cast-v1` above. It covers everything the old caster
+  covered: it skips only when BOTH methods are unavailable, and abstains
+  only when both are present and disagree past the gate — otherwise Method
+  A alone still votes. Cross-checks a closed-form aspect-ratio bleed (reads
+  the already-persisted `ImageEvidence.bleed_diff_mm`) against a per-edge
+  pinline-ruler bleed (`local_pinline_inset`, calibrated by border colour +
+  frame era from `CanonicalPrintingMetadata`, so selectable on roughly a
+  tenth of the catalogue) and withholds a vote when the two disagree by
+  more than 2mm rather than picking a side. Same NEGATIVE-ONLY convention
+  the retired caster followed — votes only when its own reading agrees the
+  card is `trimmed`. Cannot go live until `local_pinline_inset`'s own
+  branch merges and its extractor actually runs against production, so
+  0 rows here is expected, not a coverage gap, until that lands.
+- **`filename-declaration-cast-v1`** (`local_filename_declarations`, NEW
+  2026-08-19, **0 rows — not yet merged**) — parses `Card.name` (the
+  uploader's own filename-derived title) for treatment keywords
+  (Extended/Showcase/Full Art/Etched/Old Border/Future Frame, plus the
+  Black/White/Silver Border/Borderless axis) and casts the matching
+  attribute-chip vote(s) at `source=VoteSource.DEDUCTION` — zero image
+  fetches, zero `ImageEvidence` dependency at all, unlike every other
+  caster on this list. Can cast several tags for the same card (Extended
+  and Borderless are not exclusive); the four border-colour tags abstain
+  as a group on a self-contradictory filename rather than casting all of
+  them. Measured read-only against production 2026-08-19, 235,912 cards:
+  20,629 distinct cards across 109 sources declare a treatment this way
+  (Extended 13,119 new, Showcase 1,170 new, Full Art 804 new, Old Border
+  366 new, Etched 230 new, Borderless 789 new, Future Frame 24 new) — the
+  Extended figure corroborated at 90.7% agreement against the independent
+  `ImageEvidence.art_edge_class` pixel classifier on the same population.
 
-Both were created because the 2026-07-29 composition audit found the only
-casters for these two chips inside the live-fetch pilot and inside
+Both `frame-style-cast-v1` and the now-retired `bleed-edge-cast-v1` were
+created because the 2026-07-29 composition audit found the only casters for
+these two chips inside the live-fetch pilot and inside
 `image_evidence.extract_card_evidence`, which had zero production callers —
-so both chips sat at zero rows with nothing able to re-derive them. See
-`docs/features/printing-tags.md`, "Who actually casts the attribute chips".
+so both chips sat at zero rows with nothing able to re-derive them. The
+bleed half was superseded rather than fixed forward: `bleed-calculator-cast-v1`
+covers the same population with a stricter abstention (see its entry above).
+See `docs/features/printing-tags.md`, "Who actually casts the attribute chips".
 
-### Wiring status — the streaming conveyor's `_run_stage_d` (2026-08-05)
+### Wiring status — the streaming conveyor's `_run_stage_d` (2026-08-05, updated 2026-08-15)
 
 The question this section answers: for EVERY identity the roster tether
-derives from code (19 today, 2 of them not real vote-casting calculators —
+derives from code (21 today, 2 of them not real vote-casting calculators —
 `evidence-transfer-v1`/`question-feed-hypothetical-vote`, see
 `CALCULATOR_ROSTER_ALLOWLIST` in `.github/scripts/docs_lint.py` — leaving
-17 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
+19 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
 or the streaming conveyor's own `stage_e_dispatch._run_stage_d`) actually
 INVOKE it, verified by a real call site rather than a name match against
 this file? A prior claim in circulation held that a pass casts on "10 of
-roughly 28" channels — the derived roster is 17 real identities, not ~28,
-and as of this pass **11 of 17** are invoked by a real call site (up from 7
-before this pass — see below), 6 are deliberately unwired with a stated
-reason.
+roughly 28" channels — the derived roster is 19 real identities, not ~28,
+and as of this update **13 of 19** are invoked by a real call site (up from
+7 before the 2026-08-05 pass, then 11 before two 2026-08-19 changes landed
+together: the art-edge vote wiring moved `art-edge-continuity-v1` from the
+unwired set into the wired one, and `filename-declaration-cast-v1` joined
+`_run_attribute_chip_casters` as a nineteenth identity, wired from the
+start). 5 are deliberately unwired with a stated reason, and 1
+(`bleed-edge-cast-v1`) is RETIRED — its wiring slot was taken over by
+`bleed-calculator-cast-v1`, which joins the wired set below.
 
 **Wired before this pass (7):** `stage-d-join-key-v1`, `stage-d-fallback-v1`,
 `stage-d-illustration-v2`, `stage-d-slow-path-v1` (all four
@@ -1222,7 +1269,17 @@ reason.
 `_run_attribute_chip_casters`). `stage-d-slow-path-v1` is a router that
 casts 0 votes by construction (see its own entry above) but IS invoked,
 which is why it counts as wired here despite never appearing in a
-vote-count table.
+vote-count table. **`bleed-edge-cast-v1` was replaced by
+`bleed-calculator-cast-v1` in the 2026-08-15 replacement pass** — the
+retired identity is no longer invoked by `_run_attribute_chip_casters`
+(now wiring `layout-class-cast-v1`/`frame-style-cast-v1`/
+`bleed-calculator-cast-v1`), so the wired count stayed at 11: the calculator
+took the old identity's slot rather than adding a second channel onto
+`appropriate-bleed`. **`filename-declaration-cast-v1` joined the same
+`_run_attribute_chip_casters` try/except on 2026-08-19**, taking the wired
+count to 12 — it needs no `ImageEvidence` at all, so it shares the group's
+missing-tag-seed `RuntimeError` handling rather than the group's evidence
+gating.
 
 **Newly wired by this pass (4)** — `ai-art-detector-v1`,
 `lands-artist-decomp-v1`, `residual-classify-v1`, `art-hash-artist-v1`, via
@@ -1242,13 +1299,8 @@ database while writing it. See the PR that shipped this wiring for the
 per-channel dispatch-level tests (each proven to fire, and proven to fail
 when the wiring call is removed).
 
-**Deliberately left unwired (6), with a reason and a tracked issue each:**
+**Deliberately left unwired (5), with a reason and a tracked issue each:**
 
-- `art-edge-continuity-v1` — genuinely FREE, but the module's own author
-  gated it behind a stated validation precondition (agreement/false-positive
-  rate against Scryfall's own `frame_effects` ground truth) that has not
-  run. See its own entry below and
-  [issue #721](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/721).
 - `deductive-backfill-v1`, `local-name-frequency-v1` — read only
   already-stored data (no fetch/OCR/network), but NEITHER has a `card_ids`
   batch-scoping parameter: each rebuilds a whole-catalogue in-memory index
@@ -1274,6 +1326,18 @@ Backfill for the 4 newly-wired channels, against the EXISTING catalogue
 deliverable per this project's own practice (wiring ≠ backfill) — stated in
 the PR that shipped this wiring, not run as part of it, since a
 full-catalogue pass was live and the database was contended at the time.
+
+**Newly wired 2026-08-19 (1)** — `art-edge-continuity-v1`
+(`local_art_edge.run_art_edge_continuity_cast`), added as a fifth step in
+the same `_run_evidence_only_calculators`. Reads only the already-stored
+`ImageEvidence.art_edge_class` and fetches nothing, same FREE reasoning as
+the four channels above. Unwired at the 2026-08-05 pass behind issue #721's
+own validation precondition (a stated gate that had not yet run); that gate
+has since been measured against real catalog images and cleared via a
+ground truth that describes the uploaded image rather than the matched
+printing — see the roster entry below for the full measurement. Backfill
+against the existing catalogue is a separate deliverable, same convention
+as the four channels above.
 
 ### Calculator roster — the three identities this page omitted (2026-07-29)
 
@@ -1331,26 +1395,76 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   statement about illustration matching's yield.
 - **`art-edge-continuity-v1`** (`ART_EDGE_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_art_edge.py`](../MPCAutofill/cardpicker/local_art_edge.py)) —
-  **DECLARED, NOT YET LIVE. Zero votes, zero `CardScanLog` rows, and no
-  runner calls it — by design, not by dormancy.** It is the extended-art
-  channel: a two-sample-point pixel comparison (card edge vs. the band
-  adjacent to the art crop) that classifies a card image as
-  `framed`/`extended`/`open` and would cast the pre-existing "Extended"
-  attribute tag. It is listed here because this roster's whole purpose is
-  that a calculator producing no output "reads as clean by being
-  invisible" — so the identity is declared and recorded BEFORE it can
-  write anything, the same reasoning `local_fallback`'s skip-reason block
-  gives for declaring its constants ahead of first write.
-  **The gate it has not yet cleared**: the classifier is validated against
-  constructed images only, never against real card images. Before it votes,
-  run it over the `ImageEvidence` rows whose confirmed printing carries
-  Scryfall's own `frame_effects` `extendedart` (1,129 such rows in the
-  2026-07-28 join) and report agreement against that imported fact, plus
-  the false-positive rate over a same-sized sample of confirmed
-  non-extended black-bordered cards. That labelling is free and needs no
-  human pass. Do not read its zero vote count as a measured statement
-  about extended-art detection's yield — nothing has been measured yet.
+  **WIRED 2026-08-19.** `ImageEvidence.art_edge_class` carries
+  234,774 rows (framed 161,221 / extended 36,986 / mixed 36,567). The
+  `layout_class`-dependent design this entry previously described here
+  (which measured 0/30 recall against Scryfall's own extended-art images,
+  2026-08-06) was superseded by a self-referential redesign — issue #830,
+  [PR #832](https://github.com/ProxyPrints/ProxyPrints.github.io/pull/832) —
+  that compares the art-adjacent strip against two other regions of the
+  SAME image instead of against a stored classification, and wired
+  extraction into Stage C. That PR's own algorithm-level validation
+  (20/30 recall against freshly-fetched Scryfall images, 0 false positives
+  on either negative cohort) is recorded there, not restated here.
+  `run_art_edge_continuity_cast` (`local_art_edge.py`) is now called from
+  `stage_e_dispatch._run_evidence_only_calculators`, on the strength of the
+  measurement below.
+
+  **Issue #721's own gate is the narrower, catalog-specific question this
+  entry now answers: is the classifier accurate enough on the REAL
+  uploaded images already in this catalogue to justify wiring the vote?**
+  #721 originally specified Scryfall `frame_effects`/`border_color` (via
+  `Card.canonical_card`) as the ground truth to check that against.
+  **That ground truth is unusable, and the gate as originally specified
+  cannot be run** — measured 2026-08-19, read-only: of 295 cards matched
+  to an `extendedart` printing, only 16.6% (49/295) read `extended`
+  (framed 55.3%, mixed 28.1%); of 19,874 cards matched to a plain
+  black-bordered printing (no `extendedart`/`showcase`), 11.4% (2,271)
+  also read `extended`. This is not classifier error: this catalogue is
+  user-uploaded proxy renders, and a printing match is a claim about
+  which artwork the image DEPICTS, not evidence the uploader reproduced
+  that printing's frame treatment. Confirmed independently via
+  `border_color`: cross-tabbed against `ImageEvidence.layout_class` (a
+  classifier independently measured 93.75% accurate against eye-labelled
+  images) restricted to cards carrying a reading, agreement is 80.7%
+  (n=19,880) on black-bordered printings and 63.8% (n=2,885) on
+  borderless printings but only 6.3% (n=79) on white and 0.0% (n=26) on
+  silver — a classifier right 93.75% of the time on real images cannot be
+  wrong 93.7% of the time on white borders. 56 of the 79 white-bordered
+  matches carry a black border in the actual upload, which is what the
+  proxy community does (white borders are routinely re-rendered black).
+  See
+  [`reference/self-referential-reasoning.md`](reference/self-referential-reasoning.md)'s
+  2026-08-19 addendum for the general lesson this measurement grounds.
+
+  **Two ground-truth sources that describe the actual uploaded image,
+  not the matched printing, validate the classifier instead.** "Extended"
+  is already a votable attribute chip
+  (`attribute_tags.ATTRIBUTE_CHIP_TAG_NAMES`); scoring `art_edge_class`
+  against people who looked at the real upload (n=33 cards, 5 distinct
+  voters, 0 disputed) gives **recall 87.0% (20/23), false positives 0.0%
+  (0/10), precision 100% (20/20)** — `mixed` fell on 4 of the 10
+  negatives and none of the 23 positives. Uploader-declared filenames
+  corroborate at much larger n: of 13,117 cards whose filename asserts
+  `\bextended\b` (and not `borderless`), 90.7% (11,899) read `extended`
+  (mixed 3.1%, framed 6.2%) — consistent across the seven uploaders with
+  n≥15 (94.2% down to 72.2%; Pozzum supplies 81% of the cohort, so state
+  the per-source spread alongside the headline). Filenames asserting
+  `borderless` (n=4,716, a WEAK negative control — a borderless render
+  genuinely has art reaching the edge, so an `extended` reading there is
+  arguably correct) read `extended` only 23.8% of the time (mixed 46.4%,
+  framed 29.8%).
+
+  Measured 2026-08-19 against production, read-only. **A read-only dry run
+  of `run_art_edge_continuity_cast` over production the same day counted
+  36,986 votes it would cast** — the full `extended` population, since
+  this identity had cast 0 votes and 0 `CardScanLog` rows before this
+  wiring, so no card was yet excluded by its own idempotence filters.
   Tracked: [issue #721](https://github.com/ProxyPrints/ProxyPrints.github.io/issues/721).
+  Backfill against the pre-existing catalogue is tracked separately from
+  wiring, matching the "wiring ≠ backfill" convention the four 2026-08-05
+  channels above already established.
+
 - **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —
   **ZERO output of any kind. Under diagnosis; may be retired.** The

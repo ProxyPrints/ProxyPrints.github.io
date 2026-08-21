@@ -8,13 +8,15 @@ import {
   localBackendURL,
   printingCandidate1,
   printingCandidate2,
+  printingCandidate3,
 } from "@/common/test-constants";
 import {
   defaultHandlers,
   questionFeedConfirmSuggestion,
   questionFeedIdentifyPrinting,
+  questionFeedIdentifyPrintingOpenBorderColor,
   submitPrintingTagNoMatch,
-  submitPrintingTagResolvesToPrintingCandidate2,
+  submitPrintingTagResolvesToPrintingCandidate3,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -298,7 +300,7 @@ test.describe("question feed - container-first hero layout (section 3, WTC rebui
 // `.btn { min-height: 44px }` base class (SPEC-wtc-rebuild.md section 1c) instead of the
 // retired `ThumbButton`/`FilterToggleButton` styled overrides.
 test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
-  test("Level 1's stacked answer buttons meet the 44px floor", async ({
+  test("the suggested-match slot's answer buttons meet the 44px floor", async ({
     page,
     network,
   }) => {
@@ -307,10 +309,10 @@ test.describe("question feed - tap target sizes (mobile funnel pass)", () => {
     await loadPageWithDefaultBackend(page, "whatsthat");
 
     for (const testId of [
-      "question-feed-level1-yes",
-      "question-feed-level1-not-sure",
-      "question-feed-level1-no",
-      "question-feed-level1-skip",
+      "question-feed-suggestion-yes",
+      "question-feed-suggestion-same-art-but",
+      "question-feed-suggestion-not-this-art",
+      "question-feed-suggestion-skip",
     ]) {
       const box = await page.getByTestId(testId).boundingBox();
       expect(box).not.toBeNull();
@@ -516,14 +518,14 @@ test.describe("question feed - mystery-card glyph (WTC rebuild, retires the what
     network,
   }) => {
     network.use(
-      questionFeedIdentifyPrinting,
-      submitPrintingTagResolvesToPrintingCandidate2,
+      questionFeedIdentifyPrintingOpenBorderColor,
+      submitPrintingTagResolvesToPrintingCandidate3,
       ...defaultHandlers
     );
     await page.setViewportSize({ width: 1280, height: 900 });
     await loadPageWithDefaultBackend(page, "whatsthat");
     await page
-      .locator(`[data-card-identifier="${printingCandidate2.identifier}"]`)
+      .locator(`[data-card-identifier="${printingCandidate3.identifier}"]`)
       .click();
     await page.getByTestId("question-feed-level3").waitFor();
 
@@ -687,14 +689,14 @@ test.describe("question feed - desktop uses its available horizontal space (issu
 // state as before but stops clipping for exactly the hover duration ZoomableThumbnail's own
 // hover rule (cardPanel.tsx) scales the art up, so the zoom is no longer cut flush at the edge.
 test.describe("question feed - hover-zoom is not clipped by its frame (issue #705)", () => {
-  test("the Level 1 reference thumbnail's frame stops clipping while hovered", async ({
+  test("the suggestion slot's reference thumbnail frame stops clipping while hovered", async ({
     page,
     network,
   }) => {
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const thumb = page.getByTestId("question-feed-level1-reference-image");
+    const thumb = page.getByTestId("question-feed-suggestion-reference-image");
     await expect(thumb).toBeVisible();
     const restOverflow = await thumb.evaluate(
       (el) => window.getComputedStyle(el).overflow
@@ -709,28 +711,57 @@ test.describe("question feed - hover-zoom is not clipped by its frame (issue #70
   });
 });
 
-// NEW coverage (layout pass, issue #711) - the Level 1 Yes button no longer carries the
-// oversized `.big` modifier, so it now reads at the same font size as its ActionGrid siblings
-// (hierarchy by position/colour, not by disproportionate size).
-test.describe("question feed - Level 1 answer-row hierarchy (issue #711)", () => {
-  test("the Yes button reads at the same font size as its 'Not sure' sibling", async ({
+// Issue #711 / #740 - the suggestion slot's Yes button carries neither the oversized `.big`
+// modifier nor the full-width `.block` modifier, so it reads at the same font size and a
+// content-sized width, like its ActionGrid siblings. Hierarchy comes from position (its own
+// row, above the grid) and its `.primary` colour, not from disproportionate size.
+test.describe("question feed - suggestion-slot answer-row hierarchy (issue #711)", () => {
+  test("the Yes button reads at the same font size as its 'Same art, but...' sibling", async ({
     page,
     network,
   }) => {
     network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
     await loadPageWithDefaultBackend(page, "whatsthat");
 
-    const yesButton = page.getByTestId("question-feed-level1-yes");
-    const notSureButton = page.getByTestId("question-feed-level1-not-sure");
+    const yesButton = page.getByTestId("question-feed-suggestion-yes");
+    const sameArtButButton = page.getByTestId(
+      "question-feed-suggestion-same-art-but"
+    );
     await expect(yesButton).toBeVisible();
-    await expect(notSureButton).toBeVisible();
+    await expect(sameArtButButton).toBeVisible();
 
     const yesFontSize = await yesButton.evaluate(
       (el) => window.getComputedStyle(el).fontSize
     );
-    const notSureFontSize = await notSureButton.evaluate(
+    const sameArtButFontSize = await sameArtButButton.evaluate(
       (el) => window.getComputedStyle(el).fontSize
     );
-    expect(yesFontSize).toBe(notSureFontSize);
+    expect(yesFontSize).toBe(sameArtButFontSize);
+  });
+
+  test("the Yes button sizes to its content instead of spanning full width (issue #740)", async ({
+    page,
+    network,
+  }) => {
+    network.use(questionFeedConfirmSuggestion, ...defaultHandlers);
+    await page.setViewportSize({ width: 800, height: 900 });
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const yesButton = page.getByTestId("question-feed-suggestion-yes");
+    const sameArtButButton = page.getByTestId(
+      "question-feed-suggestion-same-art-but"
+    );
+    await expect(yesButton).toBeVisible();
+    await expect(sameArtButButton).toBeVisible();
+
+    const yesBox = await yesButton.boundingBox();
+    const sameArtButBox = await sameArtButButton.boundingBox();
+    expect(yesBox).not.toBeNull();
+    expect(sameArtButBox).not.toBeNull();
+    // A content-sized button's width tracks its label length, not a fixed ratio - 1.5x is a
+    // generous tolerance for "Yes — that's the one" being a longer label than "Same art,
+    // but...", while still catching a full-width regression (which measures ~2x at this
+    // viewport).
+    expect(yesBox!.width).toBeLessThan(sameArtButBox!.width * 1.5);
   });
 });

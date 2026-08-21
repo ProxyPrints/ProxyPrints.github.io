@@ -872,9 +872,10 @@ single number with an operating-mode split instead:
   with the actual numbers now attached:
   - pause dispatch above host load average **7.0** (the existing
     escalation threshold, §3 decision (3)/§1, reused unchanged);
-  - RSS ceiling **768MB per worker** (this section originally ratified
+  - RSS ceiling **1024MB per worker** (this section originally ratified
     512MB; raised 512 → 768 by `70225df8`, 2026-07-28, under an owner ops
-    ruling — 768 is the live, ratified bar and the value
+    ruling, then raised 768 → 1024 (2026-08-17) to fit the DPI-460
+    rendering footprint — 1024 is the live, ratified bar and the value
     `operating_envelope.RSS_MB_PER_WORKER_CEILING` carries);
   - fetch-failure rate **>1% over a rolling 500-card window**;
   - **instant pause** on any Google lockout signal (the existing

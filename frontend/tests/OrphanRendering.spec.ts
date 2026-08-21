@@ -20,7 +20,8 @@
  * wired from DisplayPage.tsx), asserted below on both faces.
  *
  * The classic editor's own "Common Cardback" panel (CommonCardback.tsx, /editor only - /display
- * has no equivalent persistent tile, only the CardbackToolbarButton picker) is covered
+ * has no equivalent persistent tile, only the CardbackRailControl strip section's Browse-all
+ * picker) is covered
  * separately by ImportXML.spec.ts's "brand new project" test, since that panel/bug is
  * editor-specific.
  */
@@ -150,7 +151,7 @@ test.describe("orphan rendering (issue #324) - unified /display page", () => {
     // selectedImage), rendered here via the SAME sheet cell once the page is toggled to show
     // backs - the "cardback corner" from the owner's fix request. This is a DIFFERENT concept
     // from the "Common Cardback" panel (ImportXML.spec.ts's own coverage, /editor only).
-    await page.getByRole("button", { name: /Showing: Fronts/ }).click();
+    await page.getByTestId("display-view-toggle-backs").click();
     const backImage = slot.locator("img");
     await expect(backImage).toHaveCount(1, { timeout: 45_000 });
     await expect(backImage).toHaveAttribute(

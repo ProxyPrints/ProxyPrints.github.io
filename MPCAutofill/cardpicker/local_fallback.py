@@ -308,14 +308,36 @@ def find_symbol_matches(
 # processes (cast_border_attribute_vote), regardless of whether a printing vote ever lands.
 # ---------------------------------------------------------------------------------------------
 
-# thin bands just inside each edge, avoiding rounded-corner artifacts right at the corners
-# themselves - (left, top, right, bottom) fractions of the full image.
-_BORDER_SAMPLE_BANDS: list[tuple[float, float, float, float]] = [
-    (0.03, 0.15, 0.05, 0.85),  # left edge
-    (0.95, 0.15, 0.97, 0.85),  # right edge
-    (0.15, 0.02, 0.85, 0.035),  # top edge
-    (0.15, 0.965, 0.85, 0.98),  # bottom edge
-]
+# Thin bands just inside each edge, avoiding rounded-corner artifacts right at the corners
+# themselves - (left, top, right, bottom) in MILLIMETRES relative to the card's own TRIM
+# rectangle's top-left corner (issue #830 defect 1; see `project_mm_box_to_fractions`'s own
+# docstring for why fractions-of-the-full-image collapsed these to ~1-3px on a trim-exact
+# image regardless of DPI). Named by edge, not positional, since the per-band uniformity split
+# below (defect 2) needs to address "the top band" and "the left/right bands" independently
+# rather than by list index.
+#
+# The along-the-edge span (the long axis - x for top/bottom, y for left/right) reproduces the
+# OLD fixed-fraction bands' own physical extent on a bleed-inclusive image exactly (that axis
+# was never the problem - it stayed hundreds of px regardless of bleed/trim). The cross-edge
+# THICKNESS (the short axis) keeps the OLD bands' own physical thickness (1.387mm sides,
+# 1.415mm top/bottom - not a retuning of size) but is re-anchored to start AT the trim
+# rectangle's own edge rather than a fixed distance from the outer bleed-inclusive image edge:
+# the old anchor point does not exist on a trimmed image (it sat mostly IN the bleed margin,
+# which is exactly the content a trim removes), so anchoring to the one edge that is present in
+# both conventions is what makes the cross-edge axis stop collapsing. See docs/reports/ for the
+# derivation and the before/after pixel-size proof.
+# 63.0/88.0 here are literal duplicates of `_CARD_TRIM_WIDTH_MM`/`_CARD_TRIM_HEIGHT_MM` (defined
+# further down, alongside `normalize_crop_box`/`classify_bleed_edge`) - a module-level dict is
+# evaluated at import time and cannot forward-reference a name defined later in the same file, so
+# these two are typed out again rather than reordering the module's own well-established
+# bleed-geometry section around this dict. Keep them in sync with the two constants below if the
+# reference trim size ever changes (it has not since this module's creation).
+_BORDER_SAMPLE_BANDS_MM: dict[str, tuple[float, float, float, float]] = {
+    "left": (0.0, 10.9775, 1.387, 77.0225),
+    "right": (63.0 - 1.387, 10.9775, 63.0, 77.0225),
+    "top": (7.2275, 0.0, 55.7725, 1.415),
+    "bottom": (7.2275, 88.0 - 1.415, 55.7725, 88.0),
+}
 _BORDER_UNIFORMITY_STD_THRESHOLD = 18.0  # per-channel std dev below this = "uniform enough"
 _BLACK_MAX_BRIGHTNESS = 60
 _WHITE_MIN_BRIGHTNESS = 210
@@ -343,10 +365,11 @@ def _sample_band(
     only meaningful against this exact computation.
 
     `box` is already in THIS image's own fractional coordinate space: this helper deliberately
-    does NOT call normalize_crop_box, because its two callers get there differently -
-    classify_border_color remaps _BORDER_SAMPLE_BANDS' bleed-inclusive fractions itself, whereas
-    `local_art_edge.classify_art_edge_continuity` derives half its bands from `art_crop_px`,
-    which image_evidence already stored post-remap (see that function's COORDINATE FRAMES note).
+    does NOT do any remapping itself, because its callers get there differently -
+    `classify_border_color`/`local_art_edge` project `_BORDER_SAMPLE_BANDS_MM` via
+    `project_mm_box_to_fractions`, whereas `local_art_edge.classify_art_edge_continuity` derives
+    its art-adjacent bands straight from `art_crop_px`, which `image_evidence` already stored in
+    this image's own pixel space (see that function's own COORDINATE FRAMES note).
 
     The uniformity statistic is the RED channel's pstdev, not a per-channel max or a luma std.
     That is not an aesthetic choice - _BORDER_UNIFORMITY_STD_THRESHOLD (18.0) was tuned against
@@ -370,41 +393,62 @@ def _sample_band(
     return means, statistics.pstdev([p[0] for p in pixels])
 
 
-def classify_border_color(card_image: "Image.Image", bleed_class: Optional[str] = None) -> Optional[str]:
-    """Returns 'black'/'white'/'silver'/'borderless', or None if the sample is ambiguous
-    (non-uniform - e.g. art bleeding right to the edge in a way that doesn't read as a clean
-    'borderless' card, or a color this taxonomy doesn't cover, e.g. gold/yellow - out of scope,
-    see docs/features/printing-tags.md's chip taxonomy v1 exclusions). `bleed_class` remaps each
-    of _BORDER_SAMPLE_BANDS via normalize_crop_box for a trimmed image; a no-op otherwise -
-    empirically checked (2026-07-15) that solid-color borders read identical RGB with or without
-    this remap on real bleed-inclusive images (border color extends uniformly through the bleed
-    margin), so applying it here unconditionally doesn't risk the majority case."""
+def classify_border_color(card_image: "Image.Image") -> Optional[str]:
+    """Returns 'black'/'white'/'silver'/'borderless', or None if the sample is ambiguous (a
+    color this taxonomy doesn't cover, e.g. gold/yellow - out of scope, see
+    docs/features/printing-tags.md's chip taxonomy v1 exclusions).
+
+    UNIFORMITY IS JUDGED PER BAND, NOT POOLED (issue #830 defect 2). The old implementation
+    averaged all four bands' std devs into one number before comparing it to the threshold -
+    which meant an extended-art card (real variance at the sides, where the artwork reaches the
+    edge, but a genuinely uniform top) diluted its own sides' signal against the quiet top band
+    and was measured misreading as 'borderless' on 20 of 30 confirmed extended-art images. A
+    border colour is nameable as long as EITHER the sides or the top read uniform on their own -
+    the bottom band is excluded from this decision entirely (not just deprioritised): it carries
+    the collector line, a dark strip with light text, on every card regardless of border colour,
+    so its own variance is print-layout noise for this specific question, not border signal
+    (measured on a 95-card borderless cohort: bottom median std 24.8 vs 44-53 for the other
+    bands). Colour naming itself is unchanged - still the mean RGB across every band that
+    sampled successfully, bottom included, exactly as before; only the uniform/not-uniform GATE
+    that decides whether to trust that mean at all is now per-band.
+
+    Bands project via `project_mm_box_to_fractions` (issue #830 defect 1) rather than the old
+    fixed-fraction-plus-bleed_class remap - see that function's own docstring for why, and why
+    this function no longer takes a `bleed_class` argument (the projection derives its own
+    bleed margin from `card_image` directly)."""
     import statistics
 
-    samples: list[tuple[float, float, float]] = []
-    stds: list[float] = []
-    for box in (normalize_crop_box(band, bleed_class) for band in _BORDER_SAMPLE_BANDS):
-        sampled = _sample_band(card_image, box)
-        if sampled is None:
+    samples: dict[str, tuple[tuple[float, float, float], float]] = {}
+    for name, mm_box in _BORDER_SAMPLE_BANDS_MM.items():
+        box = project_mm_box_to_fractions(mm_box, card_image)
+        if box is None:
             continue
-        means, std = sampled
-        samples.append(means)
-        stds.append(std)
+        sampled = _sample_band(card_image, box)
+        if sampled is not None:
+            samples[name] = sampled
 
     if not samples:
         return None
 
-    avg_r = statistics.mean(s[0] for s in samples)
-    avg_g = statistics.mean(s[1] for s in samples)
-    avg_b = statistics.mean(s[2] for s in samples)
+    side_stds = [samples[name][1] for name in ("left", "right") if name in samples]
+    sides_uniform = bool(side_stds) and statistics.mean(side_stds) < _BORDER_UNIFORMITY_STD_THRESHOLD
+    top_uniform = "top" in samples and samples["top"][1] < _BORDER_UNIFORMITY_STD_THRESHOLD
+
+    if not side_stds and "top" not in samples:
+        # neither the sides nor the top sampled at all (only the excluded bottom band did) -
+        # genuinely no signal to judge uniformity from, not a "borderless" finding.
+        return None
+    if not sides_uniform and not top_uniform:
+        # neither region reads as a clean painted border - genuine image content (art, or a
+        # borderless card) at every edge this function is willing to trust.
+        return "borderless"
+
+    avg_r = statistics.mean(means[0] for means, _ in samples.values())
+    avg_g = statistics.mean(means[1] for means, _ in samples.values())
+    avg_b = statistics.mean(means[2] for means, _ in samples.values())
     brightness = (avg_r + avg_g + avg_b) / 3
     saturation = max(avg_r, avg_g, avg_b) - min(avg_r, avg_g, avg_b)
-    uniform = statistics.mean(stds) < _BORDER_UNIFORMITY_STD_THRESHOLD
 
-    if not uniform:
-        # high-variance edge pixels = actual image content right at the border, not a
-        # painted/printed border at all
-        return "borderless"
     if brightness <= _BLACK_MAX_BRIGHTNESS:
         return "black"
     if brightness >= _WHITE_MIN_BRIGHTNESS:
@@ -567,7 +611,7 @@ BLEED_ASPECT_RATIO = (_CARD_TRIM_WIDTH_MM + 2 * _BLEED_MARGIN_MM) / (_CARD_TRIM_
 # What fraction of the full image the bleed margin occupies per edge, on each axis - derived
 # from the same reference geometry above, not a separate guess. Every fixed-fraction crop box
 # in this module and local_ocr/local_phash (DEFAULT_CROP_BOX, ART_CROP_BOX, ARTIST_CROP_BOX,
-# SYMBOL_STRIP_BOX, _BORDER_SAMPLE_BANDS) was empirically tuned against real fetched images,
+# SYMBOL_STRIP_BOX) was empirically tuned against real fetched images,
 # which are ~97.5% bleed-inclusive (see the 40-source validation above) - meaning those boxes
 # are already implicitly calibrated for THAT convention, not a separate one needing correction.
 # The ~2.5% TRIMMED minority is the one case where a box tuned against bleed-inclusive images
@@ -607,9 +651,9 @@ def normalize_crop_box(
     left, top, right, bottom = box
 
     def _rescale(fraction: float, margin_fraction: float) -> float:
-        # clamped to [0, 1]: a box (or band, like _BORDER_SAMPLE_BANDS' edge samples) that sat
-        # entirely within the bleed margin on the original bleed-inclusive convention rescales
-        # to at-or-past the trimmed image's own edge - genuinely degenerate for a trimmed image
+        # clamped to [0, 1]: a box that sat entirely within the bleed margin on the original
+        # bleed-inclusive convention rescales to at-or-past the trimmed image's own edge -
+        # genuinely degenerate for a trimmed image
         # (that content doesn't exist anymore, it was cut off), not a bug in the math. Callers
         # already handle a resulting zero-area crop gracefully (empty-sample skip, see
         # classify_border_color).
@@ -677,6 +721,81 @@ def compute_bleed_diff_mm(card_image: "Image.Image") -> Optional[float]:
     # b = (88*r - 63) / (2 * (1 - r))
     actual_bleed_mm = (88 * ratio - 63) / (2 * (1 - ratio))
     return round(_BLEED_MARGIN_MM - actual_bleed_mm, 4)
+
+
+# mm-relative band projection (issue #830 defect 1). `normalize_crop_box` above remaps a
+# fixed-FRACTION box by snapping to one of two known reference ratios via `bleed_class` (a
+# binary classification with a wide abstain zone). This helper instead starts from a box already
+# expressed in MILLIMETRES relative to the card's own trim rectangle, and projects it using a
+# bleed margin derived CONTINUOUSLY from the image's own aspect ratio (the same closed form
+# `compute_bleed_diff_mm` above already uses) - appropriate for `_BORDER_SAMPLE_BANDS_MM`, whose
+# bands are anchored to the trim edge itself rather than to a position tuned against one specific
+# bleed-inclusive convention. Left as a second, narrower mechanism rather than folded into
+# `normalize_crop_box` - the four main crop boxes (`DEFAULT_CROP_BOX`/`ARTIST_CROP_BOX`/
+# `ART_CROP_BOX`/`SYMBOL_STRIP_BOX`) measured healthy under the existing fraction+bleed_class
+# scheme and stay on it; only the border bands, measured unhealthy, move.
+MIN_USABLE_BAND_PX = 4  # a projected band thinner than this, in either axis, is antialiasing/
+# JPEG-blur noise at the image boundary, not a reliable colour sample.
+
+
+def _derive_bleed_mm(card_image: "Image.Image") -> Optional[float]:
+    """Continuous bleed margin (mm), from this image's own aspect ratio via the same closed form
+    `compute_bleed_diff_mm` uses (returns the raw derived margin, not a diff from the 3.175mm
+    reference). Gated by `classify_bleed_edge`'s own confidence check first: an aspect ratio too
+    far from either reference ratio to trust ANY derived margin (a token, a DFC composite, a
+    corrupted fetch) abstains here too, rather than projecting a figure off a ratio nothing
+    validated."""
+    if classify_bleed_edge(card_image) is None:
+        return None
+    width, height = card_image.size
+    if height == 0:
+        return None
+    ratio = width / height
+    denominator = 2 - 2 * ratio
+    if denominator <= 0:
+        return None
+    return (_CARD_TRIM_HEIGHT_MM * ratio - _CARD_TRIM_WIDTH_MM) / denominator
+
+
+def project_mm_box_to_fractions(
+    mm_box: tuple[float, float, float, float], card_image: "Image.Image"
+) -> Optional[tuple[float, float, float, float]]:
+    """Projects a (left, top, right, bottom) box in millimetres - relative to the card's own TRIM
+    rectangle's top-left corner, i.e. (0, 0) is the trim corner and negative values reach into
+    the bleed margin - onto `card_image`'s own fractional coordinate space, ready for
+    `_sample_band`.
+
+    Returns None (refuses) when the bleed margin can't be derived (see `_derive_bleed_mm`) or
+    when the projected region's pixel width or height - computed the same truncating way
+    `_sample_band` itself crops, so this check and the eventual crop always agree - falls below
+    `MIN_USABLE_BAND_PX`. Callers must treat a `None` exactly like `_sample_band`'s own
+    zero-area-crop abstention: skip this band, never substitute a smaller box to force a
+    reading - a silently-sampled sub-pixel band is the failure this whole mechanism exists to
+    prevent (issue #830 defect 1)."""
+    bleed_mm = _derive_bleed_mm(card_image)
+    if bleed_mm is None:
+        return None
+    width, height = card_image.size
+    image_width_mm = _CARD_TRIM_WIDTH_MM + 2 * bleed_mm
+    image_height_mm = _CARD_TRIM_HEIGHT_MM + 2 * bleed_mm
+    if image_width_mm <= 0 or image_height_mm <= 0:
+        return None
+    left_mm, top_mm, right_mm, bottom_mm = mm_box
+    # Clamped to [0, 1] - same convention `normalize_crop_box._rescale` uses, and for the same
+    # reason: a slightly negative derived bleed margin (an image trimmed a hair tighter than the
+    # exact reference ratio, or floating-point noise on a synthetic test image) can otherwise
+    # push a fraction just past the image's own edge. Passing that straight to `_sample_band`
+    # would crop a small out-of-bounds strip, which PIL pads with BLACK - corrupting a uniform
+    # band's own std dev with a handful of spurious black pixels rather than raising or refusing.
+    left = min(1.0, max(0.0, (left_mm + bleed_mm) / image_width_mm))
+    right = min(1.0, max(0.0, (right_mm + bleed_mm) / image_width_mm))
+    top = min(1.0, max(0.0, (top_mm + bleed_mm) / image_height_mm))
+    bottom = min(1.0, max(0.0, (bottom_mm + bleed_mm) / image_height_mm))
+    if int(right * width) - int(left * width) < MIN_USABLE_BAND_PX:
+        return None
+    if int(bottom * height) - int(top * height) < MIN_USABLE_BAND_PX:
+        return None
+    return left, top, right, bottom
 
 
 def cast_bleed_edge_vote(card: Card, bleed_class: Optional[str], run_id: Optional[str] = None) -> Optional[CardTagVote]:
@@ -761,7 +880,7 @@ def run_fallback_for_card(
         if getattr(c, "printing_metadata", None) is not None and c.printing_metadata.border_color
     }
 
-    border_color = classify_border_color(card_image, bleed_class)
+    border_color = classify_border_color(card_image)
     border_filtered = filter_by_border_color(border_color, selected.candidates, border_color_by_pk)
 
     illus_anchor_fired, artist_name = detect_illus_anchor(card_image, ocr_raw_texts, bleed_class)
@@ -833,6 +952,7 @@ __all__ = [
     "compute_bleed_diff_mm",
     "cast_bleed_edge_vote",
     "normalize_crop_box",
+    "project_mm_box_to_fractions",
     "FallbackOutcome",
     "run_fallback_for_card",
 ]

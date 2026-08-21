@@ -111,6 +111,46 @@ existing `seed_default_tags`/`seed_no_match_reason_tags`/
 (`journal/2026-07-14-tag-taxonomy-followup.md`) before the lesson had
 even been written down.
 
+## A migration-seeded `Schedule.next_run` assertion fails only when the suite runs long, never alone
+
+**Symptom**: `test_next_run_is_in_the_future`-shaped assertions (`assert schedule.next_run > timezone.now()`) against a django-q2 `Schedule` row a
+data migration seeded fail in CI with `next_run` only seconds or minutes
+behind `now()`, but pass every time the same test file is run alone or
+early in the suite. Two confirmed instances so far: the minutes-cadence
+lanes in `test_question_feed_pools_schedule.py` (fixed by #792) and the
+midnight-pinned weekly schedule in
+`test_warm_artist_external_links_schedule.py` (fixed the same way after
+firing for real in CI at 00:01:50 UTC — a midnight-pinned `next_run` is
+_guaranteed_ stale within minutes of any UTC day rollover, not just under
+suite-duration pressure).
+
+**Cause**: the migration sets `next_run` once, at DB-build time — not at
+test-run time — as apply-time plus some cadence (a lane's `minutes`
+setting, or "the next midnight UTC"). The gap between DB-build time and
+whenever the suite happens to reach the assertion is exactly "however long
+the rest of the suite took," which grows every time a new test is added
+anywhere in the suite (see `0105_question_feed_pools_schedule.py`) and is
+unrelated to the migration's own correctness; for a midnight-pinned
+schedule that gap needs to be exactly zero to stay safe, since it's already
+stale the instant the real UTC day rolls over. The tightest lane's cadence
+is the first to run out of headroom in the minutes case. Confirmed
+harmless, not a regression, in both cases: django-q2's own `scheduler()`
+(`django_q/scheduler.py`) selects any row with `next_run__lt=now()` on its
+next poll tick, fires it immediately, and recalculates `next_run` from the
+schedule's own cadence from there — an overdue `next_run` is routine
+catch-up behaviour, not a stuck or double-firing schedule.
+
+**Fix**: don't race wall-clock at all. Freeze apply-time with
+`unittest.mock.patch.object(<migration_module>.timezone, "now", return_value=<fixed>)`,
+delete-and-recreate the row(s) under that fixed value, and assert the
+invariant the migration actually promises against the frozen value —
+`next_run == fixed_now + timedelta(minutes=schedule.minutes)` for a
+cadence-based schedule, or `next_run == the next midnight UTC after fixed_now` for a midnight-pinned one — independent of suite duration. See
+`test_next_run_is_set_to_apply_time_plus_the_lane_cadence` in
+`test_question_feed_pools_schedule.py` and
+`test_next_run_is_pinned_to_the_next_midnight_utc_after_apply_time` in
+`test_warm_artist_external_links_schedule.py`.
+
 ## nginx 502s everything after a django container restart
 
 **Symptom**: every API request 502s after `docker compose up -d django worker` (or anything that recreates the `django` container) —
@@ -2101,3 +2141,32 @@ migrations themselves.
 worktree before the first `makemigrations`/`migrate`/any other
 management command in it. Output lands in the gitignored `/static/`
 directory at the repo root, harmless to leave in place.
+
+## Backend test suite fails with `cluster_block_exception` / "disk usage exceeded flood-stage watermark"
+
+**Symptom**: a local full backend run (`python -m pytest -v --tb=short ./MPCAutofill/cardpicker -q`) reports a handful of failures — all in
+`test_local_file_source.py::TestLocalFileIndexing` and
+`test_sources.py::TestUpdateDatabase` — with
+`cluster_block_exception` hiding in the captured output:
+`index [cards] blocked by: [TOO_MANY_REQUESTS/12/disk usage exceeded flood-stage watermark, index has read-only-allow-delete block]`. The
+other few thousand tests pass, so the suite looks "almost green".
+Meanwhile `df -h /` shows the host disk near full (seen 2026-08-11 at
+98%, 4.2G free).
+
+**Cause**: the indexing tests write into the live
+`mpcautofill_elasticsearch` docker container's real `cards` index.
+Elasticsearch's default `cluster.routing.allocation.disk.watermark`
+`flood_stage` (95%) flips an index to `read-only-allow-delete` once the
+HOST disk crosses it, and every bulk write then fails with HTTP 429
+`cluster_block_exception` until usage drops back below the high
+watermark. Only the tests that actually write to ES fail; the rest
+never touch the index, which is why the suite is "mostly green" while
+actually blocked. This is an environment condition, not a code
+regression — before debugging the failing tests, confirm whether the
+host is disk-full (`df -h /`).
+
+**Fix**: no code fix — free disk on the host until `df -h /` is below
+the ~90% high watermark so ES lifts the block, then re-run the affected
+tests. A `docker system df`-visible stale/unused image or log set is a
+good place to look. CI is unaffected (GitHub Actions provisions a fresh
+ES per run); this only bites local runs on the shared box.

@@ -15,14 +15,22 @@
  * per-project sessionStorage suppress (`cardbackReminderSuppression.ts`) makes a second guarded
  * action in the same session silent, mirroring `usePostExportContributionPrompt`'s identical
  * once-per-session shape.
+ *
+ * R9 (editor-repass round, item 2) - "Choose a cardback" no longer swaps the gate for the full
+ * `GridSelectorModal`; it swaps the modal's OWN body to the shared `CardbackSwatchStrip`
+ * primitive (the third copy staying, per the R9 ruling, but now using the same strip component
+ * as the two rails instead of a bespoke grid). Picking a swatch picks the cardback
+ * project-wide (the same `bulkReplaceSelectedImage`/`setSelectedCardback` pair the grid pick
+ * used) and proceeds - OWNER AMENDMENT 1's "no cancel path" still applies to the strip mode.
  */
 import styled from "@emotion/styled";
 import React, { useState } from "react";
 import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 
-import { useAppSelector } from "@/common/types";
-import { MemoizedCommonCardbackGridSelector } from "@/features/card/CommonCardback";
+import { Back } from "@/common/constants";
+import { useAppDispatch, useAppSelector } from "@/common/types";
+import { CardbackSwatchStrip } from "@/features/card/CardbackSwatchStrip";
 import {
   hasSuppressedCardbackReminderThisSession,
   suppressCardbackReminderThisSession,
@@ -31,9 +39,11 @@ import {
 import { selectCardbacks } from "@/store/slices/cardbackSlice";
 import { useCardDocumentsByIdentifier } from "@/store/slices/cardDocumentsSlice";
 import {
+  bulkReplaceSelectedImage,
   selectIsRidingUntouchedDefaultCardback,
   selectProjectCardback,
   selectProjectMembers,
+  setSelectedCardback,
 } from "@/store/slices/projectSlice";
 import { selectCurrentSavedDeck } from "@/store/slices/savedDeckSessionSlice";
 
@@ -83,12 +93,17 @@ const SeamNote = styled.div`
 interface CardbackReminderGateModalProps {
   curBackThumbnailUrl: string | undefined;
   onUseCurrentAndContinue: () => void;
+  /** R9 - true once "Choose a cardback" flips the modal body to the swatch strip. */
+  stripMode: boolean;
+  strip: React.ReactElement;
   onChooseACardback: () => void;
 }
 
 function CardbackReminderGateModal({
   curBackThumbnailUrl,
   onUseCurrentAndContinue,
+  stripMode,
+  strip,
   onChooseACardback,
 }: CardbackReminderGateModalProps) {
   return (
@@ -103,28 +118,34 @@ function CardbackReminderGateModal({
         <Modal.Title>Pick a cardback before printing?</Modal.Title>
       </Modal.Header>
       <Modal.Body>
-        <ReminderBody>
-          <CurBackThumbnail $url={curBackThumbnailUrl}>
-            <span className="cap">Current cardback</span>
-          </CurBackThumbnail>
-          <div>
-            <p>
-              Your deck is still using the <b>default cardback</b>. Most
-              printers put a back on every card - choosing your own is quick and
-              easy to forget.
-            </p>
-            <div style={{ fontSize: 13, color: "var(--theme-muted)" }}>
-              You can keep the default and continue - this only asks once per
-              print.
-            </div>
-          </div>
-        </ReminderBody>
-        <SeamNote>
-          The site default cardback (which source&apos;s cardback document ships
-          as the fallback) is a{" "}
-          <span className="seam">backend/config seed</span> - Annex A-1, not
-          designed here.
-        </SeamNote>
+        {stripMode ? (
+          strip
+        ) : (
+          <>
+            <ReminderBody>
+              <CurBackThumbnail $url={curBackThumbnailUrl}>
+                <span className="cap">Current cardback</span>
+              </CurBackThumbnail>
+              <div>
+                <p>
+                  Your deck is still using the <b>default cardback</b>. Most
+                  printers put a back on every card - choosing your own is quick
+                  and easy to forget.
+                </p>
+                <div style={{ fontSize: 13, color: "var(--theme-muted)" }}>
+                  You can keep the default and continue - this only asks once
+                  per print.
+                </div>
+              </div>
+            </ReminderBody>
+            <SeamNote>
+              The site default cardback (which source&apos;s cardback document
+              ships as the fallback) is a{" "}
+              <span className="seam">backend/config seed</span> - Annex A-1, not
+              designed here.
+            </SeamNote>
+          </>
+        )}
       </Modal.Body>
       <Modal.Footer>
         <Button
@@ -134,13 +155,15 @@ function CardbackReminderGateModal({
         >
           Use current &amp; continue
         </Button>
-        <Button
-          variant="primary"
-          onClick={onChooseACardback}
-          data-testid="cardback-gate-choose"
-        >
-          Choose a cardback
-        </Button>
+        {!stripMode && (
+          <Button
+            variant="primary"
+            onClick={onChooseACardback}
+            data-testid="cardback-gate-choose"
+          >
+            Choose a cardback
+          </Button>
+        )}
       </Modal.Footer>
     </Modal>
   );
@@ -148,7 +171,7 @@ function CardbackReminderGateModal({
 
 export interface UseCardbackReminderGateResult {
   /** Render this once (mirrors `usePrePrintSaveGate`'s own `element` convention) - the reminder
-   * Modal plus the cardback grid it can open. */
+   * Modal, whose body swaps between the reminder copy and the cardback strip. */
   element: React.ReactElement;
   /** Wraps any "about to print/export" action: shows the reminder first if the fire condition
    * holds, otherwise runs `proceed` immediately. */
@@ -156,6 +179,7 @@ export interface UseCardbackReminderGateResult {
 }
 
 export function useCardbackReminderGate(): UseCardbackReminderGateResult {
+  const dispatch = useAppDispatch();
   const projectMembers = useAppSelector(selectProjectMembers);
   const ridingUntouchedDefault = useAppSelector(
     selectIsRidingUntouchedDefaultCardback
@@ -168,7 +192,7 @@ export function useCardbackReminderGate(): UseCardbackReminderGateResult {
     currentSavedDeck.currentDeckKey ?? UNSAVED_PROJECT_SUPPRESSION_KEY;
 
   const [showGate, setShowGate] = useState(false);
-  const [showGridSelector, setShowGridSelector] = useState(false);
+  const [showStrip, setShowStrip] = useState(false);
   const [pendingProceed, setPendingProceed] = useState<
     (() => void) | undefined
   >(undefined);
@@ -181,10 +205,26 @@ export function useCardbackReminderGate(): UseCardbackReminderGateResult {
   const finishGate = () => {
     suppressCardbackReminderThisSession(projectKey);
     setShowGate(false);
-    setShowGridSelector(false);
+    setShowStrip(false);
     const proceed = pendingProceed;
     setPendingProceed(undefined);
     proceed?.();
+  };
+
+  const handleStripSelect = (image: string) => {
+    // Same project-wide pair the retired grid pick dispatched, then straight to the guarded
+    // action (R9: pick and proceed, no apply prompt in the reminder).
+    if (projectCardback != null) {
+      dispatch(
+        bulkReplaceSelectedImage({
+          currentImage: projectCardback,
+          selectedImage: image,
+          face: Back,
+        })
+      );
+    }
+    dispatch(setSelectedCardback({ selectedImage: image, explicit: true }));
+    finishGate();
   };
 
   const guard = (proceed: () => void) => {
@@ -202,21 +242,20 @@ export function useCardbackReminderGate(): UseCardbackReminderGateResult {
 
   const element = (
     <>
-      {showGate && !showGridSelector && (
+      {showGate && (
         <CardbackReminderGateModal
           curBackThumbnailUrl={resolvedCardback?.smallThumbnailUrl}
           onUseCurrentAndContinue={finishGate}
-          onChooseACardback={() => setShowGridSelector(true)}
-        />
-      )}
-      {showGridSelector && (
-        <MemoizedCommonCardbackGridSelector
-          searchResults={cardbackSearchResults}
-          show={showGridSelector}
-          // Whether a real pick happened or the user simply closed the grid, either way the
-          // guarded print/export action proceeds (Owner Amendment 1's "no cancel path" applies
-          // here too, not just the outer gate's own dismiss).
-          handleClose={finishGate}
+          onChooseACardback={() => setShowStrip(true)}
+          stripMode={showStrip}
+          strip={
+            <CardbackSwatchStrip
+              imageIdentifiers={cardbackSearchResults}
+              selectedImage={projectCardback}
+              onSelect={handleStripSelect}
+              testId="cardback-gate-strip"
+            />
+          }
         />
       )}
     </>

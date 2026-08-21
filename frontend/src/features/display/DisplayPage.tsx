@@ -52,9 +52,11 @@
  * features/export/postExportContributionPrompt.ts + usePostExportContributionPrompt.ts's
  * success-detection and show-once-per-session logic. Originally mounted from BOTH this page's
  * own inline export (item 2, below) and PDFGenerator.tsx itself; issue #275 removed this page's
- * inline export entirely (see that issue's own module comment further down), so PDFGenerator.tsx
- * - now the sole place PDF generation happens, reached via the Print page (D10, pages/print.tsx)
- * - is this feature's only remaining mount.
+ * inline export pipeline (see that issue's own module comment further down), so PDFGenerator.tsx
+ * - reached via the Print page (D10, pages/print.tsx) - remained its only mount. This page's own
+ * PDF export item (DisplayExportPDF.tsx, added alongside issue #275's module comment below) does
+ * not mount this prompt; it reuses only the download plumbing PDFGenerator.tsx already shares
+ * via pdfDownload.tsx, not the wider surface this prompt lives on.
  *
  * Issue #238 (deck-input landing, design doc §4.1) - the `isProjectEmpty` early return used to
  * render only a plain "head to /editor" link, meaning this page could never start a project
@@ -71,17 +73,19 @@
  *
  * Issue #240 (Cardback toolbar parity, design doc §5's CommonCardback row) - the toolbar
  * previously had no way to reach the project-wide cardback picker at all on this page (only the
- * classic editor's own right panel could). CardbackToolbarButton (CommonCardback.tsx) is a new,
- * small button+modal pairing - reusing MemoizedCommonCardbackGridSelector's existing
- * GridSelectorModal verbatim - rather than mounting CommonCardback itself, since that component's
- * swatch/prev-next CardFooter chrome belongs to the editor's right panel, not a toolbar button.
+ * classic editor's own right panel could). CardbackRailControl (CommonCardback.tsx, R9 round) is
+ * the shared swatch-strip section - reusing MemoizedCommonCardbackGridSelector's existing
+ * GridSelectorModal verbatim behind its "Browse all cardbacks…" button - rather than mounting
+ * CommonCardback itself, since that component's swatch/prev-next CardFooter chrome belongs to the
+ * editor's right panel, not a toolbar button.
  *
  * Issue #241 (Export ▾ toolbar parity, design doc §5's export-beyond-PDF row) - the last of the
  * three toolbar-parity findings from the same audit. DisplayExportMenu.tsx composes the same
  * unchanged ExportXML/ExportImages/ExportDecklist Dropdown.Items Export.tsx already mounts on the
- * classic editor's own "Download" dropdown - same hooks, same gating selectors. ExportPDF.tsx's
- * own item is deliberately excluded, since PDF generation itself lives on the Print page (D10,
- * pages/print.tsx) now, not this one - see issue #275's own module comment further down.
+ * classic editor's own "Download" dropdown - same hooks, same gating selectors - plus this page's
+ * own PDF item, DisplayExportPDF.tsx (not the classic editor's modal-opening ExportPDF.tsx; see
+ * issue #275's own module comment further down for how it downloads straight from this page's
+ * live sheet state instead).
  *
  * Issue #266 (mobile responsive shell - docs/proposals' /display layout spec, owner-approved
  * 2026-07-21, §2/§4/§6 rows R1/R2/R4/R5/R6) replaced the single always-rendered `RailWrapper`
@@ -183,24 +187,28 @@
  * addendum, tracked as its own follow-up): the Print page's tab REORDER/new PDF default, and the
  * PDF tab's own preview removal - see `pages/print.tsx`'s own module comment.
  *
- * Known, deliberately-out-of-scope gap this leaves (documented, not silently accepted): this
- * page's own Page Setup controls (paper size/bleed edge/guides - plain `DisplaySheetSettings`
- * component state, never persisted) don't carry over to the Print page's classic `PDFGenerator`,
- * which has always had its own separate settings and doesn't read this page's margin-profile/
- * card-spacing redux slices either. A user who configures those here and then prints lands on a
- * PDFGenerator with its own unrelated defaults - a genuine settings-parity gap, out of scope for
- * this issue (D9/D10 resolve the SAVE-vs-PRINT ordering and the route linkage, not settings
- * portability), left for a future issue.
+ * `DisplayExportMenu.tsx`'s PDF item (`DisplayExportPDF.tsx`) closes the settings-parity gap
+ * this page's Export ▾ used to leave for PDF specifically: `displayPdfProps.ts` is the one
+ * adapter from this page's live `DisplaySheetSettings` + margin-profile/card-spacing/project
+ * redux state to the same `PDFProps` `PDF.tsx` already consumes, so a rail configured here (page
+ * size, bleed, guides, spacing, margins, registration offset) exports exactly that sheet - no
+ * modal, no second settings panel, no preview beyond the sheet itself. It reuses
+ * `pdfDownload.tsx`'s `useDownloadPDF` (the same download plumbing `pages/print.tsx`'s
+ * `PDFGenerator` uses) rather than reintroducing the removed item-2 inline pipeline; Save PDF to
+ * Google Drive and the post-export contribution prompt remain Print-page-only, unchanged.
  *
- * Editor-completion package, E19/X19 (lime rounded corner-only cut guides) inherits this exact
- * same gap: PagePreview.tsx's screenPresentation variant now renders the reference's lime corner
- * guides on THIS page's own live sheet (screen-only, gated on screenPresentation - PDFGenerator's
- * own fast preview is unaffected), but the REAL exported PDF's guide style is drawn by
- * PDFGenerator.tsx/PDF.tsx's own independent cutLineColor/cutLineShape settings on the Print page -
- * upstream already carries the corner-only geometry this needs (`CutLineCorner`, `cutLineShape:
- * "InsideOnly"` - confirmed by reading `upstream/master`'s `PDF.tsx` directly, not assumed), so no
- * new PDF engine work is required, only wiring a lime preset through - genuine screen/print parity
- * for the guide COLOR is blocked on the same settings-portability gap above, not attempted here.
+ * Known, deliberately-out-of-scope gap that remains for the separate Print page: this page's own
+ * Page Setup controls don't carry over to the Print page's classic `PDFGenerator`, which has
+ * always had its own separate settings and doesn't read this page's margin-profile/card-spacing
+ * redux slices either. A user who configures those here and then follows "Print / Export →"
+ * lands on a PDFGenerator with its own unrelated defaults for that OTHER surface - this page's
+ * own Export ▾ PDF item does not have this gap, since it reads the same live state directly.
+ *
+ * Editor-completion package, E19/X19 (lime rounded corner-only cut guides): PagePreview.tsx's
+ * screenPresentation variant renders the reference's lime corner guides on this page's own live
+ * sheet, and `displayPdfProps.ts` carries that same lime corner-only geometry into this page's
+ * own PDF export, so the exported file's cut lines match what the rail showed. The Print page's
+ * separate `PDFGenerator.tsx`/`PDF.tsx` settings are untouched and still default independently.
  */
 import styled from "@emotion/styled";
 import React, {
@@ -219,11 +227,14 @@ import Offcanvas, { OffcanvasPlacement } from "react-bootstrap/Offcanvas";
 import Row from "react-bootstrap/Row";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
+import { useDebounce } from "use-debounce";
 
 import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
 import { getOrCreateAnonymousId } from "@/common/cookies";
+import { getSheetImageURLs } from "@/common/image";
 import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
+import { SourceType } from "@/common/schema_types";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import {
   CardDocument,
@@ -238,7 +249,7 @@ import { RightPaddedIcon } from "@/components/icon";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { CardSlotContextMenu } from "@/features/card/CardSlotContextMenu";
 import { getCardSlotMenuActions } from "@/features/card/CardSlotMenuActions";
-import { CardbackToolbarButton } from "@/features/card/CommonCardback";
+import { CardbackRailControl } from "@/features/card/CommonCardback";
 import { RequestedPrintingBadge } from "@/features/card/RequestedPrintingBadge";
 import {
   CardDownloadFavorite,
@@ -247,6 +258,7 @@ import {
   ReportBlock,
 } from "@/features/cardDetailedView/CardDetailedViewBody";
 import { ArtistSection } from "@/features/display/ArtistSection";
+import { BleedGrantedReadout } from "@/features/display/BleedGrantedReadout";
 import { CardSpacingControl } from "@/features/display/CardSpacingControl";
 import { CatalogBrowseResults } from "@/features/display/CatalogBrowseResults";
 import { ConfidenceElement } from "@/features/display/ConfidenceElement";
@@ -254,6 +266,7 @@ import { paginateSlotsForDisplay } from "@/features/display/displayPagination";
 import { FinishFooter } from "@/features/display/FinishFooter";
 import { MarginProfileControl } from "@/features/display/MarginProfileControl";
 import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
+import { PageOffsetControl } from "@/features/display/PageOffsetControl";
 import { usePrePrintSaveGate } from "@/features/display/PrePrintSaveGate";
 import { PrintOptionsSection } from "@/features/display/PrintOptionsSection";
 import {
@@ -283,13 +296,22 @@ import { ImportText } from "@/features/import/ImportText";
 import { ImportURL } from "@/features/import/ImportURL";
 import { ImportXML } from "@/features/import/ImportXML";
 import { InvalidIdentifiersStatus } from "@/features/invalidIdentifiers/InvalidIdentifiersStatus";
-import { STANDARD_BLEED_MARGIN_MM } from "@/features/pdf/bleedNormalize";
+import {
+  BleedPrior,
+  STANDARD_BLEED_MARGIN_MM,
+  willLikelyGenerateBleed,
+} from "@/features/pdf/bleedNormalize";
+import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
   PagePreviewSlotContent,
 } from "@/features/pdf/PagePreview";
-import { getPageSizeMM, PageSize } from "@/features/pdf/PDF";
+import {
+  getPageSizeMM,
+  isBleedNormalizationEligible,
+  PageSize,
+} from "@/features/pdf/PDF";
 import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { SearchSettings } from "@/features/searchSettings/SearchSettings";
 import { APICastImplicitVote, APIRetractImplicitVote } from "@/store/api";
@@ -310,6 +332,7 @@ import {
   deleteSlots,
   duplicateSlot,
   selectIsProjectEmpty,
+  selectManualOverrides,
   selectProjectCardback,
   selectProjectMember,
   selectProjectMembers,
@@ -318,21 +341,51 @@ import {
 import { selectSearchResultsForQueryOrDefault } from "@/store/slices/searchResultsSlice";
 import {
   selectFrontsVisible,
-  toggleFaces,
+  switchToBack,
+  switchToFront,
 } from "@/store/slices/viewSettingsSlice";
 
 //# region local, page-only settings state
 //
 // A deliberately small subset of PDFGenerator.tsx's full settings panel - just enough to drive
-// a genuinely live sheet (real computeLayout() inputs, not fake ones). The rest of that panel
-// (card selection mode, cut-line geometry, quality/DPI, SCM mode, spacing/margins) stays on the
-// classic PDF tab for now; relocating all of it here is Step 3 (switchover) in the design doc's
-// §6 sequencing, not Step 1.
+// a genuinely live sheet (real computeLayout() inputs, not fake ones), plus the print-quality
+// controls (image DPI/JPG quality, corner rounding) that later joined them once they moved out
+// of the export settings step (see displayPdfProps.ts's own DisplaySheetExportSettings comment).
+// The rest of PDFGenerator.tsx's panel (card selection mode, cut-line geometry, SCM mode) stays
+// on the export settings step (DisplayExportPDF.tsx) for now; relocating it here too is Step 3
+// (switchover) in the design doc's §6 sequencing, not Step 1.
 
 interface DisplaySheetSettings {
   pageSize: keyof typeof PageSize;
+  // Portrait mm, same convention as pageSize.ts's own table - only read when pageSize is
+  // "CUSTOM" (see the paper-size Form.Select's own onChange, which seeds both together from
+  // whatever paper size was previously selected the moment the user picks Custom, and
+  // displayPdfProps.ts's own DisplaySheetExportSettings, which this interface mirrors).
+  customPageWidthMM?: number;
+  customPageHeightMM?: number;
   bleedEdgeMM: number;
   showCutLines: boolean;
+  // Guide appearance (rail section below, next to the Guides toggle) - only meaningful while
+  // showCutLines is true, moved from DisplayExportPDF.tsx's own settings step for the same
+  // reason imageDPI/jpgQuality/roundCorners moved: printed-artifact appearance, not a one-off
+  // export-run choice (see displayPdfProps.ts's DisplaySheetExportSettings comment).
+  cutLineColor: string;
+  showCrossCutLines: boolean;
+  cutLineLengthMM: number;
+  cutLineThicknessMM: number;
+  cutLineOffsetMM: number;
+  // Registration compensation (PageOffsetControl.tsx) - plain, unpersisted component state, same
+  // as every other field here (see this file's own "known gap" note on why Page Setup state
+  // doesn't survive to the classic PDFGenerator). Defaults to 0: no correction until the user
+  // asks for one.
+  offsetXMM: number;
+  offsetYMM: number;
+  // Print quality (rail section below) - moved from DisplayExportPDF.tsx's own settings step so
+  // they're editable next to the live sheet they govern rather than behind the Export PDF dialog
+  // (see displayPdfProps.ts's DisplaySheetExportSettings comment for the full rationale).
+  imageDPI: number;
+  jpgQuality: number;
+  roundCorners: boolean;
 }
 
 // Proposal H D1/D4/D6 (docs/proposals/proposal-h-display-layout-spec.md, amended by issue #286's
@@ -340,12 +393,29 @@ interface DisplaySheetSettings {
 // against US Letter throughout (279.4x215.9mm landscape), and A4's own 297x210mm landscape ratio
 // (1.414, vs Letter's 1.294) doesn't land on the same grid. STANDARD_BLEED_MARGIN_MM (3.175, the
 // MPC 1/8in convention) replaces the old BleedEdgeMM (3.048, an Epson-margin-shaped constant
-// inherited from upstream) as the default bleed edge - see D6's own fit table for why 3.175 only
-// fits a 4x2 sheet under the Borderless margin profile (marginProfileSlice.ts's own default).
+// inherited from upstream) as the default bleed edge - see the granted-vs-requested readout
+// (BleedGrantedReadout.tsx) for how much of that 3.175mm request the default Rear-feed margin
+// profile (marginProfileSlice.ts's own default) actually renders.
 const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   pageSize: "LETTER",
   bleedEdgeMM: STANDARD_BLEED_MARGIN_MM,
   showCutLines: true,
+  // Matches the old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS values this migrated from,
+  // unchanged - the lime colour matches PagePreview.tsx's own E19 screen-side guide colour.
+  cutLineColor: "#8ae234",
+  showCrossCutLines: false,
+  cutLineLengthMM: 3,
+  cutLineThicknessMM: 0.6,
+  cutLineOffsetMM: 0,
+  offsetXMM: 0,
+  offsetYMM: 0,
+  // Same full-res 600 DPI/100% pipeline PDFGenerator.tsx's own download path uses - matches the
+  // old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS values this migrated from, unchanged.
+  imageDPI: 600,
+  jpgQuality: 100,
+  // A real card's die-cut corner is rounded, so that's the shape the dashed trim outline
+  // traces by default - matches the old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS default.
+  roundCorners: true,
 };
 
 // Upper bound, in real CSS px, on every sheet's rendered width - was PagePreview's own fixed
@@ -602,44 +672,61 @@ interface PromotedZoneProps {
   onCompareHide: () => void;
 }
 
-// Editor-polish round, owner amendment 1 (2026-07-24, BINDING) - "More details" RELOCATES from
-// the rail head to directly under the D14 band; this is the exact JSX `RailHeader` used to own
-// (same `CardMetaTable`/`CardDownloadFavorite`, same testids - `display-rail-more-details-*` -
-// so every existing behavior assertion querying those testids keeps working unchanged), just
-// moved into `PromotedZone`, between `ConfidenceElement` and `IdentifyPanel` per the amendment's
-// own "renders directly under the D14 confidence band" instruction.
-interface MoreDetailsSectionProps {
+// Rail restructure ruling 3 (docs/proposals/mockups/editor-repass round, owner directive, item
+// 3) - REV: "More details" and "Wrong printing? Search the right one" merge into ONE band with
+// ONE shared toggle row, instead of two full-width bands each paying for its own background,
+// border-bottom and 8px8px padding. Supersedes editor-polish's own amendment 1 (which moved
+// "More details" to its own standalone band directly under D14) only insofar as that band now
+// shares its wrapper with the identify toggle - amendment 1's actual placement instruction
+// ("directly under the D14 confidence band") is unchanged, and every testid amendment 1 named
+// (`display-rail-more-details-*`) survives unchanged below, so every prior behavior assertion
+// against those testids still exercises the same real DOM node, just inside a merged wrapper.
+// `PrintingTagsBlock`/`CardMetaTable`/`CardDownloadFavorite` are reused verbatim, same as before
+// (item 6/RD1/RD6/RD7's own reasoning, restated by reference rather than duplicated here).
+interface DetailsAndIdentifyRowProps {
   cardDocument: CardDocument | undefined;
-  open: boolean;
-  onToggle: () => void;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+  identifyOpen: boolean;
+  onToggleIdentify: () => void;
 }
 
-const MoreDetailsSection = ({
+const DetailsAndIdentifyRow = ({
   cardDocument,
-  open,
-  onToggle,
-}: MoreDetailsSectionProps) => (
-  <div className="detmore-wrap">
-    <button
-      type="button"
-      className="detmore"
-      aria-expanded={open}
-      onClick={onToggle}
-      data-testid="display-rail-more-details-toggle"
-    >
-      More details <span className="chev">{open ? "⌄" : "›"}</span>
-    </button>
-    <Collapse in={open}>
+  detailsOpen,
+  onToggleDetails,
+  identifyOpen,
+  onToggleIdentify,
+}: DetailsAndIdentifyRowProps) => (
+  <div className="detid-row" data-testid="display-details-identify-row">
+    <div className="detid-toggles">
+      <button
+        type="button"
+        className="detmore"
+        aria-expanded={detailsOpen}
+        onClick={onToggleDetails}
+        data-testid="display-rail-more-details-toggle"
+      >
+        More details <span className="chev">{detailsOpen ? "⌄" : "›"}</span>
+      </button>
+      {cardDocument != null && (
+        <button
+          type="button"
+          className="idtoggle"
+          aria-expanded={identifyOpen}
+          onClick={onToggleIdentify}
+          data-testid="display-identify-toggle"
+        >
+          Wrong printing? Search the right one{" "}
+          <span className="chev">{identifyOpen ? "⌄" : "›"}</span>
+        </button>
+      )}
+    </div>
+    <Collapse in={detailsOpen}>
       <div>
-        {/* RD6 (O2 answered) - the WHOLE Card-Details metadata block (Resolution/DPI, File
-            size, Source, Source type, Class, Identifier, Language, Tags, dates) plus Download +
-            Favourite lives ONLY here now - one of the nine removed grey AutofillCollapse
-            sections, folded in place. */}
         <div className="detbody" data-testid="display-rail-more-details-body">
           {cardDocument != null ? (
             <>
-              {/* RD7 - the printing id lives ONCE, in D14; drop CardMetaTable's own
-                  "Canonical Card" row here so it's never a static second copy. */}
               <CardMetaTable
                 cardDocument={cardDocument}
                 showCanonicalCard={false}
@@ -654,62 +741,25 @@ const MoreDetailsSection = ({
         </div>
       </div>
     </Collapse>
-  </div>
-);
-
-// Rail-delegacy round (item 6, SPEC-rail-delegacy.md §B/§F) - the "Printing Tags" grey accordion
-// (PrintingTagPicker consensus/search/candidate-grid + the AttributeVotingPanel follow-up) is
-// REMOVED as a standalone section and rehung directly off the D14 band it's ABOUT ("what printing
-// is this"), opened on demand - never a grey accordion. `PrintingTagsBlock` is reused verbatim
-// (CardDetailedViewBody.tsx) - it already owns the exact PrintingTagPicker + conditional
-// AttributeVotingPanel-when-unresolved composition item 6/RD1 call for; the ONE explicit
-// attribute-vote surface stays here (RD1/O1) - the funnel's own chips (SelectVersionResults.tsx)
-// are implicit-only.
-interface IdentifyPanelProps {
-  cardDocument: CardDocument | undefined;
-  open: boolean;
-  onToggle: () => void;
-}
-
-const IdentifyPanel = ({
-  cardDocument,
-  open,
-  onToggle,
-}: IdentifyPanelProps) => {
-  if (cardDocument == null) {
-    return null;
-  }
-  return (
-    <div className="idhang" data-testid="display-identify-panel">
-      <button
-        type="button"
-        className="idtoggle"
-        aria-expanded={open}
-        onClick={onToggle}
-        data-testid="display-identify-toggle"
-      >
-        Wrong printing? Search the right one{" "}
-        <span className="chev">{open ? "⌄" : "›"}</span>
-      </button>
-      <Collapse in={open}>
+    {cardDocument != null && (
+      <Collapse in={identifyOpen}>
         <div>
           <div className="idbody" data-testid="display-identify-body">
             <PrintingTagsBlock cardDocument={cardDocument} />
           </div>
         </div>
       </Collapse>
-    </div>
-  );
-};
+    )}
+  </div>
+);
 
-// Fix round (SPEC-display-left-rail.md §3): ConfidenceElement now renders FIRST - it's identity
-// (directly under the header's name/RequestedPrintingBadge), not demoted metadata, per the
-// spec's explicit placement call. ArtistSection follows, still promoted/always-visible (D3),
-// just no longer ahead of D14. ConfidenceElement owns its own full-width band styling
-// (`.d14` - background/border-bottom/padding all live in its own markup now, RailRoot's CSS
-// below), so it no longer needs an outer padded wrapper here; ArtistSection still does
-// (`.artist-line`) - density (§2): `px-2 py-1` (8/4) -> explicit `8px 10px`. Rail-delegacy round
-// adds the IdentifyPanel directly below ConfidenceElement (item 6 - "hangs off D14", same subject).
+// Rail restructure ruling 2 (docs/proposals/mockups/editor-repass round, owner directive): the
+// rail orders by distance from the subject - things ABOUT this card sit adjacent to the
+// reference image, things that PROPOSE a different card sit further down. ArtistSection is
+// "about this card," so it moves directly under ConfidenceElement now (previously fifth block
+// down, behind More details/Identify). ConfidenceElement owns its own full-width band styling
+// (`.d14`, RailRoot's CSS below), so it needs no outer padded wrapper here; ArtistSection still
+// does (`.artist-line`).
 const PromotedZone = ({
   cardDocument,
   backendURL,
@@ -731,17 +781,6 @@ const PromotedZone = ({
       onCompareShow={onCompareShow}
       onCompareHide={onCompareHide}
     />
-    {/* Amendment 1 - directly under the D14 band, ahead of the identify panel. */}
-    <MoreDetailsSection
-      cardDocument={cardDocument}
-      open={detailsOpen}
-      onToggle={onToggleDetails}
-    />
-    <IdentifyPanel
-      cardDocument={cardDocument}
-      open={identifyOpen}
-      onToggle={onToggleIdentify}
-    />
     <div
       // O1 fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - see RailHeader's
       // own identical comment for why the Bootstrap `.border-bottom` utility is retired here too.
@@ -750,10 +789,20 @@ const PromotedZone = ({
       // with an explicit `13px` inline style (component-scoped, this exact node only) matching
       // §D.1 precisely.
       className="artist-line"
-      style={{ padding: "8px 10px", fontSize: "13px" }}
+      style={{ padding: "8px 8px", fontSize: "13px" }}
     >
       <ArtistSection cardDocument={cardDocument} />
     </div>
+    {/* Amendment 1 - directly under the artist line now (see this component's own module
+        comment on the ruling-2 reorder above); ruling 3 merges the two toggles this used to be
+        into one row (see DetailsAndIdentifyRow's own comment). */}
+    <DetailsAndIdentifyRow
+      cardDocument={cardDocument}
+      detailsOpen={detailsOpen}
+      onToggleDetails={onToggleDetails}
+      identifyOpen={identifyOpen}
+      onToggleIdentify={onToggleIdentify}
+    />
   </>
 );
 
@@ -764,10 +813,23 @@ const PromotedZone = ({
 // Editor-completion package, E2/E3/L4 (Bkg 1/2/4/5) - promoted to the always-visible, always-open
 // art surface (renamed "Select Version", no AutofillCollapse wrapper at all - it's no longer a
 // collapsible section, "Choose Image" as an accordion key is gone from AccordionSectionKey
-// entirely). `initialSettingsVisible={false}` on useGridSelectorSearch and `layout="stacked"` on
-// SelectVersionResults fix the redline's Bkg 2/4/5 breakages (filters auto-opening cramped inside
-// the 380px rail, "Jump to Version" wrapping vertically, bottom controls clipping at the rail
-// edge) - see those two files' own prop comments.
+// entirely). `layout="stacked"` on SelectVersionResults.
+//
+// Filter-panel overlay round (owner live-use report, reversing editor-repass item 1): the Filters
+// panel now starts CLOSED (`initialSettingsVisible={false}`) - open-by-default cost the rail's
+// whole height before the user asked for anything. It also no longer widens the rail or pushes
+// the sheet/rail content when opened - it draws as an in-rail overlay instead (see
+// SelectVersionResults.tsx's own module comment and DisplayPage.tsx's own `.fpanel.inline`/
+// `.fpanel-overlay-anchor` CSS below). The rail-widening `onFiltersOpenChange` thread this used
+// to drive (LeftRailOffcanvas's own `$filtersOpen`) is removed entirely, not just disconnected.
+
+/* A slot whose query has no results yet resolves to this shared reference rather than a fresh
+   `[]`. A new array each render misses `selectCardDocumentsByIdentifiers`' size-1 memo, which
+   returns a new object, which re-fires useGridSelectorSearch's filter effect, which setStates
+   and re-renders - an unbreakable loop ("Maximum update depth exceeded") that pegs the main
+   thread so no image on either rail ever loads. Large decks hit it because their search results
+   arrive slowly enough for a slot to be clicked while still empty. */
+const EMPTY_SEARCH_RESULTS: Array<string> = [];
 
 interface SelectVersionSectionProps {
   face: Faces;
@@ -849,11 +911,12 @@ const SelectVersionSection = ({
         query?.collectorNumber,
         face
       )
-    ) ?? [];
+    ) ?? EMPTY_SEARCH_RESULTS;
   const focusRef = useRef<HTMLInputElement>(null);
-  // E3/X2 (Bkg 5) - the rail always starts with Filters collapsed, regardless of viewport width
-  // (the modal's own GridSelectorModal caller doesn't pass this, so its width-based default is
-  // unchanged).
+  // Filter-panel overlay round - the rail starts with Filters CLOSED (the modal's own
+  // GridSelectorModal caller doesn't pass this, so its width-based default is unchanged); the
+  // panel draws as an in-rail overlay when opened rather than widening the rail, so there's no
+  // "cramped inside a narrow rail" breakage left to answer by starting open.
   const search = useGridSelectorSearch({
     imageIdentifiers: searchResultsForQuery,
     active: true,
@@ -1039,7 +1102,7 @@ const DeckInputLanding = ({
           </Button>
           <Button
             size="sm"
-            variant="outline-secondary"
+            variant="outline-light"
             onClick={onDismissDraft}
             data-testid="display-restore-draft-dismiss"
           >
@@ -1120,6 +1183,34 @@ const DisplayBodyRegion = styled.div`
 // ("pinned to the bottom and mostly non visible") was a genuinely-open drawer only 30vh tall, most
 // of its own content clipped below that. The explicit height (not max-height) below matches the
 // approved mockup's own bottom-sheet rule exactly - see the design doc's R5 row.
+// Rails-meet-sheet round - past a certain viewport width, the fixed 380px/300px rail floors
+// leave the centre sheet region wider than the sheet itself ever renders (PagePreview's own
+// SHEET_MAX_WIDTH_PX cap, 960px), so the excess sits as dead space either side of the sheet
+// instead of being given to either rail. RAIL_GROWTH_THRESHOLD_PX is the exact viewport width
+// where that dead space FIRST appears: both rails at their floor (380 + 300) plus the sheet at
+// its own 960px cap plus the sheet-region's own `p-3` padding (32px, 1rem each side) -
+// 380 + 300 + 960 + 32 = 1672. Below this width the sheet is still fit-to-width-shrinking (it
+// hasn't reached its cap yet), so growing a rail there would come directly out of the sheet's
+// own render width, not out of dead space - confirmed against the wide-viewport sheet-region
+// assertion in DisplayPage.spec.ts (1400px, well under this threshold, is untouched by the clamps
+// below).
+const RAIL_GROWTH_THRESHOLD_PX = 380 + 300 + SHEET_MAX_WIDTH_PX + 32;
+
+// Past its own threshold, each rail claims a fixed share of the extra viewport width beyond it -
+// 60% to the left rail, 40% to the right. The left rail gets the bigger share because it's the
+// one that "feels cramped" at its 380px floor; the right rail's own content (Save/Export,
+// margins/spacing controls) doesn't need as much room to stop looking cramped. Each `clamp()`
+// floors at the existing fixed width (so nothing below the threshold changes at all) and ceilings
+// at a cap chosen so neither rail turns into a full sidebar on an ultrawide monitor - past the
+// cap, residual dead space on very wide viewports is an accepted trade for not overgrowing the
+// rails.
+const LEFT_RAIL_WIDTH = `clamp(380px, calc(380px + (100vw - ${RAIL_GROWTH_THRESHOLD_PX}px) * 0.6), 560px)`;
+const RIGHT_RAIL_WIDTH = `clamp(300px, calc(300px + (100vw - ${RAIL_GROWTH_THRESHOLD_PX}px) * 0.4), 420px)`;
+
+// Filter-panel overlay round - the rail's own width is now constant whether the Filters panel is
+// open or closed, at every tier: `400px` tablet drawer, `LEFT_RAIL_WIDTH` inline column. The
+// panel draws as an in-rail overlay instead (SelectVersionResults.tsx's own `.fpanel.inline`),
+// so there's no width to widen here any more.
 const LeftRailOffcanvas = styled(Offcanvas)`
   &.offcanvas-bottom {
     height: 72vh;
@@ -1127,11 +1218,16 @@ const LeftRailOffcanvas = styled(Offcanvas)`
     border-top-right-radius: 0.75rem;
   }
 
+  &.offcanvas-start {
+    width: 400px;
+    max-width: 400px;
+  }
+
   @media (min-width: 992px) {
     &.offcanvas-lg {
-      width: 380px;
-      max-width: 380px;
-      flex: 0 0 380px;
+      width: ${LEFT_RAIL_WIDTH};
+      max-width: ${LEFT_RAIL_WIDTH};
+      flex: 0 0 ${LEFT_RAIL_WIDTH};
       position: sticky;
       top: 0;
       max-height: 100vh;
@@ -1143,17 +1239,61 @@ const LeftRailOffcanvas = styled(Offcanvas)`
 `;
 
 const RightRailOffcanvas = styled(Offcanvas)`
+  /* Editor-repass R10.3 - the one section-heading style: the left rail's 10px uppercase muted
+     legend (matches .fset > .lg and .select-version-heading), adopted by the right rail. */
+  .rail-section-heading {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--theme-muted);
+  }
+  /* Editor-repass R10.2 - the View control's full-width segmented pair fills its 300px rail
+     column evenly (mockup: .seg with flex:1 children). Scoped to this rail's own w-100 groups
+     so the action bar's Add/Browse and the center's Print sheets/Browse results keep their
+     existing natural-width idiom. */
+  .btn-group.w-100 > .btn {
+    flex: 1 1 0;
+  }
   @media (min-width: 1200px) {
     &.offcanvas-xl {
-      width: 300px;
-      max-width: 300px;
-      flex: 0 0 300px;
+      /* Rails-meet-sheet round - see RIGHT_RAIL_WIDTH's own comment above (LeftRailOffcanvas) for
+         the threshold/share derivation; identical clamp, just this rail's own 300px floor. */
+      width: ${RIGHT_RAIL_WIDTH};
+      max-width: ${RIGHT_RAIL_WIDTH};
+      flex: 0 0 ${RIGHT_RAIL_WIDTH};
+      /* Bootstrap's own inline-tier CSS (.offcanvas-xl at this same breakpoint) never sets
+         display on the rail itself at this tier - only the DRAWER tier's .offcanvas-xl rule
+         (max-width: 1199.98px) does. Without it, .offcanvas-body's flex-grow: 1 below has no
+         flex container to grow inside, so it silently falls back to its own natural (unbounded)
+         content height regardless of this box's own height/overflow - confirmed via a live
+         getComputedStyle dump (bodyDisplay: flex, bodyFlexGrow: 1, but bodyHeight: 955px against
+         a 454px-tall parent) while chasing the Save/Export-still-invisible-at-a-short-viewport
+         regression this whole rule exists to fix. */
+      display: flex;
+      flex-direction: column;
       position: sticky;
-      top: 0;
-      max-height: 100vh;
-      overflow-y: auto;
+      /* Pin-the-footer fix - this was max-height: 100vh; overflow-y: auto, which let the whole
+         rail (Save/Export's FinishFooter included) scroll as one block instead of the "body
+         scrolls, footer doesn't" the JSX's own comment already describes below. A max-height
+         only CAPS the box; it never gives it a definite size, so the flex-column body's own
+         flex-grow: 1 (below) had nothing real to grow into. Using height (not max-height) fixes
+         that - and Bootstrap's own inline-tier reset (.offcanvas-xl .offcanvas-body at this same
+         breakpoint) sets flex-grow: 0 and overflow-y: visible, which this rule's own
+         .offcanvas-body override below has to reinstate for the fix to actually take effect.
+         top/height both subtract the measured toolbar height (--display-toolbar-height, set
+         below from toolbarHeightPx) rather than a flat 0/100vh - see that state's own comment
+         for why: without it, the rail's un-stuck initial position still runs past a short
+         viewport until the user scrolls the toolbar away. */
+      top: var(--display-toolbar-height, 0px);
+      height: calc(100vh - var(--display-toolbar-height, 0px));
+      overflow: hidden;
       border-left: var(--bs-border-width) solid
         var(--bs-border-color-translucent);
+
+      .offcanvas-body {
+        flex-grow: 1;
+        overflow: hidden;
+      }
     }
   }
 `;
@@ -1198,26 +1338,39 @@ const ActionBarSearchGroup = styled.div`
   }
 `;
 
-// Editor-polish round, item 2 (EP2, SPEC-editor-polish.md §D.6 `.abtn`) - the page-wide button-
-// contrast floor: the toolbar's `outline-secondary` "Add"/"Add card"/etc buttons resolve to
-// Bootstrap Superhero's own `$secondary` (`#4e5d6c`) border/text, which reads as a near-
-// invisible grey ghost on this dark chrome. Scoped to the toolbar's own DOM subtree (this
-// styled-component wraps it - see `data-testid="display-toolbar"`'s own call site below) so
-// every OTHER `outline-secondary` button sitewide (outside this page) is unaffected - the same
-// component-scoped-override discipline as `.rail-source-toggle`/`.cstack .form-select` above.
-const ToolbarRoot = styled.div`
-  .btn-outline-secondary {
-    background: var(--theme-raised-bg);
-    color: var(--bs-body-color);
-    border: 1px solid #46586a;
+// Right-rail density pass - Search Settings moves off the rail (far from what it configures)
+// onto a cog attached to the right edge of the search box itself, merging the input's and the
+// cog's borders (rounded corners on the outer edges only) so it reads as one unit, distinct from
+// the Add/Browse toggle and Import ▾ dropdown either side of it. Standing ruling: the cog opens
+// SearchSettings's own Modal (an overlay, per react-bootstrap - portaled, never reflows), never
+// an inline-expanding panel.
+const SearchBoxWithCog = styled.div`
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+
+  form {
+    flex: 1 1 auto;
+    min-width: 0;
   }
-  .btn-outline-secondary:hover,
-  .btn-outline-secondary:focus {
-    background: var(--theme-raised-bg);
-    color: var(--bs-body-color);
-    border-color: var(--theme-light);
+
+  .form-control {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  > button {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    margin-left: -1px;
+    flex-shrink: 0;
   }
 `;
+
+// Editor-repass R10 (SPEC-editor-repass.md) - the EP2 `.btn-outline-secondary` contrast floor
+// is retired: R10.1 migrated every toolbar/right-rail button to the real `outline-light`
+// variant, so this override's one-page scope now has no remaining targets.
 
 // Editor-completion package, E1/X6 - the mockup's rail stylesheet, lifted verbatim per the
 // owner's grant (spec §5: "the left rail MAY lift the mockup's CSS verbatim rather than
@@ -1261,7 +1414,7 @@ const RailRoot = styled.div`
   .rail-head {
     background: var(--theme-raised-bg);
     border-bottom: 1px solid var(--theme-divider);
-    padding: 8px 10px;
+    padding: 8px 8px;
   }
   .artist-line {
     background: var(--theme-raised-bg);
@@ -1276,14 +1429,13 @@ const RailRoot = styled.div`
   .select-version-heading {
     margin: 0;
     padding: 8px 0 4px;
-    font-weight: 600;
-    /* Machine-diff fix round (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this
-       bespoke, single-use classname had no font-size rule at all, so it fell through to the
-       Bootstrap body default (16px) instead of the spec's own 14px. This selector is invented
-       for this one heading element only (not a reused Bootstrap classname like the old
-       .card-header pattern), so extending its existing RailRoot rule is component-scoped in the
-       sense the #400 rule cares about - it cannot clobber anything else on the page. */
-    font-size: 14px;
+    /* Editor-repass R10.3 - the one section-heading style everywhere: the left rail's 10px
+       uppercase muted legend (same recipe as .fset > .lg and the right rail's
+       .rail-section-heading). Supersedes the 14px/600 weight that §D.1 pinned here. */
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--theme-muted);
   }
   /* D14 confidence band - full-width, no floating chip inset margin (density §2: "kills the
      floating-chip inset margin"). */
@@ -1293,7 +1445,7 @@ const RailRoot = styled.div`
     gap: 8px;
     flex-wrap: wrap;
     margin: 0;
-    padding: 8px 10px;
+    padding: 8px 8px;
     background: var(--theme-band-bg);
     border-bottom: 1px solid var(--theme-divider);
     font-size: 12px;
@@ -1451,9 +1603,14 @@ const RailRoot = styled.div`
     gap: 10px;
     align-items: flex-start;
   }
+  /* Rail restructure ruling 1 (docs/proposals/mockups/editor-repass round, owner directive):
+     the reference card is the LARGEST element on the rail - grown from 116px (smaller than a
+     "large"-density candidate tile) to 200px (bigger than every candidate density, including
+     "large" at 170px). Ruling 3 pays for this: the rail is now a scrolling column, not a
+     fixed-height one, so the extra height has somewhere to go. */
   .subject {
-    flex: 0 0 116px;
-    width: 116px;
+    flex: 0 0 200px;
+    width: 200px;
     aspect-ratio: 63 / 88;
     position: relative;
     overflow: hidden;
@@ -1554,13 +1711,22 @@ const RailRoot = styled.div`
     margin-top: 8px;
   }
   /* Amendment 1 (owner, 2026-07-24, BINDING) - "More details" moved out of the rail head to
-     directly under the D14 band; same padded/divider rhythm as its new neighbours ('.d14'/
-     '.idhang', both '#2b3e50') rather than the rail-head's own '#22303f', since it's still
-     "about the currently-identified printing," the same subject D14 covers. */
-  .detmore-wrap {
+     directly under the D14 band; same padded/divider rhythm as its new neighbours ('.d14', both
+     '#2b3e50') rather than the rail-head's own '#22303f', since it's still "about the
+     currently-identified printing," the same subject D14 covers. Ruling 3 (editor-repass round,
+     item 3) - REV: '.detmore-wrap'/'.idhang' (formerly two separate bands, each paying for its
+     own background/border/padding) merge into this ONE band; '.detid-toggles' lays the two
+     toggle buttons out side by side inside it instead of stacking two full-width rows. */
+  .detid-row {
     background: var(--theme-band-bg);
     border-bottom: 1px solid var(--theme-divider);
-    padding: 8px 10px;
+    padding: 8px 8px;
+  }
+  .detid-toggles {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
   }
   .detmore {
     background: transparent;
@@ -1583,8 +1749,10 @@ const RailRoot = styled.div`
     border-top: 1px solid var(--theme-divider);
     font-size: 11px;
   }
-  /* EP9 (N, §D.1 '.compare') - the Scryfall reference reveal, anchored beside the 116px subject
-     image (116 + the '.rhead-row' 10px gap = 126). 'pointer-events: none' is load-bearing, not
+  /* EP9 (N, §D.1 '.compare') - the Scryfall reference reveal, anchored beside the subject image
+     (subject width + the '.rhead-row' 10px gap - see ruling 1's own comment on '.subject' for
+     why that width grew from 116px to 200px, moving this offset from 126px to 210px in step).
+     'pointer-events: none' is load-bearing, not
      decorative: at z-index 40 this panel paints ABOVE later DOM siblings (the D14 band sits
      right after the rail head, and the panel's own aspect-ratio height easily reaches down far
      enough to visually cover the very pill that triggered it) - without this, the panel would
@@ -1596,7 +1764,7 @@ const RailRoot = styled.div`
      exactly as the mockup's own hover-reveal (not a second interactive layer) intends. */
   .compare {
     position: absolute;
-    left: 126px;
+    left: 210px;
     top: 0;
     z-index: 40;
     width: 150px;
@@ -1622,12 +1790,8 @@ const RailRoot = styled.div`
     font-weight: 700;
   }
 
-  /* identify panel band (item 6) - hangs off D14, same surface (§2/band-bg) */
-  .idhang {
-    background: var(--theme-band-bg);
-    border-bottom: 1px solid var(--theme-divider);
-    padding: 0 10px 8px;
-  }
+  /* identify toggle (item 6) - lives inside '.detid-toggles' now (ruling 3); no wrapper of its
+     own left to style, '.detid-row' above owns the shared background/border/padding. */
   .idtoggle {
     background: transparent;
     border: 1px solid #6b7d8e;
@@ -1709,23 +1873,62 @@ const RailRoot = styled.div`
     color: var(--theme-btn-ink);
   }
 
-  /* Filters panel - one shared fieldset body, tier-conditional container (RD4/O3): phone = the
-     in-rail .fpanel.inline below, still inside this styled-component's own DOM/CSS scope.
-     Desktop/tablet's own .fpanel.float + .fscrim are portaled to document.body instead (see
-     SelectVersionResults.tsx's FloatFiltersPortalRoot comment for why a plain in-tree
-     position:fixed node isn't enough here) - those two classes' rules travel WITH that portal
-     component, duplicated in lockstep, not defined here. */
+  /* Filter-panel overlay round - the panel draws ON TOP of the candidate grid and the rail's
+     other blocks instead of pushing them: svheadwrap (the head row's own wrapper,
+     SelectVersionResults.tsx) is the positioned anchor, fpanel-overlay-anchor (the Collapse's
+     own direct child - Collapse animates ITS height/overflow, not the panel's) hangs off it
+     absolutely, and fpanel.inline caps its own height with internal scroll so it never grows
+     to cover the whole rail. No page-darkening backdrop, no document.body portal - the left
+     accent border and box-shadow read it as this rail's own panel lifting off the surface below
+     it, not a dialog floating over the page. */
+  .svheadwrap {
+    position: relative;
+  }
+  .fpanel-overlay-anchor {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 20;
+  }
   .fpanel {
     background: var(--theme-raised-bg);
     border: 1px solid var(--theme-divider);
-    padding: 8px;
+    padding: 0;
   }
   .fpanel.inline {
-    margin-bottom: 8px;
+    margin-top: 4px;
+    border-left: 3px solid var(--bs-primary);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5);
+    max-height: min(55vh, 380px);
+    overflow-y: auto;
+  }
+  .fptitle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: var(--theme-card-header-bg);
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .fptitle button {
+    background: transparent;
+    border: 1px solid rgba(var(--bs-body-color-rgb), 0.2);
+    color: var(--bs-body-color);
+    padding: 2px 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .fpwrap {
+    padding: 6px 8px;
   }
   .fset {
     border: none;
-    margin: 0 0 9px;
+    margin: 0 0 6px;
     padding: 0;
   }
   .fset:last-child {
@@ -1737,17 +1940,17 @@ const RailRoot = styled.div`
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--theme-muted);
-    margin-bottom: 4px;
+    margin-bottom: 3px;
   }
   .fsep {
     height: 1px;
     background: var(--theme-divider);
-    margin: 9px -8px;
+    margin: 6px -8px;
   }
   .implicit-note {
     font-size: 10px;
     color: var(--theme-muted);
-    margin-top: 7px;
+    margin-top: 5px;
     display: flex;
     gap: 5px;
     align-items: flex-start;
@@ -1760,7 +1963,7 @@ const RailRoot = styled.div`
 
   /* control stack (item 7) - Print Options + Slot Actions + Report */
   .cstack {
-    padding: 8px 10px;
+    padding: 8px 8px;
   }
   .cs-group {
     margin-bottom: 10px;
@@ -1966,31 +2169,11 @@ const Rail = ({
         compareOpen={compareOpen}
         comparePrinting={comparePrinting}
       />
-      <div className="railsec">
-        <div
-          className="lg"
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.05em",
-            color: "var(--theme-muted)",
-            marginBottom: 5,
-          }}
-        >
-          Cardback (this slot)
-        </div>
-        <SlotCardbackControl
-          slot={selectedSlotRef.slot}
-          backImage={backProjectMember?.selectedImage}
-          projectCardback={projectCardback}
-        />
-      </div>
-      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + "More details"
-          (amendment 1) + the identify panel that hangs off it (item 6) + artist support line,
-          none of which are collapsible accordion sections (D3). Fix round
-          (SPEC-display-left-rail.md §3): ConfidenceElement renders BEFORE ArtistSection - it is
-          identity, not demoted metadata; see PromotedZone's own comment for the full ordering
-          rationale. */}
+      {/* E2 (#2/#3) - the promoted, always-visible zone: D14 confidence element + artist support
+          line + "More details" (amendment 1) + the identify panel that hangs off it (item 6),
+          none of which are collapsible accordion sections (D3). Rail restructure ruling 2 - this
+          whole zone is "about this card," so it sits directly under the header's reference
+          image; see PromotedZone's own comment for the full ordering rationale. */}
       <PromotedZone
         cardDocument={selectedCardDocument}
         backendURL={backendURL}
@@ -2011,15 +2194,8 @@ const Rail = ({
           the nine removed grey sections (SPEC-rail-delegacy.md §B/RD - owner answer #3).*/}
       <SourcesAccordion />
       {/* E2/E3/L4 - Select Version, promoted + always open (renamed from "Choose Image", no
-          collapse chrome at all - the primary art surface, not one accordion among several).
-          Density (§2): `px-2 pt-2` (8/8-top) -> explicit `8px 10px`. O1 fix round
-          (SPEC-display-left-rail.md §D.1, corrected 2026-07-23) - this wrapper gains a
-          `select-version-wrapper` class carrying the normalized `#16202b` bottom hairline (see
-          RailRoot's own rule below) - it had no block-boundary divider of its own before. */}
-      <div
-        className="select-version-wrapper sv"
-        style={{ padding: "8px 10px" }}
-      >
+          collapse chrome at all - the primary art surface, not one accordion among several). */}
+      <div className="select-version-wrapper sv" style={{ padding: "8px 8px" }}>
         <h6 className="select-version-heading">Select Version</h6>
         <SelectVersionSection
           face={selectedSlotRef.face}
@@ -2028,6 +2204,28 @@ const Rail = ({
           selectedImage={selectedImage}
           backendURL={backendURL}
           onImplicitSupport={onImplicitSupport}
+        />
+      </div>
+      {/* Rail restructure ruling 2 - the per-slot cardback control proposes a DIFFERENT card
+          (a different back face), so it moves past the identity zone and the candidate grid
+          rather than sitting above both, as it did before this round. */}
+      <div className="railsec">
+        <div
+          className="lg"
+          style={{
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            color: "var(--theme-muted)",
+            marginBottom: 5,
+          }}
+        >
+          Cardback (this slot)
+        </div>
+        <SlotCardbackControl
+          slot={selectedSlotRef.slot}
+          backImage={backProjectMember?.selectedImage}
+          projectCardback={projectCardback}
         />
       </div>
       {/* Rail-delegacy round (item 7, RD5)/editor-polish item 4 (REV RD5) - Print Options +
@@ -2143,7 +2341,11 @@ export function DisplayPage() {
   // export's own page-size semantics, unchanged there) - swapping width/height here is what
   // makes THIS page's sheet landscape, per the design doc's own default. See the design doc's
   // §1 for the computeLayout() math confirming this yields a 4x2 grid at A4 + realistic bleed.
-  const portraitSize = getPageSizeMM(settings.pageSize, undefined, undefined);
+  const portraitSize = getPageSizeMM(
+    settings.pageSize,
+    settings.customPageWidthMM,
+    settings.customPageHeightMM
+  );
   const sheetWidthMM = portraitSize.height;
   const sheetHeightMM = portraitSize.width;
 
@@ -2194,6 +2396,37 @@ export function DisplayPage() {
     observer.observe(sheetRegionNode);
     return () => observer.disconnect();
   }, [sheetRegionNode]);
+
+  // Pin-the-footer fix's own missing half: `position: sticky; top: 0; height: 100vh` alone still
+  // overflows a short viewport at the page's initial (unscrolled) scroll position, since the
+  // toolbar above DisplayBodyRegion isn't itself sticky - the right rail's un-stuck static
+  // position starts BELOW the toolbar's own height, so a flat 100vh box still runs past the
+  // viewport bottom until the user scrolls the toolbar out of view. Measuring the toolbar's real
+  // rendered height (it wraps/grows - InvalidIdentifiersStatus's own conditional row, phone's
+  // full-width search bar row - so it's never a safe constant) and feeding it into the rail's own
+  // `top`/`height` CSS as a custom property (RightRailOffcanvas below) means the rail's bottom
+  // edge lands exactly at the viewport's own bottom on FIRST paint, not only once scrolled -
+  // mirrors sheetRenderWidthPx's own lazy-ref ResizeObserver pattern immediately above.
+  const [toolbarHeightPx, setToolbarHeightPx] = useState<number>(0);
+  const [toolbarNode, setToolbarNode] = useState<HTMLDivElement | null>(null);
+  const toolbarRef = useCallback((element: HTMLDivElement | null) => {
+    setToolbarNode(element);
+  }, []);
+
+  useEffect(() => {
+    if (toolbarNode == null || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver((entries) => {
+      const measuredHeightPx = entries[0]?.contentRect.height;
+      if (measuredHeightPx == null || measuredHeightPx < 0) {
+        return;
+      }
+      setToolbarHeightPx(Math.round(measuredHeightPx));
+    });
+    observer.observe(toolbarNode);
+    return () => observer.disconnect();
+  }, [toolbarNode]);
 
   // Matches PagePreview's own internal scale-to-fit math exactly (scale = maxWidthPx /
   // pageWidthMM-in-px, height = pageHeightMM-in-px * scale - the px-per-mm factor cancels out),
@@ -2302,6 +2535,52 @@ export function DisplayPage() {
   );
   const cardsPerPage = layout.cardsPerRow * layout.cardsPerCol;
 
+  // willLikelyGenerateBleed used to be reachable only from PDFGenerator.tsx's own fast preview
+  // (/print), so this sheet never showed which cards would have bleed synthesized at export -
+  // same eligibility rule and prior-resolution pattern as that surface's fastPreviewSlots, ported
+  // here so PagePreview's existing willGenerateBleed slot flag has a real signal to render on
+  // /display too. This page always exports at full-resolution (DisplayPage's own
+  // useDisplayPDFProps caller), matching the same "full-resolution" literal that surface assumes.
+  const manualOverrides = useAppSelector(selectManualOverrides);
+  const bleedEligibleIdentifiers = useMemo(
+    () =>
+      Object.values(cardDocumentsByIdentifier)
+        .filter(
+          (doc): doc is CardDocument =>
+            doc != null && isBleedNormalizationEligible(doc, "full-resolution")
+        )
+        .map((doc) => doc.identifier),
+    [cardDocumentsByIdentifier]
+  );
+  const [debouncedBleedEligibleIdentifiers] = useDebounce(
+    bleedEligibleIdentifiers,
+    500,
+    {
+      equalityFn: (a, b) =>
+        a.length === b.length && a.every((id, i) => id === b[i]),
+    }
+  );
+  const [bleedPriors, setBleedPriors] = useState<{
+    [identifier: string]: BleedPrior;
+  }>({});
+  useEffect(() => {
+    let cancelled = false;
+    if (backendURL == null || debouncedBleedEligibleIdentifiers.length === 0) {
+      setBleedPriors({});
+      return;
+    }
+    resolveBleedPriors(backendURL, debouncedBleedEligibleIdentifiers).then(
+      (priors) => {
+        if (!cancelled) {
+          setBleedPriors(priors);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [backendURL, debouncedBleedEligibleIdentifiers]);
+
   const pages = useMemo(
     () => paginateSlotsForDisplay(projectMembers, cardsPerPage),
     [projectMembers, cardsPerPage]
@@ -2363,8 +2642,11 @@ export function DisplayPage() {
                 ? "loading"
                 : "failed"
               : undefined;
+          const sheetImageURLs =
+            cardDocument != null ? getSheetImageURLs(cardDocument) : [];
           const content: PagePreviewSlotContent = {
-            imageUrl: cardDocument?.mediumThumbnailUrl,
+            imageUrl: sheetImageURLs[0],
+            imageUrls: sheetImageURLs,
             name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
             queryText,
             loadState,
@@ -2392,6 +2674,25 @@ export function DisplayPage() {
               projectCardback != null &&
               entry.member.back?.selectedImage != null &&
               entry.member.back.selectedImage !== projectCardback,
+            willGenerateBleed: (() => {
+              const eligible =
+                cardDocument != null &&
+                isBleedNormalizationEligible(cardDocument, "full-resolution");
+              const prior =
+                cardDocument != null
+                  ? bleedPriors[cardDocument.identifier]
+                  : undefined;
+              const override =
+                cardDocument != null
+                  ? manualOverrides[cardDocument.identifier] ?? "auto"
+                  : "auto";
+              // Same "only render once there's a real signal to hedge on" gate
+              // fastPreviewSlots uses - an explicit override, or a resolved prior - so the
+              // badge never flickers wrong-then-right while the prior fetch is in flight.
+              return eligible && (override !== "auto" || prior != null)
+                ? willLikelyGenerateBleed(prior ?? "unresolved", override)
+                : undefined;
+            })(),
           };
           return content;
         }),
@@ -2403,6 +2704,8 @@ export function DisplayPage() {
       searchResultsLoading,
       flippedPreviewSlots,
       projectCardback,
+      bleedPriors,
+      manualOverrides,
     ]
   );
 
@@ -2558,7 +2861,8 @@ export function DisplayPage() {
           mode, a plain controlled Form.Control in Browse mode - see ActionBarSearchGroup's own
           comment for why ImportText itself stays unaware of Browse mode), and the existing
           Import.tsx dropdown (D15 - Text/XML/CSV/URL, verbatim, unforked). */}
-      <ToolbarRoot
+      <div
+        ref={toolbarRef}
         className="d-flex align-items-center flex-wrap gap-2 px-3 py-2 border-bottom"
         data-testid="display-toolbar"
       >
@@ -2586,7 +2890,7 @@ export function DisplayPage() {
             <ToggleButton
               id="display-search-mode-add"
               value="add"
-              variant="outline-secondary"
+              variant="outline-light"
               size="sm"
               data-testid="display-search-mode-add"
             >
@@ -2595,7 +2899,7 @@ export function DisplayPage() {
             <ToggleButton
               id="display-search-mode-browse"
               value="browse"
-              variant="outline-secondary"
+              variant="outline-light"
               size="sm"
               data-testid="display-search-mode-browse"
             >
@@ -2603,27 +2907,37 @@ export function DisplayPage() {
             </ToggleButton>
           </ToggleButtonGroup>
 
-          {isBrowseMode ? (
-            // Browse mode: the same shared searchBarText state, bound to a plain controlled
-            // input rather than ImportText - CatalogBrowseResults (mounted in the center region
-            // below) debounces off this value itself, there is no submit step here at all.
-            <Form.Control
-              size="sm"
-              type="text"
-              placeholder="Search the catalog… (e.g. Lightning Bolt)"
-              value={searchBarText}
-              onChange={(event) => setSearchBarText(event.target.value)}
-              aria-label="catalog-browse-search"
-              data-testid="display-browse-search-input"
-            />
-          ) : (
-            <ImportText
-              variant="inline"
-              textValue={searchBarText}
-              onTextChange={setSearchBarText}
-              onImportComplete={() => setSearchBarText("")}
-            />
-          )}
+          <SearchBoxWithCog>
+            {isBrowseMode ? (
+              // Browse mode: the same shared searchBarText state, bound to a plain controlled
+              // input rather than ImportText - CatalogBrowseResults (mounted in the center region
+              // below) debounces off this value itself, there is no submit step here at all.
+              <Form.Control
+                size="sm"
+                type="text"
+                placeholder="Search the catalog… (e.g. Lightning Bolt)"
+                value={searchBarText}
+                onChange={(event) => setSearchBarText(event.target.value)}
+                aria-label="catalog-browse-search"
+                data-testid="display-browse-search-input"
+              />
+            ) : (
+              <ImportText
+                variant="inline"
+                textValue={searchBarText}
+                onTextChange={setSearchBarText}
+                onImportComplete={() => setSearchBarText("")}
+              />
+            )}
+
+            {/* Issue #239 (design doc §5's SearchSettings row) - the same self-contained
+                trigger-plus-modal ProjectEditor.tsx already mounts (same Modal, same
+                searchSettingsSlice read/write, same setLocalStorageSearchSettings persistence
+                path), attached here as its compact `"icon"` trigger instead of the rail's old
+                full-width button - the control that changes searching now lives on the control
+                that searches. */}
+            <SearchSettings variant="icon" />
+          </SearchBoxWithCog>
 
           {/* Design doc ADDENDUM D15 (= §6 T4, restated) - the existing Import.tsx dropdown
               (Text/XML/CSV/URL *Button modal variants), mounted verbatim: no new importer UI,
@@ -2645,7 +2959,7 @@ export function DisplayPage() {
             open it. */}
         <Button
           size="sm"
-          variant="outline-secondary"
+          variant="outline-light"
           className="ms-auto d-xl-none"
           onClick={openRightRail}
           aria-expanded={rightRailOpen}
@@ -2655,7 +2969,7 @@ export function DisplayPage() {
           <RightPaddedIcon bootstrapIconName="gear" />
           Print &amp; Settings
         </Button>
-      </ToolbarRoot>
+      </div>
 
       <DisplayBodyRegion>
         {/* Issue #266 (design doc §4.1) - ONE node, all widths: inline sticky 380px column at
@@ -2692,7 +3006,14 @@ export function DisplayPage() {
           <Offcanvas.Header closeButton>
             <Offcanvas.Title>Card details</Offcanvas.Title>
           </Offcanvas.Header>
-          <Offcanvas.Body>
+          {/* Rail restructure ruling 6 (editor-repass round, item 1/4) - REV: Bootstrap's stock
+              Offcanvas.Body padding (p-3, 16px) was stacking with every RailRoot section's OWN
+              8px-scale padding underneath it, so the rail was carrying 24px of horizontal inset
+              per side instead of the 8px every other rail block already uses (the right rail's
+              own Offcanvas.Body already made this exact move under ruling 7 - see its own
+              comment below). Removing it both tightens the rail generally AND frees the ~32px
+              of width the "large" candidate density needs to show two tiles per row. */}
+          <Offcanvas.Body className="p-0">
             {/* `key` here (not inside Rail itself) is what actually forces a remount on slot
                 change - a key set on an element INSIDE a component's own render output has no
                 effect on that same component's hooks; only the key the PARENT assigns to the
@@ -2744,7 +3065,7 @@ export function DisplayPage() {
             <ToggleButton
               id="display-center-view-sheets"
               value="sheets"
-              variant="outline-secondary"
+              variant="outline-light"
               size="sm"
               data-testid="display-center-view-sheets"
             >
@@ -2753,7 +3074,7 @@ export function DisplayPage() {
             <ToggleButton
               id="display-center-view-browse"
               value="browse"
-              variant="outline-secondary"
+              variant="outline-light"
               size="sm"
               data-testid="display-center-view-browse"
             >
@@ -2821,6 +3142,8 @@ export function DisplayPage() {
                       bleedEdgeMM={settings.bleedEdgeMM}
                       margins={margins}
                       spacing={spacing}
+                      offsetXMM={settings.offsetXMM}
+                      offsetYMM={settings.offsetYMM}
                       slots={sheet.slots}
                       showCutLines={settings.showCutLines}
                       maxWidthPx={sheetRenderWidthPx}
@@ -2923,6 +3246,7 @@ export function DisplayPage() {
           style={
             {
               "--bs-offcanvas-width": "min(92vw, 320px)",
+              "--display-toolbar-height": `${toolbarHeightPx}px`,
             } as React.CSSProperties
           }
           data-testid="display-print-settings-rail"
@@ -2932,29 +3256,97 @@ export function DisplayPage() {
             <Offcanvas.Title>Print &amp; Settings</Offcanvas.Title>
           </Offcanvas.Header>
           <Offcanvas.Body className="d-flex flex-column p-0">
-            <div className="flex-grow-1 overflow-auto p-3">
+            {/* Rail restructure ruling 7 - both rails move to 8px interior padding (the 4/8
+                token scale); this was Bootstrap's stock p-3 (16px). */}
+            <div className="flex-grow-1 overflow-auto p-2">
               <div className="mb-3">
-                <h6>Page Setup</h6>
+                {/* Editor-repass R10.3 - right-rail section headings adopt the left rail's
+                    10px uppercase muted legend style (see `.rail-section-heading` under
+                    RightRailOffcanvas). */}
+                <h6 className="rail-section-heading">Page Setup</h6>
                 <Form.Select
                   size="sm"
                   className="mb-2"
                   value={settings.pageSize}
-                  onChange={(event) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      pageSize: event.target.value as keyof typeof PageSize,
-                    }))
-                  }
+                  onChange={(event) => {
+                    const nextPageSize = event.target
+                      .value as keyof typeof PageSize;
+                    setSettings((previous) => {
+                      // Seed Custom's own width/height together, the moment it's picked, from
+                      // whatever paper size was selected before - never an undefined pair that
+                      // getPageSizeMM/the export adapter would have to fall back on.
+                      if (
+                        nextPageSize === "CUSTOM" &&
+                        previous.customPageWidthMM === undefined
+                      ) {
+                        const seed = getPageSizeMM(
+                          previous.pageSize,
+                          undefined,
+                          undefined
+                        );
+                        return {
+                          ...previous,
+                          pageSize: nextPageSize,
+                          customPageWidthMM: seed.width,
+                          customPageHeightMM: seed.height,
+                        };
+                      }
+                      return { ...previous, pageSize: nextPageSize };
+                    });
+                  }}
                   aria-label="Paper size"
                 >
-                  {Object.keys(PageSize)
-                    .filter((key) => key !== "CUSTOM")
-                    .map((key) => (
-                      <option key={key} value={key}>
-                        {key} (landscape)
-                      </option>
-                    ))}
+                  {Object.keys(PageSize).map((key) => (
+                    <option key={key} value={key}>
+                      {key === "CUSTOM"
+                        ? PageSize.CUSTOM
+                        : `${key} (landscape)`}
+                    </option>
+                  ))}
                 </Form.Select>
+
+                {settings.pageSize === "CUSTOM" && (
+                  <div className="d-flex gap-2 align-items-center mb-2">
+                    <Form.Control
+                      type="number"
+                      size="sm"
+                      min={1}
+                      step={0.1}
+                      aria-label="Custom paper width (mm, portrait)"
+                      data-testid="display-custom-page-width"
+                      value={settings.customPageWidthMM ?? ""}
+                      onChange={(event) => {
+                        const value = parseFloat(event.target.value);
+                        if (!Number.isNaN(value)) {
+                          setSettings((previous) => ({
+                            ...previous,
+                            customPageWidthMM: value,
+                          }));
+                        }
+                      }}
+                    />
+                    <span className="text-muted small">×</span>
+                    <Form.Control
+                      type="number"
+                      size="sm"
+                      min={1}
+                      step={0.1}
+                      aria-label="Custom paper height (mm, portrait)"
+                      data-testid="display-custom-page-height"
+                      value={settings.customPageHeightMM ?? ""}
+                      onChange={(event) => {
+                        const value = parseFloat(event.target.value);
+                        if (!Number.isNaN(value)) {
+                          setSettings((previous) => ({
+                            ...previous,
+                            customPageHeightMM: value,
+                          }));
+                        }
+                      }}
+                    />
+                    <span className="text-muted small">mm, portrait</span>
+                  </div>
+                )}
 
                 <Form.Group className="mb-2">
                   <Form.Label className="small mb-1">
@@ -2981,18 +3373,29 @@ export function DisplayPage() {
 
                 {/* D5 (proposal-h-display-layout-spec.md) - the margin-profile control: no
                     `max` clamp on the Bleed edge input above (removed the old `max={BleedEdgeMM}`
-                    cap - 3.048mm, below the new 3.175mm default) since the task's own instruction
-                    is to WARN, never hard-clamp, when a bleed edge exceeds a profile's cap; this
-                    control surfaces that warning instead. */}
+                    cap - 3.048mm, below the new 3.175mm default) - a profile that can't fit the
+                    requested bleed still renders every card, just with less bleed on the crowded
+                    edge; the readout right below states exactly how much. */}
                 <MarginProfileControl
                   profile={marginProfile}
                   onChange={(profile: MarginProfileKey) =>
                     dispatch(setMarginProfile(profile))
                   }
-                  bleedEdgeMM={settings.bleedEdgeMM}
-                  pageWidthMM={sheetWidthMM}
-                  cardWidthMM={CardWidthMM}
-                  spacingColMM={spacing.col}
+                />
+
+                {/* Granted-vs-requested bleed readout - reads the SAME `layout` this section's
+                    own live sheet renders from (below), so it's always in sync with the current
+                    page size / margin profile / spacing / bleed-edge combination. */}
+                <BleedGrantedReadout
+                  requestedBleedMM={settings.bleedEdgeMM}
+                  grantedBleedMM={
+                    layout.slots[0]?.bleedMM ?? {
+                      top: 0,
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                    }
+                  }
                 />
 
                 <Form.Check
@@ -3008,6 +3411,104 @@ export function DisplayPage() {
                   }
                 />
 
+                {/* Guide appearance - moved from DisplayExportPDF.tsx's own settings step (this
+                    PR), same migration as Print quality below. Only rendered while Guides is on -
+                    with no lines drawn there's nothing for these to style, matching the old
+                    export dialog's own gating (DisplayExportPDF.tsx used to key this same block
+                    off sheetSettings.showCutLines). Colour + the three geometry numbers stay on
+                    one row (aria-labels carry what each field is - no separate caption line,
+                    kept tight to hold the rail under its pre-trim height cap). */}
+                {settings.showCutLines && (
+                  // Closes Bootstrap's default form-check bottom margin above this block -
+                  // Tailwind/Bootstrap spacing utilities bottom out at 4px steps, which left the
+                  // rail 4-6px over its 1131px pre-trim height cap; this is the last lever short
+                  // of dropping a control.
+                  <div style={{ marginTop: -6 }}>
+                    <div className="d-flex gap-2 align-items-center mb-0">
+                      <Form.Control
+                        type="color"
+                        size="sm"
+                        aria-label="Guide colour"
+                        data-testid="display-cut-line-color"
+                        value={settings.cutLineColor}
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            cutLineColor: event.target.value,
+                          }))
+                        }
+                      />
+                      <Form.Control
+                        type="number"
+                        size="sm"
+                        step={0.1}
+                        min={0}
+                        aria-label="Cut line length (mm)"
+                        data-testid="display-cut-line-length"
+                        value={settings.cutLineLengthMM}
+                        onChange={(event) => {
+                          const value = parseFloat(event.target.value);
+                          if (!Number.isNaN(value)) {
+                            setSettings((previous) => ({
+                              ...previous,
+                              cutLineLengthMM: value,
+                            }));
+                          }
+                        }}
+                      />
+                      <Form.Control
+                        type="number"
+                        size="sm"
+                        step={0.1}
+                        min={0}
+                        aria-label="Cut line thickness (mm)"
+                        data-testid="display-cut-line-thickness"
+                        value={settings.cutLineThicknessMM}
+                        onChange={(event) => {
+                          const value = parseFloat(event.target.value);
+                          if (!Number.isNaN(value)) {
+                            setSettings((previous) => ({
+                              ...previous,
+                              cutLineThicknessMM: value,
+                            }));
+                          }
+                        }}
+                      />
+                      <Form.Control
+                        type="number"
+                        size="sm"
+                        step={0.1}
+                        aria-label="Cut line offset (mm)"
+                        data-testid="display-cut-line-offset"
+                        value={settings.cutLineOffsetMM}
+                        onChange={(event) => {
+                          const value = parseFloat(event.target.value);
+                          if (!Number.isNaN(value)) {
+                            setSettings((previous) => ({
+                              ...previous,
+                              cutLineOffsetMM: value,
+                            }));
+                          }
+                        }}
+                      />
+                    </div>
+                    <Form.Check
+                      type="switch"
+                      id="display-cross-cut-lines-toggle"
+                      className="mb-0"
+                      data-testid="display-cross-cut-lines"
+                      label="Crosshair marks"
+                      checked={settings.showCrossCutLines}
+                      onChange={(event) =>
+                        setSettings((previous) => ({
+                          ...previous,
+                          showCrossCutLines: event.target.checked,
+                        }))
+                      }
+                    />
+                  </div>
+                )}
+
                 {/* D19 (proposal-h-display-layout-spec.md ADDENDUM) - Horizontal (X ->
                     spacing.col) / Vertical (Y -> spacing.row) numeric inputs + a link/unlink
                     toggle, seeded from D18's asymmetric default and persisted per deck via the
@@ -3020,53 +3521,151 @@ export function DisplayPage() {
                   onChangeCol={(value) => dispatch(setCardSpacingCol(value))}
                   onChangeRow={(value) => dispatch(setCardSpacingRow(value))}
                 />
+
+                <PageOffsetControl
+                  offsetXMM={settings.offsetXMM}
+                  offsetYMM={settings.offsetYMM}
+                  onChangeX={(value) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      offsetXMM: value,
+                    }))
+                  }
+                  onChangeY={(value) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      offsetYMM: value,
+                    }))
+                  }
+                />
               </div>
 
               <div className="mb-3">
-                <h6>View</h6>
-                <Button
-                  size="sm"
-                  variant="outline-secondary"
-                  onClick={() => dispatch(toggleFaces())}
+                {/* Moved from DisplayExportPDF.tsx's own settings step (this PR) - image DPI/JPG
+                    quality and corner rounding govern the printed card's own appearance, not a
+                    one-off export-run choice, so they're editable here next to the live sheet
+                    they affect instead of behind the Export PDF dialog. Same Form.Range/Form.Check
+                    markup and copy the export dialog used, so nothing degrades to a bare control
+                    on the move - see displayPdfProps.ts's DisplaySheetExportSettings comment. */}
+                <h6 className="rail-section-heading">Print quality</h6>
+                <Form.Group className="mb-2">
+                  <Form.Label className="small mb-1">
+                    Card image DPI: <b>{settings.imageDPI} DPI</b>
+                  </Form.Label>
+                  <Form.Range
+                    min={100}
+                    max={1500}
+                    step={100}
+                    value={settings.imageDPI}
+                    aria-label="Card image DPI"
+                    data-testid="display-image-dpi"
+                    onChange={(event) =>
+                      setSettings((previous) => ({
+                        ...previous,
+                        imageDPI: parseInt(event.target.value, 10),
+                      }))
+                    }
+                  />
+                  <Form.Label className="small mb-1">
+                    JPG quality: <b>{settings.jpgQuality}%</b>
+                  </Form.Label>
+                  <Form.Range
+                    min={5}
+                    max={100}
+                    step={5}
+                    value={settings.jpgQuality}
+                    aria-label="JPG quality"
+                    data-testid="display-jpg-quality"
+                    onChange={(event) =>
+                      setSettings((previous) => ({
+                        ...previous,
+                        jpgQuality: parseInt(event.target.value, 10),
+                      }))
+                    }
+                  />
+                </Form.Group>
+                <Form.Check
+                  type="switch"
+                  id="display-round-corners-toggle"
+                  data-testid="display-round-corners"
+                  label={
+                    settings.roundCorners ? "Round corners" : "Square corners"
+                  }
+                  checked={settings.roundCorners}
+                  onChange={(event) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      roundCorners: event.target.checked,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="mb-3">
+                {/* Editor-repass R10.2 - the View control is a Fronts/Backs ToggleButtonGroup
+                    now, the same segmented idiom as Add/Browse (was a label-flipping
+                    "Showing: Fronts/Backs" button under an <h6>). R10.3: the heading is the
+                    shared 10px uppercase muted legend style. */}
+                <h6 className="rail-section-heading">View</h6>
+                <ToggleButtonGroup
+                  type="radio"
+                  name="display-view-faces"
+                  value={frontsVisible ? "fronts" : "backs"}
+                  onChange={(value) =>
+                    dispatch(
+                      value === "fronts" ? switchToFront() : switchToBack()
+                    )
+                  }
+                  className="w-100"
                 >
-                  {frontsVisible ? "Showing: Fronts" : "Showing: Backs"}
-                </Button>
+                  <ToggleButton
+                    id="display-view-faces-fronts"
+                    value="fronts"
+                    variant="outline-light"
+                    size="sm"
+                    active={frontsVisible}
+                    data-testid="display-view-toggle-fronts"
+                  >
+                    Fronts
+                  </ToggleButton>
+                  <ToggleButton
+                    id="display-view-faces-backs"
+                    value="backs"
+                    variant="outline-light"
+                    size="sm"
+                    active={!frontsVisible}
+                    data-testid="display-view-toggle-backs"
+                  >
+                    Backs
+                  </ToggleButton>
+                </ToggleButtonGroup>
               </div>
 
               <div className="mb-3">
-                {/* No section heading here (unlike Page Setup/View above) - the button's own
-                    label already reads "Cardback", and a separate identical-text heading would
-                    make any future generic getByText("Cardback") locator ambiguous, exactly the
-                    ambiguity the Search Settings section right below used to hit (see this file's
-                    own history/PR notes). Issue #240 (design doc §5's CommonCardback row) - a
-                    project-wide setting (true of the whole deck, not one selected slot),
-                    relocated here unmodified - opens the same GridSelectorModal instance
-                    CommonCardback.tsx's editor mount already owns (see that component's own
-                    CardbackToolbarButton comment). */}
-                <CardbackToolbarButton />
-              </div>
-
-              <div>
-                {/* Issue #239 (design doc §5's SearchSettings row) - the same self-contained
-                    trigger-button-plus-modal ProjectEditor.tsx already mounts, relocated here
-                    unmodified: same Modal, same searchSettingsSlice read/write, same
-                    setLocalStorageSearchSettings persistence path. No section heading (see the
-                    Cardback div above) - the button's own label already reads "Search Settings",
-                    and test-utils.ts's shared openSearchSettingsModal helper uses a plain
-                    getByText(/Search Settings/) that a duplicate heading would make ambiguous. */}
-                <SearchSettings />
+                {/* R9 (editor-repass round, item 2) - the right rail's Cardback section is now a
+                    swatch strip (CardbackSwatchStrip) under a "Cardback (project)" legend, with
+                    the project-wide "Apply to all card backs" / "Set as my default cardback"
+                    actions as two buttons beneath the strip (exact names per the R9 task text)
+                    and a "Browse all cardbacks…" button opening the same GridSelectorModal
+                    instance CommonCardback.tsx's editor mount already owns - the modal keeps its
+                    inline apply prompt (proposal-h's own strip + "Choose cardback…" pairing).
+                    The old single trigger button (CardbackToolbarButton) is retired with this
+                    round. */}
+                <CardbackRailControl />
               </div>
             </div>
 
             {/* Design doc §4.2's "Prepare Print footer - pinned, always visible at the rail's
                 bottom (flex column: body scrolls, footer doesn't)". Issue #275 (ADDENDUM D9/F2)
-                replaces the old three-button stack with FinishFooter's own co-equal Save
-                Deck/Print - Export pair + the unchanged Export dropdown - see this file's own
-                module comment for the full rationale. */}
-            <div className="border-top p-3">
+                introduced FinishFooter's own Save Deck/Print-Export pair + the Export dropdown;
+                the separate Print/Export button was later folded into the Export dropdown's own
+                PDF item once Drive save landed there too - see FinishFooter.tsx's own module
+                comment for the full rationale. */}
+            <div className="border-top p-2">
               <FinishFooter
                 hasBackedUpThisSession={draftBackup.hasBackedUpThisSession}
-                onPrintClick={prePrintSaveGate.startPrintFlow}
+                runExportGate={prePrintSaveGate.startPrintFlow}
+                sheetSettings={settings}
               />
             </div>
           </Offcanvas.Body>

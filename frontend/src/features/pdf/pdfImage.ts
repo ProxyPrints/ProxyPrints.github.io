@@ -17,6 +17,83 @@ export interface ImageFetchFailure {
   label: string;
 }
 
+// Every blob: URL this module creates for PDF-image sources is registered here instead of
+// escaping through raw URL.createObjectURL, so pdf.worker.ts's page-batch renderer can release
+// the underlying blobs the moment a batch's PDF has embedded them (see pdf.worker.ts's
+// PAGES_PER_BATCH comment for the memory rationale). Unreferenced object URLs keep their blob
+// alive in the browser's blob store until URL.revokeObjectURL is called, so "the batch's toBlob
+// resolved" must also mean "revoke that batch's URLs" - otherwise an image that exists only as
+// an object URL still pins its full-resolution bytes for the whole export. The registry is
+// bounded to one batch at a time: the worker revokes after every batch, so the array is empty
+// between batches; a mid-render failure leaks at most the failing batch's URLs, which is what a
+// one-shot render used to leak for its ENTIRE page set.
+const trackedObjectURLs: Array<string> = [];
+
+/** Creates an object URL for a PDF image Blob and registers it for `revokeTrackedObjectURLs`. */
+export const createTrackedObjectURL = (blob: Blob): string => {
+  const url = URL.createObjectURL(blob);
+  trackedObjectURLs.push(url);
+  return url;
+};
+
+/** Revokes every object URL created since the last call - call once per rendered page batch. */
+export const revokeTrackedObjectURLs = (): void => {
+  let url: string | undefined;
+  while ((url = trackedObjectURLs.pop()) !== undefined) {
+    URL.revokeObjectURL(url);
+  }
+};
+
+/**
+ * Per-batch cache of in-flight/completed image Blob fetches, keyed by `${identifier}:${tier}`
+ * (see getCachedImageBlob below). A card that appears in more than one slot in a render (e.g.
+ * multiple copies in a deck) previously fetched its image once per SLOT rather than once per
+ * identifier - wasteful in general, but expensive specifically for the full-resolution tier,
+ * which bypasses the image-CDN Worker's R2 cache entirely and shares one rate-limited budget
+ * across the whole export (see FULL_RESOLUTION_FETCH_CONCURRENCY's comment below) - every
+ * redundant fetch there burns a slot on that shared budget for no reason.
+ *
+ * Deliberately scoped to ONE BATCH, not the whole export: cleared via resetImageBlobCache,
+ * called by pdf.worker.ts in the same per-batch `finally` as revokeTrackedObjectURLs (see that
+ * function's own PAGES_PER_BATCH comment for why memory must stay batch-bounded, not
+ * export-bounded - a large deck with many DISTINCT identifiers would otherwise accumulate
+ * every one of their blobs in this cache for the whole export, reintroducing exactly the
+ * unbounded-memory growth PAGES_PER_BATCH exists to prevent). Duplicate copies of a card are
+ * typically adjacent in deck order, so they usually land in the same batch anyway - this
+ * catches the common case without compromising the memory invariant.
+ */
+const imageBlobCache = new Map<string, Promise<Blob>>();
+
+/**
+ * Returns the cached (or newly started) Blob fetch for `cacheKey`. A concurrent caller for the
+ * same key gets the SAME in-flight promise - not merely a cache populated after the first
+ * completes, which would still race, since @react-pdf/renderer resolves a batch's images
+ * concurrently (see FULL_RESOLUTION_FETCH_CONCURRENCY's comment). A caller after the fetch has
+ * already resolved gets that same, already-resolved promise. The Blob itself is shared across
+ * every caller for this key, but each caller mints its OWN object URL from it via
+ * createTrackedObjectURL - the Blob has no per-slot object-URL lifecycle of its own, so sharing
+ * it never risks one slot's revoke invalidating another slot's still-live URL.
+ */
+const getCachedImageBlob = (
+  cacheKey: string,
+  fetchBlob: () => Promise<Blob>
+): Promise<Blob> => {
+  const cached = imageBlobCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const promise = fetchBlob();
+  imageBlobCache.set(cacheKey, promise);
+  return promise;
+};
+
+/** Clears the per-batch image-blob dedup cache - call once per rendered page batch, alongside
+ *  revokeTrackedObjectURLs (see imageBlobCache's own comment for why this is per-batch, not
+ *  per-export). */
+export const resetImageBlobCache = (): void => {
+  imageBlobCache.clear();
+};
+
 /**
  * The same card can appear in more than one slot in a render (e.g. as both
  * a front and a back), producing one ImageFetchFailure per failed slot. For
@@ -146,15 +223,15 @@ export const fetchFullResolutionImageAsBlob = async (
  * fetch failure on either domain propagates as a rejection instead of
  * being silently swallowed later.
  */
-const getThumbnailURL = async (
+const fetchThumbnailBlob = async (
   cardDocument: CardDocument,
   size: "small" | "large",
   jpgQuality: number
-): Promise<string> => {
+): Promise<Blob> => {
   const bucketURL = getBucketImageURL(cardDocument, size);
   if (bucketURL !== undefined) {
     try {
-      return URL.createObjectURL(await fetchAsBlob(bucketURL));
+      return await fetchAsBlob(bucketURL);
     } catch {
       // bucket miss or network error - fall through to the worker
     }
@@ -170,7 +247,19 @@ const getThumbnailURL = async (
       `no image source configured for card ${cardDocument.identifier}`
     );
   }
-  return URL.createObjectURL(await fetchAsBlob(workerURL));
+  return fetchAsBlob(workerURL);
+};
+
+const getThumbnailURL = async (
+  cardDocument: CardDocument,
+  size: "small" | "large",
+  jpgQuality: number
+): Promise<string> => {
+  const blob = await getCachedImageBlob(
+    `${cardDocument.identifier}:${size}-thumbnail`,
+    () => fetchThumbnailBlob(cardDocument, size, jpgQuality)
+  );
+  return createTrackedObjectURL(blob);
 };
 
 /**
@@ -199,7 +288,12 @@ const getOrphanPDFImageURL = async (
           `no orphan image source configured for card ${cardDocument.identifier}`
         );
       }
-      return URL.createObjectURL(await fetchAsBlob(thumbnailURL));
+      return createTrackedObjectURL(
+        await getCachedImageBlob(
+          `${cardDocument.identifier}:${imageQuality}`,
+          () => fetchAsBlob(thumbnailURL)
+        )
+      );
     }
     case "full-resolution": {
       const fullResolutionURL = getOrphanFullResolutionImageURL(
@@ -210,8 +304,11 @@ const getOrphanPDFImageURL = async (
           `no orphan image source configured for card ${cardDocument.identifier}`
         );
       }
-      return URL.createObjectURL(
-        await fetchFullResolutionImageAsBlob(fullResolutionURL)
+      return createTrackedObjectURL(
+        await getCachedImageBlob(
+          `${cardDocument.identifier}:full-resolution`,
+          () => fetchFullResolutionImageAsBlob(fullResolutionURL)
+        )
       );
     }
     default:
@@ -256,8 +353,11 @@ export const getPDFImageURL = async (
               `no image source configured for card ${cardDocument.identifier}`
             );
           }
-          return URL.createObjectURL(
-            await fetchFullResolutionImageAsBlob(workerURL)
+          return createTrackedObjectURL(
+            await getCachedImageBlob(
+              `${cardDocument.identifier}:full-resolution`,
+              () => fetchFullResolutionImageAsBlob(workerURL)
+            )
           );
         }
         default:
@@ -267,7 +367,12 @@ export const getPDFImageURL = async (
     case SourceType.LocalFile:
       const handle = fileHandles[cardDocument.identifier];
       if (handle !== undefined) {
-        return URL.createObjectURL(await handle.getFile());
+        return createTrackedObjectURL(
+          await getCachedImageBlob(
+            `${cardDocument.identifier}:local-file`,
+            () => handle.getFile()
+          )
+        );
       } else {
         throw new Error(
           `could not get handle for file ${cardDocument.identifier}`
@@ -306,7 +411,10 @@ export const getPDFImageBlob = async (
         `no orphan image source configured for card ${cardDocument.identifier}`
       );
     }
-    return fetchFullResolutionImageAsBlob(fullResolutionURL);
+    return getCachedImageBlob(
+      `${cardDocument.identifier}:full-resolution`,
+      () => fetchFullResolutionImageAsBlob(fullResolutionURL)
+    );
   }
   switch (cardDocument.sourceType) {
     case SourceType.GoogleDrive: {
@@ -321,7 +429,10 @@ export const getPDFImageBlob = async (
           `no image source configured for card ${cardDocument.identifier}`
         );
       }
-      return fetchFullResolutionImageAsBlob(workerURL);
+      return getCachedImageBlob(
+        `${cardDocument.identifier}:full-resolution`,
+        () => fetchFullResolutionImageAsBlob(workerURL)
+      );
     }
     case SourceType.LocalFile: {
       const handle = fileHandles[cardDocument.identifier];
@@ -330,7 +441,9 @@ export const getPDFImageBlob = async (
           `could not get handle for file ${cardDocument.identifier}`
         );
       }
-      return handle.getFile();
+      return getCachedImageBlob(`${cardDocument.identifier}:local-file`, () =>
+        handle.getFile()
+      );
     }
     default:
       throw new Error(

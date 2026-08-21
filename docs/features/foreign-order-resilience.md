@@ -320,10 +320,10 @@ already offered exactly as it always was for any slot.
   `PagePreviewSlotContent`'s `orphanLabel` prop and its `orphan-badge`
   render, the `/display` sheet's own port of Card.tsx's `OrphanBadge`.
 - `frontend/src/features/display/DisplayPage.tsx` — wires `orphanLabel`
-  from `cardDocument.isOrphan`/`sourceName` into each sheet slot's content.
-- `frontend/src/features/pdf/PDFGenerator.tsx` — wires the same `orphanLabel`
-  into its fast-preview slots (`fastPreviewSlots`), alongside the existing
-  bleed badge.
+  from `cardDocument.isOrphan`/`sourceName` into each sheet slot's content
+  (the `/print` page's `PDFGenerator.tsx` that first carried this into its
+  fast-preview slots was retired 2026-08-14; the sheet slot is the only
+  live surface now).
 - `frontend/src/common/types.ts` — the `isOrphan?: boolean` marker on the
   frontend's own `Card`/`CardDocument` type (never present in the
   quicktype-generated `schema_types.ts`).

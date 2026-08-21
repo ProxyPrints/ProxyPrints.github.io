@@ -203,6 +203,38 @@ points cannot drift), in one transaction. Unseeded tag = report still lands,
 vote skipped. Broken image / Other are report-row-only. Rate limit:
 `CARD_REPORT_RATE` (default `10/d`) per anonymous_id, polite 429 in the UI.
 
+### Per-user hide (issue #714)
+
+The report panel carries an optional **"Also hide this image for me"**
+checkbox (the panel's own `hideForMe` state; a report with it checked sends
+`hide: true` in the `ReportCardRequest` payload). On the server,
+`views.post_report_card` then writes a **`HiddenCard`** row (card FK
+CASCADE, `anonymous_id`, `created_at`; unique per `(card, anonymous_id)` —
+`hiddencard_unique_hide`) in the **same transaction** as the `CardReport`
+row, via `get_or_create` — a `HiddenCard` never exists without its
+accompanying report, and `hide: false`/absent creates nothing. Hiding a card
+for yourself has no moderation meaning: it is purely a per-anonymous_id
+view preference, the report's reason/text still lands as a normal audit row.
+
+Read side: the question feed excludes this identity's hidden cards from
+every tier and question kind (printing, artist, tag), widened to each
+card's md5 identity group — see `question_feed._voter_hidden_card_ids`
+(computed once per feed request and threaded to every branch). Pools skip
+them too (`question_feed_pools.draw_*`'s `hidden_card_ids`). The exclusion
+is per-anonymous_id: one visitor hiding a card never hides it for anyone
+else.
+
+Client side: the modal/panel dispatch `hideCard(identifier)` on a
+`hide=True` submission, which (a) drops the card from the current view
+immediately — `Modals.tsx` gates the card-detail modal on
+`selectHiddenCardIdentifiersSet` — and (b) persists a per-anonymous_id
+localStorage mirror under `hiddenCardIds:<anonymousId>`
+(`cookies.ts`'s `get/setLocalStorageHiddenCardIds`, written through by the
+`hideCard` listener and hydrated once at app start via
+`getExistingAnonymousId`, never minting an identity just by loading). The
+localStorage mirror is only session continuity for the current view; the
+server-side feed filter is the durable mechanism.
+
 ## Moderation tab
 
 `whatsthat.tsx` (`ModerationTab.tsx`) grows a **Moderation** tab alongside the

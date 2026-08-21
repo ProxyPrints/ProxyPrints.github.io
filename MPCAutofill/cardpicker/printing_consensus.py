@@ -1,7 +1,8 @@
 from dataclasses import dataclass
-from typing import Hashable, Iterable, Literal, Sequence, TypedDict
+from typing import Any, Hashable, Iterable, Literal, Optional, Sequence, TypedDict
 
 from django.conf import settings
+from django.core.cache import InvalidCacheBackendError, caches
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import F, QuerySet
 
@@ -861,7 +862,29 @@ class VoteTallyEntry(TypedDict):
     count: int
 
 
-def get_contested_card_ids() -> list[int]:
+# Short-TTL "shared"-cache wrapper - same convention as `question_feed._REMAINING_ESTIMATE_CACHE_*`
+# (the TTL IS the invalidation policy; see get_contested_card_ids's docstring for why that is safe).
+_CONTESTED_CARD_IDS_CACHE_KEY = "contested-card-ids:v1"
+_CONTESTED_CARD_IDS_CACHE_TTL = 300  # seconds - see get_contested_card_ids's docstring
+
+
+def _contested_card_ids_shared_cache() -> Optional[Any]:
+    """
+    The cross-process `"shared"` cache (see `settings.CACHES` and the "WHICH CACHE DO I USE?"
+    section there), or `None` on a pre-#543 environment.
+
+    Same read-side degradation convention as `question_feed._remaining_estimate_shared_cache`
+    and `question_feed_pools._shared_cache_for_read`: a missing alias is an ordinary miss and
+    the caller falls back to computing the contested set live - the feed must never 500
+    because an advisory cache isn't configured.
+    """
+    try:
+        return caches["shared"]
+    except InvalidCacheBackendError:
+        return None
+
+
+def get_contested_card_ids(*, force_refresh: bool = False) -> list[int]:
     """
     IDs of cards with conflicting printing-tag votes on record: more than one distinct
     printing voted for, or both a printing vote and a no-match vote. Coarser than
@@ -876,10 +899,37 @@ def get_contested_card_ids() -> list[int]:
     Delegates to the shared `vote_consensus.contested_queryset` - this function's name,
     signature, and behavior are unchanged; it's the reference point that function's own
     docstring calls "behavior-preserving".
+
+    CACHING (2026-08-16): the group-by aggregation `contested_queryset` builds is a pure
+    function of persisted votes and measured at 520-686ms per call against live production
+    data, and `views.get_question_feed` resolves it once per feed request (see that view
+    and `question_feed.get_next_question_feed_item`'s own threading docstrings). The
+    resolved list is therefore cached on the cross-process `"shared"` cache (never
+    `default`, which is per-process `LocMemCache` - the vote-submitting worker and the
+    request-serving worker must agree on the set) for `_CONTESTED_CARD_IDS_CACHE_TTL`
+    (300s), keyed by a single stable key since the value has no inputs. Cache hit returns
+    a fresh list COPY every time, so a caller that holds or mutates the returned list can
+    never poison the cached value for the next caller. A cache miss computes and stores,
+    exactly as before otherwise.
+
+    `force_refresh` (2026-08-20, `question_feed.warm_feed_supply_cache`'s own fix): skips
+    the cache READ so a scheduled warm always recomputes, but still performs the cache
+    WRITE - a warm that lands while the entry is still valid (the normal case on a warm
+    cadence shorter than the TTL) must still reset the TTL, or the entry keeps expiring
+    300s after its original write regardless of how often the warm runs. Defaults `False`
+    so every other caller - above all `views.get_question_feed`'s request path - keeps
+    reading the cache exactly as before; only the warm ever passes `True`.
     """
-    return contested_queryset(
+    shared_cache = _contested_card_ids_shared_cache()
+    cached = shared_cache.get(_CONTESTED_CARD_IDS_CACHE_KEY) if shared_cache is not None and not force_refresh else None
+    if cached is not None:
+        return list(cached)
+    contested = contested_queryset(
         CardPrintingTag.objects.all(), group_by="card_id", outcome_field="printing_id", sentinel_field="is_no_match"
     )
+    if shared_cache is not None:
+        shared_cache.set(_CONTESTED_CARD_IDS_CACHE_KEY, contested, _CONTESTED_CARD_IDS_CACHE_TTL)
+    return contested
 
 
 def get_vote_tally(card: Card) -> list[VoteTallyEntry]:

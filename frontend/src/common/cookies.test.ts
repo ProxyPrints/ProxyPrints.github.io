@@ -1,5 +1,6 @@
 import {
   AnonymousIdKey,
+  HiddenCardIdsKey,
   ManualOverridesKey,
   MaximumDPI,
   MaximumSize,
@@ -7,9 +8,11 @@ import {
   SearchSettingsKey,
 } from "@/common/constants";
 import {
+  getLocalStorageHiddenCardIds,
   getLocalStorageManualOverrides,
   getLocalStorageSearchSettings,
   getOrCreateAnonymousId,
+  setLocalStorageHiddenCardIds,
   setLocalStorageManualOverrides,
 } from "@/common/cookies";
 import { defaultSettings, sourceDocuments } from "@/common/test-constants";
@@ -18,11 +21,15 @@ beforeEach(() => {
   window.localStorage.removeItem(SearchSettingsKey);
   window.localStorage.removeItem(AnonymousIdKey);
   window.localStorage.removeItem(ManualOverridesKey);
+  window.localStorage.removeItem(`${HiddenCardIdsKey}:anon-1`);
+  window.localStorage.removeItem(`${HiddenCardIdsKey}:anon-2`);
 });
 afterEach(() => {
   window.localStorage.removeItem(SearchSettingsKey);
   window.localStorage.removeItem(AnonymousIdKey);
   window.localStorage.removeItem(ManualOverridesKey);
+  window.localStorage.removeItem(`${HiddenCardIdsKey}:anon-1`);
+  window.localStorage.removeItem(`${HiddenCardIdsKey}:anon-2`);
 });
 
 //# region tests
@@ -258,6 +265,45 @@ test("setLocalStorageManualOverrides persists the map for getLocalStorageManualO
   expect(getLocalStorageManualOverrides()).toStrictEqual({
     "card-1": "force-bleed",
   });
+});
+
+//# endregion
+
+//# region hidden card ids (issue #714)
+
+test("getLocalStorageHiddenCardIds returns an empty set when nothing is stored", () => {
+  expect(getLocalStorageHiddenCardIds("anon-1")).toEqual(new Set());
+});
+
+test("getLocalStorageHiddenCardIds round-trips a valid stored list", () => {
+  setLocalStorageHiddenCardIds("anon-1", ["card-a", "card-b"]);
+
+  expect(getLocalStorageHiddenCardIds("anon-1")).toEqual(
+    new Set(["card-a", "card-b"])
+  );
+});
+
+test("hidden card ids are scoped per anonymous id", () => {
+  setLocalStorageHiddenCardIds("anon-1", ["card-a"]);
+
+  // a card hidden for one identity still shows for another - the mirror keeps the exact
+  // scoping of the server-side HiddenCard rows
+  expect(getLocalStorageHiddenCardIds("anon-2")).toEqual(new Set());
+});
+
+test("getLocalStorageHiddenCardIds falls back to an empty set on invalid JSON", () => {
+  window.localStorage.setItem(`${HiddenCardIdsKey}:anon-1`, "not valid json{");
+
+  expect(getLocalStorageHiddenCardIds("anon-1")).toEqual(new Set());
+});
+
+test("getLocalStorageHiddenCardIds falls back to an empty set on a non-array value", () => {
+  window.localStorage.setItem(
+    `${HiddenCardIdsKey}:anon-1`,
+    JSON.stringify({ card: "not-an-array" })
+  );
+
+  expect(getLocalStorageHiddenCardIds("anon-1")).toEqual(new Set());
 });
 
 //# endregion

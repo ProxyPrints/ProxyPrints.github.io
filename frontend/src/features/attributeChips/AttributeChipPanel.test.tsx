@@ -20,9 +20,11 @@ function buildRoute(path: string): string {
 function Wrapper({
   store,
   onRateLimited,
+  pruneContradicted,
 }: {
   store: AppStore;
   onRateLimited?: () => void;
+  pruneContradicted?: boolean;
 }) {
   const [states, setStates] = React.useState(initialChipStates());
   return (
@@ -35,6 +37,7 @@ function Wrapper({
         onChipStatesChange={setStates}
         cardSlot={<div data-testid="card-slot-stub">card</div>}
         onRateLimited={onRateLimited}
+        pruneContradicted={pruneContradicted}
       />
     </Provider>
   );
@@ -122,6 +125,85 @@ describe("AttributeChipPanel", () => {
     expect(submittedTagNames).not.toContain("Silver Border");
     const sibling = screen.getByTestId("attribute-chip-White Border");
     expect(sibling.getAttribute("data-chip-state")).toBe("untouched");
+  });
+
+  it("with pruneContradicted, disqualifies untouched exclusion-group siblings entirely", async () => {
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          tagName: string;
+          polarity: number;
+        };
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: 1,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    render(<Wrapper store={setupStore()} pruneContradicted />);
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("attribute-chip-Black Border")
+          .getAttribute("data-chip-state")
+      ).toBe("positive")
+    );
+
+    // the positive chip stays; its untouched group-mates are hidden, not dimmed
+    expect(screen.getByTestId("attribute-chip-Black Border")).toBeVisible();
+    expect(screen.queryByTestId("attribute-chip-White Border")).toBeNull();
+    expect(screen.queryByTestId("attribute-chip-Silver Border")).toBeNull();
+    // standalone chips are never contradicted and stay visible
+    expect(screen.getByTestId("attribute-chip-Full Art")).toBeVisible();
+  });
+
+  it("with pruneContradicted, retracting the positive restores the hidden siblings", async () => {
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          tagName: string;
+          polarity: number;
+        };
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: body.polarity,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    render(<Wrapper store={setupStore()} pruneContradicted />);
+
+    fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("attribute-chip-Black Border")
+          .getAttribute("data-chip-state")
+      ).toBe("positive")
+    );
+    expect(screen.queryByTestId("attribute-chip-White Border")).toBeNull();
+
+    // tapping the already-active Yes retracts to untouched - the siblings reappear
+    fireEvent.click(screen.getByTestId("attribute-chip-Black Border-yes"));
+    await waitFor(() =>
+      expect(screen.getByTestId("attribute-chip-White Border")).toBeVisible()
+    );
+    expect(
+      screen
+        .getByTestId("attribute-chip-Black Border")
+        .getAttribute("data-chip-state")
+    ).toBe("untouched");
   });
 
   it("reverts the explicit state on a failed submit", async () => {

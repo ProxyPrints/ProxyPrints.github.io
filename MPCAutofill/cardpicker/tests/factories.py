@@ -146,6 +146,17 @@ class CardIllustrationVoteFactory(factory.django.DjangoModelFactory):
     confidence = None
 
 
+class CardIllustrationRejectionFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.CardIllustrationRejection
+
+    card = factory.SubFactory(CardFactory)
+    illustration_id = factory.LazyFunction(uuid.uuid4)
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
+    source = models.VoteSource.USER
+    confidence = None
+
+
 class CardTagVoteFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = models.CardTagVote
@@ -166,6 +177,14 @@ class CardReportFactory(factory.django.DjangoModelFactory):
     anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
     reason = models.CardReportReason.NSFW
     text = ""
+
+
+class HiddenCardFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.HiddenCard
+
+    card = factory.SubFactory(CardFactory)
+    anonymous_id = factory.Sequence(lambda n: f"anonymous_{n}")
 
 
 class SavedDeckFactory(factory.django.DjangoModelFactory):

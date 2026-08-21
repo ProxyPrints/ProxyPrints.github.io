@@ -37,25 +37,61 @@ export interface ExclusionGroup {
 // group-awareness beyond this - see filterCandidatesByChipStates in QuestionFeed.tsx: an
 // explicit positive on one member already excludes every candidate whose border_color/frame
 // doesn't match, which naturally excludes the group's other values with no extra logic.
+const BLACK_BORDER_CHIP: AttributeChipDef = {
+  tagName: "Black Border",
+  label: "Black Border",
+  matches: (candidate) => candidate.borderColor === "black",
+};
+const WHITE_BORDER_CHIP: AttributeChipDef = {
+  tagName: "White Border",
+  label: "White Border",
+  matches: (candidate) => candidate.borderColor === "white",
+};
+const SILVER_BORDER_CHIP: AttributeChipDef = {
+  tagName: "Silver Border",
+  label: "Silver Border",
+  matches: (candidate) => candidate.borderColor === "silver",
+};
+const BORDERLESS_CHIP: AttributeChipDef = {
+  tagName: "Borderless",
+  label: "Borderless",
+  matches: (candidate) => candidate.isBorderless,
+};
+export const FULL_ART_CHIP: AttributeChipDef = {
+  tagName: "Full Art",
+  label: "Full Art",
+  matches: (candidate) => candidate.fullArt,
+};
+const SHOWCASE_CHIP: AttributeChipDef = {
+  tagName: "Showcase",
+  label: "Showcase",
+  matches: (candidate) => candidate.isShowcase,
+};
+const EXTENDED_ART_CHIP: AttributeChipDef = {
+  tagName: "Extended",
+  label: "Extended Art",
+  matches: (candidate) => candidate.isExtendedArt,
+};
+const ETCHED_CHIP: AttributeChipDef = {
+  tagName: "Etched",
+  label: "Etched",
+  matches: (candidate) => candidate.isEtched,
+};
+
+// Owner ruling (frame-treatment axis rework, 2026-08, grounded in a live count against
+// CanonicalPrintingMetadata's 113,224 printings): Borderless belongs here, not in a "frame
+// treatment" axis - Scryfall's own `border_color` field enum IS {black, white, silver,
+// borderless, gold}, so a card has exactly one value of it, same closed-taxonomy shape the
+// other three chips already assume. "No border colour to ask about" falls out of the axis
+// itself once Borderless is a member - no separate disqualification rule is needed.
 export const BORDER_COLOR_GROUP: ExclusionGroup = {
   id: "borderColor",
   label: "Border Color",
   chips: [
-    {
-      tagName: "Black Border",
-      label: "Black Border",
-      matches: (candidate) => candidate.borderColor === "black",
-    },
-    {
-      tagName: "White Border",
-      label: "White Border",
-      matches: (candidate) => candidate.borderColor === "white",
-    },
-    {
-      tagName: "Silver Border",
-      label: "Silver Border",
-      matches: (candidate) => candidate.borderColor === "silver",
-    },
+    BLACK_BORDER_CHIP,
+    WHITE_BORDER_CHIP,
+    SILVER_BORDER_CHIP,
+    BORDERLESS_CHIP,
   ],
 };
 
@@ -86,44 +122,62 @@ export const FRAME_STYLE_GROUP: ExclusionGroup = {
   ],
 };
 
+// Owner ruling (frame-treatment axis rework, 2026-08), measured against CanonicalPrintingMetadata
+// (113,224 printings): Showcase and Extended Art co-occur in exactly 0 of them, so they're the
+// genuinely exclusive pair here - not the old four-way "Frame Treatment" group. Full Art
+// co-occurs with Showcase in 652 printings (21% of all showcase printings) and with Extended Art
+// in only 2 (an EOC pair that reads as a tagging quirk, not a real interaction) - not exclusive
+// with either, so it lives in STANDALONE_CHIPS below instead.
+export const FRAME_TREATMENT_GROUP: ExclusionGroup = {
+  id: "frameTreatment",
+  label: "Frame Treatment",
+  chips: [SHOWCASE_CHIP, EXTENDED_ART_CHIP],
+};
+
 export const EXCLUSION_GROUPS: ExclusionGroup[] = [
   BORDER_COLOR_GROUP,
   FRAME_STYLE_GROUP,
+  FRAME_TREATMENT_GROUP,
 ];
 
 // Independent toggles - not mutually exclusive with each other or with the exclusion groups
-// above (a card can be simultaneously Full Art, Showcase, and black-bordered).
+// above. Full Art co-occurs with every border colour (82% of borderless printings are also full
+// art - Ghalta, Primal Hunger; Cathars' Crusade is full art AND showcase AND borderless all at
+// once) and with Showcase, so it can't live in an exclusion group at all; Etched is a finish, not
+// a frame treatment, and stays independently toggleable alongside it.
 export const STANDALONE_CHIPS: AttributeChipDef[] = [
-  {
-    tagName: "Full Art",
-    label: "Full Art",
-    matches: (candidate) => candidate.fullArt,
-  },
-  {
-    tagName: "Borderless",
-    label: "Borderless",
-    matches: (candidate) => candidate.isBorderless,
-  },
-  {
-    tagName: "Showcase",
-    label: "Showcase",
-    matches: (candidate) => candidate.isShowcase,
-  },
-  {
-    tagName: "Extended",
-    label: "Extended Art",
-    matches: (candidate) => candidate.isExtendedArt,
-  },
-  {
-    tagName: "Etched",
-    label: "Etched",
-    matches: (candidate) => candidate.isEtched,
-  },
+  FULL_ART_CHIP,
+  ETCHED_CHIP,
 ];
 
 export const ALL_ATTRIBUTE_CHIPS: AttributeChipDef[] = [
   ...STANDALONE_CHIPS,
   ...EXCLUSION_GROUPS.flatMap((group) => group.chips),
+];
+
+// AttributesSection.tsx (the /display rail) and FUNNEL_AXES' /display funnel below were
+// ratified as their own shape on 2026-07-22 (PR #329) and never had a frame-treatment exclusion
+// axis at all - Border Color is Black/White/Silver only and Treatment is five independent,
+// non-exclusive toggles. The WTC-specific mutual-exclusivity ruling above is scoped to the
+// question feed (AttributeChipPanel.tsx/QuestionFeed.tsx's EXCLUSION_GROUPS); these two surfaces
+// get their own explicit exports instead of inheriting it through a shared array.
+export const DISPLAY_RAIL_BORDER_COLOR_GROUP: ExclusionGroup = {
+  id: "borderColor",
+  label: "Border Color",
+  chips: [BLACK_BORDER_CHIP, WHITE_BORDER_CHIP, SILVER_BORDER_CHIP],
+};
+
+export const DISPLAY_RAIL_EXCLUSION_GROUPS: ExclusionGroup[] = [
+  DISPLAY_RAIL_BORDER_COLOR_GROUP,
+  FRAME_STYLE_GROUP,
+];
+
+export const DISPLAY_RAIL_STANDALONE_CHIPS: AttributeChipDef[] = [
+  FULL_ART_CHIP,
+  BORDERLESS_CHIP,
+  SHOWCASE_CHIP,
+  EXTENDED_ART_CHIP,
+  ETCHED_CHIP,
 ];
 
 export type ChipVoteState = "untouched" | "positive" | "negative";
@@ -151,10 +205,52 @@ export function findExclusionGroup(
 }
 
 /**
+ * True when a chip is contradicted by the current vote state: it is itself untouched AND an
+ * explicitly-positive sibling in its own exclusion group already answers the group's question
+ * (a card has exactly one border color / one frame era, so "Black Border" being yes leaves
+ * "White Border"/"Silver Border" factually disqualified). Standalone chips and explicitly-
+ * voted chips (positive or negative) are never contradicted - the latter are themselves the
+ * active filters that disqualify others.
+ *
+ * Surfaces may either dim such chips (implied-negative styling) or hide them entirely -
+ * the question feed's filter panel hides them (context-dependent disqualification,
+ * DESIGN-REPASS-2026-08.md Rule 5), mirroring how the deeper question grids drop any option
+ * that contradicts the answer already given, rather than only greying it out.
+ */
+export function isChipContradicted(
+  tagName: string,
+  chipStates: Record<string, ChipVoteState>
+): boolean {
+  if ((chipStates[tagName] ?? "untouched") !== "untouched") {
+    return false;
+  }
+  const group = findExclusionGroup(tagName);
+  if (group == null) {
+    return false;
+  }
+  return group.chips.some(
+    (sibling) =>
+      sibling.tagName !== tagName &&
+      (chipStates[sibling.tagName] ?? "untouched") === "positive"
+  );
+}
+
+/**
  * Filters candidates against the current explicit chip vote states: a positive chip drops
- * any candidate that doesn't match it, a negative chip drops any candidate that does. Implied-
- * negative (exclusion-group sibling) styling never contributes an extra filter condition on
- * its own - see the exclusion-group comment above for why that's unnecessary.
+ * any candidate that doesn't match it, a negative chip drops any candidate that does - with
+ * two carve-outs, both about a chip's inability to prove a negative:
+ *
+ * 1. Taxonomy unknowns never count as a mismatch. A candidate whose value for a chip's own
+ *    exclusion group falls outside that group's taxonomy entirely (getOpenExclusionGroups -
+ *    e.g. borderColor "gold" against Black/White/Silver/Borderless) is a genuine unknown, not
+ *    a contradiction, so it can't be excluded by that group's chips either way.
+ * 2. A chip never eliminates an illustration outright. Candidates are grouped by
+ *    illustrationId (an ungrouped candidate is its own group of one) before filtering; within
+ *    a group, a chip narrows to the matching members same as always, but if
+ *    that would empty the group completely, the group survives unnarrowed instead of
+ *    disappearing. Border/frame axes are independent of illustration identity - a statement
+ *    about one must not remove the other from consideration. Only candidates with no
+ *    illustrationId (solo candidates) can be eliminated by a genuine mismatch.
  */
 export function filterCandidatesByChipStates<T extends PrintingCandidate>(
   candidates: T[],
@@ -166,12 +262,46 @@ export function filterCandidatesByChipStates<T extends PrintingCandidate>(
   if (activeChips.length === 0) {
     return candidates;
   }
+
+  const satisfiesChip = (candidate: T, chip: AttributeChipDef): boolean => {
+    const state = chipStates[chip.tagName] ?? "untouched";
+    if (chip.matches(candidate)) {
+      return state === "positive";
+    }
+    const group = findExclusionGroup(chip.tagName);
+    if (group != null && getOpenExclusionGroups(candidate).includes(group)) {
+      return true;
+    }
+    return state === "negative";
+  };
+
+  const satisfiesActiveChips = (candidate: T): boolean =>
+    activeChips.every((chip) => satisfiesChip(candidate, chip));
+
+  const groupKeys: string[] = [];
+  const groups = new Map<string, T[]>();
+  candidates.forEach((candidate) => {
+    const key = candidate.illustrationId ?? `solo:${candidate.identifier}`;
+    let group = groups.get(key);
+    if (group == null) {
+      group = [];
+      groups.set(key, group);
+      groupKeys.push(key);
+    }
+    group.push(candidate);
+  });
+
+  const survivingIds = new Set<string>();
+  groupKeys.forEach((key) => {
+    const group = groups.get(key) as T[];
+    const matched = group.filter(satisfiesActiveChips);
+    const survivors =
+      matched.length > 0 || group[0].illustrationId == null ? matched : group;
+    survivors.forEach((candidate) => survivingIds.add(candidate.identifier));
+  });
+
   return candidates.filter((candidate) =>
-    activeChips.every((chip) => {
-      const state = chipStates[chip.tagName] ?? "untouched";
-      const isMatch = chip.matches(candidate);
-      return state === "positive" ? isMatch : !isMatch;
-    })
+    survivingIds.has(candidate.identifier)
   );
 }
 
@@ -186,6 +316,14 @@ export function getAutoTagChips(
 ): AttributeChipDef[] {
   return ALL_ATTRIBUTE_CHIPS.filter((chip) => chip.matches(candidate));
 }
+
+/**
+ * `voteSurface` for the CardTagVote(s) selectCandidate (QuestionFeed.tsx) casts from
+ * getAutoTagChips above - distinct from any surface a voter's own deliberate tap uses, so the
+ * backend can recast these as VoteSource.IMPLICIT without touching a genuine tag-question
+ * answer (issue #790). Must match `views.AUTO_DERIVED_TAG_VOTE_SURFACE` exactly.
+ */
+export const AUTO_DERIVED_TAG_VOTE_SURFACE = "question-feed-auto-tag";
 
 /**
  * The /display art-picker FUNNEL's axis descriptor (funnel-spec.md F2, XF1) - a thin wrapper
@@ -206,10 +344,10 @@ export interface FunnelAxis {
 
 export const FUNNEL_AXES: FunnelAxis[] = [
   {
-    id: BORDER_COLOR_GROUP.id,
+    id: DISPLAY_RAIL_BORDER_COLOR_GROUP.id,
     label: "Border",
     exclusive: true,
-    chips: BORDER_COLOR_GROUP.chips,
+    chips: DISPLAY_RAIL_BORDER_COLOR_GROUP.chips,
   },
   {
     id: FRAME_STYLE_GROUP.id,
@@ -221,10 +359,14 @@ export const FUNNEL_AXES: FunnelAxis[] = [
     // D23 honesty note (funnel-spec.md): no "finish" axis exists in the catalog taxonomy -
     // foil/finish is a print SETTING (finishSettingsSlice), not a per-card vote/filter
     // dimension; "Etched" is the only finish-adjacent chip and it lives here, in Treatment.
+    // The /display funnel predates and is out of scope for the WTC-specific mutual-exclusivity
+    // ruling above - like DISPLAY_RAIL_BORDER_COLOR_GROUP above, this axis uses
+    // DISPLAY_RAIL_STANDALONE_CHIPS to keep its own pre-existing non-exclusive checkbox
+    // behaviour and exact five-chip set unchanged.
     id: "treatment",
     label: "Treatment",
     exclusive: false,
-    chips: STANDALONE_CHIPS,
+    chips: DISPLAY_RAIL_STANDALONE_CHIPS,
   },
 ];
 
@@ -303,15 +445,13 @@ export function chipMembershipState(
 }
 
 /**
- * Whether a single candidate satisfies an active filter tag - resolved (`tags`) OR, only when
- * `votesOn`, suggested via the backend's own compliant `suggestedFilterTagNames` computation
- * (condition 6 - see `chipMembershipState`'s own comment for the full "why not tagVoteStatuses"
- * reasoning). The funnel's own per-axis survivor-narrowing filter (F1/F2) applies this per
- * active chip, ANDed across chips (same semantics `filterCandidatesByChipStates` already uses
- * for the QuestionFeed's tri-state chips, just sourced from Tag-consensus data rather than
- * `chip.matches`).
+ * Resolved (`tags`) OR, only when `votesOn`, suggested via the backend's own compliant
+ * `suggestedFilterTagNames` computation (condition 6 - see `chipMembershipState`'s own comment
+ * for the full "why not tagVoteStatuses" reasoning). This is the definite half of a tag's
+ * status for a candidate - true only when there is an actual positive signal, never merely
+ * because the tag happens to be absent.
  */
-export function candidateSatisfiesAttributeTag(
+export function candidateHasAttributeTag(
   candidate: ChipMembershipCandidate,
   tagName: string,
   votesOn: boolean
@@ -323,17 +463,78 @@ export function candidateSatisfiesAttributeTag(
 }
 
 /**
+ * Whether `tagName`'s own exclusion-group axis carries zero signal for `candidate`: no sibling
+ * tag in the group is resolved or suggested. This is a genuine unknown - the candidate has
+ * simply never been evaluated on this axis - as distinct from a candidate that resolves to a
+ * *different* value on the same axis, which is a real, known mismatch and stays one (a sibling
+ * tag being present is itself the disqualifying evidence).
+ *
+ * Scoped exactly like `getOpenExclusionGroups`: only Border Color and Frame Style qualify, since
+ * `borderColor`/`frame` are the two enum-like axes that can hold a value outside the taxonomy
+ * entirely (e.g. borderColor "gold"). A standalone chip (no exclusion group) or a
+ * `FRAME_TREATMENT_GROUP` member has no such taxonomy-gap case - "no tag" is a complete, definite
+ * answer for those (an ordinary card, no special treatment), same reasoning
+ * `getOpenExclusionGroups` already applies for its own read of the equivalent raw metadata.
+ */
+export function isAttributeAxisUnknownForCandidate(
+  candidate: ChipMembershipCandidate,
+  tagName: string,
+  votesOn: boolean
+): boolean {
+  const group = findExclusionGroup(tagName);
+  if (group == null || group === FRAME_TREATMENT_GROUP) {
+    return false;
+  }
+  return !group.chips.some((chip) =>
+    candidateHasAttributeTag(candidate, chip.tagName, votesOn)
+  );
+}
+
+/**
+ * Whether a single candidate satisfies an active filter tag - a definite match
+ * (`candidateHasAttributeTag`) OR a genuine unknown on that tag's own axis
+ * (`isAttributeAxisUnknownForCandidate`). Having no signal on an axis is a different claim from
+ * knowing the candidate does not match it, and only the latter should disqualify a candidate -
+ * so an untagged candidate is never filtered out purely for lacking a tag it was never
+ * evaluated on. The funnel's own per-axis survivor-narrowing filter (F1/F2) applies this per
+ * active chip, ANDed across chips (same semantics `filterCandidatesByChipStates` already uses
+ * for the QuestionFeed's tri-state chips, just sourced from Tag-consensus data rather than
+ * `chip.matches`).
+ *
+ * This is deliberately NOT the right predicate for a negative/exclude filter, which must drop a
+ * candidate only on a definite match - an axis-unknown candidate can't be confirmed to carry the
+ * excluded tag either, so excluding it here too would just move the same mistake in the other
+ * direction. Callers doing exclusion should use `candidateHasAttributeTag` instead.
+ */
+export function candidateSatisfiesAttributeTag(
+  candidate: ChipMembershipCandidate,
+  tagName: string,
+  votesOn: boolean
+): boolean {
+  return (
+    candidateHasAttributeTag(candidate, tagName, votesOn) ||
+    isAttributeAxisUnknownForCandidate(candidate, tagName, votesOn)
+  );
+}
+
+/**
  * An exclusion group is "open" for a candidate when none of its chips match it - e.g.
- * borderColor "borderless" or "gold" fall outside the Black/White/Silver taxonomy (see
- * printingCandidate2's fixture, borderColor: "borderless"). Standalone chips are never open:
- * their underlying fields are plain booleans, so a definite "false" is itself a complete
- * derived answer, not an unknown one. Drives Level 3's conditional render in QuestionFeed.tsx
- * - most candidates leave nothing open and skip straight past it.
+ * borderColor "gold" falls outside the Black/White/Silver/Borderless taxonomy. Border Color and
+ * Frame Style chips read plain enum-like fields (`borderColor`/`frame`) that CAN fall outside
+ * their taxonomy, so "no match" there is a genuine unknown - a borderless candidate is never
+ * open here, since its own Borderless chip already matches it. FRAME_TREATMENT_GROUP is
+ * different and never counts as open: its two chips are plain booleans, so "neither is true" is
+ * itself a complete, definite answer (an ordinary card, no special treatment) - same reasoning
+ * STANDALONE_CHIPS chips have always used. Drives Level 3's conditional render in
+ * QuestionFeed.tsx - most candidates leave nothing open and skip straight past it.
  */
 export function getOpenExclusionGroups(
   candidate: PrintingCandidate
 ): ExclusionGroup[] {
-  return EXCLUSION_GROUPS.filter(
-    (group) => !group.chips.some((chip) => chip.matches(candidate))
-  );
+  return EXCLUSION_GROUPS.filter((group) => {
+    if (group === FRAME_TREATMENT_GROUP) {
+      return false;
+    }
+    return !group.chips.some((chip) => chip.matches(candidate));
+  });
 }

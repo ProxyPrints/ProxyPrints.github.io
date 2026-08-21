@@ -32,14 +32,18 @@ const threeCardHandlers = [
 //
 // Proposal H switchover (2026-07-23, issues #231/#272) note: the original editor -> /display
 // nav-link transition this first test exercised no longer exists as a cross-page hop (/editor now
-// IS the unified page, /display only redirects there). The same class of client-side transition
-// this test protects against still exists on the unified page itself though - the Finish
-// footer's "Print / Export ->" button (PrePrintSaveGate.tsx) does a real client-side
-// `router.push("/print")` while cards are present, so that's the transition exercised below now.
+// IS the unified page, /display only redirects there). A later transition this test protected
+// against - the Finish footer's own "Print / Export ->" button doing a client-side
+// `router.push("/print")` while cards were present - no longer exists at all: PDF export now runs
+// in place from the editor's own Export dropdown (see docs/features/pdf-generator.md's "Page cut
+// guide lines, Google Drive save, and retiring the Finish footer's own print route"), so there is
+// no more editor -> /print navigation to guard against a false-positive dialog on. The happy-path
+// test below now exercises that same class of regression against the export flow that replaced
+// it - a real download completing with no beforeunload dialog appearing along the way.
 test.describe("Unsaved-work guard (priority bug fix)", () => {
   test.describe.configure({ timeout: 60_000 });
 
-  test("editor -> /print with cards selected does not show any dialog, and the deck's cards are the ones sent to print", async ({
+  test("editor: exporting a PDF with cards selected does not show any dialog, and the export completes", async ({
     page,
     network,
   }) => {
@@ -53,25 +57,30 @@ test.describe("Unsaved-work guard (priority bug fix)", () => {
       void dialog.dismiss();
     });
 
-    await page.getByTestId("finish-footer-print-export").click();
+    await page.getByTestId("display-export-menu-toggle").click();
+    await page.getByTestId("display-export-pdf-button").click();
+    const settingsModal = page.getByTestId("display-export-pdf-settings-modal");
+    await expect(settingsModal).toBeVisible();
 
-    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still riding the
-    // untouched default cardback, so the reminder gate fires first; "Use current & continue"
-    // proceeds with the same client-side navigation this test is really about.
-    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-    await expect(cardbackGate).toBeVisible();
-    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      (async () => {
+        await settingsModal
+          .getByTestId("display-export-pdf-download-button")
+          .click();
 
-    // A real navigation, not just a same-page state change - waitForURL fails outright if the
-    // click never actually left /editor, which is exactly the failure mode a regression here
-    // would produce. Generous explicit timeout - /print's first on-demand dev-mode compile
-    // (@react-pdf/renderer transitively, via FinishedMyProject/PDFGenerator) is slow, the same
-    // documented cost DisplayPage.spec.ts's own describe.configure covers for /display's first
-    // hit; see DisplayFinishFooter.spec.ts's own comment for the same finding against this route.
-    await page.waitForURL("**/print", { timeout: 30_000 });
-    // Same deck, not an empty print page that merely happened not to show a dialog - the store
-    // genuinely survived the transition, matching the client-side-nav diagnosis.
-    await expect(page.getByTestId("print-page-empty-state")).toHaveCount(0);
+        // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still riding
+        // the untouched default cardback, so the reminder gate fires first; "Use current &
+        // continue" proceeds with the export itself.
+        const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+        await expect(cardbackGate).toBeVisible();
+        await cardbackGate.getByTestId("cardback-gate-use-current").click();
+      })(),
+    ]);
+    // A real download completed with the deck's own card, not an empty/failed export that
+    // merely happened not to show a dialog - the store genuinely stayed populated in place
+    // (no navigation ever happens for this flow any more).
+    expect(download.suggestedFilename()).toBe("cards.pdf");
 
     expect(dialogAppeared).toBe(false);
   });

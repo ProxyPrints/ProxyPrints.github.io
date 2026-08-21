@@ -224,7 +224,23 @@ printings, artists, tags, and moderation from one screen.
   `PRINTING_TAG_MIN_SHARE` (default 0.6) of total weight **and** at least
   one non-machine vote — `vote_consensus.is_human_backed_source()` is the one
   place that knows which `VoteSource` values are machine-derived, so no
-  volume of machine-only votes can resolve a card alone. The shared core
+  volume of machine-only votes can resolve a card alone — that gate alone
+  closes the "machine-only resolution" hole, unconditionally, at any cap
+  value. The SUM of machine weight per (card, tag, polarity) outcome group
+  is additionally hard-capped at `PRINTING_TAG_MACHINE_CAP` (default 1.0,
+  strictly below `PRINTING_TAG_MIN_VOTES`) — the sibling ceiling to the
+  implicit cap below, but for a narrower purpose: bounding how far machine
+  weight can carry a group TOWARD quorum alongside real human votes, and
+  how much it can inflate that group's share of the total weight — the
+  [no machine tipping of a human-vs-human contest](#human-contest-machine-weight-drop)
+  mechanism described below (formerly labeled _D1_ in the
+  [owner-ratified vote-weight matrix](../reference/vote-weight-matrix.md)).
+  The matrix ratifies no machine-cap value
+  directly; the default of 1.0 mirrors the one cap it does ratify (the
+  sibling implicit cap at w=0.25/cap=1.0) rather than reasoning a
+  fresh number for an unratified constant: two agreeing channels (0.5 each)
+  still count in full, a third adds nothing, and one human vote still
+  carries the group to the default quorum of 2. The shared core
   (`vote_consensus.resolve_weighted_consensus`, used by printing/artist/tag
   alike) additionally implements two owner-ratified mechanisms from the
   2026-07-22 vote-weight scenario matrix (owner-ratified 2026-07-22, PR
@@ -404,6 +420,34 @@ printings, artists, tags, and moderation from one screen.
   — set by `tag_consensus.py`'s wrappers, never inferred from `source`
   inside the resolver itself (same "caller decides" convention
   `is_human_backed` already used).
+- **Question-feed candidate-pick auto-tag votes are also `VoteSource.IMPLICIT`**
+  (issue #790, fixed after being reopened once a narrower write-side fix
+  in #791 didn't reach the common untouched-chip-panel case): `QuestionFeed.tsx`'s `selectCandidate` derives one positive `CardTagVote`
+  per attribute the picked candidate's own Scryfall metadata carries true
+  (`attributeChips.ts`'s `getAutoTagChips`) and casts it on the voter's
+  behalf. The voter's click asserted "this is the printing," not "this
+  printing is black-bordered" — the second claim is a machine inference
+  read off the CANONICAL PRINTING, not an assertion about the physical
+  card, so it must not carry the voter's human-backed weight. Routed
+  through `views._cast_auto_derived_tag_vote_and_resolve` (shares its
+  guards with `_cast_implicit_vote_and_resolve` via the common
+  `_cast_implicit_sourced_vote_and_resolve`), stamped with
+  `vote_surface="question-feed-auto-tag"` (`views.AUTO_DERIVED_TAG_VOTE_SURFACE`) — deliberately distinct from `IMPLICIT_VOTE_SURFACE`
+  above even though both cast `VoteSource.IMPLICIT`, since the two are
+  different mechanisms (a filter-chip pick-under-active-filter signal vs.
+  a candidate pick's derived attribute chips) and must stay separable in
+  the vote history. `post_submit_tag_vote` decides the source
+  server-side from a fixed comparison against this constant — the client
+  can only ever downgrade its own vote to `IMPLICIT` by sending this exact
+  surface string, never claim a stronger source than `USER`. A voter's
+  own direct answer to a tag question (`BorderColorQuestion.tsx`, Level 3
+  exclusion-group picks, the "custom-art" no-match reason) is unaffected
+  and still casts `VoteSource.USER` under the existing `"question-feed"`
+  surface. Historical rows cast before this fix are `VoteSource.USER`
+  with `vote_surface="question-feed"`, indistinguishable from a genuine
+  tag-question answer — that contamination is not retroactively
+  correctable and is a known, unresolved consequence of the defect
+  window, not of this fix.
 - <a id="suggestedness-excludes-implicit"></a>**Suggested filter tags /
   suggestedness excludes implicit** (owner-ratified 2026-07-22, PR #325;
   formerly labeled decision _D6_ in this document; raw ratification
@@ -659,14 +703,43 @@ printings, artists, tags, and moderation from one screen.
 - **Unified question feed**: `GET 2/questionFeed/` replaces the old
   printing/artist/tag/moderation tab switcher with one typed, prioritized
   stream (`confirm_suggestion` → contested pairs → `moderation` → fresh
-  unresolved; "dumb ranked union," no cross-tier scoring, with one
-  deliberate exception — the mix-composition policy immediately below).
+  unresolved; "dumb ranked union," no cross-tier scoring, with three
+  deliberate selection-layer policies on top: the mix-composition policy
+  below, the evidence-gated confirmation policy immediately after it, and
+  the information-gain question-scoring policy after that).
   Full rationale in `journal/2026-07-14-queue-question-feed-design.md`
-  (gitignored, local-only). **Known v1 property, not a bug**: at current
-  volume a voter only sees tier-1 (`confirm_suggestion`) questions until
-  all ~28k are exhausted — an interleaved/weighted union is the likely v2
-  fix, out of scope for v1. Every tier excludes `(card, tag)` pairs the
-  requesting `anonymous_id` already voted on.
+  (gitignored, local-only). At current volume tier 1 (`confirm_suggestion`,
+  110,130 cards carrying a machine printing vote, measured 2026-08-11)
+  dwarfs the contested/cold pools (500-entry cap each) — a voter working
+  only this feed used to not reach the other question kinds until tier 1
+  was personally exhausted, originally flagged as a known v1 property. A
+  weighted rotation (2026-08-10) fixed that for one release; the evidence
+  gate below (2026-08-11, issue #766) replaces it, since gating tier 1
+  removes almost all of that volume from the confirm lane in the first
+  place — see that policy's own entry for the measured effect. Every tier
+  excludes `(card, tag)` pairs the requesting `anonymous_id` already voted
+  on.
+- **Materialised candidate pools** (issue #727, `cardpicker/question_feed_pools.py`):
+  the request path never scans the four tiers' own live queries - a
+  scheduled warm (per-lane cadence, `settings.QUESTION_FEED_POOL_WARM_MINUTES_*`)
+  materialises up to `settings.QUESTION_FEED_POOL_SIZE` (500) candidates per
+  lane onto the shared cache, and `get_next_question_feed_item` only ever
+  reads from that cache. A cache miss (never warmed, evicted, or the
+  `"shared"` backend unavailable) means that lane has no supply for this
+  request - it is never a trigger to build the pool live, which would
+  reintroduce the unindexed `date_created`-sorted Parallel Seq Scan this
+  mechanism exists to move off the request path (2.4-4.7s typical, up to
+  47.8s observed on a single-gunicorn deployment). Each draw scores at most
+  `question_feed._CANDIDATE_SCORING_WINDOW` (50) candidates, taken from a
+  random offset into the pool so different voters spread across a large
+  pool's full breadth rather than converging on the cards nearest the
+  front - see "Information-gain question scoring" below for what the score
+  is. Within that bounded window, printing candidates are tried entirely
+  before artist, before tag (the same structural precedence the live tiers
+  encode), and a tied score falls back to the pool's own warm-time SQL
+  ordering rather than the random draw's rotation, so the `-vote_count`/
+  quick-negative/`-date_created` tiebreak chain stays deterministic across
+  requests even though which window gets scored is not.
 - **Mix-composition policy** (2026-07-24, `cardpicker/question_feed.py`,
   owner-ratified per the WTC vote-queue data brief's OWNER ADDENDUM —
   that brief was a read-only diagnostic session with no committed doc of
@@ -727,6 +800,120 @@ printings, artists, tags, and moderation from one screen.
   `question_feed._served_mix_ratio` reads it back as two cheap indexed
   `COUNT`s, never a per-row scan. Append-only, same convention as
   `CardScanLog` — never read by any consensus computation.
+- **Evidence-gated confirmation policy** (2026-08-11, `cardpicker/ question_feed.py`, `_evidence_justifies_confirmation`, issue #766,
+  replaces the 2026-08-10 remainder mix rotation described in the git
+  history of this section; tightened to read the vote itself by issue #797,
+  2026-08-13): [`wtc-question-model.md`](wtc-question-model.md)
+  §2/§3 (ratified 2026-08-11) holds there is no lane RATIO to tune for
+  confirm/contested/cold — a printing confirmation is either justified by
+  the machine's own recorded evidence for that specific card, or it isn't,
+  so `QUESTION_FEED_CONFIRM_MIX_WEIGHT`/`_CONTESTED_MIX_WEIGHT`/
+  `_COLD_MIX_WEIGHT` (defaults `3`/`2`/`1`, never measured — see that
+  ratified doc's §3) are deleted rather than retuned. **Mechanism**: the
+  gate sits at `confirm_suggestion`'s one construction site,
+  `_confirm_suggestion_item` — a `CardPrintingTag` vote is offered as a
+  confirmation only when its own `evidence_types_used` (a field on the vote
+  itself, not on `CardScanLog` — see below) covers every type the fallback
+  calculator can record (`border`/`artist`/`symbol` — the ratified doc's
+  own text names a fourth, "collector line", that the calculator never
+  actually produces; see `_KNOWN_EVIDENCE_TYPES`'s own comment and that
+  doc's correction note). A card with several machine votes filters to only
+  the gate-admitted ones before elimination consensus is applied, so
+  different votes on the same card can pass or fail independently. Every
+  card with no gate-admitted vote, including one the machine already
+  suggested a printing for, is simply not constructible as
+  `confirm_suggestion` and falls through to whichever of tier 2 or tier 4
+  already claims it, served as `identify_printing` instead — the question
+  that presupposes nothing, safe to ask regardless of which element (if
+  any) the evidence check failed on. **Issue #797 (2026-08-13):** at
+  ratification the gate read `CardScanLog.evidence_types_used` instead,
+  scoped to the fallback calculator's own writer id — but a MATCH (the
+  fallback calculator's own outcome that produces the `CardPrintingTag`
+  vote this gate exists to judge) never writes a `CardScanLog` row at all
+  (only a SKIP does), so that reader was structurally unreachable for the
+  population it governed: measured 2026-08-11, 0 of 110,130
+  confirm-eligible cards cleared the gate. The fix moved
+  `evidence_types_used` onto `CardPrintingTag` itself, populated by
+  `run_fallback_calculator` on a match exactly as the skip branch already
+  populated the sibling `CardScanLog` field, and pointed the gate at that
+  column — the skip path's own `CardScanLog` write is unchanged. Historical
+  votes (cast before this field existed, and every join-key/deductive-
+  backfill vote, which share no evidence vocabulary with the fallback
+  calculator) carry `evidence_types_used=null` and fail the gate exactly
+  like an empty list does, until a future backfill pass populates them.
+  Before the #797 fix, `QuestionFeedServedLog` showed confirm_suggestion at
+  507 of 516 remainder-pool serves (98.3%); after the #766 gate landed
+  (before #797's correction), that population was absorbed by tier 4's
+  non-contested printing pool (222,105 cards) as `identify_printing`
+  instead — no starvation, a question-type shift only. The now-gated tier 1
+  no longer needs a per-session rebalancing policy, so the remainder
+  waterfall (`_REMAINDER_LANE_ORDER`) is a plain, fixed confirm → contested
+  → cold order — restored, not reinvented; see this module's own docstring
+  for the full mechanism. **Soundness**: SELECTION-LAYER only, same
+  boundary the mix-composition and information-gain policies state for
+  themselves — it decides whether tier 1 is even constructible for a
+  given card, never how any lane's candidate set is built, how a vote
+  resolves, or the LIKELY-RESOLVE pool's own precedence above it.
+- **Information-gain question scoring** (2026-08-09, issue #716,
+  `cardpicker/question_feed.py`, the same file as the mix-composition
+  policy above): where each remainder tier used to serve the first
+  candidate of a fixed queryset, the tiers now score their candidates by
+  expected information gain and serve the highest-scoring one within a
+  bounded window. **What is scored**: the entropy of the existing vote
+  distribution across the question's own dimension, per kind.
+  `_printing_question_score` runs `_shannon_entropy` over the weighted
+  printing-outcome distribution across the card's md5 identity group (the
+  same pooled tuples `is_likely_resolve_printing` reads; see
+  `_printing_vote_tuples`). `_artist_question_score` runs it over the
+  weighted artist-outcome distribution (one outcome per distinct
+  `CanonicalArtist`, plus the unknown-artist sentinel for an `is_unknown`
+  vote). `_tag_question_score(card, tag_name)` runs it over the weighted
+  polarity distribution for that `(card, tag)` pair, IMPLICIT votes
+  excluded, mirroring `get_tag_net_polarity`'s weighting convention. A
+  question whose evidence is evenly split (entropy at its maximum) is the
+  highest-value question to serve next; a unanimous or absent distribution
+  (entropy 0.0) carries nothing left to learn. **Cold start**: a printing
+  question with no votes yet has no distribution to be uncertain about, so
+  `_printing_question_score` falls back to `_ATTRIBUTE_VARIANCE_SCALE`
+  (0.25) times `_attribute_variance` (the standard deviation of the card's
+  machine-derived attribute-chip net-polarity vector,
+  `ATTRIBUTE_CHIP_TAG_NAMES`, IMPLICIT excluded, the same per-chip values
+  `_tag_confidence` computes for the served item's confidence overlay): a
+  card whose own derived picture is internally inconsistent is where a
+  human vote resolves the most. Tier 1 (`confirm_suggestion`) re-ranks on
+  this attribute-variance dimension alone, since every tier-1 candidate
+  carries exactly one machine-sourced suggestion and its printing-vote
+  entropy is identically zero. **Bounded window**:
+  `_CANDIDATE_SCORING_WINDOW` (50) caps how many candidates a live tier
+  scores per serve, per kind: each tier slices its pre-ranked queryset to
+  the first 50 and scores only those via `_max_scored_candidate`, and the
+  tag lanes collect `(card, tag)` pairs from
+  `get_tag_review_queue_pairs()` up to the same bound. The window is a
+  candidate horizon, not a loss: the next serve draws a fresh window from
+  the same pre-ranked queryset, and the materialised pools (issue #727)
+  remain the long-horizon layer this re-rank refines on the pool-miss
+  fallback path. **Priority over the static waterfall**: the highest-
+  scoring candidate in the window is served first within its tier;
+  `_max_scored_candidate` is a STABLE argmax (Python's `max` returns the
+  first maximal element), so the tier's pre-ranking, which encodes every
+  existing selection rule (`-vote_count` "closest to resolving" in tier 4,
+  the quick-negative secondary tiebreak, `-date_created`, kind
+  precedence), is the tiebreak whenever two candidates score equally.
+  Tier 4's `-vote_count` heuristic survives folded into that tiebreak
+  chain rather than standing alone. Tier 1's windowed scan still skips
+  candidates that fail to build a suggestion and falls through to the
+  unchanged full scan, so it never returns `None` where the old code
+  returned a card. **Soundness**: this is a SELECTION-LAYER policy only,
+  the direct successor to tier 4's old `-vote_count` heuristic. It
+  re-ranks WHICH candidate a tier serves and changes nothing else: every
+  request-scoped exclusion set (answered/hidden/`not_official_art` per
+  tier, widened to md5 identity groups per issue #473) still applies
+  unchanged, the `_served_mix_ratio` mix-composition path above is
+  untouched (this policy re-ranks only the remainder tiers, never the
+  LIKELY-RESOLVE pool), no tier's candidate set is built differently, and
+  `vote_consensus.resolve_weighted_consensus` still weighs and resolves
+  every vote exactly as before, the same boundary the mix-composition
+  policy states for itself.
 - **"Not sure" abstention** (issue #712): Level 1's "Yes"/"No, different
   printing" both cast a real vote (see `selectCandidate`/`rejectSuggestion`
   in `QuestionFeed.tsx`); "Not sure" and "Skip" used to be indistinguishable
@@ -787,10 +974,18 @@ mystery-card flip only), `CardPulseWrapper`/the sliced WHAT'S/THAT/CARD? pop seq
 document now). Added: the quiet "N tagged this session" affordance (the only reward surface —
 no streak/score/confetti) and the seven question-shapes-as-visually-distinct-modes framing
 (confirm/shortlist/quick-negative/open-ended/artist/tag/follow-up) `SPEC-wtc-rebuild.md`
-section 2 defines. The interaction contract (Level 1/2/3 flows, `getAutoTagChips`, no-re-
-presentation, the singleton-NO terminal vote, per-item state reset, the rate-limit banner) is
-unchanged — every bullet below describing THAT contract (not the retired visual mechanism) is
-still accurate. The detailed "quiz-reveal hero"/starburst/gold-button narrative below is kept
+section 2 originally defined (that section is itself now superseded — see below). **Withdrawn
+(2026-08-11):** this paragraph used to claim the Level 1/2/3 flow was unchanged by the WTC
+rebuild. That is false — issue #728 removed the fixed ladder, and `QuestionFeed.tsx` says so at
+its own file header and at more than a dozen inline call sites (e.g. "The de-laddered feed
+(issue #728) has no fixed level1 -> level2 -> level3 sequence"). The governing question-type
+and composition model, replacing both the Level 1/2/3 ladder and
+[`SPEC-wtc-rebuild.md`](../proposals/mockups/wtc-rebuild/SPEC-wtc-rebuild.md) §2, now lives in
+[`wtc-question-model.md`](wtc-question-model.md). The rest of the parenthetical
+(`getAutoTagChips`, no-re-presentation, the singleton-NO terminal vote, per-item state reset,
+the rate-limit banner) is unaffected by that withdrawal and remains accurate — those are
+mechanics the ladder's removal did not touch. The detailed "quiz-reveal hero"/starburst/
+gold-button narrative below is kept
 for history (this doc's own established convention — see the `cardPanel.tsx` bullet's own prior
 "SUPERSEDED" marker two bullets down) but no longer describes the current rendering; read it as
 "how we got here," not "what's live."
@@ -908,8 +1103,9 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     intentionally identical transitions — "an honest skip beats a coerced
     guess"), but NO additionally records the rejected candidate's
     identifier client-side (`rejectedCandidateIds` — never NOT SURE, which
-    is genuine uncertainty, not a rejection) so Level 2 excludes it — see
-    the no-re-presentation rule below. `identify_printing` items (and
+    is genuine uncertainty, not a rejection) so Level 2 retains it as a
+    de-emphasised, re-selectable tile — see the no-re-presentation rule
+    below. `identify_printing` items (and
     `confirm_suggestion` items without a `suggestedPrinting`) skip Level 1
     entirely.
   - **Level 2** — the candidate grid. The attribute-chip ring is now an
@@ -967,7 +1163,10 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     illustration resolves, against LIVE data at write time, to exactly one
     candidate printing for this card (`printings_for_card_and_illustration`
     — N>1 casts nothing on the printing channel, matching #526's machine-side
-    rule); and a `CardArtistVote` is derived (`source=USER`,
+    rule; `question_feed._voter_answered_printing_card_ids` reads
+    `CardIllustrationVote` as well as `CardPrintingTag` so an N>1 answer still
+    excludes the card from the printing tiers, issue #713); and a
+    `CardArtistVote` is derived (`source=USER`,
     `vote_surface="illustration_vote_derived_artist"`) whenever the
     resolved artist's name doesn't indicate a combined credit (tests for
     `' & '` only — see the module's own census comment) and no
@@ -984,25 +1183,95 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     in `schemas/schemas/endpoints/` — the generator itself was NOT run (see
     issue #332: it destroys the hand-added `CastImplicitVoteRequest`/
     `RetractImplicitVoteRequest` types).
+  - **Illustration elimination — "Not this art"** (the negative counterpart
+    to illustration voting above; `docs/features/wtc-question-model.md`
+    §7.1's `confirm_suggestion` answer of the same name). `CardIllustrationVote`'s
+    `(card, anonymous_id)` unique constraint is unconditional — one identity
+    holds AT MOST ONE illustration opinion per card (issue #525) — so a
+    rejection cannot share that model or that constraint: consuming the
+    same slot to reject one artwork would block ever affirming a different
+    one, backwards from the intent. `CardIllustrationRejection` is therefore
+    a SEPARATE model, keyed on `(card, anonymous_id, illustration_id)` — one
+    identity may reject many artworks for one card, and a rejection never
+    touches the `CardIllustrationVote` row. The human path
+    (`POST /2/submitIllustrationRejection/`, `views.post_submit_illustration_rejection`,
+    `illustration_vote.cast_illustration_rejection`) always names a concrete
+    `illustrationId` (no `isUnknown` branch — rejecting "unknown" is not a
+    meaningful claim) and writes nothing on the printing or artist channels:
+    a rejected ARTWORK implies nothing about which PRINTINGS share it, the
+    same "narrowing stays a read" posture `printings_for_illustration`
+    already enforces for the affirmative side.
+
+    The MACHINE side (`local_illustration.run_illustration_calculator`)
+    casts eliminations alongside every `CardIllustrationVote` it writes: one
+    resolved positive implies a rejection for every OTHER `illustration_id`
+    among `get_ranked_printing_candidates(card, None)` — the same
+    name-ranked candidate space `illustration_vote. printings_for_card_and_illustration` already reads for the human 1:1
+    check, not the narrower artist+name index the positive itself came from
+    (that index holds exactly one surviving illustration by construction
+    whenever a vote is cast, so it has nothing left to reject). Measured
+    live against production data (300-card sample, cards with a machine
+    `CardIllustrationVote`): mean 2.79 distinct illustrations among a
+    card's ranked candidates (so ~1.79 eliminations per card among the
+    ~50% of cards with any other candidate at all — the other ~50% have a
+    unique illustration among their candidates and produce zero
+    eliminations), median 2, p90 6, max 35. Eliminations are written with
+    `source=VoteSource.DEDUCTION` through the same `resolve_vote_weight`
+    machinery every machine vote uses — no separate rejection weight scale
+    exists. Retraction (a later run resolving a DIFFERENT illustration)
+    goes through the same `purge_stale_machine_votes` family-scoped purge
+    every other Stage D write uses: eliminations are recomputed from
+    scratch and rewritten only for cards whose positive actually changed
+    this run (`_split_new_illustration_votes`'s own scope), so a genuine
+    no-op re-run writes zero rows here too.
+
+    **Consumption is a read, never a materialisation** — narrows a candidate
+    SET, never elects a winner. `illustration_consensus. eliminated_illustration_ids(card)` judges each `illustration_id`
+    independently against only its own rejection rows, reusing
+    `vote_consensus.resolve_weighted_consensus` with a single possible
+    outcome (so `min_share` is trivially satisfied and the call reduces to
+    the ordinary weighted-quorum-plus-human-backed-gate every other vote
+    type already applies — no volume of machine eliminations alone can
+    eliminate anything). It never touches `resolve_illustration`'s own
+    affirmative tally. The one consumer wired in this PR:
+    `question_feed._confirm_suggestion_item` skips an AI-suggested printing
+    whose artwork has reached elimination consensus and falls through to
+    the next machine vote for the card, so a suggestion the group has
+    already rejected is not re-served to a different voter as if it were
+    new.
+
   - **No-re-presentation rule** (owner-directed fix, was a real live bug:
     Level 1 "Is it M21 203?" → NO → Level 2 grid containing only M21 203
-    again): within a single question item's flow, a candidate the user
-    has just rejected is never re-presented as a selectable answer at a
-    later level — each level's display set is candidates minus
-    already-rejected-this-item. Level 2's grid is computed from
-    `nonRejectedCandidates` (all candidates minus `rejectedCandidateIds`,
-    filtered _before_ the attribute-chip filter, so "N hidden by your
-    tags" doesn't conflate a rejection with a filter), and the singleton
-    case — rejecting the one and only candidate, or a rejection that
-    happens to empty the remaining set — skips the grid entirely: the
-    prompt swaps to a contextual "Got it — not that one. Is it any
-    official printing at all?" with the rejected candidate shown only as
-    grayed, non-interactive context (never a button), falling straight
-    through to the same classified-exit choice (None of these / custom
-    art / skip) that always rendered below the grid. `rejectedCandidateIds`
-    is per-item state, reset alongside every other per-question field in
-    the same fetch effect (see the module's own comment on why that reset
-    can't be a separate dependency-keyed effect).
+    again): within a single question item's flow, the suggested candidate
+    is asked about exactly once, in its own slot, and is never
+    re-presented as a grid tile while that slot is still asking —
+    `gridCandidates` keeps it out (`candidate.identifier !== suggestedCandidateId`), so the old asked-twice shape cannot recur.
+    A candidate the user has explicitly REJECTED at the suggestion slot
+    is the deliberate exception (issue #748): the slot collapses to a
+    contextual "Got it — not that one. Is it any official printing at
+    all?" plus a "You said: not M21 203" context line, and the rejected
+    candidate STAYS in the grid as a de-emphasised, fully re-selectable
+    tile — `data-rejected="true"` with a "you said no · tap to
+    reconsider" note — the recover path for a mis-tap, where tapping the
+    tile casts it as a real pick. `gridCandidates` is therefore every
+    candidate with `rejectedCandidateIds.has(id) || id !== suggestedCandidateId`: the rejected set is INCLUDED, not subtracted,
+    and the grid still runs through the attribute-chip filter separately
+    (a rejection is a `gridCandidates` decision, chip hiding a
+    `visibleCandidates` one), so "N hidden by your tags" never conflates
+    the two. A rejected candidate never joins an illustration cluster —
+    a cluster renders only one representative tile, which would silently
+    bury the reconsider path — so it always renders standalone as a
+    de-emphasised, ungrouped tile. The "none left" state
+    (`suggestionRejectedWithNoneLeft`) is decided by candidate count, not
+    grid count — no candidate OTHER than the rejected suggestion, since
+    the rejected one is now a grid member: in that state the grid is just
+    the single de-emphasised tile, the question was already resolved by
+    the terminal vote (next paragraph), and the filter panel and bottom
+    action row stay hidden while the reason strip carries the flow.
+    `rejectedCandidateIds` is per-item state, reset alongside every other
+    per-question field in the same fetch effect (see the module's own
+    comment on why that reset can't be a separate dependency-keyed
+    effect).
 
     **Singleton "No" now casts the terminal vote immediately** (owner-
     reported "dedup doesn't work" bug, fixed after this bullet originally
@@ -2195,17 +2464,11 @@ what the engine actually found.
 **Instrumentation for a future ranked-vote decision** (code-only, no new
 fetches, no ranked-vote schema built here - `docs/theory.md`'s
 Dawid-Skene addendum is the eventual consumer): `CardScanLog` gained two
-additive fields, `evidence_types_used` and `survivor_pks`, populated for
-fallback's own `"no-evidence"`/`"ambiguous"` rows (never for an OCR/phash
-row, which have no sub-check concept of their own).
+additive fields, `evidence_types_used` and `survivor_pks` (never for an
+OCR/phash row, which have no sub-check concept of their own).
 `evidence_types_used` is always available (already threaded through as
 `CardOutcome.fallback_evidence_types`, just never persisted before this
-change). `survivor_pks` is populated only where knowable WITHOUT
-re-deriving `local_fallback.py`'s own border/artist/symbol sub-checks a
-second time in the caller: trivially the card's full (post
-`expansion_hint`-narrowing) candidate set for `"no-evidence"` (nothing
-filtered anything) - left `null` for `"ambiguous"`, see the open item
-below. phash's own `"no-clear-winner"` skip_reason is similarly split
+change). phash's own `"no-clear-winner"` skip_reason is similarly split
 into two distinct sub-cases, `"no-clear-winner-distance"` (best distance
 over threshold) and `"no-clear-winner-margin"` (runner-up too close
 behind it) - re-derived in the caller via a pure Hamming-distance
@@ -2214,20 +2477,35 @@ itself used (verified empirically to match `imagehash.ImageHash`'s own
 subtraction before use), never by editing that function's own decision
 logic.
 
-**PROTECTED CORE boundary honored, not routed around**
-(`docs/upstreaming/license-provenance.md` §2): `local_phash.py` and
-`local_fallback.py` were not edited. The phash no-clear-winner split is
-pure arithmetic re-derivation from inputs the caller already held (safe
-to duplicate - no tunable decision logic of its own). Fallback's
-survivor set for `"ambiguous"` is a different case: recovering it would
-mean either reimplementing `local_fallback.py`'s border/artist/symbol
-sub-checks (three algorithms with real tunable thresholds/margins/fuzzy
-ratios) a second time in the caller, or having `FallbackOutcome` expose
-the already-computed `survivors` set directly - the latter touches
-protected core. **Open item, not built**: exposing `survivors` on
-`FallbackOutcome` is the clean fix, needs owner sign-off per the
-absorption-adjacent protected-core review convention; `survivor_pks`
-stays `null` for `"ambiguous"` rows until that lands.
+**Two distinct fallback mechanisms, not one** - easy to conflate since
+both port the same evidence-combination model: `local_fallback.py`'s
+`run_fallback_for_card`/`FallbackOutcome` is the LIVE PILOT engine
+(PROTECTED CORE, runs against a fresh per-invocation image fetch);
+`local_calculate_verdicts.calculate_fallback_verdict` is Stage D's own
+independent port, operating entirely off already-persisted
+`ImageEvidence` fields. The latter calls `local_fallback.py`'s
+`filter_by_border_color`/`match_artist` directly (PROTECTED CORE
+functions, called not reimplemented) and reimplements only the symbol
+sub-check's pure Hamming-distance arithmetic - never `FallbackOutcome`
+itself, so its own `survivors` set was never gated on that class
+exposing anything.
+
+**`survivor_pks` now populated for Stage D's own fallback rows** (issue
+#433): `calculate_fallback_verdict` already builds `survivors` to pick
+its own skip_reason in the first place - the "no protected-core
+reimplementation" analysis above applies unchanged, since this only
+persists a set that calculator already held via functions it was already
+calling. Populated for all three skip reasons that calculator returns:
+the full candidate set for `"no-sub-check-evidence"` (nothing filtered
+anything), `[]` for `"eliminated"`, the actual shortlist for
+`"ambiguous"`. **Still `null`** for the LIVE PILOT engine's own fallback
+rows - recovering ITS survivor set still means either reimplementing
+`local_fallback.py`'s sub-checks a second time in that caller or having
+`FallbackOutcome` expose `survivors` directly, and the latter still
+touches protected core. **Open item, not built**: exposing `survivors`
+on `FallbackOutcome` remains the clean fix for the live pilot engine's
+own rows, needs owner sign-off per the absorption-adjacent
+protected-core review convention.
 
 **Known gap, not built**: `is_no_match` votes do not propagate to
 cluster (identical-image) members the way positive votes do via
@@ -2583,23 +2861,34 @@ Confidence unchanged (0.7). No new tag seeded - the existing-tag check
 (`Tag.objects.filter(name=...).first()`, degrades to no vote if absent)
 was already in place before this change.
 
-### Who actually casts the attribute chips (2026-07-30)
+### Who actually casts the attribute chips (2026-07-30, updated 2026-08-19)
 
-**This replaces the pilot as the answer.** All three chip families —
-border colour, frame style, bleed edge — are cast by **evidence-reading
-casters that fetch no images**, and both modules are wired into the
-streaming conveyor (`stage_e_dispatch._run_stage_d`):
+**This replaces the pilot as the answer.** Five channels — covering border
+colour, frame style, bleed edge, uploader-declared filename treatments, and
+extended-art continuity — are cast by **evidence-reading casters that fetch
+no images**, wired into the streaming conveyor through two different
+dispatch steps: the first four rows below run inside
+`stage_e_dispatch._run_attribute_chip_casters`, and `art-edge-continuity-v1`
+runs inside the separate `stage_e_dispatch._run_evidence_only_calculators`
+— both are called from `_run_stage_d`:
 
-| chip family                           | module                      | identity               |
-| ------------------------------------- | --------------------------- | ---------------------- |
-| Black/White/Silver Border, Borderless | `local_layout_class_cast`   | `layout-class-cast-v1` |
-| Old Border, Modern Border             | `local_attribute_chip_cast` | `frame-style-cast-v1`  |
-| appropriate-bleed                     | `local_attribute_chip_cast` | `bleed-edge-cast-v1`   |
+| chip family                                                                                           | module                        | identity                       |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------ |
+| Black/White/Silver Border, Borderless                                                                 | `local_layout_class_cast`     | `layout-class-cast-v1`         |
+| Old Border, Modern Border                                                                             | `local_attribute_chip_cast`   | `frame-style-cast-v1`          |
+| appropriate-bleed                                                                                     | `local_bleed_calculator`      | `bleed-calculator-cast-v1`     |
+| Extended, Showcase, Full Art, Etched, Old Border, Future Frame, Black/White/Silver Border, Borderless | `local_filename_declarations` | `filename-declaration-cast-v1` |
+| Extended                                                                                              | `local_art_edge`              | `art-edge-continuity-v1`       |
 
-Each also has a standalone `--write`-gated management command of the same
-name. Frame style and bleed edge get **separate identities** because the
-bleed chip is negative-only: under one shared identity a card's frame vote
-would read as "handled" and permanently strand its bleed chip.
+The old single-signal bleed caster (`bleed-edge-cast-v1`, same module as
+frame style, NEW 2026-07-30) is **RETIRED 2026-08-15**: it is the SOLE
+machine channel that no longer runs, not a second channel alongside the
+calculator — see the cross-checked section below for why running both would
+defeat the calculator's abstention. Each surviving caster also has a
+standalone `--write`-gated management command of the same name. Frame style
+and bleed edge get **separate identities** because the bleed chip is
+negative-only: under one shared identity a card's frame vote would read as
+"handled" and permanently strand its bleed chip.
 
 **Why this exists.** `local_fallback`'s three `cast_*_vote` functions were
 reachable only from `local_identify_printing_tags.run_pilot` (which
@@ -2617,11 +2906,14 @@ pilot run; they are simply no longer the only path.
 
 **Zero image fetches, and that is the point.** Every input is already
 stored on `ImageEvidence`: `classify_frame_style` reads
-`collector_line_collector_number` and `illus_anchor_fired`; the bleed chip
-reads `bleed_class`. Re-deriving these through the pilot would have meant
-re-fetching ~220,000 images to recompute facts already in the database.
-Derivable populations, measured read-only 2026-07-29: `Modern Border`
-133,627, `Old Border` 9,006, `appropriate-bleed` 2,786.
+`collector_line_collector_number` and `illus_anchor_fired`; the bleed
+calculator reads `bleed_diff_mm` (Method A) and, where a canonical exists,
+the pinline-ruler measurement (Method B). Re-deriving these through the
+pilot would have meant re-fetching ~220,000 images to recompute facts
+already in the database. Derivable populations, measured read-only
+2026-07-29: `Modern Border` 133,627, `Old Border` 9,006,
+`appropriate-bleed` 2,786 (the retired single-signal caster's figure; the
+calculator covers the same population with a stricter abstention).
 
 **The frame chip gates on `artist_ocr`, not only on `collector_line_ocr`.**
 `illus_anchor_fired` is nullable and `bool(None)` is `False`, which is
@@ -2630,6 +2922,133 @@ without that gate every card missing `artist_ocr` would read `modern`.
 That is a manufactured vote from evidence that does not exist, and it is
 the same failure mode that lets a genuine old-frame card be vetoed
 `frame-mismatch` in Stage D.
+
+### A second, evidence-free channel: filename declarations (`local_filename_declarations`, 2026-08-19)
+
+Proxy artists name their own renders, and those names routinely declare
+the treatment ("Snapcaster Mage Extended.png"). `local_filename_declarations`
+parses `Card.name` for those declarations and casts the matching chip vote
+at `source=VoteSource.DEDUCTION` (pure inference from already-trusted
+structured data, per that enum's own docstring — filename parsing inspects
+no pixel) rather than `OCR`. Unlike every caster above it needs no
+`ImageEvidence` row at all: the input is present and immutable from the
+moment a card is created. A single card can cast several tags at once
+(Extended and Borderless are not exclusive); the four border-colour tags
+are the one mutually-exclusive axis and abstain as a group, recording
+`border-axis-contradiction`, when a name declares more than one of them.
+
+This channel never gates, skips, or is gated by any pixel-based
+calculator above — the two kinds of evidence are read independently, and
+their disagreement is itself useful: on the Extended chip, the stored
+`ImageEvidence.art_edge_class` pixel classifier independently agrees with
+the filename declaration 90.7% of the time (measured read-only against
+production, 2026-08-19, 235,912 cards), so the remaining 9.3% is exactly
+the population worth a human's attention rather than either channel's
+alone. Measured population that same pass: 20,629 distinct cards across
+109 sources declare a treatment this way, three chips (Full Art, Etched,
+Future Frame) with no other machine coverage at all.
+
+### A third channel, wired separately: extended-art continuity (`local_art_edge`, 2026-08-19)
+
+`local_art_edge.run_art_edge_continuity_cast` casts the pre-existing
+"Extended" chip from `ImageEvidence.art_edge_class`, a column Stage C's
+evidence extraction already populates by comparing three regions of the
+same image (the strip beside the art crop against two independent border
+references — see `classify_art_edge_continuity`'s own docstring for the
+geometry). The cast function itself fetches no image; it only reads that
+already-stored column, the same "reads stored evidence, fetches nothing"
+shape the four casters above share.
+
+It is wired into a different dispatch step from the other four, though:
+`stage_e_dispatch._run_evidence_only_calculators`, not
+`_run_attribute_chip_casters` — it was added in a separate wiring pass
+(2026-08-19), behind its own validation precondition (issue #721), after
+the other four were already live.
+
+Only the `extended` reading casts a vote (`VotePolarity.APPLY` on
+"Extended", `source=VoteSource.OCR`, since the underlying classification
+reads pixels even though the cast step itself does not); `framed` and
+`mixed` abstain deliberately rather than casting a negative — a negative
+vote from an unvalidated class would be a claim, not an abstention, and
+`mixed` is by definition the reading this classifier is least sure of.
+Validated against human votes on the pre-existing "Extended" chip: recall
+87.0% (20/23), 0.0% false positives (0/10), precision 100% (20/20), n=33
+cards / 5 voters, 0 disputed — corroborated at much larger scale by the
+filename channel above, which independently agrees with this classifier
+90.7% of the time over 13,117 cards.
+
+### The bleed calculator: two independent methods, cross-checked (`local_bleed_calculator`)
+
+The retired single-signal `bleed-edge-cast-v1` classified bleed from one signal - the image's own
+aspect ratio against the two known reference ratios. `local_bleed_calculator` REPLACES it: it adds
+a second, independent way to measure the same physical quantity and votes only when the two agree,
+giving `appropriate-bleed` a single cross-checked machine channel rather than two parallel ones
+that would double-count one signal (see the "Negative-only" paragraph below for why running both
+would defeat the abstention).
+
+**Method A - closed form from aspect ratio.** For symmetric bleed `b` on a 63x88mm card, the
+image's own aspect `a = width/height` satisfies `a = (63 + 2b) / (88 + 2b)`, so `b = (88a - 63) / (2 - 2a)`. This is exactly `local_fallback.compute_bleed_diff_mm`'s own formula, already computed
+and stored on every card's `ImageEvidence.bleed_diff_mm` at Stage C - this module reads that stored
+value back into a bleed figure (`3.175mm - bleed_diff_mm`) rather than deriving the formula a
+second time. It needs only the image's own pixel dimensions, so it applies to every card with a
+fetched, non-degenerate image - no canonical, no metadata, no frame class. Its blind spot: it
+assumes bleed is symmetric on all four edges, so it can't see an off-centre crop or one edge
+trimmed more than another.
+
+**Method B - the pinline ruler.** `local_pinline_inset.measure_pinline_inset` measures, per edge,
+the distance from the image's own edge inward to the first sustained colour transition - on a
+bordered card, that transition is the pinline where the printed border gives way to the card
+frame, not the upload's own canvas boundary (see that module's own docstring for the colour-scan
+mechanics and the two guards - the uniformity gate and the black-on-black abstention - that keep it
+from mistaking a borderless card's artwork, or a black margin against a black border, for a
+transition). Subtracting a calibrated trim-to-pinline constant (this module's
+`CALIBRATED_PINLINE_INSET_MM`, keyed by the card's `border_color`/`frame` era from
+`CanonicalPrintingMetadata`) from that pinline position yields a per-edge bleed. Because the
+constant is keyed by frame era and border colour is only resolvable together with era on a
+canonical-linked card, Method B is available on roughly a tenth of the catalogue - the cards with a
+resolved canonical printing - not on every card the way Method A is. Its blind spot is the mirror
+image of Method A's: a border printed thicker than the calibration expects reads as extra bleed,
+because the scan cannot tell "long border" from "border, then more bleed."
+
+**No pooled constant across frame eras.** A card whose border colour is known but whose era isn't
+(the common case - both live on the same canonical-linked 10% of the catalogue) could in principle
+use a constant pooled across eras for that colour. Measured: `black_2003`'s and `black_2015`'s
+per-edge medians differ by 0.42-0.51mm on top/left/right - technically under the calibration's own
+usability ceiling (~1.5mm spread), but 2-3x the ~0.24mm agreement floor every genuinely usable class
+in the calibration table sits at. Pooling would spend most of Method B's whole reason for existing
+
+- finer precision than Method A - on a case where the era-split constant is directly selectable
+  instead. So no pooled entry exists: an unresolved or era-unknown card falls back to Method A alone.
+
+**The abstain gate.** When both methods produce a number and they disagree by more than
+`METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM` (2.0mm, a named constant, not a literal at either call
+site), this module votes nothing and records `method-disagreement` instead of picking a side. The
+two methods fail in different, uncorrelated ways - a thick border fools Method B but not Method A -
+so a gap this large means at least one of them is wrong for this specific card, and the honest
+output is "this needs a human," which is exactly what a machine vote on a SENSITIVE tag exists to
+request, not to resolve. Measured cost, re-run against the 68-card catalogue geometry sample: 1
+card triggered the gate.
+
+**Confidence tiers, not a consensus-weight input.** `vote_consensus.resolve_vote_weight`'s own
+docstring is explicit that a vote's weight comes from `source` (who cast it, by what method), never
+from its self-reported `confidence` - so this module does not invent a number to express "the two
+methods agreed." It reuses the same two-tier split `local_fallback.py` already draws for its own
+multi-evidence-vs-single-evidence distinction: `FALLBACK_CONFIDENCE_MULTI_EVIDENCE` (0.8) when both
+methods produced a number within the gate, `FALLBACK_CONFIDENCE_SINGLE_EVIDENCE` (0.7) when only
+Method A was available (Method B unresolved, structurally abstained for borderless, or flagged
+unusable for this card's specific frame/edge combination). The value is stored on the vote row, the
+same as every other machine caster here - informational, not read by consensus weighting.
+
+**Negative-only, same convention the retired `bleed-edge-cast-v1` followed**: a vote fires only
+when this module's own reading agrees the card's Stage C `bleed_class` is `trimmed`,
+`NOT_APPLICABLE` polarity, own identity `bleed-calculator-cast-v1` so it stays independently
+purgeable/re-runnable and can never read a plain frame-chip vote as "handled" for its own
+eligibility. Its reason for existing over the single-signal caster it replaces is narrow and
+specific: withholding the vote on the ~1.5% of cases where Method B's independent, per-edge
+geometry contradicts the aspect-ratio-only "trimmed" call past the gate. That abstention is why
+`bleed-edge-cast-v1` was RETIRED rather than run alongside it — the old caster voted on exactly
+those cards, so a concurrent pass would re-cast the very votes the calculator was built to
+withhold. Zero image fetches - every input is already in the database.
 
 ### DPI-tag audit (2026-07-15, addendum item 8 - report only)
 

@@ -456,8 +456,10 @@ class Card(BaseModel):
 
 class TypeEnum(str, Enum):
     artist = "artist"
+    border = "border"
     confirmsuggestion = "confirm_suggestion"
     identifyprinting = "identify_printing"
+    illustration = "illustration"
     tag = "tag"
 
 
@@ -466,6 +468,7 @@ class QuestionFeedItem(BaseModel):
     type: TypeEnum
     candidates: Optional[List[PrintingCandidate]] = None
     confidentlyKnownArtistName: Optional[str] = None
+    illustrationCandidates: Optional[List[PrintingCandidate]] = None
     scryfallIllustrationUrl: Optional[str] = None
     suggestedPrinting: Optional[PrintingCandidate] = None
     tagConfidence: Optional[Dict[str, float]] = None
@@ -478,6 +481,9 @@ class QuestionFeedItem(BaseModel):
         type = TypeEnum(obj.get("type"))
         candidates = from_union([lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("candidates"))
         confidentlyKnownArtistName = from_union([from_none, from_str], obj.get("confidentlyKnownArtistName"))
+        illustrationCandidates = from_union(
+            [lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("illustrationCandidates")
+        )
         scryfallIllustrationUrl = from_union([from_none, from_str], obj.get("scryfallIllustrationUrl"))
         suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
         tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
@@ -487,6 +493,7 @@ class QuestionFeedItem(BaseModel):
             type,
             candidates,
             confidentlyKnownArtistName,
+            illustrationCandidates,
             scryfallIllustrationUrl,
             suggestedPrinting,
             tagConfidence,
@@ -503,6 +510,11 @@ class QuestionFeedItem(BaseModel):
             )
         if self.confidentlyKnownArtistName is not None:
             result["confidentlyKnownArtistName"] = from_union([from_none, from_str], self.confidentlyKnownArtistName)
+        if self.illustrationCandidates is not None:
+            result["illustrationCandidates"] = from_union(
+                [lambda x: from_list(lambda x: to_class(PrintingCandidate, x), x), from_none],
+                self.illustrationCandidates,
+            )
         if self.scryfallIllustrationUrl is not None:
             result["scryfallIllustrationUrl"] = from_union([from_none, from_str], self.scryfallIllustrationUrl)
         if self.suggestedPrinting is not None:
@@ -2143,6 +2155,7 @@ class ReportCardRequest(BaseModel):
     anonymousId: str
     identifier: str
     reason: Reason
+    hide: Optional[bool] = None
     text: Optional[str] = None
 
     @staticmethod
@@ -2151,14 +2164,17 @@ class ReportCardRequest(BaseModel):
         anonymousId = from_str(obj.get("anonymousId"))
         identifier = from_str(obj.get("identifier"))
         reason = Reason(obj.get("reason"))
+        hide = from_union([from_bool, from_none], obj.get("hide"))
         text = from_union([from_str, from_none], obj.get("text"))
-        return ReportCardRequest(anonymousId, identifier, reason, text)
+        return ReportCardRequest(anonymousId, identifier, reason, hide, text)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["anonymousId"] = from_str(self.anonymousId)
         result["identifier"] = from_str(self.identifier)
         result["reason"] = to_enum(Reason, self.reason)
+        if self.hide is not None:
+            result["hide"] = from_union([from_bool, from_none], self.hide)
         if self.text is not None:
             result["text"] = from_union([from_str, from_none], self.text)
         return result
@@ -2821,6 +2837,60 @@ class SubmitIllustrationVoteResponse(BaseModel):
         return result
 
 
+class SubmitIllustrationRejectionRequest(BaseModel):
+    """
+    2/submitIllustrationRejection/ - the "Not this art" follow-up to
+    2/submitIllustrationVote/. Always names the artwork being rejected (`illustrationId` is
+    required, unlike that endpoint's optional/XOR-with-isUnknown field) - there is no "unknown"
+    analogue for a rejection, see `CardIllustrationRejection`'s own model docstring.
+    """
+
+    anonymousId: str
+    identifier: str
+    illustrationId: str
+    voteSurface: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitIllustrationRejectionRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        illustrationId = from_str(obj.get("illustrationId"))
+        voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
+        return SubmitIllustrationRejectionRequest(anonymousId, identifier, illustrationId, voteSurface)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["illustrationId"] = from_str(self.illustrationId)
+        if self.voteSurface is not None:
+            result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
+        return result
+
+
+class SubmitIllustrationRejectionResponse(BaseModel):
+    """
+    Response to 2/submitIllustrationRejection/. Deliberately narrower than
+    `SubmitIllustrationVoteResponse` - a rejection never writes a printing or artist channel (see
+    `illustration_vote.cast_illustration_rejection`'s own docstring), so there is nothing there
+    to report.
+    """
+
+    illustrationId: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitIllustrationRejectionResponse":
+        assert isinstance(obj, dict)
+        illustrationId = from_str(obj.get("illustrationId"))
+        return SubmitIllustrationRejectionResponse(illustrationId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["illustrationId"] = from_str(self.illustrationId)
+        return result
+
+
 class SubmitTagVoteRequest(BaseModel):
     anonymousId: str
     identifier: str
@@ -2951,6 +3021,7 @@ class SubmitQuestionAbstentionRequest(BaseModel):
     anonymousId: str
     identifier: str
     questionType: str
+    reason: Optional[str] = None
 
     @staticmethod
     def from_dict(obj: Any) -> "SubmitQuestionAbstentionRequest":
@@ -2958,13 +3029,15 @@ class SubmitQuestionAbstentionRequest(BaseModel):
         anonymousId = from_str(obj.get("anonymousId"))
         identifier = from_str(obj.get("identifier"))
         questionType = from_str(obj.get("questionType"))
-        return SubmitQuestionAbstentionRequest(anonymousId, identifier, questionType)
+        reason = from_union([from_none, from_str], obj.get("reason"))
+        return SubmitQuestionAbstentionRequest(anonymousId, identifier, questionType, reason)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["anonymousId"] = from_str(self.anonymousId)
         result["identifier"] = from_str(self.identifier)
         result["questionType"] = from_str(self.questionType)
+        result["reason"] = from_union([from_none, from_str], self.reason)
         return result
 
 

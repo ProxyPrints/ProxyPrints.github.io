@@ -24,6 +24,7 @@ import Tooltip from "react-bootstrap/Tooltip";
 import { getCardDataAttributes } from "@/common/cardDom";
 import {
   getBucketImageURL,
+  getDriveThumbnailURL,
   getImageKey,
   getWorkerImageURL,
 } from "@/common/image";
@@ -208,7 +209,10 @@ const useLocalFileImageSrc = (
 
 export const useImageSrc = (
   cardDocument: CardDocument,
-  small: boolean
+  small: boolean,
+  /** Editor-repass R1 - "small" | "thumb" tile tier; default "small" keeps every caller
+   * byte-identical. Only the Drive fallback URL changes at "thumb" (see getDriveThumbnailURL). */
+  imageTier: "small" | "thumb" = "small"
 ): {
   imageSrc: string | undefined;
   onLoad: React.ReactEventHandler<HTMLImageElement>;
@@ -299,8 +303,13 @@ export const useImageSrc = (
     small ? "small" : "large"
   );
   const imageWorkerURLValid = imageWorkerURL !== undefined;
+  // Editor-repass R1: at the "thumb" tier only the Drive fallback's `sz` parameter changes
+  // (w800-h800 → w340-h340) - the worker/bucket tiers above stay at "small", since their
+  // `thumb` keys/paths are backend/worker changes tracked separately.
   const smallThumbnailURL = imageWorkerURLValid
     ? imageWorkerURL
+    : imageTier === "thumb"
+    ? getDriveThumbnailURL(cardDocument)
     : cardDocument?.smallThumbnailUrl;
   const mediumThumbnailURL = imageWorkerURLValid
     ? imageWorkerURL
@@ -327,6 +336,9 @@ interface CardImageProps {
   hidden: boolean;
   small: boolean;
   showDetailedViewOnClick: boolean;
+  /** Editor-repass R1 - "small" | "thumb" tile tier for the Drive fallback URL; defaults to
+   * "small" (see useImageSrc). */
+  imageTier?: "small" | "thumb";
   /** The `SearchQuery` specified when searching for this card - used to detect whether
    * `cardDocument` was matched to a specific printing via community tags. */
   searchQuery?: SearchQuery | undefined;
@@ -342,6 +354,7 @@ function CardImage({
   hidden,
   small,
   showDetailedViewOnClick,
+  imageTier = "small",
   searchQuery,
   priority = false,
 }: CardImageProps) {
@@ -357,7 +370,7 @@ function CardImage({
   };
 
   const { imageSrc, onLoad, onError, imageIsLoading, imageRef, imageState } =
-    useImageSrc(cardDocument, small);
+    useImageSrc(cardDocument, small, imageTier);
 
   // a few other computed constants
   const imageAlt = cardDocument.name ?? "Unnamed Card";
@@ -534,6 +547,9 @@ interface CardProps {
   highlight?: boolean;
   /** When true, suppresses the card header and footer, showing only the image. */
   compressed?: boolean;
+  /** Editor-repass R1 - "small" | "thumb" tile tier for the Drive fallback URL; defaults to
+   * "small" (see useImageSrc). */
+  imageTier?: "small" | "thumb";
   /** Ref to attach to the card header for use as a drag handle. */
   handleRef?: (element: Element | null) => void;
 }
@@ -567,6 +583,7 @@ export function Card({
   noResultsFound,
   highlight,
   compressed = false,
+  imageTier = "small",
   handleRef,
 }: CardProps) {
   //# region computed constants
@@ -588,6 +605,7 @@ export function Card({
                   cardDocument?.identifier !== maybeCardDocument.identifier
                 }
                 small={true}
+                imageTier={imageTier}
                 showDetailedViewOnClick={
                   cardDocument?.identifier === maybeCardDocument.identifier &&
                   cardOnClick == null
@@ -720,6 +738,9 @@ interface EditorCardProps {
   highlight?: boolean;
   /** When true, suppresses the card header and footer, showing only the image. */
   compressed?: boolean;
+  /** Editor-repass R1 - "small" | "thumb" tile tier for the Drive fallback URL; defaults to
+   * "small" (see useImageSrc). */
+  imageTier?: "small" | "thumb";
   /** Ref to attach to the card header for use as a drag handle. */
   handleRef?: (element: Element | null) => void;
 }
@@ -743,6 +764,7 @@ export function EditorCard({
   noResultsFound,
   highlight,
   compressed,
+  imageTier = "small",
   handleRef,
 }: EditorCardProps) {
   //# region queries and hooks
@@ -773,6 +795,7 @@ export function EditorCard({
       noResultsFound={noResultsFound}
       highlight={highlight}
       compressed={compressed}
+      imageTier={imageTier}
       handleRef={handleRef}
     />
   );

@@ -191,6 +191,26 @@ B′, awareness line C (F4), survivors D at the count-proportional tier. The
 
 ## F2 — Per-axis stacked-exclusive chips (segmented, not chip soup)
 
+> **2026-08-11 correction note (ground truth, not a ratification
+> revision).** This section's Treatment/Border split does not hold against
+> the live catalogue. Measured against `CanonicalPrintingMetadata`
+> (113,224 printings, 2026-08-11): `borderless` 5,962 · `full_art` 6,505 ·
+> `showcase` 3,074 · `extendedart` 4,165. Borderless combines freely with
+> full art (4,902 of 5,962 borderless printings, 82%) and with showcase
+> (1,056); full art combines freely with showcase (652 of 3,074 showcase
+> printings, 21%). Extended art never co-occurs with borderless or
+> showcase (0 each), and co-occurs with full art in exactly 2 printings
+> catalogue-wide (Exploration Broodship, Uthros Research Craft — both Edge
+> of Eternities Commander). So **borderless is a border colour**
+> (Scryfall's own `border_color` field puts it alongside black/white/
+> silver), not an independent Treatment toggle, and **full art is
+> independent of every treatment** rather than one member of a five-way
+> standalone set. Per this file's own header, the ruling below is not
+> re-derived — this note records a fact the ratification got wrong, it
+> does not revise the ratification. The corrected model lives in the
+> living doc: [`docs/features/grid-selector.md`](../features/grid-selector.md)'s
+> "The art-picker FUNNEL" section.
+
 **Model (already in `attributeChips.ts` — render it correctly):**
 
 - **Exclusive axes** = `EXCLUSION_GROUPS`. Render each as a react-bootstrap

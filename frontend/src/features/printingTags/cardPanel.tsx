@@ -43,6 +43,8 @@ export const revealAnimation = keyframes`
 export const RevealWrapper = styled.div`
   position: relative;
   overflow: hidden;
+  width: 100%;
+  height: 100%;
 `;
 
 // The one "mystery card" backdrop every blue/purple-tinted placeholder on the page renders -
@@ -146,8 +148,18 @@ export const StaticCardPanel = styled.div`
 // so the enlarged art is fully visible rather than cut off at the original box edge -
 // raised above its siblings on hover so it doesn't render underneath the neighbouring grid
 // cells it now overlaps.
+//
+// Issue #746 - `position: absolute; inset: 0` (rather than a normal-flow box the img sizes
+// via a `height: 100%` percentage) so this never counts as in-flow content for its
+// aspect-ratio'd ArtPlaceholder/IllustrationArtPlaceholder parent to size itself around: a
+// percentage height on a replaced element (the <img> inside) resolves against an
+// indeterminate ancestor by falling back to the image's own intrinsic ratio, which was
+// silently overriding the parent's declared aspect-ratio with whatever ratio the loaded
+// image happened to have. Taking this box out of flow removes that override path, so the
+// parent's aspect-ratio is what actually renders, matching what its own token table says.
 export const ZoomableThumbnail = styled.div`
-  position: relative;
+  position: absolute;
+  inset: 0;
   z-index: 0;
 
   img {
@@ -218,6 +230,31 @@ export const ArtPlaceholder = styled.div`
   }
 `;
 
+// Issue #746 - the harvested Scryfall illustration crop (candidate.artCropUrl) is not
+// card-shaped, so forcing it through ArtPlaceholder's 63/88 card frame either crops its edges
+// or letterboxes it. This frame's ratio is measured from the actual crop region instead of
+// assumed: MPCAutofill's local_phash.ART_CROP_BOX (the fractional box every art crop is
+// harvested from) resolves to pixel regions of width:height ~= 584:444 across the golden-set
+// fixtures (MPCAutofill/cardpicker/golden_set.py `art_crop_px` entries, e.g.
+// `[48, 92, 632, 536]`) - a landscape ratio, nothing like the full card's portrait 63/88. Same
+// object-fit/hover-zoom contract as ArtPlaceholder, just sized to what an illustration crop
+// actually looks like.
+export const ILLUSTRATION_CROP_ASPECT_RATIO = "584 / 444";
+
+export const IllustrationArtPlaceholder = styled.div`
+  position: relative;
+  width: 100%;
+  aspect-ratio: ${ILLUSTRATION_CROP_ASPECT_RATIO};
+
+  img {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+`;
+
 // The spec's ".ctile" candidate tile (SPEC-wtc-rebuild.md section 1c "candidate tile" row) -
 // `bg raised, border divider; .sel outline 2px --accent`. "highlighted" (this component's own
 // className, kept unchanged at every call site) marks the suggested printing from a
@@ -238,6 +275,10 @@ export const CandidateButton = styled.button`
   color: inherit;
   text-align: left;
   cursor: pointer;
+  /* DESIGN-REPASS Rule 2 (#715) - kills the mobile double-tap-zoom gesture that swallows a
+     fast single tap (the first tap starts a zoom, the second lands the click, reading as
+     "needs two taps"), so every tap on a candidate tile registers on the first press. */
+  touch-action: manipulation;
 
   /* Issue #705 - same fix as SuggestedThumb (QuestionFeed.tsx): clip to the rounded tile at
      rest, stop clipping for exactly the hover duration ZoomableThumbnail scales its <img> up,
@@ -259,6 +300,22 @@ export const CandidateButton = styled.button`
     outline: 2px solid var(--accent, #bb9af7);
     outline-offset: -1px;
     border-color: var(--accent, #bb9af7);
+  }
+
+  /* Issue #748 - a Level 1 suggestion the user rejected stays reachable in the Level 2 grid
+     as a de-emphasised tile (dimmed, dashed outline) instead of vanishing; hovering restores
+     full opacity so it still reads as selectable - tapping it re-casts the candidate as a
+     legitimate pick, the reconsider path. QuestionFeed.tsx adds 'data-rejected' on the same
+     tiles; this class is the visual half of that same marker. */
+  &.rejected {
+    opacity: 0.55;
+    outline: 1px dashed var(--muted, #8c94bf);
+    outline-offset: -1px;
+
+    &:hover {
+      opacity: 1;
+      outline: 1px solid var(--divider, #16161e);
+    }
   }
 `;
 
@@ -282,18 +339,34 @@ export const CandidateCaption = styled.div`
     font-family: "Courier New", monospace;
     font-size: 10px;
   }
+
+  /* Issue #748 - the "you said no · tap to reconsider" note on a rejected Level 1 suggestion
+     that stays in the grid as a de-emphasised, re-selectable tile (QuestionFeed.tsx renders
+     it as a .rej caption div with its own testid). Muted italic, one step quieter than the
+     set/collector line above it, so the tile still reads as a candidate first and a
+     reconsideration affordance second. */
+  .rej {
+    color: var(--muted);
+    font-size: 10px;
+    font-style: italic;
+  }
 `;
 
 // The spec's ".candgrid" (SPEC-wtc-rebuild.md section 1c "candidate grid" row + section 3's
 // "continuous fold points" table) - an intrinsic auto-fill grid in container units, replacing
 // the old `MobileCandidateScroller` horizontal-scroll wrapper (retired, WD8) with a grid that
 // folds continuously (6 -> 4 -> 3 -> 2 columns) as the hero container narrows, no breakpoint.
+// Issue #746 - the harvested artwork IS the subject of the question being asked, so a
+// 78-116px tile read as "far too small by default" against that role. Raised to
+// 120-190px (still an intrinsic auto-fill clamp, no viewport breakpoint - section 3's
+// container-first policy) so a candidate's art is legible enough to actually compare on
+// sight, at the cost of fewer columns per row on a narrow container.
 export const CandidateGrid = styled.div`
   display: grid;
   gap: clamp(7px, 1.6cqi, 11px);
   margin-top: 4px;
   grid-template-columns: repeat(
     auto-fill,
-    minmax(clamp(78px, 15cqi, 116px), 1fr)
+    minmax(clamp(120px, 24cqi, 190px), 1fr)
   );
 `;

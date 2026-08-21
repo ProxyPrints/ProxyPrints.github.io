@@ -6,8 +6,10 @@ import {
 
 import { Back, Front, QueryTags } from "@/common/constants";
 import {
+  getExistingAnonymousId,
   getLocalStorageSearchSettings,
   setLocalStorageFavorites,
+  setLocalStorageHiddenCardIds,
   setLocalStorageManualOverrides,
 } from "@/common/cookies";
 import { isLikelyDriveFileId } from "@/common/orphanCard";
@@ -37,6 +39,7 @@ import {
   setFavoriteRender,
   toggleFavoriteRender,
 } from "@/store/slices/favoritesSlice";
+import { hideCard } from "@/store/slices/hiddenCardsSlice";
 import { recordInvalidIdentifier } from "@/store/slices/invalidIdentifiersSlice";
 import {
   addMembers,
@@ -88,9 +91,19 @@ export const recalculateSearchResults = async (
   });
 };
 
+// WTC load-time waterfall fix - /whatsthat renders QuestionFeed, which is entirely
+// self-contained off its own questionFeed/cards/tags endpoints and has no cardback picker, no
+// search UI, and nothing that reads sourceDocuments. Fetching sources+cardbacks here anyway
+// cost every WTC page load two round trips (~450ms each in production) it can never use;
+// skipping them on this one route leaves every other caller of fetchSources (which does need
+// both, for the cardback picker and search-settings hydration) unaffected.
+const routeNeedsSourcesAndCardbacks = (): boolean =>
+  typeof window === "undefined" ||
+  !window.location.pathname.startsWith("/whatsthat");
+
 export const fetchSources = async (state: RootState, dispatch: AppDispatch) => {
   const isRemoteBackendConfigured = selectRemoteBackendConfigured(state);
-  if (isRemoteBackendConfigured) {
+  if (isRemoteBackendConfigured && routeNeedsSourcesAndCardbacks()) {
     await fetchSourceDocumentsAndReportError(dispatch).then(() =>
       fetchCardbacksAndReportError(dispatch)
     );
@@ -429,6 +442,25 @@ startAppListening({
   effect: async (action, { getState }) => {
     const state = getState();
     setLocalStorageManualOverrides(state.project.manualOverrides);
+  },
+});
+
+startAppListening({
+  actionCreator: hideCard,
+  /**
+   * Persist the per-anonymous_id hidden set to localStorage on every hide (issue #714), so
+   * the client-side mirror survives a reload. A hide only ever follows a successful report
+   * submission, which has already minted the anonymous id - so the id always exists here.
+   */
+  effect: async (action, { getState }) => {
+    const anonymousId = getExistingAnonymousId();
+    if (anonymousId == null) {
+      return;
+    }
+    setLocalStorageHiddenCardIds(
+      anonymousId,
+      getState().hiddenCards.hiddenIdentifiers
+    );
   },
 });
 

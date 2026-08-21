@@ -223,6 +223,19 @@ This is scoped to the rail (`layout="stacked"`) caller only; the
 `GridSelectorFilters` component this doc's earlier sections describe is
 a completely separate code path, also unaffected.
 
+**Superseded again by the rail-anchored filters round** — the owner
+rejected the tier-conditional float/scrim panel above as a de-facto
+modal ("a massive background darkening box"). The panel is now ONE
+in-rail `Collapse` (`.fpanel.inline`) at every viewport tier, not just
+phone; there is no `.fpanel.float`, no `.fscrim`, and no
+`ReactDOM.createPortal` call left in `SelectVersionResults.tsx`.
+`DisplayPage.tsx`'s `LeftRailOffcanvas` widens itself (its own
+`$filtersOpen` prop, reported up through `SelectVersionResults`' own
+`onFiltersOpenChange`) while the panel is open, so the funnel's chips and
+the candidate grid stay visible together instead of one covering the
+other. The panel still starts closed by default (`initialSettingsVisible: false`, unchanged) and is opened via the same `funnel-filters-toggle`
+button. This is scoped to the same rail (`layout="stacked"`) caller only.
+
 - <a id="funnel-chips-positive-or-off"></a>**Per-axis segmented chips are
   positive-or-off (two-state) for Border/Frame, not the QuestionFeed's
   tri-state** (locked 2026-07-22, PR #329; formerly labeled _D23_ in this
@@ -258,6 +271,35 @@ a completely separate code path, also unaffected.
   of the 2026-07-22 ratification (whose own "narrow to this / don't"
   reasoning was about the funnel-vs-QuestionFeed distinction generally,
   not a hard ban on ever adding an exclude state anywhere in the funnel).
+  - **CORRECTION (ground-truth catalogue measurement, 2026-08-11)**: the
+    Treatment block above — Full Art/Borderless/Showcase/Extended/Etched
+    folded into one unified include/exclude group — mis-models the
+    catalogue. Measured against `CanonicalPrintingMetadata` (113,224
+    printings): `borderless` 5,962 · `full_art` 6,505 · `showcase` 3,074 ·
+    `extendedart` 4,165, and these are not mutually exclusive the way a
+    single shared tri-state cycle assumes. 4,902 of the 5,962 borderless
+    printings (82%) are ALSO full art (e.g. Ghalta, Primal Hunger); 1,056
+    are also showcase; 652 of the 3,074 showcase printings (21%) are also
+    full art (Cathars' Crusade, INR 483, is full art AND showcase AND
+    borderless at once; Tymaret, Chosen from Death, MUL 148, is full art
+    AND showcase on a BLACK border — treatments compose across border
+    colours too). Only showcase and extended art are genuinely exclusive
+    of each other and of borderless (0 co-occurrences each in the
+    catalogue); full art and extended art co-occur in exactly 2 printings
+    catalogue-wide (Exploration Broodship, Uthros Research Craft, both
+    Edge of Eternities Commander). The correct model: **Border** is an
+    exclusive axis of Black/White/Silver/**Borderless** (Scryfall's own
+    `border_color` field already puts borderless there, not in a
+    treatment field); **Frame era** stays its own exclusive
+    Old/Modern/Future axis; **Treatment** is Showcase XOR Extended Art,
+    with **Full Art independent and freely combinable with either** (or
+    with neither). Extended art always carries a border colour; borderless
+    and full art may co-occur with each other and with showcase. This is a
+    documentation correction recording ground truth, not an implementation
+    change — the code fix is tracked separately. See
+    [`docs/reference/funnel-spec.md`](../reference/funnel-spec.md)'s §F2
+    correction note for the same figures measured against the original
+    ratified spec.
 - <a id="sensitive-tags-excluded-from-funnel"></a>**Three chip states**
   (F3): SETTLED (some survivor resolves the tag — `card.tags`), SUGGESTED
   (every carrying survivor only has it via `card.suggestedFilterTagNames`
@@ -316,6 +358,38 @@ a completely separate code path, also unaffected.
     a card whose `tagVoteStatuses` says `"suggested"` but whose
     `suggestedFilterTagNames` excludes the tag renders no suggested
     chip and casts no implicit vote for it.
+- <a id="unknown-axis-survives-filter"></a>**A candidate with no signal on
+  a chip's axis survives that chip, marked distinct from a real match**
+  (issue #789). `candidateSatisfiesAttributeTag` used to read only as
+  "resolved OR suggested," so a candidate carrying neither was treated as
+  a _known_ non-match and dropped by the funnel's AND-across-chips
+  survivor filter — indistinguishable from a candidate that genuinely
+  resolves to a different value on the same axis. Those are different
+  claims: having no vote data for an axis says nothing about what the
+  axis actually is. This mattered most for exactly the population the
+  taxonomy already admits it can't classify — a custom/altered/gold
+  border falls outside Black/White/Silver/Borderless entirely, so no
+  amount of future voting could ever resolve it, and every border chip
+  silently deleted it (and the illustration on it) from the grid.
+  Fixed by splitting the definite-match check
+  (`candidateHasAttributeTag`) from a new genuine-unknown check
+  (`isAttributeAxisUnknownForCandidate`): unknown when no tag sharing the
+  chip's own exclusion group is resolved or suggested; a _resolved_
+  sibling (a candidate that genuinely IS a different value on the same
+  axis) still disqualifies as before. Scoped exactly like
+  `getOpenExclusionGroups` — Border Color and Frame Style qualify (the
+  two enum-like axes that can hold a value outside the taxonomy); a
+  standalone chip (Full Art, Etched) or `FRAME_TREATMENT_GROUP`
+  (Showcase/Extended) does not, since "no tag" is already a complete,
+  definite answer for a plain boolean with no taxonomy-gap case. An
+  unknown survivor renders a small `?` corner marker
+  (`select-version-unknown-attribute-badge-*`) distinct from the
+  `SuggestedMarker` glyph, so surviving the filter never reads as a
+  confirmed match. Since the filter operates per-candidate (this surface
+  has no illustration-level grouping the way `filterCandidatesByChipStates`
+  does), an unknown candidate simply isn't removed at all — filtering on
+  a border axis can't narrow the illustration axis for it, because
+  nothing here ever removes it on that axis's account.
 - <a id="count-proportional-disclosure"></a>**Count-proportional disclosure
   tiers ship as named constants** (F1; locked 2026-07-22, PR #329;
   formerly labeled _D21_ in this document), refining the editor-completion
@@ -559,7 +633,8 @@ a completely separate code path, also unaffected.
   (+ `selectVersionGrouping.test.ts`) — the `/display`-only Select
   Version section (issue #167) and its FUNNEL round (F1-F7)
 - `frontend/src/features/attributeChips/attributeChips.ts` —
-  `FUNNEL_AXES`, `chipMembershipState`, `candidateSatisfiesAttributeTag`
+  `FUNNEL_AXES`, `chipMembershipState`, `candidateSatisfiesAttributeTag`,
+  `candidateHasAttributeTag`, `isAttributeAxisUnknownForCandidate`
   (funnel round, additive to the existing chip taxonomy)
 - `frontend/src/features/pdf/PagePreview.tsx` — `onSlotContextMenu`,
   the extracted `PagePreviewSlotEl`, the `⋯` menu cue (funnel round F6)

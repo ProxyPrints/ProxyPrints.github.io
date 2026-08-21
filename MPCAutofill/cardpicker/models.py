@@ -202,6 +202,19 @@ class CanonicalPrintingMetadata(models.Model):
     border_color = models.CharField(max_length=20, blank=True)
     frame = models.CharField(max_length=10, blank=True)
     frame_effects = models.JSONField(default=list, blank=True)
+    # Scryfall's own colour identity, copied verbatim (e.g. `["W", "U"]`, `[]` for colourless) -
+    # same JSONField shape as frame_effects above. Motivation: a card's frame colour treatment
+    # varies with its colour identity, which makes any fixed-position colour measurement of frame
+    # geometry uninterpretable without it (a colour-homogeneous group of cards measured a
+    # within-group colour spread of 8.8 at a fixed coordinate against a colour-diverse group's
+    # 87.2 at the identical coordinate). Not consumed by any calculator yet - data availability
+    # only, see printing_metadata_import.PrintingMetadataRow.color_identity.
+    color_identity = models.JSONField(default=list, blank=True)
+    # Scryfall's own type line verbatim (e.g. "Basic Land — Forest") - same CharField convention
+    # as border_color/frame above. Identifies lands, the most colour-homogeneous group and
+    # therefore the cleanest to measure colour identity's effect against (see color_identity
+    # above). Not consumed by any calculator yet - data availability only.
+    type_line = models.CharField(max_length=255, blank=True, default="")
     # Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme") -
     # the same value `printing_metadata_import.PrintingMetadataRow.layout` already parses and
     # was, until issue #693, discarded after being checked against `DOUBLE_FACED_LAYOUTS`.
@@ -1091,6 +1104,23 @@ class CardPrintingTag(AbstractWeightedVote):
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="printing_tags")
     printing = models.ForeignKey(to=CanonicalCard, on_delete=models.CASCADE, null=True, blank=True, related_name="tags")
     is_no_match = models.BooleanField(default=False)
+    # Issue #797: `local_calculate_verdicts.calculate_fallback_verdict`'s own border/artist/
+    # symbol(/collector_line) evidence list, carried onto the vote it justifies instead of
+    # discarded. `CardScanLog.evidence_types_used` (that field's own docstring) is this field's
+    # sibling on the SKIP side; a MATCH never writes a `CardScanLog` row at all
+    # (`local_calculate_verdicts.run_fallback_calculator`), which is exactly why
+    # `question_feed._evidence_justifies_confirmation` reads THIS field, off the specific vote
+    # being confirmed, rather than that table. Null (not `default=list`) distinguishes "no writer
+    # has ever populated this vote" - every vote cast before this field existed, every human vote,
+    # every join-key/deductive-backfill vote, none of which share the fallback calculator's
+    # border/artist/symbol vocabulary - from "the fallback calculator looked and recorded
+    # something"; both read as "evidence does not justify confirmation" at the one call site that
+    # reads this field, so the distinction is for a future backfill pass to act on, not for
+    # today's gate to branch on. No `survivor_pks` sibling here: `FallbackVerdict.survivor_pks` is
+    # only ever populated alongside a SKIP (see that dataclass's own docstring) - on a MATCH it is
+    # always `None`, so a vote-side copy would carry zero information for every row that could
+    # ever write one.
+    evidence_types_used = models.JSONField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -1400,6 +1430,85 @@ class CardIllustrationVote(AbstractWeightedVote):
         return f"[{self.source}] {self.card.name} -> illustration {outcome}"
 
 
+class CardIllustrationRejection(AbstractWeightedVote):
+    """
+    A vote that a given `Card` does NOT depict a specific Scryfall ARTWORK (issue #524's "Not
+    this art" follow-up) - the negative counterpart to `CardIllustrationVote`, and deliberately
+    a SEPARATE model rather than a polarity flag on that one.
+
+    WHY NOT A POLARITY FLAG ON `CardIllustrationVote`. That model's (card, anonymous_id) unique
+    constraint is UNCONDITIONAL BY DESIGN (issue #525 - see its own docstring): one identity
+    holds AT MOST ONE illustration opinion per card, full stop. A rejection is not that opinion -
+    it is the opposite kind of claim, "one of these artworks is wrong", and a voter must be able
+    to reject several candidate artworks for one card while still affirming a different one, or
+    affirming none at all. Consuming the same unconditional slot for a rejection would mean
+    rejecting one artwork could block ever affirming the right one - backwards from the intent,
+    and exactly the failure this model exists to avoid. So this is its own table, its own
+    constraint, unrelated to `CardIllustrationVote`'s.
+
+    THE CONSTRAINT IS (card, anonymous_id, illustration_id) - conditional in the sense that
+    matters (per-artwork, not per-card): one identity may hold many rejections for one card (one
+    per rejected artwork), but at most one rejection of any GIVEN artwork. No XOR/unknown split
+    either - a rejection always names the artwork it rejects (`illustration_id` is NOT NULL);
+    "I don't know what this artwork is" is `CardIllustrationVote.is_unknown`'s claim, not this
+    model's, and rejecting "unknown" is not a meaningful statement.
+
+    NARROWS BY ELIMINATION, NEVER BY ELECTION. This model competes for nothing:
+    `illustration_consensus.eliminated_illustration_ids` runs `vote_consensus.
+    resolve_weighted_consensus` independently per `illustration_id`, over just that artwork's
+    own rejection rows, with a single possible outcome - so the function reduces to the same
+    weighted-quorum-plus-human-backed-gate test every other vote model here already uses, applied
+    per candidate rather than across candidates. It never assigns a winner and never touches
+    `CardIllustrationVote.resolve_illustration`'s own tally; see that function's module for the
+    full read-side design. Nothing here is ever expanded into `CardPrintingTag` rows either - the
+    illustration-to-printing narrowing stays the same READ (`local_illustration.
+    printings_for_illustration`) it always was; a rejected ARTWORK says nothing about which
+    PRINTINGS sharing it are themselves rejected.
+
+    WEIGHT IS UNCHANGED MACHINERY. A rejection's weight resolves through the exact same
+    `vote_consensus.resolve_vote_weight(source, anonymous_id, run_id)` every other
+    `AbstractWeightedVote` subclass uses - there is no separate rejection weight scale. A vote's
+    weight is a property of WHO cast it and BY WHAT METHOD, never of which way it points; see
+    that function's own docstring for the argument against a weight ever depending on the claim
+    itself.
+
+    MACHINE-CAST ROWS (`local_illustration.run_illustration_calculator`) are written alongside
+    every accepted `CardIllustrationVote`: one positive implies a rejection for every OTHER
+    illustration candidate available for that card (`get_ranked_printing_candidates` - the same
+    candidate space `illustration_vote.printings_for_card_and_illustration` already draws on),
+    so the elimination space stays dense even though human rejections alone are sparse. Retracted
+    the same way every other Stage D write is: `models.purge_stale_machine_votes`, family-scoped
+    on `ILLUSTRATION_ANONYMOUS_ID`, re-run each time the calculator's positive for that card
+    changes - see that function's own call site in `local_illustration.py` for the exact
+    ordering/idempotence contract.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="illustration_rejections")
+    # Always set - a rejection names the artwork it rejects. Not nullable, unlike
+    # `CardIllustrationVote.illustration_id`: there is no "unknown" analogue here (see the
+    # docstring above).
+    illustration_id = models.UUIDField(db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["card", "anonymous_id", "illustration_id"],
+                name="cardillustrationrejection_unique_vote",
+            ),
+        ]
+        indexes = [
+            # Covers `illustration_consensus.eliminated_illustration_ids`' per-group read
+            # (`WHERE card_id IN (<md5 group>) ORDER BY card_id, id`, then bucketed by
+            # illustration_id in Python) - card_id-first because the query is always scoped by
+            # card/group first and only ever fans out to illustration_id afterwards in-memory,
+            # never filtered by illustration_id alone at the DB layer.
+            models.Index(fields=["card", "illustration_id"], name="cardillusrej_card_illus_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"[{self.source}] {self.card.name} -> NOT illustration {self.illustration_id}"
+
+
 class ArtboxPhashExemplarSeedKind(models.TextChoices):
     """
     How an `ArtboxPhashExemplar` row was seeded (issue #508 phase 1) - the provenance distinction
@@ -1650,6 +1759,31 @@ class CardReport(models.Model):
 
     def __str__(self) -> str:
         return f"{self.card.name} -> {self.reason} ({self.anonymous_id})"
+
+
+class HiddenCard(models.Model):
+    """
+    A durable per-anonymous_id record that `card` should be excluded from that identity's own
+    future question-feed items (see docs/features/moderation.md's hidden-card section). Written
+    by `views.post_report_card` when the report carries `hide=True` (`ReportCardRequest.hide`,
+    additive to the existing report payload) - always alongside a `CardReport` row, in the same
+    transaction, never in place of one. Scoped to the client-generated anonymous_id only, same
+    as every other vote/report table here - no account linkage yet (see that doc section for
+    what this deliberately does not do). `get_or_create`d at the write site, so a repeat report
+    with `hide=True` for the same (card, anonymous_id) is a no-op rather than an IntegrityError.
+    """
+
+    card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="hidden_by")
+    anonymous_id = models.CharField(max_length=40)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["card", "anonymous_id"], name="hiddencard_unique_hide"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.card.name} hidden for {self.anonymous_id}"
 
 
 class TagSuggestionStatus(models.TextChoices):
@@ -2188,18 +2322,25 @@ class CardScanLog(models.Model):
     # Instrumentation for a future ranked-vote decision (issue #207, docs/theory.md's
     # Dawid-Skene addendum) - code-only, no schema for that future decision built here. Always
     # `[]` for a non-fallback row (OCR/phash have no sub-check concept of their own) and for
-    # fallback's own "no-evidence" row (by definition, nothing fired) - populated with whichever
-    # of "border"/"artist"/"symbol" produced a reading for fallback's "ambiguous" row.
+    # local_calculate_verdicts.calculate_fallback_verdict's own "no-sub-check-evidence" row (by
+    # definition, nothing fired) - populated (issue #433) with whichever of "border"/"artist"/
+    # "symbol" produced a reading for that same calculator's "eliminated" and "ambiguous" rows.
     evidence_types_used = models.JSONField(default=list, blank=True)
-    # The candidate pks fallback's evidence intersection left standing, where knowable WITHOUT
-    # re-deriving local_fallback's own protected-core decision logic a second time in the caller
-    # (docs/upstreaming/license-provenance.md §2): trivially the card's full (post
-    # expansion_hint-narrowing) candidate set for "no-evidence" (nothing filtered anything).
-    # Deliberately left `null` for "ambiguous" (more than one candidate survived, but which ones
-    # can't be recovered from what run_fallback_for_card returns today without either
-    # reimplementing its border/artist/symbol sub-checks a second time here, or having
-    # `FallbackOutcome` expose the survivor set itself - the latter touches protected core and is
-    # an open item, not built in this change). Never populated for an OCR/phash row.
+    # The candidate pks fallback's evidence intersection left standing (issue #433) - populated
+    # for every skip local_calculate_verdicts.calculate_fallback_verdict itself returns: the
+    # card's full candidate set for "no-sub-check-evidence" (nothing filtered anything), `[]` for
+    # "eliminated", the actual shortlist for "ambiguous". That calculator computes this set to
+    # pick its own skip_reason in the first place (`survivors` in calculate_fallback_verdict) -
+    # this field just carries it out to the row instead of discarding it, no protected-core
+    # reimplementation involved (docs/upstreaming/license-provenance.md §2: `filter_by_border_
+    # color`/`match_artist` are called, not reimplemented; the symbol sub-check's own arithmetic
+    # reimplementation predates this field). Still deliberately `null` for the LIVE PILOT engine's
+    # own fallback rows (`local_fallback.run_fallback_for_card` / `FallbackOutcome`, a different
+    # caller from the one above) - recovering its survivor set would mean either reimplementing
+    # its border/artist/symbol sub-checks a second time here or having `FallbackOutcome` expose
+    # the survivor set itself, and the latter touches protected core - still an open item, not
+    # built by issue #433. Never populated for an OCR/phash row, or for a missing-`ImageEvidence`
+    # skip (`calculate_fallback_verdict` is never reached, so no candidate set was ever resolved).
     survivor_pks = models.JSONField(null=True, blank=True)
 
     class Meta:
@@ -2245,6 +2386,11 @@ class CardQuestionAbstention(models.Model):
     source of truth, and duplicating it as a second closed enum here would just be a second
     place for the two to drift apart.
 
+    `reason` is an optional coded why for the abstention (e.g. the border question's "Can't
+    tell from this scan." answer sends `cannot-tell` - the scan genuinely doesn't show the
+    border, which a bare "Not sure" tap cannot distinguish). Nullable and additive-only: a
+    reason-carrying abstention is still this model, never a separate model or vote type.
+
     Unique on (card, anonymous_id, question_type); the write path is `get_or_create`, so a voter
     tapping "Not sure" more than once on the same pair (e.g. across repeat serves) records the
     fact once, not once per tap. This is also exactly the shape a future exclusion query needs
@@ -2257,6 +2403,7 @@ class CardQuestionAbstention(models.Model):
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="question_abstentions")
     anonymous_id = models.CharField(max_length=40)
     question_type = models.CharField(max_length=32)
+    reason = models.CharField(max_length=32, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -2596,8 +2743,20 @@ class ImageEvidence(models.Model):
     predates the OCR group and had to use `classify_border_color` as a stand-in, this extractor
     lands after issue #149's OCR group and can call the real frame classifier. `artbox_phash` is
     a perceptual hash (`imagehash.phash`, same family/size as `symbol_phash` above) of that
-    region, stored the same signed-64-bit-int way. Null when not yet computed (fetch failure, an
+    region, stored the same signed-64-bit-int way.     Null when not yet computed (fetch failure, an
     unclassifiable frame, or a degenerate crop box - see `image_evidence.py`'s module docstring).
+
+    pinline_inset (Stage C pinline-inset measurement, MEASURE-AND-PERSIST-ONLY - no consumer of
+    any kind is built or wired in this PR): four per-edge inset-fraction measurements
+    (`pinline_inset_frac_*`), four per-edge calls (`pinline_inset_call_*`, `local_pinline_
+    inset.CALL_*`), and one whole-image verdict (`pinline_inset_verdict`, `local_pinline_
+    inset.VERDICT_*`) - see `local_pinline_inset.py`'s own module docstring for what the number
+    means, its two guards (the uniformity gate against measuring a borderless card's own artwork,
+    and the black-on-black abstention that keeps an unreadable edge from ever reading as a
+    measured zero), and what it deliberately does not do. Every `*_frac` field is a fraction of
+    the relevant dimension, not a pixel count - `width`/`height` already on this row make pixels
+    trivially derivable, while a fraction stays valid even if a later extraction pass fetches the
+    same upload at a different resolution.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -2637,6 +2796,12 @@ class ImageEvidence(models.Model):
     collector_line_crop_px = models.JSONField(null=True, blank=True)
     artist_crop_px = models.JSONField(null=True, blank=True)
     art_crop_px = models.JSONField(null=True, blank=True)
+
+    # art_edge (issue #830 defect 3) - local_art_edge.classify_art_edge_continuity's own return
+    # convention ("framed"/"extended"/"mixed"), same blank-string-as-sentinel convention as
+    # layout_class above for the ambiguous/not-yet-run case. EVIDENCE-ONLY: nothing votes on this
+    # column yet (see local_art_edge.cast_art_edge_continuity_vote's own docstring).
+    art_edge_class = models.CharField(max_length=16, blank=True, default="")
 
     # OCR-group (issue #149) - collector_line_ocr/artist_ocr/collector_line_tsv. Raw text +
     # local_ocr.parse_collector_line's tolerant parse of it (blank-string-as-sentinel for "no
@@ -2723,6 +2888,38 @@ class ImageEvidence(models.Model):
     artbox_crop_px = models.JSONField(null=True, blank=True)
     artbox_frame_class = models.CharField(max_length=16, blank=True, default="")
     artbox_phash = models.BigIntegerField(null=True, blank=True)
+
+    # pinline_inset (local_pinline_inset.measure_pinline_inset, MEASURE-AND-PERSIST-ONLY - no
+    # existing crop box computation above reads these fields yet): four per-edge measurements of
+    # how far the first sustained colour transition inward from this image's own edge sits - on a
+    # bordered card, the pinline where the border's ink meets the frame/art, not a canvas
+    # boundary. See local_pinline_inset.py's own module docstring for what the number means and
+    # how it was validated, and its two guards.
+    #
+    # Stored as FRACTIONS of the relevant dimension, not pixels: width/height are already on this
+    # row, so a pixel value stays trivially derivable, while a fraction is a property of the
+    # UPLOAD itself and stays valid even if a later extraction pass fetches the same upload at a
+    # different resolution.
+    #
+    # Each *_frac field is null when that edge's own reading is INDETERMINATE, never zero -
+    # distinguishing "not measured" from "measured a zero-distance inset" matters most exactly
+    # where it's easy to get wrong: a black canvas around a black-bordered card produces no colour
+    # departure at all, so the null is the honest reading, and the paired *_call field (local_
+    # pinline_inset.CALL_*) says why. A consumer that defaulted a null fraction to zero would
+    # silently mislocate a black-on-black card's pinline instead of correctly declining to.
+    pinline_inset_frac_top = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_bottom = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_left = models.FloatField(null=True, blank=True)
+    pinline_inset_frac_right = models.FloatField(null=True, blank=True)
+    # local_pinline_inset.CALL_* - measured/indeterminate_black/no_transition. Blank-string-as-
+    # sentinel for "not yet computed", same convention as bleed_class/layout_class above.
+    pinline_inset_call_top = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_bottom = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_left = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_call_right = models.CharField(max_length=24, blank=True, default="")
+    # local_pinline_inset.VERDICT_* - measured/ambiguous/indeterminate. Blank-string-as-sentinel
+    # for "not yet computed", same convention as the per-edge calls above.
+    pinline_inset_verdict = models.CharField(max_length=16, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

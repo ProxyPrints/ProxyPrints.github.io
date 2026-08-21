@@ -76,7 +76,7 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     ...defaultHandlers,
   ];
 
-  test("rail-head (rev #1/#2/#3), D14, Select Version header, and the desktop/tablet float Filters panel resolve the spec's literal §D values, not Bootstrap defaults", async ({
+  test("rail-head (rev #1/#2/#3), D14, Select Version header, and the rail-anchored Filters panel resolve the spec's literal §D values, not Bootstrap defaults", async ({
     page,
     network,
   }) => {
@@ -84,26 +84,30 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await openSelectVersionSection(page);
     await expect(page.getByTestId("display-rail-content")).toBeVisible();
 
-    // `.rail-head` (§D.1, inherited verbatim) - padding:8px 10px, divider hairline. Tokyo-11:
-    // $theme-divider #16202b -> #16161e, rgb(22, 32, 43) -> rgb(22, 22, 30).
+    // `.rail-head` (rail restructure ruling 7, density pass) - authored `padding:8px 8px` (REV,
+    // was `8px 10px`); computed style collapses a uniform four-side value to the single-token
+    // form `8px`, not `8px 8px`. Divider hairline unchanged. Tokyo-11: $theme-divider #16202b ->
+    // #16161e, rgb(22, 32, 43) -> rgb(22, 22, 30).
     await expect(page.getByTestId("display-rail-header")).toHaveCSS(
       "padding",
-      "8px 10px"
+      "8px"
     );
     await expect(page.getByTestId("display-rail-header")).toHaveCSS(
       "border-bottom",
       "1px solid rgb(22, 22, 30)"
     );
 
-    // Rev #3 (RD8), EP5 (SPEC-editor-polish.md §D.1 `.subject`, REV - `66px` -> `116px`) - the
-    // subject-card preview, aspect 63/88, a text-tinted `.15`-alpha border (unchanged shape by
-    // EP5). Tokyo-11: this border is `rgba(var(--bs-body-color-rgb),.15)`, so it moved with
+    // Rail restructure ruling 1 (docs/proposals/mockups/editor-repass round) - the subject-card
+    // preview grows again, `116px` -> `200px` (REV EP5's own `66px` -> `116px`): the reference
+    // card must be the LARGEST element on the rail, bigger than every candidate density
+    // including "large" (170px) - aspect 63/88, a text-tinted `.15`-alpha border (unchanged
+    // shape). Tokyo-11: this border is `rgba(var(--bs-body-color-rgb),.15)`, so it moved with
     // $theme-text #ebebeb -> #c0caf5, rgba(235, 235, 235, .15) -> rgba(192, 202, 245, .15). This
     // fixture's slot has a real selected image, so the ART variant renders (not the dashed empty
     // state).
     const subject = page.getByTestId("display-rail-subject");
     await expect(subject).toBeVisible();
-    await expect(subject).toHaveCSS("width", "116px");
+    await expect(subject).toHaveCSS("width", "200px");
     await expect(subject).toHaveCSS(
       "border",
       "1px solid rgba(192, 202, 245, 0.15)"
@@ -144,12 +148,12 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     // Tokyo-11: $theme-band-bg #2b3e50 -> #222234, rgb(43, 62, 80) -> rgb(34, 34, 52).
     const d14 = page.getByTestId("display-confidence-element");
     await expect(d14).toBeVisible();
-    await expect(d14).toHaveCSS("padding", "8px 10px");
+    await expect(d14).toHaveCSS("padding", "8px");
     await expect(d14).toHaveCSS("background-color", "rgb(34, 34, 52)");
 
-    // `.artist-line` (§D.1, inherited) - unchanged.
+    // `.artist-line` (ruling 7 density pass, REV 8px 10px -> 8px 8px).
     const artistLine = page.getByTestId("display-artist-section").locator("..");
-    await expect(artistLine).toHaveCSS("padding", "8px 10px");
+    await expect(artistLine).toHaveCSS("padding", "8px");
     await expect(artistLine).toHaveCSS("font-size", "13px");
 
     // Item 2 (RD2) - the Select Version header row `.svhead`: count, Sort `Form.Select`, Filters
@@ -171,42 +175,52 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await expect(filtersToggle).toHaveCSS("font-size", "14px");
     await expect(filtersToggle).toHaveCSS("padding", "4px 8px");
     expect(await filtersToggle.evaluate((el) => el.tagName)).toBe("BUTTON");
+    // Filter-panel overlay round (owner live-use report, reversing editor-repass item 1) - the
+    // panel now starts CLOSED (`initialSettingsVisible={false}`), so the toggle's initial
+    // aria-expanded is "false" and the panel itself isn't in the DOM's visible state yet.
     await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
+    const inlinePanel = page.getByTestId("filters-panel-inline");
+    await expect(inlinePanel).not.toBeVisible();
 
-    // Item 2/3/5 (RD4/O3) - at the default (desktop) viewport, opening Filters renders the FLOAT
-    // panel (fixed-positioned toward the viewport centre, with a backdrop) - not the phone-only
-    // in-rail Collapse.
-    await expect(page.getByTestId("filters-panel-inline")).toHaveCount(0);
     await filtersToggle.click();
     await expect(filtersToggle).toHaveAttribute("aria-expanded", "true");
-    const floatPanel = page.getByTestId("filters-panel-float");
-    await expect(floatPanel).toBeVisible();
-    await expect(floatPanel).toHaveCSS("position", "fixed");
-    await expect(floatPanel).toHaveCSS("width", "440px");
-    await expect(floatPanel).toHaveCSS(
-      "border",
-      "1px solid rgb(127, 143, 160)"
-    );
-    await expect(page.getByTestId("filters-panel-scrim")).toBeVisible();
+
+    // Filter-panel overlay round - the Filters panel is the SAME in-rail panel the phone tier
+    // already used (`.fpanel.inline`) - there is no separate float/scrim variant any more, and
+    // no page-darkening backdrop appears anywhere. It now draws as an absolutely-positioned
+    // overlay (not `position: fixed`) anchored to the head row above it, rather than pushing the
+    // rail wider or the grid below it down.
+    await expect(inlinePanel).toBeVisible();
+    await expect(inlinePanel).not.toHaveCSS("position", "fixed");
+    await expect(page.getByTestId("filters-panel-float")).toHaveCount(0);
+    await expect(page.getByTestId("filters-panel-scrim")).toHaveCount(0);
 
     // O1/RD1 - ONE chip surface inside the panel: the "Filter versions" fieldset (`.fset`, 10px
     // uppercase legend `#8fa0b0`) carries the funnel's own Border/Frame/Treatment chips - no
     // separate `.achip` attribute-vote fieldset exists any more.
-    const fieldset = floatPanel.getByTestId("funnel-unified-filter");
+    const fieldset = inlinePanel.getByTestId("funnel-unified-filter");
     await expect(fieldset).toBeVisible();
     await expect(fieldset.locator(".lg")).toHaveCSS("font-size", "10px");
     await expect(fieldset.locator(".lg")).toHaveText("Filter versions");
     await expect(
-      floatPanel.getByTestId("funnel-frame-treatment-row")
+      inlinePanel.getByTestId("funnel-frame-treatment-row")
     ).toHaveCSS("gap", "6px");
 
-    // The float panel closes via the backdrop click (O3's own "escapes... no stacking hazard"
-    // affordance) - clicked at a corner offset since the scrim's own default centre point falls
-    // inside the (also roughly-centred) panel itself at this viewport.
-    await page
-      .getByTestId("filters-panel-scrim")
-      .click({ position: { x: 5, y: 5 } });
-    await expect(page.getByTestId("filters-panel-float")).toHaveCount(0);
+    // Filter-panel overlay round - the candidate grid stays in the DOM and visible while the
+    // panel is open (it draws on top of it rather than pushing it out of the viewport).
+    await expect(
+      page.getByTestId("select-version-continuous-grid")
+    ).toBeVisible();
+
+    // The panel closes via its own Close button, same as it always could - it just no longer has
+    // a backdrop to also close it via; and the toggle still reopens it.
+    await page.getByTestId("filters-panel-close").click();
+    await expect(inlinePanel).not.toBeVisible();
+    await expect(filtersToggle).toHaveAttribute("aria-expanded", "false");
+    await filtersToggle.click();
+    await expect(inlinePanel).toBeVisible();
+    await page.getByTestId("filters-panel-close").click();
+    await expect(inlinePanel).not.toBeVisible();
 
     // Machine-diff-precedent tile styling (§D.1, inherited) - unchanged by this round except
     // colour. Tokyo-11: $theme-success #5cb85c -> #9ece6a, rgba(92, 184, 92, .92) ->
@@ -233,12 +247,14 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     await openSelectVersionSection(page);
     await expect(page.getByTestId("display-rail-content")).toBeVisible();
 
-    // Item 6 (RD - "hangs off D14") - `.idhang`/`.idtoggle`/`.idbody` (§D.2): same surface colour
-    // as D14 ($theme-band-bg), starts closed, PrintingTagsBlock mounts only once opened.
-    // Tokyo-11: #2b3e50 -> #222234, rgb(43, 62, 80) -> rgb(34, 34, 52).
-    const identifyPanel = page.getByTestId("display-identify-panel");
-    await expect(identifyPanel).toBeVisible();
-    await expect(identifyPanel).toHaveCSS(
+    // Item 6 (RD - "hangs off D14"), REV ruling 3 (editor-repass round, item 3) - `.idtoggle`/
+    // `.idbody` no longer have their own `.idhang` wrapper; they share `.detid-row` with
+    // "More details" now (same surface colour as D14, $theme-band-bg), starts closed,
+    // PrintingTagsBlock mounts only once opened. Tokyo-11: #2b3e50 -> #222234,
+    // rgb(43, 62, 80) -> rgb(34, 34, 52).
+    const detailsIdentifyRow = page.getByTestId("display-details-identify-row");
+    await expect(detailsIdentifyRow).toBeVisible();
+    await expect(detailsIdentifyRow).toHaveCSS(
       "background-color",
       "rgb(34, 34, 52)"
     );
@@ -259,7 +275,7 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     // (10px uppercase `#8fa0b0`), not two.
     const controlStack = page.getByTestId("display-control-stack");
     await expect(controlStack).toBeVisible();
-    await expect(controlStack).toHaveCSS("padding", "8px 10px");
+    await expect(controlStack).toHaveCSS("padding", "8px");
     const legends = controlStack.locator(".cs-legend");
     await expect(legends).toHaveCount(1);
     await expect(legends.first()).toHaveCSS("font-size", "10px");
@@ -352,9 +368,11 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
 
     // No resolved card at all here, so D14/identify/More-details/mismatch all correctly render
     // nothing to identify - confirms the empty state doesn't ALSO leave some other element
-    // showing a stale/fabricated id.
+    // showing a stale/fabricated id. REV ruling 3 - `display-identify-panel` no longer exists as
+    // its own node (merged into `.detid-row`, which still renders for "More details" alone); the
+    // identify toggle itself is the thing gated on a resolved card, so that's what's asserted.
     await expect(page.getByTestId("display-confidence-element")).toHaveCount(0);
-    await expect(page.getByTestId("display-identify-panel")).toHaveCount(0);
+    await expect(page.getByTestId("display-identify-toggle")).toHaveCount(0);
     await expect(page.getByTestId("requested-printing-badge")).toHaveCount(0);
   });
 
@@ -382,9 +400,9 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
     }
   });
 
-  // RD4/O3 - the desktop/tablet float panel node isn't even RENDERED at phone width (the mockup's
-  // own verified claim, "display:none-el" - here, absent from the DOM entirely, not just hidden).
-  test("at phone width (390px) the Filters panel expands IN PLACE inline - the desktop/tablet float node and its backdrop are never mounted", async ({
+  // Rail-anchored filters round - the float/scrim node no longer exists at ANY viewport, phone
+  // included; this pins that the phone bottom sheet still gets the same in-rail panel.
+  test("at phone width (390px) the Filters panel expands IN PLACE inline - the retired float node and its backdrop are never mounted", async ({
     page,
     network,
   }) => {
@@ -394,6 +412,14 @@ test.describe("Display left rail CSS fidelity guard (SPEC-rail-delegacy.md)", ()
 
     const filtersToggle = page.getByTestId("funnel-filters-toggle");
     await expect(filtersToggle).toBeVisible();
+    // Filter-panel overlay round - the panel starts closed at every tier now; exercise a real
+    // open/close cycle here so the phone tier's in-place behavior is asserted against actual
+    // toggling, not just the initial state.
+    await expect(page.getByTestId("filters-panel-inline")).not.toBeVisible();
+    await filtersToggle.click();
+    await expect(page.getByTestId("filters-panel-inline")).toBeVisible();
+    await filtersToggle.click();
+    await expect(page.getByTestId("filters-panel-inline")).not.toBeVisible();
     await filtersToggle.click();
 
     await expect(page.getByTestId("filters-panel-inline")).toBeVisible();
@@ -484,7 +510,14 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     // itself, which Bootstrap's own toggle-button CSS covers with its sibling `<label>` by
     // design - `force: true` bypasses Playwright's actionability wait for that expected overlap
     // (the same pattern any `ToggleButtonGroup`/`ToggleButton` test in this codebase needs).
-    await page.getByRole("radio", { name: "Back" }).click({ force: true });
+    // Scoped to `.fbtoggle` (same as the `frontToggleLabel` locator above) - R10.2 added a
+    // second Fronts/Backs `ToggleButtonGroup` (the right rail's View control), and an
+    // unscoped `name: "Back"` substring-matches both that group's "Backs" radio and this
+    // rail-head toggle's "Back" radio.
+    await page
+      .locator(".fbtoggle")
+      .getByRole("radio", { name: "Back" })
+      .click({ force: true });
     // Either a real back-face thumbnail (`.subject[data-face=back]`, same testid, reused - a
     // real distinct back ProjectMember resolved) or the `.backart` placeholder (nothing
     // resolved for back) renders - never the FRONT-faced subject any more either way.
@@ -524,7 +557,9 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     const compare = page.getByTestId("display-rail-compare");
     await expect(compare).toBeVisible();
     await expect(compare).toHaveCSS("position", "absolute");
-    await expect(compare).toHaveCSS("left", "126px");
+    // Ruling 1 moved the subject from 116px -> 200px, so this offset (subject width + the
+    // `.rhead-row` 10px gap) moves from 126px -> 210px in step.
+    await expect(compare).toHaveCSS("left", "210px");
 
     // Moving away hides it again (mouseleave).
     await page.mouse.move(0, 0);
@@ -589,10 +624,13 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     ).toHaveCount(0);
 
     const order = await page.evaluate(() => {
+      // REV ruling 3 (editor-repass round, item 3) - "display-identify-panel" no longer exists
+      // as its own node (merged into "display-details-identify-row"); the identify toggle button
+      // is the thing whose relative order to "More details" actually matters here.
       const ids = [
         "display-confidence-element",
         "display-rail-more-details-toggle",
-        "display-identify-panel",
+        "display-identify-toggle",
       ];
       const positions = ids.map((id) => {
         const el = document.querySelector(`[data-testid="${id}"]`);

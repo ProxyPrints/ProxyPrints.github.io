@@ -34,6 +34,7 @@ import {
   localBackend,
   printingCandidate1,
   printingCandidate2,
+  printingCandidate3,
   sourceDocument1,
   sourceDocument2,
   sourceDocument3,
@@ -339,8 +340,9 @@ export const cardbacksServerError = http.post(buildRoute("2/cardbacks/"), () =>
 );
 
 // GridSelectorModal parity port (2026-07-24, issue #272 wave 3). GridSelectorModal.tsx's only
-// surviving mount post-route-swap is CardbackToolbarButton's project-wide cardback picker
-// (CommonCardback.tsx) - it's fed by the `2/cardbacks` identifier list, not a search query, so
+// surviving mount post-route-swap is the project-wide cardback picker behind CardbackRailControl's
+// "Browse all cardbacks…" button (CommonCardback.tsx; R9 round replaces the old CardbackToolbarButton
+// trigger) - it's fed by the `2/cardbacks` identifier list, not a search query, so
 // the classic per-slot cluster's own `2/cards/` + `3/editorSearch/` fixture pairs (below) need a
 // `2/cardbacks` counterpart naming the same identifiers to reuse unchanged for this wave's ported
 // tests. The modal itself doesn't care what a given identifier's underlying CardDocument's own
@@ -1463,6 +1465,23 @@ export const submitPrintingTagResolvesToPrintingCandidate2 = http.post(
     )
 );
 
+// printingCandidate3's border color falls outside the taxonomy (not Borderless like candidate2),
+// so its Border Color question stays open - used by the Level 3 open-border-color coverage.
+export const submitPrintingTagResolvesToPrintingCandidate3 = http.post(
+  buildRoute("2/submitPrintingTag/"),
+  () =>
+    HttpResponse.json(
+      {
+        resolvedPrinting: printingCandidate3,
+        isNoMatch: false,
+        voteTally: [
+          { printing: printingCandidate3, isNoMatch: false, count: 1 },
+        ],
+      },
+      { status: 200 }
+    )
+);
+
 export const submitQuestionAbstentionRecorded = http.post(
   buildRoute("2/submitQuestionAbstention/"),
   () => HttpResponse.json({ recorded: true }, { status: 200 })
@@ -1615,13 +1634,35 @@ export const questionFeedIdentifyPrinting = http.get(
     )
 );
 
+// Level 3 border-color coverage needs a candidate whose Frame Treatment resolves (Showcase)
+// while its Border Color genuinely stays open (borderColor outside the taxonomy) - candidate2
+// can't serve this since it's itself Borderless, which resolves its own Border Color chip.
+export const questionFeedIdentifyPrintingOpenBorderColor = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "identify_printing",
+          card: cardDocument1,
+          candidates: [printingCandidate1, printingCandidate3],
+          tagConfidence: { "Full Art": 0, Borderless: 0.6 },
+        },
+        remainingEstimate: questionFeedCounts({ total: 3, fresh: 3 }),
+      },
+      { status: 200 }
+    )
+);
+
 // Issue #503 (WTC phase C1) - a MIXED candidate set for the illustration-grouping regression
 // guard: `illustrationGroupCandidateA`/`B` share an illustration (a real 2+ cluster),
-// `illustrationGroupCandidateC` has its own distinct illustrationId (no sibling - stays
-// unclustered), and `illustrationGroupCandidateD` carries no illustrationId at all
+// `illustrationGroupCandidateC` has its own distinct illustrationId (no sibling - forms a
+// cluster of its own, size 1: group size is orthogonal to whether a candidate clusters at
+// all), and `illustrationGroupCandidateD` carries no illustrationId at all
 // (CanonicalPrintingMetadata.illustration_id is nullable and frequently absent - see
-// local_illustration.py:137). Built by spreading the existing printingCandidate1/2 fixtures
-// rather than editing test-constants.ts, which is out of this change's scope.
+// local_illustration.py:137) - the only member of this set that never clusters. Built by
+// spreading the existing printingCandidate1/2 fixtures rather than editing test-constants.ts,
+// which is out of this change's scope.
 // candidateA carries an art crop (the common case); candidateB shares its illustration but
 // has none (a metadata sidecar gap) - together they cover both the swap and its fallback.
 export const illustrationGroupCandidateA: PrintingCandidate = {
@@ -1650,6 +1691,31 @@ export const illustrationGroupCandidateD: PrintingCandidate = {
   collectorNumber: "104",
   illustrationId: null,
 };
+
+// The illustration question type (wtc-question-model.md §7.2) - art crops only, grouped by
+// unique illustrationId. `A` and `C` carry distinct illustrationIds (each tile is its own
+// question option), unlike `A`/`B` above which deliberately share one for the identify_printing
+// clustering guard - the backend's own dedup (`_illustration_item`) never sends the frontend two
+// candidates with the same illustrationId, so this fixture's shape matches a real payload.
+export const questionFeedIllustration = http.get(
+  buildRoute("2/questionFeed/"),
+  () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "illustration",
+          card: cardDocument1,
+          illustrationCandidates: [
+            illustrationGroupCandidateA,
+            illustrationGroupCandidateC,
+          ],
+          tagConfidence: {},
+        },
+        remainingEstimate: questionFeedCounts({ total: 2, fresh: 2 }),
+      },
+      { status: 200 }
+    )
+);
 
 export const questionFeedIdentifyPrintingGroupedByIllustration = http.get(
   buildRoute("2/questionFeed/"),
@@ -1691,9 +1757,8 @@ export const submitIllustrationVoteCastsPrintingAndArtist = http.post(
     )
 );
 
-// N>1 live printings - nothing on the printing channel, matching what the always->2-member
-// visual grouping (illustrationGroups' own `.filter((group) => group.length > 1)`) normally
-// produces server-side.
+// N>1 live printings - nothing on the printing channel, the normal outcome for a genuine
+// multi-printing illustration cluster.
 export const submitIllustrationVoteCastsNothingOnPrintingChannel = http.post(
   buildRoute("2/submitIllustrationVote/"),
   () =>
@@ -1704,6 +1769,17 @@ export const submitIllustrationVoteCastsNothingOnPrintingChannel = http.post(
         printingVoteCast: false,
         artistVoteCast: true,
       },
+      { status: 200 }
+    )
+);
+
+// "Not this art" - 2/submitIllustrationRejection/. Mirrors SubmitIllustrationRejectionResponse's
+// narrower shape (no printing/artist channel to report on - see that response's own comment).
+export const submitIllustrationRejection = http.post(
+  buildRoute("2/submitIllustrationRejection/"),
+  () =>
+    HttpResponse.json(
+      { illustrationId: "illustration-shared" },
       { status: 200 }
     )
 );
@@ -1770,6 +1846,30 @@ export const questionFeedTag = http.get(buildRoute("2/questionFeed/"), () =>
         type: "tag",
         card: cardDocument9,
         tagName: "Borderless",
+      },
+      remainingEstimate: questionFeedCounts({ total: 1, fresh: 1 }),
+    },
+    { status: 200 }
+  )
+);
+
+// The border question type's answer surface is the BORDER_COLOR_GROUP chips plus the Full Art
+// chip (see BorderColorQuestion.tsx) - the mock seeds tagConfidence the way the backend
+// `_border_item` builder does (question_feed.py's `_tag_confidence`: the full chip set), so
+// the chips render with a realistic lean the moment the question lands.
+export const questionFeedBorder = http.get(buildRoute("2/questionFeed/"), () =>
+  HttpResponse.json(
+    {
+      item: {
+        type: "border",
+        card: cardDocument9,
+        tagConfidence: {
+          "Black Border": 0.8,
+          "White Border": 0,
+          "Silver Border": 0,
+          Borderless: 0,
+          "Full Art": 0,
+        },
       },
       remainingEstimate: questionFeedCounts({ total: 1, fresh: 1 }),
     },

@@ -58,3 +58,65 @@ export const getWorkerImageURL = (
       ).toString()
     : undefined;
 };
+
+// Editor-repass R1, FRONTEND HALF ONLY. The third image tier (~340px, ~2x the largest drawn
+// tile box) is, for the Google Drive fallback, a URL parameter change and nothing else:
+// `smallThumbnailUrl` is built as `https://drive.google.com/thumbnail?sz=w800-h800&id=<id>`
+// (MPCAutofill/cardpicker/sources/source_types.py). The CDN bucket key (`<identifier>-thumb-…`)
+// and the worker path (`/images/google_drive/thumb/…`) are backend/worker changes tracked
+// separately - this helper only rewrites the fallback's `sz` parameter and returns every
+// non-Drive fallback (Scryfall, mocked fixtures, etc.) unchanged.
+export const DRIVE_FALLBACK_THUMB_PARAM = "w340-h340";
+
+export const getDriveThumbnailURL = (
+  cardDocument: CardDocument
+): string | undefined => {
+  const fallbackUrl = cardDocument.smallThumbnailUrl;
+  if (fallbackUrl == null) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(fallbackUrl);
+    if (
+      parsed.hostname === "drive.google.com" &&
+      parsed.pathname.startsWith("/thumbnail")
+    ) {
+      parsed.searchParams.set("sz", DRIVE_FALLBACK_THUMB_PARAM);
+      return parsed.toString();
+    }
+  } catch {
+    // Malformed fallback URL - hand it back unchanged; the img's own onerror path handles it.
+  }
+  return fallbackUrl;
+};
+
+// Sheet slots render far below native card resolution, so `small` suffices here.
+//
+// `getBucketImageURL` only checks that the bucket is *configured*, never that the object
+// actually exists there - most Google Drive cards resolve to a bucket URL, but any card whose
+// image isn't actually in the bucket yields a URL that 404s. Unlike `useImageSrc` (Card.tsx),
+// this module has no React state to step through candidates on load failure, so it exposes the
+// full ordered chain instead of picking one URL and hoping it loads - callers with a recovery
+// path (PagePreview's sheet slots) can fall through it the same way Card.tsx's own `onError`
+// handler falls through bucket -> worker -> thumbnail.
+export const getSheetImageURLs = (
+  cardDocument: CardDocument
+): Array<string> => {
+  const urls: Array<string> = [];
+  const bucketURL = getBucketImageURL(cardDocument, "small");
+  if (bucketURL != null) {
+    urls.push(bucketURL);
+  }
+  const workerURL = getWorkerImageURL(cardDocument, "small");
+  if (workerURL != null) {
+    urls.push(workerURL);
+  }
+  if (cardDocument.mediumThumbnailUrl != null) {
+    urls.push(cardDocument.mediumThumbnailUrl);
+  }
+  return urls;
+};
+
+export const getSheetImageURL = (
+  cardDocument: CardDocument
+): string | undefined => getSheetImageURLs(cardDocument)[0];

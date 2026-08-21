@@ -110,7 +110,7 @@ def _release_any_leaked_locks(db: Any):
     the next test in the same pytest session to trip over)."""
     yield
     with connection.cursor() as cursor:
-        for slot in range(8):  # generous upper bound - real caps in this file never exceed 2
+        for slot in range(8):  # generous upper bound - real caps in this file never exceed 5
             while True:
                 cursor.execute("SELECT pg_advisory_unlock(%s, %s)", [_LOCK_NAMESPACE, slot])
                 (released,) = cursor.fetchone()
@@ -178,8 +178,8 @@ class TestTryAcquireSlot:
             raw_b.close()
             raw_c.close()
 
-    def test_default_cap_is_two(self, db: Any) -> None:
-        assert stage_e_concurrency._slot_count() == 2
+    def test_default_cap_is_six(self, db: Any) -> None:
+        assert stage_e_concurrency._slot_count() == 6
 
     @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=0)
     def test_a_zero_configured_cap_floors_to_one_and_warns(self, db: Any, caplog: Any) -> None:

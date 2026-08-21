@@ -1,4 +1,13 @@
-import { Document, Image, Page, StyleSheet, View } from "@react-pdf/renderer";
+import {
+  Document,
+  DocumentProps,
+  Image,
+  Page,
+  Rect,
+  StyleSheet,
+  Svg,
+  View,
+} from "@react-pdf/renderer";
 import React, { createContext, useContext } from "react";
 
 import {
@@ -13,9 +22,11 @@ import { chunk } from "@/common/utils";
 import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
 import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
 import { computeLayout, LayoutEdgeBleed } from "@/features/pdf/layout";
+import { getPageSizeMM, PageSize } from "@/features/pdf/pageSize";
 import {
   computeBleedCropMM,
   computeRenderedBleedMM,
+  createTrackedObjectURL,
   getPDFImageBlob,
   getPDFImageURL,
   PDFImageQuality,
@@ -25,7 +36,13 @@ import {
   ScmRegistration,
   ScmVariant,
 } from "@/features/pdf/scm/scmLayout";
-import { SCMPDF } from "@/features/pdf/scm/SCMPDF";
+import {
+  computeSCMPDFPageCount,
+  SCMPDF,
+  SCMPDFProps,
+} from "@/features/pdf/scm/SCMPDF";
+
+export { getPageSizeMM, PageSize };
 
 const PDFContext = createContext<PDFProps | undefined>(undefined);
 
@@ -35,86 +52,6 @@ const usePDFContext = (): PDFProps => {
     throw new Error("Attempted to use pdfContext outside of provider");
   }
   return context;
-};
-
-// copy-pasted from react-pdf because they don't export this data
-// measured in PDF points
-const SIZES: { [key: string]: { width: number; height: number } } = {
-  "4A0": { width: 4767.87, height: 6740.79 },
-  "2A0": { width: 3370.39, height: 4767.87 },
-  A0: { width: 2383.94, height: 3370.39 },
-  A1: { width: 1683.78, height: 2383.94 },
-  A2: { width: 1190.55, height: 1683.78 },
-  A3: { width: 841.89, height: 1190.55 },
-  A4: { width: 595.28, height: 841.89 },
-  A5: { width: 419.53, height: 595.28 },
-  A6: { width: 297.64, height: 419.53 },
-  A7: { width: 209.76, height: 297.64 },
-  A8: { width: 147.4, height: 209.76 },
-  A9: { width: 104.88, height: 147.4 },
-  A10: { width: 73.7, height: 104.88 },
-  B0: { width: 2834.65, height: 4008.19 },
-  B1: { width: 2004.09, height: 2834.65 },
-  B2: { width: 1417.32, height: 2004.09 },
-  B3: { width: 1000.63, height: 1417.32 },
-  B4: { width: 708.66, height: 1000.63 },
-  B5: { width: 498.9, height: 708.66 },
-  B6: { width: 354.33, height: 498.9 },
-  B7: { width: 249.45, height: 354.33 },
-  B8: { width: 175.75, height: 249.45 },
-  B9: { width: 124.72, height: 175.75 },
-  B10: { width: 87.87, height: 124.72 },
-  C0: { width: 2599.37, height: 3676.54 },
-  C1: { width: 1836.85, height: 2599.37 },
-  C2: { width: 1298.27, height: 1836.85 },
-  C3: { width: 918.43, height: 1298.27 },
-  C4: { width: 649.13, height: 918.43 },
-  C5: { width: 459.21, height: 649.13 },
-  C6: { width: 323.15, height: 459.21 },
-  C7: { width: 229.61, height: 323.15 },
-  C8: { width: 161.57, height: 229.61 },
-  C9: { width: 113.39, height: 161.57 },
-  C10: { width: 79.37, height: 113.39 },
-  RA0: { width: 2437.8, height: 3458.27 },
-  RA1: { width: 1729.13, height: 2437.8 },
-  RA2: { width: 1218.9, height: 1729.13 },
-  RA3: { width: 864.57, height: 1218.9 },
-  RA4: { width: 609.45, height: 864.57 },
-  SRA0: { width: 2551.18, height: 3628.35 },
-  SRA1: { width: 1814.17, height: 2551.18 },
-  SRA2: { width: 1275.59, height: 1814.17 },
-  SRA3: { width: 907.09, height: 1275.59 },
-  SRA4: { width: 637.8, height: 907.09 },
-  EXECUTIVE: { width: 521.86, height: 756.0 },
-  FOLIO: { width: 612.0, height: 936.0 },
-  LEGAL: { width: 612.0, height: 1008.0 },
-  LETTER: { width: 612.0, height: 792.0 },
-  TABLOID: { width: 792.0, height: 1224.0 },
-} as const;
-
-const pdfPointsToMM = (pdfPoints: number) => (pdfPoints / 72) * 25.4;
-
-// Exported so the WYSIWYG page preview (PagePreview.tsx) can resolve the same page-size table
-// (Letter/A4/.../CUSTOM) the PDF generator itself uses, rather than duplicating this lookup.
-export const getPageSizeMM = (
-  pageSize: keyof typeof PageSize,
-  pageWidth: number | undefined,
-  pageHeight: number | undefined
-) => {
-  if (
-    pageSize === "CUSTOM" &&
-    pageWidth !== undefined &&
-    pageHeight !== undefined
-  ) {
-    return { width: pageWidth, height: pageHeight };
-  } else {
-    const pdfPointsSize =
-      SIZES[pageSize as keyof Omit<typeof PageSize, "CUSTOM">];
-    return {
-      width: pdfPointsToMM(pdfPointsSize.width),
-      height: pdfPointsToMM(pdfPointsSize.height),
-    };
-  }
 };
 
 // Thin wrapper over the shared computeLayout() - was previously two independently-tuned
@@ -174,33 +111,22 @@ const contextAvailableBleedMM = (ctx: PDFProps): LayoutEdgeBleed => {
   return layout.slots[0]?.bleedMM ?? ZERO_BLEED;
 };
 
-export const PageSize = {
-  A4: "A4",
-  A3: "A3",
-  LETTER: "LETTER",
-  LEGAL: "LEGAL",
-  TABLOID: "TABLOID",
-  CUSTOM: "Custom", // special case
-} as const;
-
-export const CutLinePlacement = {
-  Inside: "Inside",
-  Centre: "Centre",
-  Outside: "Outside",
-} as const;
-
-export const CutLineShape = {
-  Cross: "Cross Shaped",
-  InsideOnly: "Inside Card Border",
-  OutsideOnly: "Outside Card Border",
-};
-
 export const CardSelectionMode = {
   frontsAndDistinctBacks: "Fronts + Distinct Backs",
   frontsOnly: "Fronts Only",
   frontsAndBacks: "Fronts + Backs",
   backsOnly: "Backs Only",
 } as const;
+
+// The mode a fresh export starts in. Must be a mode that emits a back for every card:
+// "Fronts + Distinct Backs" deliberately omits the shared project cardback (it is meant to be
+// printed in bulk once, not once per card), so a deck whose cards all share the project
+// cardback would export fronts-only with no warning - exactly the scenario the pre-print
+// cardback reminder gate warns about. "Fronts + Backs" emits every card's back, so a
+// shared-cardback deck still gets a duplex-printable file. Users who want the paper-saving
+// behaviour can still select "Fronts + Distinct Backs" explicitly.
+export const DEFAULT_CARD_SELECTION_MODE: keyof typeof CardSelectionMode =
+  "frontsAndBacks";
 
 // Create styles
 const styles = StyleSheet.create({
@@ -213,8 +139,6 @@ const styles = StyleSheet.create({
 
 export interface PDFProps {
   cardSelectionMode: keyof typeof CardSelectionMode;
-  cutLinePlacement: keyof typeof CutLinePlacement;
-  cutLineShape: keyof typeof CutLineShape;
   pageSize: keyof typeof PageSize;
   pageWidth: number | undefined;
   pageHeight: number | undefined;
@@ -222,6 +146,12 @@ export interface PDFProps {
   roundCorners: boolean;
   drawCardCutLines: boolean;
   drawPageCutLines: boolean;
+  // Optional crosshair corner marks alongside the default dashed trim outline `drawCardCutLines`
+  // already draws - default off (most users just need the outline; the marks are for anyone who
+  // specifically wants a traditional corner-mark guide too). Independent of drawCardCutLines'
+  // own on/off state in principle, but only rendered when it's on (nothing to add marks to
+  // otherwise) - see PDFCardCutLines' own render.
+  showCrossCutLines: boolean;
   cutLineLengthMM: number;
   cutLineOffsetMM: number;
   cutLineThicknessMM: number;
@@ -232,6 +162,22 @@ export interface PDFProps {
   pageMarginBottomMM: number;
   pageMarginLeftMM: number;
   pageMarginRightMM: number;
+  // Registration compensation (PageOffsetControl.tsx, /display's right rail) - shifts the whole
+  // CardGrid container away from its otherwise-centered position, applied AFTER layoutForPage has
+  // already resolved card counts/granted bleed, never fed into that computation itself: it must
+  // never change either. Never clamped to the page's own margins/slack (a real printer
+  // correction can legitimately exceed them) - see CardGrid's own render for where this applies.
+  // Optional, additive, defaults to 0 (via `?? 0` at the one render site that reads it) so every
+  // existing caller (none of which set it yet) renders at the exact position it always did.
+  pageOffsetXMM?: number;
+  pageOffsetYMM?: number;
+  // 1-indexed, inclusive; applied AFTER pagination has already resolved the full page set (see
+  // sliceToPageRange below) - never changes card selection, layout, or page count itself, only
+  // which of the already-computed pages are emitted. `undefined` on either bound means "no
+  // restriction on that end" - both undefined (every existing caller) exports every page, same
+  // as before this field existed.
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
   cardDocumentsByIdentifier: { [identifier: string]: CardDocument | undefined };
   projectMembers: Array<SlotProjectMembers>;
   projectCardback: string | undefined;
@@ -287,19 +233,64 @@ type CutLineCornerPosition =
 interface CutLineCornerProps {
   position: CutLineCornerPosition;
   lengthMM: number;
-  placement: keyof typeof CutLinePlacement;
-  shape: keyof typeof CutLineShape;
   horizontalLeftLengthOverrideMM?: number;
   horizontalRightLengthOverrideMM?: number;
   verticalUpLengthOverrideMM?: number;
   verticalDownLengthOverrideMM?: number;
 }
 
+// Gap between dashes on the trim outline (PDFCardCutLines' Svg/Rect strokeDasharray) - the dash
+// length itself is the user-adjustable cutLineLengthMM, so only the fixed gap lives here.
+const CUT_LINE_DASH_GAP_MM = 1;
+
+// @react-pdf/renderer's Svg/Rect (unlike View's mm-string styles) take bare point values - see
+// PDFCardCutLines' own comment where this is used.
+const mmToPt = (mm: number): number => (mm / 25.4) * 72;
+
+// One arm of a CutLineCorner mark (the optional crosshair guide) - "positive" extends right/down
+// from the corner's own anchor point, "negative" extends left/up. Always a single solid bar; the
+// dashed guide is the trim outline (PDFCardCutLines' Svg/Rect), not these marks.
+const CutLineBar = ({
+  axis,
+  direction,
+  lengthMM,
+  thicknessMM,
+  color,
+}: {
+  axis: "horizontal" | "vertical";
+  direction: "positive" | "negative";
+  lengthMM: number;
+  thicknessMM: number;
+  color: string;
+}) => {
+  const style =
+    axis === "vertical"
+      ? {
+          position: "absolute" as const,
+          width: thicknessMM + "mm",
+          height: lengthMM + "mm",
+          backgroundColor: color,
+          left: 0,
+          ...(direction === "positive" ? { top: 0 } : { bottom: 0 }),
+        }
+      : {
+          position: "absolute" as const,
+          width: lengthMM + "mm",
+          height: thicknessMM + "mm",
+          backgroundColor: color,
+          top: 0,
+          ...(direction === "positive" ? { left: 0 } : { right: 0 }),
+        };
+  return <View style={style} />;
+};
+
+// The optional crosshair corner-mark guide (PDFProps.showCrossCutLines) - always anchored at the
+// true trim edge (bleedMM.<edge> from the slot's own boundary, same #301 per-axis-cropped-bleed
+// reasoning the dashed outline below uses). This is the only placement CutLineCorner ever needed
+// even before the cut-guide redesign (PageCutLines, further down, already hardcoded it).
 const CutLineCorner = ({
   position,
   lengthMM,
-  placement,
-  shape,
   horizontalLeftLengthOverrideMM,
   horizontalRightLengthOverrideMM,
   verticalUpLengthOverrideMM,
@@ -314,152 +305,79 @@ const CutLineCorner = ({
   // #301 uniform-bleed version used.
   const bleedMM = contextAvailableBleedMM(ctx);
 
-  const cutLinePlacementToThicknessOffset: {
-    [key in keyof typeof CutLinePlacement]: number;
-  } = {
-    [CutLinePlacement.Inside]: 0,
-    [CutLinePlacement.Centre]: 0.5 * cutLineThicknessMM,
-    [CutLinePlacement.Outside]: cutLineThicknessMM,
-  };
-  const thicknessOffset = cutLinePlacementToThicknessOffset[placement];
-
   const positionLookup: {
     [location in CutLineCornerPosition]: {
-      horizontal: "left" | "right";
-      vertical: "up" | "down";
       verticalCssProperty: "top" | "bottom";
       horizontalCssProperty: "left" | "right";
     };
   } = {
-    "top-left": {
-      horizontal: "right",
-      vertical: "down",
-      verticalCssProperty: "top",
-      horizontalCssProperty: "left",
-    },
+    "top-left": { verticalCssProperty: "top", horizontalCssProperty: "left" },
     "top-right": {
-      horizontal: "left",
-      vertical: "down",
       verticalCssProperty: "top",
       horizontalCssProperty: "right",
     },
     "bottom-left": {
-      horizontal: "right",
-      vertical: "up",
       verticalCssProperty: "bottom",
       horizontalCssProperty: "left",
     },
     "bottom-right": {
-      horizontal: "left",
-      vertical: "up",
       verticalCssProperty: "bottom",
       horizontalCssProperty: "right",
     },
   };
 
   const inside = positionLookup[position];
-  const outside = {
-    horizontal: inside.horizontal === "left" ? "right" : "left",
-    vertical: inside.vertical === "up" ? "down" : "up",
-  } as const;
   const horizontalOffset =
-    bleedMM[inside.horizontalCssProperty] - cutLineOffsetMM - thicknessOffset;
-  const verticalOffset =
-    bleedMM[inside.verticalCssProperty] - cutLineOffsetMM - thicknessOffset;
-
-  const showHorizontal = (dir: "left" | "right") => {
-    if (shape === "Cross") return true;
-    if (shape === "InsideOnly") return inside.horizontal === dir;
-    if (shape === "OutsideOnly") return outside.horizontal === dir;
-    return false;
-  };
-
-  const showVertical = (dir: "up" | "down") => {
-    if (shape === "Cross") return true;
-    if (shape === "InsideOnly") return inside.vertical === dir;
-    if (shape === "OutsideOnly") return outside.vertical === dir;
-    return false;
-  };
+    bleedMM[inside.horizontalCssProperty] - cutLineOffsetMM;
+  const verticalOffset = bleedMM[inside.verticalCssProperty] - cutLineOffsetMM;
 
   return (
-    <>
-      <View
-        style={{
-          position: "absolute" as const,
-          ...(inside.verticalCssProperty === "top" && {
-            top: verticalOffset + "mm",
-          }),
-          ...(inside.verticalCssProperty === "bottom" && {
-            bottom: verticalOffset + cutLineThicknessMM + "mm",
-          }),
-          ...(inside.horizontalCssProperty === "left" && {
-            left: horizontalOffset + "mm",
-          }),
-          ...(inside.horizontalCssProperty === "right" && {
-            right: horizontalOffset + cutLineThicknessMM + "mm",
-          }),
-        }}
-      >
-        {showVertical("down") && (
-          <View
-            style={{
-              // lower vertical bar
-              position: "absolute" as const,
-              width: cutLineThicknessMM + "mm",
-              height: (verticalDownLengthOverrideMM ?? lengthMM) + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left: 0,
-            }}
-          />
-        )}
-        {showVertical("up") && (
-          <View
-            style={{
-              // upper vertical bar
-              position: "absolute" as const,
-              width: cutLineThicknessMM + "mm",
-              height: (verticalUpLengthOverrideMM ?? lengthMM) + "mm",
-              backgroundColor: cutLineColor,
-              top:
-                -(verticalUpLengthOverrideMM ?? lengthMM) +
-                cutLineThicknessMM +
-                "mm",
-              left: 0,
-            }}
-          />
-        )}
-        {showHorizontal("right") && (
-          <View
-            style={{
-              // right horizontal bar
-              position: "absolute" as const,
-              width: (horizontalRightLengthOverrideMM ?? lengthMM) + "mm",
-              height: cutLineThicknessMM + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left: 0,
-            }}
-          />
-        )}
-        {showHorizontal("left") && (
-          <View
-            style={{
-              // left horizontal bar
-              position: "absolute" as const,
-              width: (horizontalLeftLengthOverrideMM ?? lengthMM) + "mm",
-              height: cutLineThicknessMM + "mm",
-              backgroundColor: cutLineColor,
-              top: 0,
-              left:
-                -(horizontalLeftLengthOverrideMM ?? lengthMM) +
-                cutLineThicknessMM +
-                "mm",
-            }}
-          />
-        )}
-      </View>
-    </>
+    <View
+      style={{
+        position: "absolute" as const,
+        ...(inside.verticalCssProperty === "top" && {
+          top: verticalOffset + "mm",
+        }),
+        ...(inside.verticalCssProperty === "bottom" && {
+          bottom: verticalOffset + cutLineThicknessMM + "mm",
+        }),
+        ...(inside.horizontalCssProperty === "left" && {
+          left: horizontalOffset + "mm",
+        }),
+        ...(inside.horizontalCssProperty === "right" && {
+          right: horizontalOffset + cutLineThicknessMM + "mm",
+        }),
+      }}
+    >
+      <CutLineBar
+        axis="vertical"
+        direction="positive"
+        lengthMM={verticalDownLengthOverrideMM ?? lengthMM}
+        thicknessMM={cutLineThicknessMM}
+        color={cutLineColor}
+      />
+      <CutLineBar
+        axis="vertical"
+        direction="negative"
+        lengthMM={verticalUpLengthOverrideMM ?? lengthMM}
+        thicknessMM={cutLineThicknessMM}
+        color={cutLineColor}
+      />
+      <CutLineBar
+        axis="horizontal"
+        direction="positive"
+        lengthMM={horizontalRightLengthOverrideMM ?? lengthMM}
+        thicknessMM={cutLineThicknessMM}
+        color={cutLineColor}
+      />
+      <CutLineBar
+        axis="horizontal"
+        direction="negative"
+        lengthMM={horizontalLeftLengthOverrideMM ?? lengthMM}
+        thicknessMM={cutLineThicknessMM}
+        color={cutLineColor}
+      />
+    </View>
   );
 };
 
@@ -502,7 +420,6 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
     bleedPriors,
     bleedOverrides,
   } = ctx;
-  const radius = roundCorners ? CornerRadiusMM : 0;
   const bleedNormalized = isBleedNormalizationEligible(
     cardDocument,
     imageQuality
@@ -526,6 +443,32 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   );
   const height = CardHeightMM + renderedBleedMM.top + renderedBleedMM.bottom;
   const width = CardWidthMM + renderedBleedMM.left + renderedBleedMM.right;
+
+  // Rounding is drawn on this box (card + bleed), but the bleed is exactly what a trim along
+  // the cut guide removes - a flat CornerRadiusMM here would sit entirely inside that discarded
+  // margin and vanish the moment the card is actually cut out. Growing the radius by the
+  // adjoining bleed means the arc reaches the TRUE card edge, so the CUT card's own corner comes
+  // out at exactly CornerRadiusMM (trimming a rounded rect by `b` on each edge shrinks its
+  // radius by `b`). min() of the two edges meeting at a corner handles the rare case where a
+  // crowded page axis has cropped one of them below the configured bleed (#301).
+  const cornerRadiusMM = (edgeAMM: number, edgeBMM: number): number =>
+    roundCorners ? CornerRadiusMM + Math.min(edgeAMM, edgeBMM) : 0;
+  const topLeftRadiusMM = cornerRadiusMM(
+    renderedBleedMM.top,
+    renderedBleedMM.left
+  );
+  const topRightRadiusMM = cornerRadiusMM(
+    renderedBleedMM.top,
+    renderedBleedMM.right
+  );
+  const bottomLeftRadiusMM = cornerRadiusMM(
+    renderedBleedMM.bottom,
+    renderedBleedMM.left
+  );
+  const bottomRightRadiusMM = cornerRadiusMM(
+    renderedBleedMM.bottom,
+    renderedBleedMM.right
+  );
 
   // Non-normalized path only (bleedNormalized short-circuits this - see below): the old
   // proportion-based rescale, fixing up an image assumed to be at the STANDARD bleed amount
@@ -588,7 +531,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
           prior,
           manualOverride
         );
-        return URL.createObjectURL(normalized);
+        return createTrackedObjectURL(normalized);
       }
       return await getPDFImageURL(
         cardDocument,
@@ -617,10 +560,10 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
           minHeight: height + "mm",
           position: "relative" as const,
           overflow: "hidden",
-          borderTopLeftRadius: radius + "mm",
-          borderTopRightRadius: radius + "mm",
-          borderBottomRightRadius: radius + "mm",
-          borderBottomLeftRadius: radius + "mm",
+          borderTopLeftRadius: topLeftRadiusMM + "mm",
+          borderTopRightRadius: topRightRadiusMM + "mm",
+          borderBottomRightRadius: bottomRightRadiusMM + "mm",
+          borderBottomLeftRadius: bottomLeftRadiusMM + "mm",
         }}
       >
         <Image
@@ -660,10 +603,10 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
             minHeight: height + "mm",
             transform: scaleTransform,
             overflow: "hidden",
-            borderTopLeftRadius: radius + "mm",
-            borderTopRightRadius: radius + "mm",
-            borderBottomRightRadius: radius + "mm",
-            borderBottomLeftRadius: radius + "mm",
+            borderTopLeftRadius: topLeftRadiusMM + "mm",
+            borderTopRightRadius: topRightRadiusMM + "mm",
+            borderBottomRightRadius: bottomRightRadiusMM + "mm",
+            borderBottomLeftRadius: bottomLeftRadiusMM + "mm",
           } as const
         }
       />
@@ -671,8 +614,13 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   );
 };
 
-// Renders cut lines for a single card slot, absolutely positioned within the
-// overlay layer to match the card at (colIndex, rowIndex) in the grid.
+// Renders cut lines for a single card slot, absolutely positioned within the overlay layer to
+// match the card at (colIndex, rowIndex) in the grid. The default guide is a dashed rounded-rect
+// outline traced directly on the trim boundary (an Svg/Rect, not a corner mark - native SVG
+// stroke-dashing continues the pattern seamlessly around the rounded corners, which the old
+// segment-by-segment CutLineBar approach couldn't do for a full perimeter); the crosshair corner
+// marks (CutLineCorner, same component PageCutLines uses for the sheet-wide guillotine lines) are
+// an opt-in addition, not an alternative shape.
 const PDFCardCutLines = ({
   colIndex,
   rowIndex,
@@ -685,8 +633,11 @@ const PDFCardCutLines = ({
     cardSpacingRowMM,
     cardSpacingColMM,
     cutLineLengthMM,
-    cutLinePlacement,
-    cutLineShape,
+    cutLineThicknessMM,
+    cutLineColor,
+    cutLineOffsetMM,
+    roundCorners,
+    showCrossCutLines,
   } = ctx;
   // #301 - this slot's actual rendered size (may be less than CardSize + 2*bleedEdgeMM on a
   // crowded axis - see layout.ts's fitAxisWithBleed), not the flat target-bleed box the pre-
@@ -698,6 +649,32 @@ const PDFCardCutLines = ({
   const left = colIndex * (cardSlotWidth + cardSpacingColMM);
   const top = rowIndex * (cardSlotHeight + cardSpacingRowMM);
 
+  // The outline's own path grows outward from the true trim rect (CardWidthMM x CardHeightMM at
+  // bleedMM.left/top) by cutLineOffsetMM on every side - offset 0 (the default) puts the path
+  // exactly on the trim boundary, so the stroke straddles it (half into the visible card face,
+  // half into the bleed), which is what "sits on the trim boundary" means for a drawn line. The
+  // Svg viewport is padded by half the stroke width beyond that so the stroke's own outer edge
+  // never sits exactly on (and risks being clipped at) the viewport bound.
+  const outlineWidthMM = CardWidthMM + 2 * cutLineOffsetMM;
+  const outlineHeightMM = CardHeightMM + 2 * cutLineOffsetMM;
+  const strokePadMM = cutLineThicknessMM / 2;
+  const svgLeftMM = bleedMM.left - cutLineOffsetMM - strokePadMM;
+  const svgTopMM = bleedMM.top - cutLineOffsetMM - strokePadMM;
+  const radiusMM = roundCorners ? CornerRadiusMM : 0;
+  // Rasterized proof (fix/print-cut-guides verification pass): Svg's own width/height props
+  // (unlike a View's mm-string styles, which DO get react-pdf's box-model unit conversion) are
+  // read as bare point values - "63mm" renders at 63pt (~22mm), not 63mm. The Rect's own
+  // coordinates share whatever physical scale the Svg viewport resolves to (no viewBox is set),
+  // so every number handed to Svg/Rect below is pre-converted to points explicitly; only the
+  // outer wrapping View's position (mm strings) needs no conversion.
+  const outlineWidthPt = mmToPt(outlineWidthMM);
+  const outlineHeightPt = mmToPt(outlineHeightMM);
+  const strokePadPt = mmToPt(strokePadMM);
+  const radiusPt = mmToPt(radiusMM);
+  const strokeWidthPt = mmToPt(cutLineThicknessMM);
+  const dashLengthPt = mmToPt(cutLineLengthMM);
+  const dashGapPt = mmToPt(CUT_LINE_DASH_GAP_MM);
+
   return (
     <View
       style={{
@@ -708,30 +685,36 @@ const PDFCardCutLines = ({
         height: cardSlotHeight + "mm",
       }}
     >
-      <CutLineCorner
-        position="top-left"
-        lengthMM={cutLineLengthMM}
-        placement={cutLinePlacement}
-        shape={cutLineShape}
-      />
-      <CutLineCorner
-        position="top-right"
-        lengthMM={cutLineLengthMM}
-        placement={cutLinePlacement}
-        shape={cutLineShape}
-      />
-      <CutLineCorner
-        position="bottom-left"
-        lengthMM={cutLineLengthMM}
-        placement={cutLinePlacement}
-        shape={cutLineShape}
-      />
-      <CutLineCorner
-        position="bottom-right"
-        lengthMM={cutLineLengthMM}
-        placement={cutLinePlacement}
-        shape={cutLineShape}
-      />
+      <Svg
+        style={{
+          position: "absolute" as const,
+          left: svgLeftMM + "mm",
+          top: svgTopMM + "mm",
+        }}
+        width={outlineWidthPt + 2 * strokePadPt}
+        height={outlineHeightPt + 2 * strokePadPt}
+      >
+        <Rect
+          x={strokePadPt}
+          y={strokePadPt}
+          width={outlineWidthPt}
+          height={outlineHeightPt}
+          rx={radiusPt}
+          ry={radiusPt}
+          fill="none"
+          stroke={cutLineColor}
+          strokeWidth={strokeWidthPt}
+          strokeDasharray={`${dashLengthPt} ${dashGapPt}`}
+        />
+      </Svg>
+      {showCrossCutLines && (
+        <>
+          <CutLineCorner position="top-left" lengthMM={cutLineLengthMM} />
+          <CutLineCorner position="top-right" lengthMM={cutLineLengthMM} />
+          <CutLineCorner position="bottom-left" lengthMM={cutLineLengthMM} />
+          <CutLineCorner position="bottom-right" lengthMM={cutLineLengthMM} />
+        </>
+      )}
     </View>
   );
 };
@@ -792,16 +775,12 @@ const PageCutLines = ({
       <CutLineCorner
         position="top-left"
         lengthMM={cutLineLengthMM}
-        placement="Inside"
-        shape="Cross"
         {...(colIndex === 0 && { horizontalLeftLengthOverrideMM: lengthMM })}
         {...(rowIndex === 0 && { verticalUpLengthOverrideMM: lengthMM })}
       />
       <CutLineCorner
         position="top-right"
         lengthMM={cutLineLengthMM}
-        placement="Inside"
-        shape="Cross"
         {...(colIndex === cardsPerRow - 1 && {
           horizontalRightLengthOverrideMM: lengthMM,
         })}
@@ -810,8 +789,6 @@ const PageCutLines = ({
       <CutLineCorner
         position="bottom-left"
         lengthMM={cutLineLengthMM}
-        placement="Inside"
-        shape="Cross"
         {...(colIndex === 0 && { horizontalLeftLengthOverrideMM: lengthMM })}
         {...(rowIndex === cardsPerCol - 1 && {
           verticalDownLengthOverrideMM: lengthMM,
@@ -820,8 +797,6 @@ const PageCutLines = ({
       <CutLineCorner
         position="bottom-right"
         lengthMM={cutLineLengthMM}
-        placement="Inside"
-        shape="Cross"
         {...(colIndex === cardsPerRow - 1 && {
           horizontalRightLengthOverrideMM: lengthMM,
         })}
@@ -852,6 +827,8 @@ const CardGrid = ({
     pageMarginRightMM,
     pageMarginTopMM,
     pageMarginBottomMM,
+    pageOffsetXMM,
+    pageOffsetYMM,
   } = usePDFContext();
 
   const {
@@ -888,6 +865,12 @@ const CardGrid = ({
         height: containerHeight + "mm",
         alignSelf: "center",
         position: "relative" as const,
+        // Registration compensation - shifts this already-centered container, applied on top of
+        // (not instead of) the centering above. Never clamped: a negative margin here is exactly
+        // as valid as a positive one, and react-pdf/Yoga's flexbox honors it the same way a
+        // browser would.
+        marginLeft: (pageOffsetXMM ?? 0) + "mm",
+        marginTop: (pageOffsetYMM ?? 0) + "mm",
       }}
     >
       {/* Pass 0: page cut-line underlay — painted before all images so it is always on bottom */}
@@ -1074,30 +1057,32 @@ export const CardSelectionModeToPaginator: {
   frontsAndBacks: paginateFrontsAndBacks,
 };
 
-export const PDF = (props: PDFProps) => {
-  if (props.scmMode) {
-    return (
-      <SCMPDF
-        scmPaperSize={props.scmPaperSize}
-        scmVariant={props.scmVariant}
-        scmRegistration={props.scmRegistration}
-        scmDuplex={props.scmDuplex}
-        scmOffsetXMM={props.scmOffsetXMM}
-        scmOffsetYMM={props.scmOffsetYMM}
-        scmOffsetAngleDeg={props.scmOffsetAngleDeg}
-        cardDocumentsByIdentifier={props.cardDocumentsByIdentifier}
-        projectMembers={props.projectMembers}
-        projectCardback={props.projectCardback}
-        imageQuality={props.imageQuality}
-        imageDPI={props.imageDPI}
-        jpgQuality={props.jpgQuality}
-        fileHandles={props.fileHandles}
-        reportImageFailure={props.reportImageFailure}
-        reportImageProgress={props.reportImageProgress}
-      />
-    );
-  }
+// Everything CardSelectionModeToPaginator + the per-page chunking needs - the same subset both
+// the real render (PDF, below) and a caller that only wants the page COUNT (computePDFPageCount,
+// for a page-range control that must reflect the real total - see PDFProps.pageRangeStart/End's
+// own comment) require. Deliberately does not depend on pageRangeStart/pageRangeEnd - the range
+// slices this result, it never changes what this computes.
+type PDFPaginationInput = Pick<
+  PDFProps,
+  | "pageSize"
+  | "pageWidth"
+  | "pageHeight"
+  | "bleedEdgeMM"
+  | "cardSpacingRowMM"
+  | "cardSpacingColMM"
+  | "pageMarginTopMM"
+  | "pageMarginBottomMM"
+  | "pageMarginLeftMM"
+  | "pageMarginRightMM"
+  | "cardSelectionMode"
+  | "projectMembers"
+  | "cardDocumentsByIdentifier"
+  | "projectCardback"
+>;
 
+const computePDFPages = (
+  props: PDFPaginationInput
+): Array<Array<CardDocument>> => {
   const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
 
   const { cardsPerRow, cardsPerCol } = layoutForPage(
@@ -1121,7 +1106,65 @@ export const PDF = (props: PDFProps) => {
     props.projectCardback,
     cardsPerPage
   );
-  const pages = cardDocumentSets.flatMap((set) => chunk(set, cardsPerPage));
+  return cardDocumentSets.flatMap((set) => chunk(set, cardsPerPage));
+};
+
+// The real, un-ranged page count a page-range control needs to show/clamp against (see
+// PDFProps.pageRangeStart/End's own comment on why the control can't know this up front) -
+// SCM mode paginates independently inside SCMPDF.tsx and isn't covered by this count.
+export const computePDFPageCount = (props: PDFPaginationInput): number =>
+  computePDFPages(props).length;
+
+// 1-indexed, inclusive bounds, clamped defensively against the real page count so an
+// out-of-range value (e.g. a stale range left over from a larger project) degrades to the
+// nearest valid page rather than producing an empty or out-of-bounds slice.
+const sliceToPageRange = (
+  pages: Array<Array<CardDocument>>,
+  pageRangeStart: number | undefined,
+  pageRangeEnd: number | undefined
+): Array<Array<CardDocument>> => {
+  if (pageRangeStart == null && pageRangeEnd == null) {
+    return pages;
+  }
+  const startIndex = Math.max(0, (pageRangeStart ?? 1) - 1);
+  const endIndex = Math.min(pages.length, pageRangeEnd ?? pages.length);
+  return pages.slice(startIndex, endIndex);
+};
+
+// The exact SCMPDFProps the SCM branch of PDF() renders with - factored out so the page count
+// (computePDFRenderPageCount below) plans against the same props set, not a re-derived copy.
+const scmPropsFromPDFProps = (props: PDFProps): SCMPDFProps => ({
+  scmPaperSize: props.scmPaperSize,
+  scmVariant: props.scmVariant,
+  scmRegistration: props.scmRegistration,
+  scmDuplex: props.scmDuplex,
+  scmOffsetXMM: props.scmOffsetXMM,
+  scmOffsetYMM: props.scmOffsetYMM,
+  scmOffsetAngleDeg: props.scmOffsetAngleDeg,
+  cardDocumentsByIdentifier: props.cardDocumentsByIdentifier,
+  projectMembers: props.projectMembers,
+  projectCardback: props.projectCardback,
+  imageQuality: props.imageQuality,
+  imageDPI: props.imageDPI,
+  jpgQuality: props.jpgQuality,
+  fileHandles: props.fileHandles,
+  reportImageFailure: props.reportImageFailure,
+  reportImageProgress: props.reportImageProgress,
+  pageRangeStart: props.pageRangeStart,
+  pageRangeEnd: props.pageRangeEnd,
+});
+
+export const PDF = (props: PDFProps) => {
+  if (props.scmMode) {
+    return <SCMPDF {...scmPropsFromPDFProps(props)} />;
+  }
+
+  const size = getPageSizeMM(props.pageSize, props.pageWidth, props.pageHeight);
+  const pages = sliceToPageRange(
+    computePDFPages(props),
+    props.pageRangeStart,
+    props.pageRangeEnd
+  );
 
   return (
     <PDFContext.Provider value={props}>
@@ -1150,3 +1193,41 @@ export const PDF = (props: PDFProps) => {
     </PDFContext.Provider>
   );
 };
+
+// The page COUNT a batch renderer plans against - the range-sliced page total for the standard
+// path (mirrors what PDF() emits, including its single-empty-page fallback for an empty export),
+// and the range-sliced SCM total for SCM mode (which paginates independently inside SCMPDF.tsx).
+// pdf.worker.ts slices this total into PAGES_PER_BATCH chunks and re-renders each chunk via
+// overloaded pageRangeStart/pageRangeEnd - matching PDF()'s own slice semantics is what makes
+// the per-batch outputs concatenate back into exactly the single-shot document.
+export const computePDFRenderPageCount = (props: PDFProps): number => {
+  if (props.scmMode) {
+    return computeSCMPDFPageCount(scmPropsFromPDFProps(props));
+  }
+  const pages = sliceToPageRange(
+    computePDFPages(props),
+    props.pageRangeStart,
+    props.pageRangeEnd
+  );
+  return pages.length > 0 ? pages.length : 1;
+};
+
+// The worker's page-batch loop needs its ranges in ABSOLUTE deck-page numbers: PDF()/SCMPDF()
+// always slice the FULL deck by pageRangeStart/pageRangeEnd, so a batch rendering the slice's
+// k..m-th pages must restate them as full-deck page numbers (startPage + k - 1 .. + m - 1) -
+// batch-relative bounds would re-slice the deck from page 1 and drop the caller's offset.
+export const computePDFRenderWindow = (
+  props: PDFProps
+): { startPage: number; totalPages: number } => ({
+  startPage: Math.max(0, (props.pageRangeStart ?? 1) - 1) + 1,
+  totalPages: computePDFRenderPageCount(props),
+});
+
+// The per-batch element pdf.worker.ts hands to @react-pdf/renderer's pdf(). Built here (a .tsx
+// module) rather than in the worker so it is constructed with JSX: createElement would type it
+// ReactElement<PDFProps>, which pdf()'s ReactElement<DocumentProps> parameter rejects, while a
+// JSX expression is typed JSX.Element (ReactElement<any, any>) and satisfies it - no type escape
+// hatch needed at the call site.
+export const createPDFElement = (
+  props: PDFProps
+): React.ReactElement<DocumentProps> => <PDF {...props} />;

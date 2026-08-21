@@ -16,12 +16,16 @@ import { test } from "../playwright.setup";
 import {
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openPDFExportSettingsModal,
 } from "./test-utils";
 
-// PDF-generation wait experience round (SPEC-cardback-pdfwait.md §D, PKG2) - reached via the real
-// editor -> Finish footer -> (cardback reminder gate) -> /print flow, not the classic /editor
-// route (fully unrouted post-Proposal-H - see PDFGenerator.spec.ts's own module comment). This is
-// the ONE live entry point PDFGenerator.tsx has today.
+// Issue #811 - the editor's own wait experience for DisplayExportPDF.tsx's Download/Save-to-Drive
+// buttons (PDFWaitPanel.tsx, mounted from DisplayExportPDF.tsx itself - see that file's own
+// module comment). The equivalent coverage for /print's now-deleted PDFGenerator.tsx
+// (PDFWaitExperience.spec.ts's original version) was dropped, not ported, when #813 retired that
+// page and the route this suite used to reach it - this is the replacement, written against the
+// editor's own Export ▾ -> PDF surface instead.
+test.describe.configure({ timeout: 60_000 });
 
 const IMAGE_WORKER_URL_PATTERN = /^https:\/\/cdn\.proxyprints\.ca\//;
 const IMAGE_BUCKET_URL_PATTERN = /^https:\/\/img\.proxyprints\.ca\//;
@@ -31,18 +35,13 @@ const validImageBytes = readFileSync(
   path.join(__dirname, "..", "public", "blank.png")
 );
 
-const imageBucketFailure = http.get(
-  IMAGE_BUCKET_URL_PATTERN,
-  () => new HttpResponse(null, { status: 404 })
-);
-// Artificially delayed (not instant) so the "fetching" phase - and thus the game embed - has a
-// real window to be observed in, matching the pre-existing precedent for this same need
-// (PDFGenerator.spec.ts's own "shows live 'fetching images' progress" test, before that whole
-// file was retired by the Proposal H route swap).
+// Artificially delayed (not instant) so the fetching phase - and thus the game embed - has a
+// real window to be observed in, matching the same precedent DisplayExportPDFSettings.spec.ts's
+// own sibling suite already establishes for this fixture.
 const delayedImageWorkerSuccess = http.get(
   IMAGE_WORKER_URL_PATTERN,
   async () => {
-    await new Promise((resolve) => setTimeout(resolve, 4_000));
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
     return new HttpResponse(validImageBytes, {
       status: 200,
       headers: { "Content-Type": "image/png" },
@@ -50,25 +49,34 @@ const delayedImageWorkerSuccess = http.get(
   }
 );
 
-const reachPDFTabOnPrintPage = async (
-  page: import("@playwright/test").Page
-) => {
-  await loadPageWithDefaultBackend(page);
-  await importTextOnEditorLanding(page, "my search query");
+const imageBucketFailure = http.get(
+  IMAGE_BUCKET_URL_PATTERN,
+  () => new HttpResponse(null, { status: 404 })
+);
 
-  await page.getByTestId("finish-footer-print-export").click();
-  const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-  await expect(cardbackGate).toBeVisible();
-  await cardbackGate.getByTestId("cardback-gate-use-current").click();
+const imageBucketSuccess = http.get(
+  IMAGE_BUCKET_URL_PATTERN,
+  () =>
+    new HttpResponse(validImageBytes, {
+      status: 200,
+      headers: { "Content-Type": "image/png" },
+    })
+);
 
-  await page.waitForURL(/\/print/, { timeout: 30_000 });
-  await page.getByRole("tab", { name: "PDF" }).click();
+// Clicking Download shows the cardback reminder gate on the first export attempt each test (a
+// fresh project still riding the untouched default cardback) - CB1 suppresses it for the rest of
+// that session. Same pattern DisplayExportPDFSettings.spec.ts's own clickDownload helper uses.
+const clickDownload = async (page: import("@playwright/test").Page) => {
+  await page.getByTestId("display-export-pdf-download-button").click();
+  await page
+    .getByTestId("pre-print-cardback-gate")
+    .getByTestId("cardback-gate-use-current")
+    .click({ timeout: 3_000 })
+    .catch(() => {});
 };
 
-test.describe("PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG2)", () => {
-  test.describe.configure({ mode: "serial", timeout: 90_000 });
-
-  test("progress phases: determinate fetching -> indeterminate assembling -> green done, replacing the bare text line", async ({
+test.describe("PDF-generation wait experience (issue #811)", () => {
+  test("the progress indicator appears before the render finishes, shows live fetching progress, and clears once the download completes", async ({
     page,
     network,
   }) => {
@@ -82,36 +90,41 @@ test.describe("PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG
       ...defaultHandlers
     );
 
-    await reachPDFTabOnPrintPage(page);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
+    await openPDFExportSettingsModal(page);
+
+    const progressModal = page.getByTestId("display-export-pdf-progress-modal");
+    await expect(progressModal).not.toBeVisible();
 
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       (async () => {
-        await page.getByRole("button", { name: "Generate PDF" }).click();
+        await clickDownload(page);
 
-        const progressBox = page.getByTestId("pdf-progress");
-        await expect(progressBox).toBeVisible({ timeout: 15_000 });
+        // Appears promptly - well before the ~3s artificial image delay resolves, not after.
+        await expect(progressModal).toBeVisible({ timeout: 2_000 });
+        const progressBox = progressModal.getByTestId("pdf-progress");
         await expect(progressBox).toContainText("Fetching images", {
-          timeout: 3_000,
+          timeout: 1_000,
         });
+
         // react-bootstrap's ProgressBar puts role="progressbar"/aria-valuenow on the INNER bar
-        // element, not the outer data-testid'd wrapper - scope via role instead.
+        // element, not the outer data-testid'd wrapper.
         const bar = progressBox.getByRole("progressbar");
         await expect(bar).toHaveAttribute("aria-valuenow", /\d+/);
-
-        // The determinate bar never claims a false 100% mid-fetch (seam 2a).
         const valueNow = await bar.getAttribute("aria-valuenow");
+        // The determinate bar never claims a false 100% mid-fetch.
         expect(Number(valueNow)).toBeLessThanOrEqual(99);
       })(),
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");
 
-    // Done phase - green bar, "PDF ready" label.
-    const progressBox = page.getByTestId("pdf-progress");
-    await expect(progressBox).toContainText("✓ PDF ready");
+    // Reaches completion and clears - no lingering "done" state to dismiss.
+    await expect(progressModal).not.toBeVisible();
   });
 
-  test("game embed: lazy-mounts the real QuestionFeed while generating, and tears down to the outro on finish (no standalone duplicate)", async ({
+  test("game embed: lazy-mounts the real QuestionFeed while generating, and tears down on finish", async ({
     page,
     network,
   }) => {
@@ -125,25 +138,35 @@ test.describe("PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG
       ...defaultHandlers
     );
 
-    await reachPDFTabOnPrintPage(page);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
 
-    // Never mounted before generation starts (2c - lazy-load only once isDownloading is true).
+    // Never mounted before generation starts - not even the settings modal has opened yet.
+    await expect(page.getByTestId("pdf-wait-game")).toHaveCount(0);
+    await expect(page.getByTestId("question-feed")).toHaveCount(0);
+
+    await openPDFExportSettingsModal(page);
+    // Opening the settings step itself never mounts the game either - only actual generation
+    // does (PDFWaitPanel.tsx's own module comment: "only imported once a caller actually mounts
+    // it").
     await expect(page.getByTestId("pdf-wait-game")).toHaveCount(0);
     await expect(page.getByTestId("question-feed")).toHaveCount(0);
 
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       (async () => {
-        await page.getByRole("button", { name: "Generate PDF" }).click();
+        await clickDownload(page);
 
         const embed = page.getByTestId("pdf-wait-game");
-        await expect(embed).toBeVisible({ timeout: 15_000 });
-        // The real, unforked QuestionFeed funnel - Level 1 YES/NOT SURE/NO/SKIP.
+        await expect(embed).toBeVisible({ timeout: 2_000 });
+        // The real, unforked QuestionFeed.
         await expect(embed.getByTestId("question-feed")).toBeVisible({
           timeout: 15_000,
         });
-        await expect(embed.getByTestId("question-feed-level1")).toBeVisible();
         await expect(embed.getByTestId("pdf-wait-game-ribbon")).toBeVisible();
+        await expect(embed.getByTestId("pdf-wait-game-ribbon")).toContainText(
+          "Building your PDF"
+        );
       })(),
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");
@@ -151,22 +174,9 @@ test.describe("PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG
     // Torn down on finish - the game (and QuestionFeed with it) unmounts entirely.
     await expect(page.getByTestId("pdf-wait-game")).toHaveCount(0);
     await expect(page.getByTestId("question-feed")).toHaveCount(0);
-
-    // The outro (the shipped PostExportContributionPrompt, unchanged) replaces it in the SAME
-    // right column.
-    const outro = page.getByTestId("post-export-contribution-prompt");
-    await expect(outro).toBeVisible();
-    await expect(outro).toContainText("What's That Card?");
-
-    // §D.3/PE1 - exactly ONE nudge: the standalone left-column mount is suppressed while the
-    // embed's own outro is showing (there is only ever one post-export-contribution-prompt
-    // testid on the page at a time).
-    await expect(
-      page.getByTestId("post-export-contribution-prompt")
-    ).toHaveCount(1);
   });
 
-  test("the classic direct 'Generate PDF' path reachable from /print still respects the cardback reminder guard's own once-per-session suppression", async ({
+  test("an image that fails to fetch surfaces a confirmation instead of silently stalling the bar", async ({
     page,
     network,
   }) => {
@@ -175,31 +185,68 @@ test.describe("PDF-generation wait experience (SPEC-cardback-pdfwait.md §D, PKG
       sourceDocumentsOneResult,
       searchResultsOneResult,
       imageBucketFailure,
-      delayedImageWorkerSuccess,
+      // Every image-worker request fails too, in addition to imageBucketFailure - forces
+      // pdfImage.ts's own fetch chain to exhaust every fallback and report a genuine failure
+      // rather than quietly recovering via the bucket/worker fallback pair.
+      http.get(
+        IMAGE_WORKER_URL_PATTERN,
+        () => new HttpResponse(null, { status: 404 })
+      ),
       questionFeedConfirmSuggestionSingleton,
       ...defaultHandlers
     );
 
-    await reachPDFTabOnPrintPage(page);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
+    await openPDFExportSettingsModal(page);
+    await clickDownload(page);
 
-    // The editor's own Finish-footer gate already ran (and was suppressed via "Use current &
-    // continue") earlier in this same session/tab - PDFGenerator.tsx's OWN independent guard
-    // (usePrePrintSaveGate's sibling call site around the classic direct Generate/Save-to-Drive
-    // buttons) reads the SAME per-project sessionStorage suppression key, so a click here does
-    // NOT show a second reminder - straight into the real fetch/assemble/done flow, confirming
-    // both call sites share one coherent CB1 "once per session" contract rather than each
-    // maintaining an independent (and possibly nagging-twice) copy.
-    await Promise.all([
+    const confirmModal = page.getByTestId("image-failure-confirm-modal");
+    await expect(confirmModal).toBeVisible({ timeout: 15_000 });
+    await expect(confirmModal).toContainText(
+      "Some card images couldn't be loaded"
+    );
+
+    // Cancelling declines the download - the wait experience clears without ever completing.
+    await confirmModal.getByTestId("image-failure-confirm-cancel").click();
+    await expect(confirmModal).not.toBeVisible();
+    await expect(
+      page.getByTestId("display-export-pdf-progress-modal")
+    ).not.toBeVisible();
+  });
+
+  test("a successful export shows the post-export 'What's That Card?' prompt", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsOneResult,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      imageBucketSuccess,
+      questionFeedConfirmSuggestionSingleton,
+      ...defaultHandlers
+    );
+
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
+    await openPDFExportSettingsModal(page);
+
+    await expect(
+      page.getByTestId("post-export-contribution-prompt")
+    ).toHaveCount(0);
+
+    const [download] = await Promise.all([
       page.waitForEvent("download"),
-      (async () => {
-        await page.getByRole("button", { name: "Generate PDF" }).click();
-        await expect(page.getByTestId("pre-print-cardback-gate")).toHaveCount(
-          0
-        );
-        await expect(page.getByTestId("pdf-progress")).toBeVisible({
-          timeout: 15_000,
-        });
-      })(),
+      clickDownload(page),
     ]);
+    expect(download.suggestedFilename()).toBe("cards.pdf");
+
+    const prompt = page.getByTestId("post-export-contribution-prompt");
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toContainText("What's That Card?");
+    await expect(
+      page.getByTestId("post-export-contribution-prompt-link")
+    ).toHaveAttribute("href", "/whatsthat");
   });
 });

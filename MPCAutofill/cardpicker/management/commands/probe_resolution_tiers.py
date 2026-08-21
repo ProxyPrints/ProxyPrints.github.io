@@ -15,9 +15,9 @@ DEFAULT_SAMPLE_SIZE = 50
 class Command(BaseCommand):
     help = (
         "T1/T2 resolution-tier probe (docs/features/catalog-completion-plan.md, 'STAGE B "
-        "RESOLUTION DECISION'): fetches real images at native/1200px/925px/800px and measures "
+        "RESOLUTION DECISION'): fetches real images at native/1200px/1702px/800px and measures "
         "T1 (real OCR match rate per tier) and T2 (phash Hamming-distance drift vs. both the "
-        "native and the 925px 'full resolution' calibration baseline). Real network cost, no "
+        "native and the 1702px 'full resolution' calibration baseline). Real network cost, no "
         "votes/residue ever persisted."
     )
 

@@ -29,11 +29,19 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
 from cardpicker import stage_e_dispatch
+from cardpicker.attribute_tags import seed_attribute_tags
 from cardpicker.default_tags import seed_default_tags
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import ExtractionResult
+from cardpicker.local_art_edge import (
+    ART_EDGE_ANONYMOUS_ID,
+    ART_EDGE_CONTINUITY_TAG_NAME,
+)
 from cardpicker.local_calculate_verdicts import JOIN_KEY_ANONYMOUS_ID
 from cardpicker.local_detect_ai_art import AI_ART_ANONYMOUS_ID, AI_GENERATED_TAG_NAME
+from cardpicker.local_filename_declarations import (
+    FILENAME_DECLARATION_CAST_ANONYMOUS_ID,
+)
 from cardpicker.local_identify_printing_tags import PHASH_ANONYMOUS_ID
 from cardpicker.local_lands_identify import LANDS_ANONYMOUS_ID
 from cardpicker.local_residual_classify import (
@@ -67,6 +75,7 @@ from cardpicker.operating_envelope import (
     check_envelope,
     current_trip,
 )
+from cardpicker.sensitive_tags import seed_sensitive_tags
 from cardpicker.stage_e_concurrency import _LOCK_NAMESPACE
 from cardpicker.stage_e_dispatch import (
     SweepLapTracker,
@@ -194,6 +203,9 @@ def _stub_compute_card_evidence_ok(**field_overrides: Any):
         modern_artist_lexicon=None,
         md5_checksum=None,
         sha256_checksum=None,
+        stale_extractor_keys=None,
+        stored_evidence_fields=None,
+        stored_extractor_versions=None,
     ):
         fields = {
             "fetch_ok": True,
@@ -759,6 +771,112 @@ class TestEvidenceOnlyCalculators:
         vote = CardPrintingTag.objects.get(card=card, anonymous_id=LANDS_ANONYMOUS_ID)
         assert vote.printing_id == printing.pk
 
+    @STREAMING_ON
+    def test_art_edge_continuity_fires_on_an_extended_reading(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _full_evidence(card, art_edge_class="extended")
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("evidence-backed card should never re-fetch for Stage C")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_art_edge_votes == 1
+        vote = CardTagVote.objects.get(card=card, anonymous_id=ART_EDGE_ANONYMOUS_ID)
+        assert vote.tag.name == ART_EDGE_CONTINUITY_TAG_NAME
+
+        ledger = PilotRunLedger.objects.get(command="stage_e_streaming_dispatch")
+        assert ledger.counters["stage_d_art_edge_votes"] == 1
+
+    @STREAMING_ON
+    def test_art_edge_continuity_abstains_on_a_framed_reading(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        seed_default_tags()
+        card = CardFactory(content_phash=2)
+        _full_evidence(card, art_edge_class="framed")
+        _install_stage_c_stub(monkeypatch, fetch_result=lambda card, dpi=None: (_ for _ in ()).throw(AssertionError))
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_art_edge_votes == 0
+        assert not CardTagVote.objects.filter(card=card, anonymous_id=ART_EDGE_ANONYMOUS_ID).exists()
+
+
+class TestFilenameDeclarationCasterInDispatch:
+    """`local_filename_declarations.run_filename_declaration_cast`, wired into
+    `_run_attribute_chip_casters` (2026-08-19) - proves the channel fires inside a real
+    `dispatch_micro_batch` call rather than only in isolation (that coverage lives in
+    `test_local_filename_declarations.py`). `_full_evidence` is given anyway, even though this
+    channel itself needs none, purely to keep Stage C from attempting a fetch this test never
+    installs a real response for - the same convention `TestEvidenceOnlyCalculators` uses."""
+
+    @STREAMING_ON
+    def test_filename_declaration_caster_fires_and_casts_a_tag_vote(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Both seed functions: run_layout_class_cast (the FIRST caster in the shared try/except
+        # _run_attribute_chip_casters gives every chip family) needs the border-colour tags too,
+        # or its own RuntimeError stops this caster from ever being reached.
+        seed_default_tags()
+        seed_attribute_tags()
+        seed_sensitive_tags()  # run_bleed_calculator_cast (third in the same try/except) needs "appropriate-bleed"
+        card = CardFactory(name="Snapcaster Mage Extended.png", content_phash=1)
+        _full_evidence(card)
+
+        def _fail_if_called(card, dpi=None):
+            raise AssertionError("evidence-backed card should never re-fetch for Stage C")
+
+        _install_stage_c_stub(monkeypatch, fetch_result=_fail_if_called)
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_filename_declaration_votes == 1
+        vote = CardTagVote.objects.get(card=card, anonymous_id=FILENAME_DECLARATION_CAST_ANONYMOUS_ID)
+        assert vote.tag.name == "Extended"
+        assert vote.source == VoteSource.DEDUCTION
+
+        ledger = PilotRunLedger.objects.get(command="stage_e_streaming_dispatch")
+        assert ledger.counters["stage_d_filename_declaration_votes"] == 1
+
+    @STREAMING_ON
+    def test_a_card_with_two_non_exclusive_declarations_casts_both_in_one_batch(
+        self, db: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seed_default_tags()
+        seed_attribute_tags()
+        seed_sensitive_tags()
+        card = CardFactory(name="Forest (Extended Showcase).png", content_phash=2)
+        _full_evidence(card)
+        _install_stage_c_stub(monkeypatch, fetch_result=lambda card, dpi=None: (_ for _ in ()).throw(AssertionError()))
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.stage_d_filename_declaration_votes == 2
+        tag_names = set(
+            CardTagVote.objects.filter(card=card, anonymous_id=FILENAME_DECLARATION_CAST_ANONYMOUS_ID).values_list(
+                "tag__name", flat=True
+            )
+        )
+        assert tag_names == {"Extended", "Showcase"}
+
+    @STREAMING_ON
+    def test_missing_tag_seed_does_not_halt_the_batch(self, db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        # No Tag rows seeded at all - mirrors _run_attribute_chip_casters' own missing-seed test
+        # convention: an operator setup gap in one advisory channel must not fail the dispatch.
+        card = CardFactory(name="Snapcaster Mage Extended.png", content_phash=3)
+        _full_evidence(card)
+        _install_stage_c_stub(monkeypatch, fetch_result=lambda card, dpi=None: (_ for _ in ()).throw(AssertionError()))
+
+        outcome = dispatch_micro_batch(card_ids=[card.pk])
+
+        assert outcome.status == "completed"
+        assert outcome.stage_d_filename_declaration_votes == 0
+
 
 class TestForceStageCReextract:
     """Issue #465's one conveyor change (`force_stage_c_reextract`, threaded through
@@ -874,6 +992,9 @@ class TestForceStageCReextract:
             modern_artist_lexicon=None,
             md5_checksum=None,
             sha256_checksum=None,
+            stale_extractor_keys=None,
+            stored_evidence_fields=None,
+            stored_extractor_versions=None,
         ):
             observed_short_circuit.append(short_circuit)
             return _stub_compute_card_evidence_ok()(
@@ -920,7 +1041,11 @@ class TestConcurrencyCapIntegration:
         return raw
 
     @STREAMING_ON
-    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    # STAGE_E_GOVERNOR_CONCURRENCY_CAP=1 pins the AIMD governor's own ceiling to match this test's
+    # `cap=1` raw-connection setup - without it, `apply_load_governor`'s additive increase (the
+    # deterministically-pinned test load is always below the soft ceiling) would climb the seed
+    # of 1 straight to 2 on this call's own governor sample, before slot acquisition ever runs.
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1, STAGE_E_GOVERNOR_CONCURRENCY_CAP=1)
     def test_dispatch_is_throttled_when_the_only_slot_is_already_held(
         self, db: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1143,7 +1268,10 @@ class TestBackstopSweep:
         assert PilotRunLedger.objects.count() == 0  # halted before any batch ledger row was written
 
     @STREAMING_ON
-    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    # STAGE_E_GOVERNOR_CONCURRENCY_CAP=1 - same reasoning as TestConcurrencyCapIntegration's own
+    # identical override above: pins the governor's ceiling so its additive increase cannot climb
+    # past the single slot this test's raw connection holds.
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1, STAGE_E_GOVERNOR_CONCURRENCY_CAP=1)
     def test_sweep_stops_on_a_throttled_concurrency_cap_without_looping(
         self, db: Any, capsys: pytest.CaptureFixture
     ) -> None:
@@ -2108,6 +2236,9 @@ class TestDecoupledFetchAhead:
             modern_artist_lexicon: Any = None,
             md5_checksum: Any = None,
             sha256_checksum: Any = None,
+            stale_extractor_keys: Any = None,
+            stored_evidence_fields: Any = None,
+            stored_extractor_versions: Any = None,
         ) -> Any:
             compute_calls["n"] += 1
             if compute_calls["n"] == 3:
@@ -2227,6 +2358,9 @@ class TestPooledStageC:
             modern_artist_lexicon: Any = None,
             md5_checksum: Any = None,
             sha256_checksum: Any = None,
+            stale_extractor_keys: Any = None,
+            stored_evidence_fields: Any = None,
+            stored_extractor_versions: Any = None,
         ) -> Any:
             compute_calls["n"] += 1
             if compute_calls["n"] == 3:

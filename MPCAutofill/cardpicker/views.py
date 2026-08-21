@@ -63,7 +63,10 @@ from cardpicker.constants import (
     SAVED_DECK_SNAPSHOT_RING_SIZE,
 )
 from cardpicker.documents import CardSearch
-from cardpicker.illustration_vote import cast_illustration_vote
+from cardpicker.illustration_vote import (
+    cast_illustration_rejection,
+    cast_illustration_vote,
+)
 from cardpicker.integrations.integrations import get_configured_game_integration
 from cardpicker.integrations.patreon import get_patreon_campaign_details, get_patrons
 from cardpicker.models import (
@@ -79,6 +82,7 @@ from cardpicker.models import (
     CardTagVote,
     CardTypes,
     DFCPair,
+    HiddenCard,
     PrintingTagStatus,
     SavedDeck,
     SavedDeckKind,
@@ -216,6 +220,8 @@ from cardpicker.schema_types import (
     SubmitArtistVoteRequest,
     SubmitArtistWriteInVoteRequest,
     SubmitArtistWriteInVoteResponse,
+    SubmitIllustrationRejectionRequest,
+    SubmitIllustrationRejectionResponse,
     SubmitIllustrationVoteRequest,
     SubmitIllustrationVoteResponse,
     SubmitPrintingTagRequest,
@@ -1142,7 +1148,10 @@ def post_submit_question_abstention(request: HttpRequest) -> HttpResponse:
     req = SubmitQuestionAbstentionRequest.model_validate(json.loads(request.body))
     card = _get_card_or_400(req.identifier)
     CardQuestionAbstention.objects.get_or_create(
-        card=card, anonymous_id=req.anonymousId, question_type=req.questionType
+        card=card,
+        anonymous_id=req.anonymousId,
+        question_type=req.questionType,
+        defaults={"reason": req.reason},
     )
     return JsonResponse(SubmitQuestionAbstentionResponse(recorded=True).model_dump())
 
@@ -1345,6 +1354,54 @@ def post_submit_illustration_vote(request: HttpRequest) -> HttpResponse:
             artistAbstainReason=outcome.artist_abstain_reason,
         ).model_dump()
     )
+
+
+@csrf_exempt
+@reject_untrusted_origin  # sessions now authenticate these writes - see cardpicker.security
+@ratelimit(  # type: ignore  # `django-ratelimit` does not implement decorator typing correctly
+    key=_printing_tag_rate_limit_key, rate=_printing_tag_rate_limit_rate, method="POST", block=False
+)
+@ErrorWrappers.to_json
+def post_submit_illustration_rejection(request: HttpRequest) -> HttpResponse:
+    """
+    Submit a vote that a card does NOT depict a specific Scryfall illustration (artwork) -
+    the "Not this art" follow-up to `2/submitIllustrationVote/` (`docs/features/
+    wtc-question-model.md` §7.1). See `illustration_vote.cast_illustration_rejection` and
+    `CardIllustrationRejection`'s own model docstring for the full rationale behind this being a
+    separate endpoint (and a separate model) rather than a polarity flag on the affirmative one.
+
+    Always names a concrete `illustrationId` - unlike `post_submit_illustration_vote`'s request,
+    there is no `isUnknown` branch here: rejecting "unknown" is not a meaningful claim.
+
+    Reuses the same rate-limit plumbing as every other WTC submission endpoint
+    (`_printing_tag_rate_limit_key`/`_printing_tag_rate_limit_rate`).
+    """
+    if request.method != "POST":
+        raise BadRequestException("Expected POST request.")
+    if getattr(request, "limited", False):
+        return JsonResponse(
+            ErrorResponse(
+                name="Rate limited", message="Too many illustration rejection submissions - please slow down."
+            ).model_dump(),
+            status=429,
+        )
+
+    req = SubmitIllustrationRejectionRequest.model_validate(json.loads(request.body))
+    card = _get_card_or_400(req.identifier)
+    try:
+        illustration_id = uuid.UUID(req.illustrationId)
+    except (ValueError, AttributeError, TypeError):
+        raise BadRequestException(f"illustrationId {req.illustrationId!r} is not a valid UUID.")
+
+    rejection = cast_illustration_rejection(
+        card=card,
+        anonymous_id=req.anonymousId,
+        illustration_id=illustration_id,
+        user=_requesting_user(request),
+        vote_surface=req.voteSurface,
+    )
+
+    return JsonResponse(SubmitIllustrationRejectionResponse(illustrationId=str(rejection.illustration_id)).model_dump())
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -1642,14 +1699,20 @@ def post_submit_tag_vote(request: HttpRequest) -> HttpResponse:
             f"Invalid polarity {req.polarity!r} - must be 1 (apply), -1 (not applicable), or 0 (retract)."
         )
 
-    _cast_tag_vote_and_resolve(
-        card=card,
-        tag=tag,
-        anonymous_id=req.anonymousId,
-        polarity=req.polarity,
-        user=_requesting_user(request),
-        vote_surface=req.voteSurface,
-    )
+    # A candidate-pick auto-tag carries VoteSource.IMPLICIT, not USER - see
+    # _cast_auto_derived_tag_vote_and_resolve. The source is decided here from a fixed
+    # server-side comparison, never taken from client input directly.
+    if req.voteSurface == AUTO_DERIVED_TAG_VOTE_SURFACE and req.polarity == VotePolarity.APPLY:
+        _cast_auto_derived_tag_vote_and_resolve(card=card, tag=tag, anonymous_id=req.anonymousId)
+    else:
+        _cast_tag_vote_and_resolve(
+            card=card,
+            tag=tag,
+            anonymous_id=req.anonymousId,
+            polarity=req.polarity,
+            user=_requesting_user(request),
+            vote_surface=req.voteSurface,
+        )
     return JsonResponse(_build_tag_consensus_entry(card, tag).model_dump())
 
 
@@ -1699,6 +1762,13 @@ def _cast_tag_vote_and_resolve(
 # 2026-07-22 vote-weight scenario matrix).
 IMPLICIT_VOTE_SURFACE = "display-editor-filter"
 
+# `vote_surface` stamped on a positive CardTagVote auto-derived from a picked candidate's own
+# Scryfall printing metadata (QuestionFeed.tsx's selectCandidate -> getAutoTagChips, issue
+# #790). A distinct value from IMPLICIT_VOTE_SURFACE above - both are VoteSource.IMPLICIT, but
+# they are different mechanisms (a filter-chip pick-under-active-filter signal vs. a candidate
+# pick's derived attribute chips) and must stay separable in the vote history.
+AUTO_DERIVED_TAG_VOTE_SURFACE = "question-feed-auto-tag"
+
 # Persisted tag-vote statuses an implicit vote must never be cast against (owner-ratified
 # 2026-07-22 vote-weight scenario matrix, "write-side guards" / prior condition 8): a settled
 # or in-flight-for-moderation pair shouldn't accept a low-weight nudge in either direction.
@@ -1711,12 +1781,16 @@ _STATUSES_BLOCKING_IMPLICIT_VOTES = {
 }
 
 
-def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
+def _cast_implicit_sourced_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str, vote_surface: str) -> None:
     """
-    Casts (or supersedes) one `VoteSource.IMPLICIT` vote for (card, tag, anonymous_id) - the
-    /editor filter-chip signal fired when a person picks a candidate card while that tag's
-    filter chip is active (docs/features/printing-tags.md's implicit-vote section). Silently a
-    no-op (never an error - a guarded tag is an entirely normal case, not a client mistake) when:
+    Casts (or supersedes) one positive `VoteSource.IMPLICIT` vote for (card, tag, anonymous_id),
+    stamped with the given `vote_surface` - the shared core behind `_cast_implicit_vote_and_resolve`
+    (the /editor filter-chip signal) and `_cast_auto_derived_tag_vote_and_resolve` (a question-feed
+    candidate pick's derived attribute chips, issue #790). Both mechanisms need the exact same
+    guards; only the surface differs, which is what keeps them separable in the vote history.
+
+    Silently a no-op (never an error - a guarded tag is an entirely normal case, not a client
+    mistake) when:
 
       - `tag` is SENSITIVE (docs/features/moderation.md's approval queue is the only path for
         those; never a passive selection signal);
@@ -1737,6 +1811,12 @@ def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> 
         vote at all yet - has nothing to lock; a true simultaneous double-create race there is a
         narrower, pre-existing gap shared with every other `update_or_create`/`get_or_create` call
         site in this module, not introduced by this function.)
+
+    `user` is always stamped `None`, never the requesting session's user: `moderation.
+    is_privileged_vote` grants privileged weight to a USER-sourced vote from a moderator's
+    account regardless of source, so a moderator's own implicit pick must not carry their user
+    FK through to an IMPLICIT row, or it would resolve at privileged weight instead of the
+    tiny implicit one.
 
     Re-runs `resolve_and_persist_tag_votes` in the same transaction as the write, same as
     `_cast_tag_vote_and_resolve`.
@@ -1762,10 +1842,32 @@ def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> 
                 "polarity": VotePolarity.APPLY,
                 "source": VoteSource.IMPLICIT,
                 "user": None,
-                "vote_surface": IMPLICIT_VOTE_SURFACE,
+                "vote_surface": vote_surface,
             },
         )
         resolve_and_persist_tag_votes(card)
+
+
+def _cast_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
+    """
+    The /editor filter-chip signal fired when a person picks a candidate card while a tag's
+    filter chip is active (docs/features/printing-tags.md's implicit-vote section). See
+    `_cast_implicit_sourced_vote_and_resolve` for the guards and write.
+    """
+    _cast_implicit_sourced_vote_and_resolve(card, tag, anonymous_id, vote_surface=IMPLICIT_VOTE_SURFACE)
+
+
+def _cast_auto_derived_tag_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
+    """
+    A question-feed candidate pick's derived attribute chip (QuestionFeed.tsx's selectCandidate
+    -> getAutoTagChips, issue #790): the voter's click asserted "this is the printing", not
+    "this printing is black-bordered" - the second claim is a machine inference read off the
+    candidate's own Scryfall metadata, cast on the voter's behalf, and must not carry their
+    human-backed weight. Same guards as `_cast_implicit_vote_and_resolve` (see
+    `_cast_implicit_sourced_vote_and_resolve`), stamped with the distinct
+    `AUTO_DERIVED_TAG_VOTE_SURFACE` so the two mechanisms stay separable.
+    """
+    _cast_implicit_sourced_vote_and_resolve(card, tag, anonymous_id, vote_surface=AUTO_DERIVED_TAG_VOTE_SURFACE)
 
 
 def _retract_implicit_vote_and_resolve(card: Card, tag: Tag, anonymous_id: str) -> None:
@@ -1891,6 +1993,14 @@ def post_report_card(request: HttpRequest) -> HttpResponse:
     report still lands and the vote is skipped - same graceful degradation as the no-match
     reason strips. broken_image/other write the report row only.
 
+    A report may optionally carry `hide=True` (`ReportCardRequest.hide`, additive to the
+    existing payload) - a per-anonymous_id request that this card be excluded from that
+    identity's own future question-feed items (see docs/features/moderation.md's hidden-card
+    section). The `HiddenCard` row is written in the SAME transaction as the `CardReport`,
+    never in place of one: the report always lands regardless, and `hide` only ever adds the
+    exclusion. `get_or_create` makes a repeat `hide=True` for the same (card, anonymous_id) a
+    no-op rather than an IntegrityError; a `hide=False` or absent `hide` never creates one.
+
     Rate limited per anonymous ID (IP fallback) via CARD_REPORT_RATE (default 10/day) - the
     vote only happens inside this view, so the one limit covers both effects. Same
     single-worker in-process-cache caveat as post_submit_printing_tag.
@@ -1920,6 +2030,8 @@ def post_report_card(request: HttpRequest) -> HttpResponse:
         CardReport.objects.create(
             card=card, anonymous_id=req.anonymousId, user=user, reason=req.reason.value, text=req.text or ""
         )
+        if req.hide:
+            HiddenCard.objects.get_or_create(card=card, anonymous_id=req.anonymousId)
         tag_name = REPORT_REASON_TO_TAG_NAME.get(req.reason.value)
         if tag_name is not None:
             tag = Tag.objects.filter(name=tag_name).first()
@@ -2010,8 +2122,13 @@ def get_question_feed(request: HttpRequest) -> HttpResponse:
     if not anonymous_id:
         raise BadRequestException("Missing required anonymousId query parameter.")
 
-    item = get_next_question_feed_item(anonymous_id)
-    remaining_estimate = get_remaining_estimate()
+    # Resolved once and threaded to both calls below: `get_next_question_feed_item` and
+    # `get_remaining_estimate` each independently called `get_contested_card_ids()` before,
+    # measured at 520-562ms per call against live production data - on a single-gunicorn-worker
+    # deployment that's site-wide latency on every request, not one user's.
+    contested_card_ids = get_contested_card_ids()
+    item = get_next_question_feed_item(anonymous_id, contested_card_ids=contested_card_ids)
+    remaining_estimate = get_remaining_estimate(contested_card_ids)
     return JsonResponse(QuestionFeedResponse(item=item, remainingEstimate=remaining_estimate).model_dump())
 
 

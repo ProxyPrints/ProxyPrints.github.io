@@ -27,10 +27,11 @@ import {
 // Parity wave 3 (2026-07-24, issue #272) - un-skipped and ported onto the unified `/editor` page,
 // same retarget as GridSelectorModal.spec.ts (see that file's own header comment and
 // openDisplayCardbackGridSelector's comment in test-utils.ts for the full rationale): the only
-// surviving GridSelectorModal.tsx mount post-route-swap is CardbackToolbarButton's project-wide
-// cardback picker, reachable only once the project is non-empty - every test below runs one plain
-// import first purely to populate the project before the right rail/gear button/Cardback trigger
-// exist at all (DisplayPage.tsx's own `isProjectEmpty` early-return).
+// surviving GridSelectorModal.tsx mount post-route-swap is the project-wide cardback picker behind
+// CardbackRailControl's "Browse all cardbacks…" button, reachable only once the project is
+// non-empty - every test below runs one plain import first purely to populate the project before
+// the right rail/gear button/Browse-all trigger exist at all (DisplayPage.tsx's own
+// `isProjectEmpty` early-return).
 const threeCardHandlers = [
   cardDocumentsThreeResults,
   cardbacksThreeResults,

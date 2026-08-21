@@ -20,9 +20,10 @@ THE FOUR RATIFIED PASSIVE-MODE BARS (§10(a), verbatim numbers - none invented h
   1. Host load average > 7.0 - the existing escalation threshold (§3 decision (3)/§1, reused
      unchanged; see docs/reports/2026-07-23-4c-pilot-dry-run.md's own "well under the 7.0
      escalation threshold" note).
-  2. RSS > 768MB per worker (originally ratified at 512MB; raised 512 -> 768 by 70225df8,
-     2026-07-28, an owner ops ruling - 768 is THE ratified number, and a 512 found in an older
-     doc, report or test is pre-70225df8 history, not a competing bar).
+  2. RSS > 1024MB per worker (ratified at 512MB; raised 512 -> 768 by 70225df8,
+     2026-07-28, an owner ops ruling, then raised 768 -> 1024 (2026-08-17) to fit the
+     DPI-460 rendering footprint - 1024 is THE ratified number, and an older figure found
+     in a doc, report or test is pre-1024 history, not a competing bar).
   3. Fetch-failure rate > 1% over a rolling 500-card window.
 
      WHAT COUNTS AS A "FAILURE" HERE NARROWED ON 2026-07-30 (owner rate ruling: "the limit needs
@@ -86,10 +87,10 @@ from cardpicker.models import EnvelopeTrip
 # §10(a) ratified numeric bounds - PASSIVE mode only (see module docstring). None of these are
 # invented here; every one is cited to a specific brief section in the module docstring above.
 # `RSS_MB_PER_WORKER_CEILING` is the one bound whose value has moved since §10(a) was written:
-# raised 512 -> 768 by 70225df8 (2026-07-28) under an owner ops ruling, which is itself the
-# ratifying act for 768 - see the module docstring's bar 2.
+# raised 512 -> 768 by 70225df8 (2026-07-28) under an owner ops ruling, then raised 768 -> 1024
+# (2026-08-17) to fit the DPI-460 rendering footprint - see the module docstring's bar 2.
 HOST_LOAD_CEILING = 7.0
-RSS_MB_PER_WORKER_CEILING = 768.0
+RSS_MB_PER_WORKER_CEILING = 1024.0
 FETCH_FAILURE_RATE_CEILING = 0.01
 FETCH_FAILURE_WINDOW = 500
 

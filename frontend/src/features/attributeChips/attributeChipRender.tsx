@@ -25,7 +25,7 @@ import React from "react";
 
 import {
   ChipVoteState,
-  findExclusionGroup,
+  isChipContradicted,
 } from "@/features/attributeChips/attributeChips";
 
 // Mobile funnel pass (thumb-native tap targets): measured at ~30px tall against the previous
@@ -40,6 +40,13 @@ import {
 // reclaim the row space the owner reported as dead. Height/tap-targets are unchanged (still the
 // full 44px buttons, still directly tappable to override the implied state - see this file's
 // header comment).
+// `width: fit-content` (issue #742): an exclusion-group chip renders inside a container
+// (`LeftArea`/`RightArea`, AttributeChipPanel.tsx) that switches to `flex-direction: column`
+// once the ring/flat-stack has room to form; the flex spec's default `align-items: stretch`
+// then stretches any child with no definite cross-size to the column's full width, which is how
+// a chip meant to be a small label+buttons pill ended up spanning the whole panel with its Yes/
+// No buttons stranded far from the label. A definite width makes the chip immune to that stretch
+// regardless of an ancestor's flex-direction.
 export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
   border: 2px solid rgba(0, 0, 0, 0.25);
   border-radius: 0.5rem;
@@ -48,6 +55,7 @@ export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
   font-size: 0.85rem;
   white-space: nowrap;
   min-height: 44px;
+  width: fit-content;
   display: inline-flex;
   align-items: stretch;
   overflow: hidden;
@@ -55,7 +63,7 @@ export const ChipGroup = styled.div<{ impliedNegative: boolean }>`
 
 export const ChipLabel = styled.span<{ fill: string; collapsed?: boolean }>`
   background-color: ${(props) => props.fill};
-  padding: ${(props) => (props.collapsed ? "0" : "0.35rem 0.5rem")};
+  padding: ${(props) => (props.collapsed ? "0" : "0.3rem 0.45rem")};
   width: ${(props) => (props.collapsed ? "0" : "auto")};
   display: ${(props) => (props.collapsed ? "none" : "inline-flex")};
   align-items: center;
@@ -82,10 +90,11 @@ export const ChipStateButton = styled.button<{
   font-weight: ${(props) => (props.$active ? 700 : 400)};
   min-height: 44px;
   min-width: 32px;
-  padding: 0.35rem 0.4rem;
+  padding: 0.3rem 0.3rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  touch-action: manipulation;
 
   &:disabled {
     opacity: 0.5;
@@ -95,7 +104,7 @@ export const ChipStateButton = styled.button<{
 export const ChipRow = styled.div`
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.3rem;
   justify-content: center;
 `;
 
@@ -149,15 +158,7 @@ export function renderAttributeChip(
   const explicitState = chipStates[tagName] ?? "untouched";
   const isPositive = explicitState === "positive";
   const isNegative = explicitState === "negative";
-  const group = findExclusionGroup(tagName);
-  const impliedNegative =
-    explicitState === "untouched" &&
-    group != null &&
-    group.chips.some(
-      (sibling) =>
-        sibling.tagName !== tagName &&
-        (chipStates[sibling.tagName] ?? "untouched") === "positive"
-    );
+  const impliedNegative = isChipContradicted(tagName, chipStates);
   const lean = leanTooltip(confidence[tagName] ?? 0);
   const disabled = submittingTagName != null;
   const setState = (desired: "positive" | "negative") =>

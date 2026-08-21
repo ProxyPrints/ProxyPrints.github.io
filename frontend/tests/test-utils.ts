@@ -129,12 +129,18 @@ export const closeDetailedView = async (page: Page) => {
 // standing in for (which specific candidate got auto-selected); see this port's own report for
 // the one place that stops being true.
 export const ensureDisplayFace = async (page: Page, face: "front" | "back") => {
-  const wantLabel = face === "front" ? "Showing: Fronts" : "Showing: Backs";
-  const otherLabel = face === "front" ? "Showing: Backs" : "Showing: Fronts";
-  if (await page.getByText(otherLabel).isVisible()) {
-    await page.getByText(otherLabel).click();
+  // Editor-repass R10.2 - the right-rail View control is a Fronts/Backs ToggleButtonGroup now
+  // (was a label-flipping "Showing: Fronts/Backs" button); react-bootstrap marks the active
+  // segment with the `active` class.
+  const wantTestId =
+    face === "front"
+      ? "display-view-toggle-fronts"
+      : "display-view-toggle-backs";
+  const segment = page.getByTestId(wantTestId);
+  if (!(await segment.evaluate((el) => el.classList.contains("active")))) {
+    await segment.click();
   }
-  await expect(page.getByText(wantLabel)).toBeVisible();
+  await expect(segment).toHaveClass(/active/);
 };
 
 export const expectDisplaySheetSlotState = async (
@@ -243,43 +249,28 @@ export const openSelectVersionSection = async (page: Page) => {
   // toggle is gone entirely, hard-pinned true) - no "Compressed" click needed any more.
 };
 
-// Parked-spec port wave (2026-07-24, issue #272; PDFGenerator/PagePreview/PostExportContribution-
-// Prompt specs). PDF generation now lives solely on the standalone /print route (D10,
-// pages/print.tsx) - the classic grid's own "Print!" tab this helper used to click through
-// (ProjectEditor.tsx's own PrintPanel) no longer exists anywhere reachable. The unified page's
-// Finish footer button is the one live entry point (mirrors UnsavedWorkGuard.spec.ts's and
-// DisplayFinishFooter.spec.ts's own precedent for this exact transition) - `whoamiAnonymous` is
-// part of `defaultHandlers`, so this always lands straight on /print with no pre-print save gate
-// to dismiss first. FinishedMyProject's default tab is "pringleprints", not "pdf"
-// (FinishedMyProject.tsx) - the PDF tab always needs an explicit click even though its own nav
-// item is already visible immediately.
-//
-// The click+waitForURL step is wrapped in a `toPass` retry (same resilience pattern
-// `openAddCardsDropdown` above already established for this suite) rather than a single
-// generous-timeout attempt - observed directly (2026-07-24, verifying this port at 4 parallel
-// workers) failing with a bare `net::ERR_ABORTED` on the FIRST attempt under worker contention
-// (three separate spec files - this one, PDFGenerator.spec.ts, PostExportContributionPrompt.spec.ts
-// - all racing to first-hit /print's cold on-demand dev-mode compile simultaneously, the same
-// characteristic DisplayFinishFooter.spec.ts's own `mode: "serial"` comment documents, just not
-// fully solved by that file-local fix once MULTIPLE files contend for the same route). A retried
-// click safely re-fires `router.push("/print")` if the first attempt's navigation never actually
-// landed - idempotent either way.
-export const navigateToPrintPDFTab = async (page: Page, query: string) => {
-  await loadPageWithDefaultBackend(page);
-  await importTextOnEditorLanding(page, query);
-  await expect(async () => {
-    await page.getByTestId("finish-footer-print-export").click();
-    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still riding the
-    // untouched default cardback, so the reminder gate fires before navigation; "Use current &
-    // continue" proceeds (and suppresses the gate for the rest of this retry loop's session, so a
-    // `toPass` retry never re-shows it).
-    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-    if (await cardbackGate.isVisible().catch(() => false)) {
-      await cardbackGate.getByTestId("cardback-gate-use-current").click();
-    }
-    await page.waitForURL(/\/print/, { timeout: 15_000 });
-  }).toPass({ timeout: 45_000 });
-  await page.getByRole("tab", { name: "PDF" }).click();
+// Editor export rescue (docs/features/pdf-generator.md) - replaces the old navigateToPrintPDFTab
+// helper (drove the removed Finish-footer "Print / Export" button + /print navigation). PDF
+// export now runs in place via the Export dropdown -> PDF -> this settings modal -> Download,
+// same path CardbackFlow.spec.ts's own local copy already drives.
+export const openPDFExportSettingsModal = async (page: Page) => {
+  // The Export dropdown lives inside the right rail's Finish footer - below `xl` that's the
+  // same gated Offcanvas ensureDisplayRightRailOpen's own callers already guard for.
+  const rail = page.getByTestId("display-print-settings-rail");
+  if (!(await rail.isVisible())) {
+    await page.getByTestId("display-gear-button").click();
+    await expect(rail).toBeVisible();
+  }
+  await page.getByTestId("display-export-menu-toggle").click();
+  await page.getByTestId("display-export-pdf-button").click();
+  const settingsModal = page.getByTestId("display-export-pdf-settings-modal");
+  await expect(settingsModal).toBeVisible();
+  return settingsModal;
+};
+
+export const openPDFExportSettingsAndClickDownload = async (page: Page) => {
+  const settingsModal = await openPDFExportSettingsModal(page);
+  await settingsModal.getByTestId("display-export-pdf-download-button").click();
 };
 
 export async function expectCardSlotToExist(page: Page, slot: number) {
@@ -784,7 +775,12 @@ export const getErrorToast = async (page: Page) => {
 };
 
 export const openSearchSettingsModal = async (page: Page) => {
-  await page.getByText(/Search Settings/).click();
+  // A role/name locator (not the old plain getByText(/Search Settings/)) matches either
+  // SearchSettings.tsx trigger variant: the classic editor's full-width `"button"` (visible text
+  // "Search Settings" IS its accessible name) and the display page's compact `"icon"` cog
+  // (aria-label "Search Settings", no visible text at all) - see that component's own
+  // SearchSettingsProps comment for why the two variants share one Modal.
+  await page.getByRole("button", { name: /Search Settings/ }).click();
   await expect(
     page.getByTestId("search-settings").getByText("Search Settings")
   ).toBeVisible();
@@ -797,24 +793,14 @@ export const enableFuzzySearch = async (page: Page) => {
   await settingsModal.getByRole("button", { name: "Save Changes" }).click();
 };
 
-// SearchSettings parity port (2026-07-23, issue #272 wave 2). SearchSettings.tsx itself is
-// unchanged and unforked (DisplayPage.tsx's own comment: "relocated here unmodified") - it just
-// lives inside the right rail's Offcanvas (`display-print-settings-rail`) instead of the classic
-// toolbar. Below the `xl` breakpoint that Offcanvas starts closed, reachable only via the gear
-// button (`display-gear-button`, itself `d-xl-none` - hidden at `xl`+, where the rail is already
-// inline instead - playwright.config.ts's own `contextOptions.viewport` override doesn't actually
-// take effect, an unrelated pre-existing quirk: Playwright's real viewport for this whole suite is
-// devices["Desktop Chrome"]'s stock 1280x720, which IS above `xl`, so the gear button is normally
-// hidden and the rail already visible here - conditional click, same `isVisible()`-guard pattern
-// as `openAddCardsDropdown`, keeps this helper correct at either width). Once the rail is open,
-// openSearchSettingsModal's own `getByText(/Search Settings/)` trigger click still works verbatim
-// - no duplicate-heading ambiguity here either (see DisplayPage.tsx's own comment on that button).
+// Right-rail density pass - the cog moved out of the right rail's Offcanvas onto the search box
+// itself, in the always-visible toolbar (`display-toolbar`/`display-search-bar-group`), so unlike
+// `openDisplayCardbackGridSelector`/`ensureDisplayRightRailOpen` below it no longer needs the
+// gear-open guard at any viewport tier - it's reachable directly, same as the classic editor's
+// own trigger. Kept as its own named export (rather than inlining `openSearchSettingsModal`
+// everywhere) so existing callers (ChangeQueryModal.spec.ts, SearchSettings.visual.spec.ts) don't
+// need touching.
 export const openDisplaySearchSettingsModal = async (page: Page) => {
-  const rail = page.getByTestId("display-print-settings-rail");
-  if (!(await rail.isVisible())) {
-    await page.getByTestId("display-gear-button").click();
-    await expect(rail).toBeVisible();
-  }
   return openSearchSettingsModal(page);
 };
 
@@ -829,13 +815,16 @@ export const enableDisplayFuzzySearch = async (page: Page) => {
 // below). Per-slot picking on the unified page goes through the rail's own Select Version section
 // instead (SelectVersionSection.spec.ts's own coverage) - a materially different component with no
 // grouping/filters-sidebar/Jump-to-Version UI of its own. The ONE GridSelectorModal instance still
-// reachable on this page is CardbackToolbarButton's project-wide cardback picker
-// (CommonCardback.tsx's `MemoizedCommonCardbackGridSelector`, testid `cardback-grid-selector`,
-// title "Select Cardback") - GridSelectorModal.tsx itself is entirely generic (a bare
-// `imageIdentifiers` array + `onClick` callback, doesn't care what the identifiers represent), so
-// every grouping/filter/keyboard/autofocus/mobile-viewport behavior this modal exposes is
-// identical regardless of which caller's identifiers feed it - this is the full-fidelity instance
-// this wave's GridSelectorModal.spec.ts/GridSelectorModalVariants.spec.ts clusters port onto.
+// reachable on this page is the project-wide cardback picker behind CardbackRailControl's
+// "Browse all cardbacks…" button (CommonCardback.tsx's `MemoizedCommonCardbackGridSelector`,
+// testid `cardback-grid-selector`, title "Select Cardback") - GridSelectorModal.tsx itself is
+// entirely generic (a bare `imageIdentifiers` array + `onClick` callback, doesn't care what the
+// identifiers represent), so every grouping/filter/keyboard/autofocus/mobile-viewport behavior
+// this modal exposes is identical regardless of which caller's identifiers feed it - this is the
+// full-fidelity instance this wave's GridSelectorModal.spec.ts/GridSelectorModalVariants.spec.ts
+// clusters port onto. R9 (editor-repass round, item 2): CardbackToolbarButton is retired in
+// favour of CardbackRailControl (the shared CardbackSwatchStrip + two plain buttons), and the
+// full picker is reached via its "Browse all cardbacks…" button (`cardback-browse-all-button`).
 // Requires the right rail open first (same isVisible()-guard pattern as
 // openDisplaySearchSettingsModal). Also requires a NON-empty project already: DisplayPage.tsx's
 // own `if (isProjectEmpty) return <DeckInputLanding ... />` early-return means the toolbar/gear
@@ -848,7 +837,9 @@ export const openDisplayCardbackGridSelector = async (page: Page) => {
     await page.getByTestId("display-gear-button").click();
     await expect(rail).toBeVisible();
   }
-  await rail.getByRole("button", { name: /Cardback/ }).click();
+  // Dedicated testid (not a name-based locator): the sheet slot's own "⟲" flip button can carry
+  // an accessible name mentioning "cardback" too (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3).
+  await page.getByTestId("cardback-browse-all-button").click();
   const gridSelector = page.getByTestId("cardback-grid-selector");
   await expect(gridSelector).toBeVisible();
   return gridSelector;

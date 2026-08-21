@@ -37,8 +37,7 @@
  * not an empty header.
  */
 
-import React, { useState } from "react";
-import Button from "react-bootstrap/Button";
+import React, { useRef, useState } from "react";
 import Col from "react-bootstrap/Col";
 import Row from "react-bootstrap/Row";
 
@@ -46,6 +45,7 @@ import { errorToNotification, isRateLimited } from "@/common/apiErrors";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { useTagDisplayName } from "@/common/tagDisplayNames";
 import { useAppDispatch } from "@/common/types";
+import { ActionButton } from "@/features/attributeVoting/ActionButton";
 import { ChipCard } from "@/features/attributeVoting/ChipCard";
 import { APISubmitTagVote, useGetTagsQuery } from "@/store/api";
 import { setNotification } from "@/store/slices/toastsSlice";
@@ -119,6 +119,10 @@ export function NoMatchReasonStrip({
   const [submittingTagName, setSubmittingTagName] = useState<string | null>(
     null
   );
+  // Issue #715 - same synchronous in-flight guard as the other funnel components: the visual
+  // `disabled` lags a fast double-tap by a render, so the ref drops the second chip tap (and
+  // the second Skip) before a vote can be cast twice.
+  const inFlightRef = useRef<boolean>(false);
   const { data: existingTags } = useGetTagsQuery();
   const existingTagNames =
     existingTags != null ? new Set(existingTags.map((tag) => tag.name)) : null;
@@ -126,6 +130,10 @@ export function NoMatchReasonStrip({
     existingTagNames == null || existingTagNames.has(tagName);
 
   const choose = (tagName: string) => {
+    if (inFlightRef.current) {
+      return;
+    }
+    inFlightRef.current = true;
     setSubmittingTagName(tagName);
     APISubmitTagVote(
       backendURL,
@@ -153,7 +161,10 @@ export function NoMatchReasonStrip({
           ])
         );
       })
-      .finally(() => setSubmittingTagName(null));
+      .finally(() => {
+        inFlightRef.current = false;
+        setSubmittingTagName(null);
+      });
   };
 
   return (
@@ -196,14 +207,20 @@ export function NoMatchReasonStrip({
         );
       })}
       <div className="mt-2">
-        <Button
-          variant="outline-secondary"
+        <ActionButton
+          className="ghost"
           disabled={submittingTagName != null}
-          onClick={() => onDone()}
+          onClick={() => {
+            if (inFlightRef.current) {
+              return;
+            }
+            inFlightRef.current = true;
+            onDone();
+          }}
           data-testid="no-match-reason-skip"
         >
           Skip
-        </Button>
+        </ActionButton>
       </div>
     </div>
   );

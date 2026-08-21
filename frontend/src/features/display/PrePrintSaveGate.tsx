@@ -1,7 +1,6 @@
 /**
  * Proposal H ADDENDUM D9(3)/F3 (docs/proposals/proposal-h-display-layout-spec.md, issue #275) -
- * the pre-print save gate. Pressing the Finish footer's "Print / Export →" runs a persist step
- * FIRST, before any navigation (and therefore any PDF render) begins:
+ * the pre-export save gate. Runs a persist step FIRST, before the export action it wraps begins:
  *   (a) flush the local draft synchronously (useProjectDraftBackup's `flushDraftNow`) - never
  *       debounced, so the crash/OOM safety net is guaranteed current the instant before whatever
  *       happens next;
@@ -12,16 +11,24 @@
  *       Skip - mirroring LoadSafetyModal.tsx's existing "always take a safety copy before a
  *       destructive step" pattern, here applied to the PDF-render step instead of a deck-load
  *       step;
- *   (c) only after persistence resolves (Save completes, or Skip/no-save-needed) does
- *       client-side navigation to the Print page (D10, pages/print.tsx) begin.
+ *   (c) only after persistence resolves (Save completes, or Skip/no-save-needed) does the
+ *       caller-supplied `proceed` callback run.
+ *
+ * Originally this always ended in a client-side navigation to the Print page (D10,
+ * pages/print.tsx). Once Drive save landed on the editor too (see docs/features/pdf-generator.md's
+ * "Editor-native PDF export" section), that destination stopped being the only place an export
+ * could finish, so `startPrintFlow` takes the export action itself as a `proceed` parameter rather
+ * than hardcoding one - its only caller today is `DisplayExportPDF.tsx`'s Download/Save-to-Drive
+ * buttons (threaded down via `FinishFooter`/`DisplayExportMenu`), which run the actual export in
+ * place instead of navigating away.
  *
  * "Saving gates PDF; PDF never gates saving" (D9's own summary line) - this hook never blocks on
  * anything PDF-related, only on the save choice itself, and an anonymous or clean (non-dirty)
- * session skips the prompt entirely and navigates immediately - the gate only ever appears when
+ * session skips the prompt entirely and proceeds immediately - the gate only ever appears when
  * there is genuinely something unsaved to decide about.
  *
- * Dismissing the prompt (close button/Escape/backdrop) is treated as cancelling the WHOLE print
- * attempt, not as an implicit Skip - the user stays on /display with nothing navigated and
+ * Dismissing the prompt (close button/Escape/backdrop) is treated as cancelling the WHOLE export
+ * attempt, not as an implicit Skip - the user stays on the editor with nothing exported and
  * nothing saved, which is the safer default for a modal that isn't itself a forced,
  * no-cancel-option safety net (unlike LoadSafetyModal, which never offers a plain dismiss).
  *
@@ -32,7 +39,6 @@
  * are OWNER AMENDMENT 1 (dismiss = "use current & continue", not cancel) - the two gates are
  * deliberately NOT symmetric; see that hook's own module comment for why.
  */
-import { useRouter } from "next/router";
 import React, { useState } from "react";
 import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
@@ -42,10 +48,6 @@ import { useCardbackReminderGate } from "@/features/display/useCardbackReminderG
 import { selectIsCurrentProjectDirty } from "@/features/savedDecks/selectors";
 import { useSaveDeckFlow } from "@/features/savedDecks/useSaveDeckFlow";
 import { useGetWhoamiQuery } from "@/store/api";
-
-/** The Print page's own route (D10/F5 - pages/print.tsx, a thin wrapper mounting
- * FinishedMyProject/PrintPanel). */
-const PRINT_PAGE_ROUTE = "/print";
 
 export interface UsePrePrintSaveGateOptions {
   /** useProjectDraftBackup's own `flushDraftNow` - D9(3)a, always run first. */
@@ -59,15 +61,16 @@ export interface UsePrePrintSaveGateResult {
   /** Render this once - the "Save before printing?" prompt plus whatever useSaveDeckFlow.ts's
    * own modal chain needs, all in one place. */
   element: React.ReactElement;
-  /** The Finish footer's "Print / Export →" `onClick` - runs the full D9(3) sequence. */
-  startPrintFlow: () => void;
+  /** Runs the full D9(3) gate sequence (draft flush, cardback reminder, then the save-before-
+   * export prompt if there's something dirty to save), then calls `proceed` - the actual export
+   * action, supplied by the caller. */
+  startPrintFlow: (proceed: () => void) => void;
 }
 
 export function usePrePrintSaveGate({
   flushDraftNow,
   notifyPromoteDraftPrePrint,
 }: UsePrePrintSaveGateOptions): UsePrePrintSaveGateResult {
-  const router = useRouter();
   const whoami = useGetWhoamiQuery();
   const isAuthenticated = whoami.data?.authenticated === true;
   const isProjectDirty = useAppSelector(selectIsCurrentProjectDirty);
@@ -75,23 +78,23 @@ export function usePrePrintSaveGate({
   const cardbackReminderGate = useCardbackReminderGate();
 
   const [showPrompt, setShowPrompt] = useState(false);
+  const [pendingProceed, setPendingProceed] = useState<
+    (() => void) | undefined
+  >(undefined);
 
-  const proceedToPrint = () => {
-    router.push(PRINT_PAGE_ROUTE);
-  };
-
-  const runSaveBranch = () => {
+  const runSaveBranch = (proceed: () => void) => {
     if (isAuthenticated && isProjectDirty) {
+      setPendingProceed(() => proceed);
       setShowPrompt(true);
     } else {
-      // Nothing dirty to offer saving (or no account to save to at all) - navigate immediately.
-      // "PDF never gates saving" cuts both ways: saving never gates a print attempt that has
+      // Nothing dirty to offer saving (or no account to save to at all) - proceed immediately.
+      // "PDF never gates saving" cuts both ways: saving never gates an export attempt that has
       // nothing new to save either.
-      proceedToPrint();
+      proceed();
     }
   };
 
-  const startPrintFlow = () => {
+  const startPrintFlow = (proceed: () => void) => {
     // D9(3)a - flush first, unconditionally, before any branch below. D9(2)'s pre-print
     // promotion nudge rides the same moment.
     flushDraftNow();
@@ -100,17 +103,21 @@ export function usePrePrintSaveGate({
     // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the deck-completeness decision runs
     // BEFORE the persistence decision; `guard` is a no-op (calls `runSaveBranch` immediately) once
     // a cardback has been explicitly chosen or the reminder's already been dismissed this session.
-    cardbackReminderGate.guard(runSaveBranch);
+    cardbackReminderGate.guard(() => runSaveBranch(proceed));
   };
 
   const handleSave = () => {
     setShowPrompt(false);
-    saveFlow.triggerSave(proceedToPrint);
+    const proceed = pendingProceed;
+    setPendingProceed(undefined);
+    saveFlow.triggerSave(() => proceed?.());
   };
 
   const handleSkip = () => {
     setShowPrompt(false);
-    proceedToPrint();
+    const proceed = pendingProceed;
+    setPendingProceed(undefined);
+    proceed?.();
   };
 
   const element = (

@@ -137,8 +137,10 @@ STAGE E - REUSED, NOT REIMPLEMENTED. `operating_envelope.current_trip` / `check_
 (rate pressure throttles, genuine breaches halt) and the global 7/s ceiling from PR #649 live
 BELOW this command, inside `harvest_fetch_limiter` / `harvest_rate_coordinator`, and apply to
 Stage C's fetches whether this command knows about them or not - which is why this file does not
-mention them again. The fidelity gate is `local_identify_printing_tags.verify_zero_resolutions`,
-the same gate `local_calculate_verdicts` runs between its calculators.
+mention them again. The fidelity gate is `local_identify_printing_tags.run_fidelity_gate`, a
+shared entry point (built on the same `verify_zero_resolutions` check `local_calculate_verdicts`
+runs between its calculators) that `backfill_survivor_pks` also calls, so the two commands can
+never drift on what "the gate" means.
 
 END - `channel_report`. Run at the end of the pass, ALWAYS non-gating for this command's own exit
 status. Expect exit 1 on the first run: `ZERO_DECLARATIONS` ships empty and there are known-silent
@@ -178,10 +180,11 @@ from cardpicker.local_clustering import compute_two_threshold_clusters
 from cardpicker.local_identify_printing_tags import (
     EXCLUDED_RESOLVED_TAGS,
     build_propagated_cluster_votes,
-    verify_zero_resolutions,
+    run_fidelity_gate,
 )
 from cardpicker.management.commands.stream_full_catalog import (
     EXIT_ENVELOPE_HALT,
+    EXIT_FIDELITY_GATE_VIOLATION,
     run_stage_zero_freshness,
 )
 from cardpicker.models import (
@@ -209,8 +212,6 @@ from cardpicker.stage_e_dispatch import (
 )
 from cardpicker.utils import get_baked_git_sha
 from cardpicker.vote_write import purge_and_write_votes
-
-EXIT_FIDELITY_GATE_VIOLATION = 7
 
 # The cohort bound handed to `run_image_evidence_cohort` when the operator has not narrowed the
 # run. That command's own `--limit` defaults to 3000 (a pilot-sized default for a pilot-sized
@@ -480,7 +481,9 @@ class Command(BaseCommand):
                 self.stdout.write("FIDELITY GATE skipped (--skip-gate).")
                 counters["fidelity_gate"] = {"skipped": True}
             else:
-                gate_violations = self._run_fidelity_gate(run_id=run_id)
+                gate_violations = run_fidelity_gate(
+                    run_id=run_id, write=self.stdout.write, style_error=self.style.ERROR
+                )
                 counters["fidelity_gate"] = {"violations": len(gate_violations)}
 
             # -- END : channel_report ----------------------------------------------------------
@@ -636,7 +639,7 @@ class Command(BaseCommand):
             "slow_path_routed": outcome.stage_d_slow_path_routed,
             "border_chip_votes": outcome.stage_d_border_chip_votes,
             "frame_chip_votes": outcome.stage_d_frame_chip_votes,
-            "bleed_chip_votes": outcome.stage_d_bleed_chip_votes,
+            "bleed_calculator_votes": outcome.stage_d_bleed_calculator_votes,
             "ai_art_votes": outcome.stage_d_ai_art_votes,
             "art_hash_artist_votes": outcome.stage_d_art_hash_artist_votes,
             "lands_votes": outcome.stage_d_lands_votes,
@@ -663,8 +666,9 @@ class Command(BaseCommand):
         self.stdout.write(f"STREAMING C→D: {batch_decision.describe()}")
         self.stdout.write(f"STAGE C: run_stage_e_streaming (micro-batches of {batch_size})")
         self.stdout.write(
-            "STAGE D: join-key -> fallback -> illustration -> slow-path, then the border / frame / bleed "
-            "chips, then ai-art / residual-classify / art-hash-artist / lands-artist-decomp"
+            "STAGE D: join-key -> fallback -> illustration -> slow-path, then the border / frame "
+            "chips and the bleed calculator, then ai-art / residual-classify / art-hash-artist / "
+            "lands-artist-decomp"
         )
 
         max_batches: Optional[int] = options.get("max_batches")
@@ -698,7 +702,7 @@ class Command(BaseCommand):
             "stage_d_slow_path_routed": 0,
             "stage_d_border_chip_votes": 0,
             "stage_d_frame_chip_votes": 0,
-            "stage_d_bleed_chip_votes": 0,
+            "stage_d_bleed_calculator_votes": 0,
             "stage_d_ai_art_votes": 0,
             "stage_d_art_hash_artist_votes": 0,
             "stage_d_lands_votes": 0,
@@ -1127,27 +1131,6 @@ class Command(BaseCommand):
             purge_and_write_votes(CardPrintingTag, rows, target_field="card_id")
         stats["would_propagate" if dry_run else "votes_propagated"] = len(rows)
         return stats
-
-    # ------------------------------------------------------------------------------------------
-    def _run_fidelity_gate(self, *, run_id: str) -> list[int]:
-        """
-        The Stage D fidelity gate - `verify_zero_resolutions`, the same check
-        `local_calculate_verdicts` runs between its calculators, applied here once over every card
-        this run cast a printing vote for. It answers one question: did any card reach a RESOLVED
-        printing state on machine votes alone? The answer must be zero.
-        """
-        card_ids = list(CardPrintingTag.objects.filter(run_id=run_id).values_list("card_id", flat=True).distinct())
-        if not card_ids:
-            self.stdout.write("FIDELITY GATE: this run cast no printing votes - nothing to check.")
-            return []
-        violations = verify_zero_resolutions(card_ids)
-        if violations:
-            self.stdout.write(
-                self.style.ERROR(f"FIDELITY GATE VIOLATION: {len(violations)} card(s): {violations[:20]}")
-            )
-        else:
-            self.stdout.write(f"FIDELITY GATE: clear over {len(card_ids)} cards.")
-        return violations
 
     # ------------------------------------------------------------------------------------------
     def _run_channel_report(self, *, run_id: str) -> dict[str, Any]:

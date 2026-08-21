@@ -131,6 +131,7 @@ from cardpicker.models import (
     CanonicalCard,
     CanonicalPrintingMetadata,
     Card,
+    CardIllustrationRejection,
     CardIllustrationVote,
     CardPrintingTag,
     CardScanLog,
@@ -140,6 +141,7 @@ from cardpicker.models import (
     VoteSource,
     purge_stale_machine_votes,
 )
+from cardpicker.printing_candidates import get_ranked_printing_candidates
 from cardpicker.printing_consensus import resolve_and_persist_printing
 from cardpicker.search.sanitisation import to_searchable
 
@@ -544,6 +546,13 @@ class IllustrationCalculatorResult:
     illustration_votes_would_cast: int = 0
     illustration_votes_written: int = 0
     illustration_votes_already_voted: int = 0
+    # ELIMINATION COVERAGE (the "Not this art" follow-up) — one positive implies a rejection for
+    # every OTHER illustration candidate available for the card (`_other_available_illustration_ids`).
+    # Scoped to the SAME cards `illustration_votes_written` counts (a card whose positive was
+    # unchanged this run gets no rejection churn either — see `run_illustration_calculator`'s own
+    # write-phase comment). Counted in dry-run mode too, same convention as every counter above.
+    illustration_rejections_would_cast: int = 0
+    illustration_rejections_written: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -1004,6 +1013,72 @@ def _purge_and_write_illustration_votes(anonymous_id: str, new_votes: list[CardI
         CardIllustrationVote.objects.bulk_create(new_votes, ignore_conflicts=True)
 
 
+def _other_available_illustration_ids(card: Card, resolved_illustration_id: str) -> list[uuid_module.UUID]:
+    """
+    "Every OTHER available illustration for this card" (the owner's phrase, verbatim) — the
+    population `run_illustration_calculator` casts a `CardIllustrationRejection` against
+    alongside the `CardIllustrationVote` it writes for `resolved_illustration_id`.
+
+    NOT the artist+name index this calculator resolved its positive from — that index is keyed
+    by `(artist_pk, searchable_card_name)` and, by construction, holds exactly one surviving
+    illustration on every card that reaches this function (0/1/N>1 illustrations is the whole of
+    `calculate_illustration_verdict`'s branch structure; only the N=1 branch ever writes a vote).
+    There is nothing left in THAT index to reject.
+
+    The candidate space this draws on instead is `get_ranked_printing_candidates(card, None)` —
+    the same name-ranked printing-candidate list `illustration_vote.
+    printings_for_card_and_illustration` already reads for the human path's live 1:1 check, and
+    the same list a human voter sees in the candidate grid. Every DISTINCT `illustration_id`
+    among those candidates, other than the one just resolved, is "an artwork this card's name
+    could plausibly be, that the calculator is now saying it is NOT" — exactly the elimination
+    claim the model exists to record.
+    """
+    resolved_uuid = _as_uuid(resolved_illustration_id)
+    seen: dict[uuid_module.UUID, None] = {}
+    for candidate in get_ranked_printing_candidates(card, None):
+        metadata = getattr(candidate, "printing_metadata", None)
+        candidate_illustration_id = getattr(metadata, "illustration_id", None) if metadata is not None else None
+        if candidate_illustration_id is None or candidate_illustration_id == resolved_uuid:
+            continue
+        seen.setdefault(candidate_illustration_id, None)
+    return list(seen.keys())
+
+
+def _purge_and_write_illustration_rejections(
+    anonymous_id: str, touched_card_ids: list[int], new_rejections: list[CardIllustrationRejection]
+) -> None:
+    """
+    The elimination-grain analogue of `_purge_and_write_illustration_votes` above, with one
+    structural difference this model's shape forces: a card's rejection set has no single VALUE
+    to compare (it is a SET of `illustration_id`s, not one scalar), so there is no
+    `_split_new_illustration_rejections` step - the caller decides which cards are "touched"
+    (`run_illustration_calculator` scopes this to exactly the cards in `new_illustration_votes`,
+    i.e. cards whose POSITIVE changed this run - an unchanged positive gets no rejection churn
+    either, which is what makes a genuine no-op re-run write zero rows here too).
+
+    `touched_card_ids` and `new_rejections` are PURPOSELY SEPARATE ARGUMENTS: a touched card can
+    legitimately produce zero rejections (its candidate space collapsed to just the one resolved
+    illustration - measured live, roughly half of resolved cards), and that card's STALE
+    rejections from a previous run (when its candidate space, or its positive, was different)
+    must still be purged even though nothing new is being inserted for it. Purging is therefore
+    keyed on `touched_card_ids`, not on `{r.card_id for r in new_rejections}`.
+
+    RETRACTION (the "later run tags a DIFFERENT illustration" case): when a card's positive
+    changes from X to Y, `_other_available_illustration_ids` recomputes against the SAME
+    candidate space excluding Y this time, so X naturally reappears as one of the new rejections
+    - and the family-scoped purge below removes the stale row that used to reject Y (now the
+    positive) before the new set (which now rejects X instead) is inserted. No special-cased
+    supersession logic is needed; recomputing the full set fresh every touched run and purging
+    before writing is what the existing `purge_stale_machine_votes` machinery already guarantees.
+    """
+    if not touched_card_ids:
+        return
+    with transaction.atomic():
+        purge_stale_machine_votes(CardIllustrationRejection, anonymous_id, "card_id", touched_card_ids)
+        if new_rejections:
+            CardIllustrationRejection.objects.bulk_create(new_rejections, ignore_conflicts=True)
+
+
 # ---------------------------------------------------------------------------
 # Batch runner
 # ---------------------------------------------------------------------------
@@ -1064,6 +1139,7 @@ def run_illustration_calculator(
 
     votes_batch: list[CardPrintingTag] = []
     illustration_votes_batch: list[CardIllustrationVote] = []
+    illustration_rejections_batch: list[CardIllustrationRejection] = []
     scan_log_batch: list[CardScanLog] = []
     touched_card_ids: list[int] = []
 
@@ -1190,6 +1266,14 @@ def run_illustration_calculator(
         # confident identity claim as a zero-confidence one on the majority of its own population.
         if verdict.illustration_id:
             result.illustration_votes_would_cast += 1
+            # THE ELIMINATION WRITE (the "Not this art" follow-up) - one positive implies a
+            # rejection for every OTHER illustration this card's own candidate space still holds.
+            # Computed (and counted) whether or not this is a dry run, matching every other
+            # counter's own convention in this loop - see `_other_available_illustration_ids`'s
+            # own docstring for what that space is and why it is not the artist+name index this
+            # positive came from.
+            other_illustration_ids = _other_available_illustration_ids(card, verdict.illustration_id)
+            result.illustration_rejections_would_cast += len(other_illustration_ids)
             if not dry_run:
                 illustration_votes_batch.append(
                     CardIllustrationVote(
@@ -1201,6 +1285,17 @@ def run_illustration_calculator(
                         confidence=BASE_CONFIDENCE,
                         run_id=run_id,
                     )
+                )
+                illustration_rejections_batch.extend(
+                    CardIllustrationRejection(
+                        card_id=card.pk,
+                        illustration_id=other_illustration_id,
+                        anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+                        source=VoteSource.DEDUCTION,
+                        confidence=BASE_CONFIDENCE,
+                        run_id=run_id,
+                    )
+                    for other_illustration_id in other_illustration_ids
                 )
 
         if verdict.skip_reason:
@@ -1299,6 +1394,22 @@ def run_illustration_calculator(
         )
         _purge_and_write_illustration_votes(ILLUSTRATION_ANONYMOUS_ID, new_illustration_votes)
         result.illustration_votes_written = len(new_illustration_votes)
+
+        # Eliminations are scoped to exactly the cards whose POSITIVE changed this run
+        # (`new_illustration_votes`), never the full `illustration_rejections_batch` built during
+        # the scan loop above - a card whose answer was unchanged (`_split_new_illustration_votes`
+        # dropped it as a genuine no-op) gets no rejection churn either, which is what keeps a
+        # true no-op re-run at zero writes on this table too.
+        touched_illustration_card_ids = [vote.card_id for vote in new_illustration_votes]
+        new_rejections = [
+            rejection
+            for rejection in illustration_rejections_batch
+            if rejection.card_id in set(touched_illustration_card_ids)
+        ]
+        _purge_and_write_illustration_rejections(
+            ILLUSTRATION_ANONYMOUS_ID, touched_illustration_card_ids, new_rejections
+        )
+        result.illustration_rejections_written = len(new_rejections)
 
         if scan_log_batch:
             CardScanLog.objects.bulk_create(scan_log_batch)

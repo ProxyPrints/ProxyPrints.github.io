@@ -43,7 +43,7 @@ export function useBackendSetter() {
       if (!backendConfigured) {
         dispatch(setURL(envURL));
       }
-    } else if (formattedURL != null) {
+    } else if (formattedURL != null && backendURL !== formattedURL) {
       dispatch(setURL(formattedURL));
       setLocalStorageBackendURL(formattedURL);
       if (server != null && typeof server == "string" && server.length > 0) {

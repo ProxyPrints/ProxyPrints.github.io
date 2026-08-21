@@ -30,6 +30,7 @@ from cardpicker.local_illustration import (
     IllustrationIndex,
     _eligible_illustration_cards_queryset,
     _get_cached_illustration_index,
+    _other_available_illustration_ids,
     _split_new_illustration_votes,
     calculate_illustration_verdict,
     printings_for_illustration,
@@ -38,6 +39,7 @@ from cardpicker.local_illustration import (
 )
 from cardpicker.models import (
     CardArtistVote,
+    CardIllustrationRejection,
     CardIllustrationVote,
     CardPrintingTag,
     CardScanLog,
@@ -2284,3 +2286,203 @@ class TestNameOnlyFaceIllustrations:
 
         assert after != before
         assert after[5] == before[5] + 1
+
+
+# =============================================================================================
+# Eliminations - the "Not this art" follow-up's machine-cast side (one positive implies a
+# rejection for every OTHER illustration this card's own candidate space still holds).
+# =============================================================================================
+
+
+class TestOtherAvailableIllustrationIds:
+    def _artist_and_card(self, artist_name="Artist Q", card_name="Dragon"):
+        artist = CanonicalArtistFactory(name=artist_name)
+        expansion = CanonicalExpansionFactory(code="lea")
+        card = _eligible_card(name=card_name)
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name=artist_name)
+        return artist, expansion, card
+
+    def test_a_name_matching_printing_by_a_different_artist_is_an_other_candidate(self, db):
+        """The candidate space this draws on (get_ranked_printing_candidates) is NAME-based and
+        artist-agnostic - broader than the artist+name index the resolved positive came from, so
+        a same-named printing by a DIFFERENT artist (never visible to the calculator's own
+        resolution) still surfaces here as something to reject."""
+        artist, expansion, card = self._artist_and_card()
+        resolved = uuid.uuid4()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=resolved)
+
+        other_artist = CanonicalArtistFactory(name="Someone Else")
+        other = uuid.uuid4()
+        other_cc = CanonicalCardFactory(name="Dragon", artist=other_artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=other_cc, illustration_id=other)
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.illustration_votes_written == 1
+        assert CardIllustrationVote.objects.get(card=card).illustration_id == resolved
+        rejected = set(
+            CardIllustrationRejection.objects.filter(card=card, anonymous_id=ILLUSTRATION_ANONYMOUS_ID).values_list(
+                "illustration_id", flat=True
+            )
+        )
+        assert rejected == {other}
+
+    def test_the_resolved_illustration_itself_is_never_rejected(self, db):
+        artist, expansion, card = self._artist_and_card()
+        resolved = uuid.uuid4()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=resolved)
+
+        others = _other_available_illustration_ids(card, str(resolved))
+
+        assert resolved not in others
+
+    def test_no_other_candidates_rejects_nothing(self, db):
+        artist, expansion, card = self._artist_and_card()
+        resolved = uuid.uuid4()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=resolved)
+
+        result = run_illustration_calculator(dry_run=False)
+
+        assert result.illustration_votes_written == 1
+        assert CardIllustrationRejection.objects.filter(card=card).count() == 0
+
+
+class TestIllustrationRejectionWriter:
+    def _artist_and_card(self, artist_name="Artist Q", card_name="Dragon"):
+        artist = CanonicalArtistFactory(name=artist_name)
+        expansion = CanonicalExpansionFactory(code="lea")
+        card = _eligible_card(name=card_name)
+        _join_key_no_hit_card(card)
+        _make_evidence(card, artist_ocr_name=artist_name)
+        return artist, expansion, card
+
+    def _card_with_one_resolved_and_one_other(self):
+        artist, expansion, card = self._artist_and_card()
+        resolved = uuid.uuid4()
+        cc = CanonicalCardFactory(name="Dragon", artist=artist, expansion=expansion)
+        CanonicalPrintingMetadataFactory(canonical_card=cc, illustration_id=resolved)
+        other_artist = CanonicalArtistFactory(name="Someone Else")
+        other = uuid.uuid4()
+        other_cc = CanonicalCardFactory(name="Dragon", artist=other_artist)
+        CanonicalPrintingMetadataFactory(canonical_card=other_cc, illustration_id=other)
+        return card, resolved, other
+
+    def test_rejections_route_through_the_shared_weight_machinery(self, db):
+        card, resolved, other = self._card_with_one_resolved_and_one_other()
+
+        run_illustration_calculator(dry_run=False)
+
+        rejection = CardIllustrationRejection.objects.get(card=card, illustration_id=other)
+        assert rejection.source == VoteSource.DEDUCTION
+        assert rejection.confidence == BASE_CONFIDENCE
+        assert resolve_vote_weight(rejection.source, rejection.anonymous_id, rejection.run_id) == resolve_vote_weight(
+            VoteSource.DEDUCTION, ILLUSTRATION_ANONYMOUS_ID, rejection.run_id
+        )
+
+    def test_dry_run_writes_nothing_but_still_counts(self, db):
+        card, resolved, other = self._card_with_one_resolved_and_one_other()
+
+        result = run_illustration_calculator(dry_run=True)
+
+        assert result.illustration_rejections_would_cast == 1
+        assert result.illustration_rejections_written == 0
+        assert CardIllustrationRejection.objects.count() == 0
+
+    def test_an_unchanged_positive_writes_no_rejection_churn(self, db):
+        """A genuine no-op re-run (the positive didn't change) must write ZERO rows on the
+        elimination table too - not merely dedupe them. Eliminations are scoped to exactly the
+        cards `_split_new_illustration_votes` kept, and an unchanged answer is dropped there."""
+        card, resolved, other = self._card_with_one_resolved_and_one_other()
+        run_illustration_calculator(dry_run=False)
+        first_pk = CardIllustrationRejection.objects.get(card=card).pk
+
+        with CaptureQueriesContext(connection) as ctx:
+            result = run_illustration_calculator(dry_run=False)
+
+        assert result.illustration_votes_already_voted == 1
+        assert result.illustration_rejections_written == 0
+        assert CardIllustrationRejection.objects.filter(card=card).count() == 1
+        assert CardIllustrationRejection.objects.get(card=card).pk == first_pk
+        assert not any("cardpicker_cardillustrationrejection" in q["sql"].lower() for q in ctx.captured_queries)
+
+    def test_a_changed_positive_supersedes_the_old_rejections(self, db):
+        """The retraction case, exercised directly against the purge+write step (the same unit
+        `run_illustration_calculator` calls once per calculator run): a fresh rejection set for a
+        touched card must fully REPLACE whatever that calculator family previously rejected for
+        it, not accumulate beside it - no manual supersession logic, just a fresh recompute
+        behind the same purge-then-insert machinery every other Stage D write uses."""
+        from cardpicker.local_illustration import (
+            _purge_and_write_illustration_rejections,
+        )
+
+        card = _eligible_card()
+        stale_illustration = uuid.uuid4()
+        stale = CardIllustrationRejection.objects.create(
+            card=card,
+            illustration_id=stale_illustration,
+            anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+            source=VoteSource.DEDUCTION,
+            confidence=BASE_CONFIDENCE,
+            run_id="prior-run",
+        )
+        new_illustration = uuid.uuid4()
+        new_row = CardIllustrationRejection(
+            card_id=card.pk,
+            illustration_id=new_illustration,
+            anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+            source=VoteSource.DEDUCTION,
+            confidence=BASE_CONFIDENCE,
+            run_id="new-run",
+        )
+
+        _purge_and_write_illustration_rejections(ILLUSTRATION_ANONYMOUS_ID, [card.pk], [new_row])
+
+        assert not CardIllustrationRejection.objects.filter(pk=stale.pk).exists()
+        assert set(CardIllustrationRejection.objects.filter(card=card).values_list("illustration_id", flat=True)) == {
+            new_illustration
+        }
+
+    def test_a_touched_card_with_zero_new_rejections_still_purges_stale_ones(self, db):
+        """The other half of retraction: a touched card whose candidate space has collapsed to
+        just its new positive (zero other candidates) must still purge whatever it used to
+        reject - `touched_card_ids` and `new_rejections` are separate arguments precisely so an
+        empty new set does not skip the purge."""
+        from cardpicker.local_illustration import (
+            _purge_and_write_illustration_rejections,
+        )
+
+        card = _eligible_card()
+        stale = CardIllustrationRejection.objects.create(
+            card=card,
+            illustration_id=uuid.uuid4(),
+            anonymous_id=ILLUSTRATION_ANONYMOUS_ID,
+            source=VoteSource.DEDUCTION,
+            run_id="prior-run",
+        )
+
+        _purge_and_write_illustration_rejections(ILLUSTRATION_ANONYMOUS_ID, [card.pk], [])
+
+        assert not CardIllustrationRejection.objects.filter(pk=stale.pk).exists()
+        assert CardIllustrationRejection.objects.filter(card=card).count() == 0
+
+    def test_purge_is_family_scoped_not_run_scoped(self, db):
+        """A version bump (v1 -> v2, the precedent this calculator already lived through once)
+        must still purge a prior version's rejection rows - purge_stale_machine_votes matches the
+        whole family, not just the current run_id."""
+        card, resolved, other = self._card_with_one_resolved_and_one_other()
+        CardIllustrationRejection.objects.create(
+            card=card,
+            illustration_id=uuid.uuid4(),
+            anonymous_id="stage-d-illustration-v1",
+            source=VoteSource.DEDUCTION,
+            run_id="old-run",
+        )
+
+        run_illustration_calculator(dry_run=False)
+
+        assert not CardIllustrationRejection.objects.filter(anonymous_id="stage-d-illustration-v1").exists()
+        assert CardIllustrationRejection.objects.filter(card=card, illustration_id=other).exists()

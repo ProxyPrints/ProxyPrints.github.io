@@ -35,7 +35,7 @@
 
 import { keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import { CardHeightMM, CardWidthMM } from "@/common/constants";
 import { useLongPress } from "@/common/useLongPress";
@@ -239,6 +239,12 @@ export interface PagePreviewSlotContent {
    * component. Undefined renders an empty placeholder slot (e.g. a page with fewer cards than
    * grid capacity). */
   imageUrl: string | undefined;
+  /** Ordered candidate URLs for this slot's image, most-preferred first - `imageUrl` is this
+   * array's first entry. `PagePreviewSlotEl` steps forward through it on load failure, the same
+   * bucket -> worker -> thumbnail recovery Card.tsx's own `onError` handler already does for the
+   * left rail. `undefined` (every existing caller, e.g. PDFGenerator's fast preview) renders
+   * with zero behavior change: just `imageUrl`, no fallback on failure. */
+  imageUrls?: Array<string>;
   /** Rendered as the slot's accessible name; also shown as a fallback label when imageUrl is
    * undefined. */
   name: string;
@@ -342,6 +348,13 @@ export interface PagePreviewProps {
    * `undefined` (every existing caller) renders with zero behavior change: no flip button at
    * all, same as before this round. */
   onSlotFlip?: (index: number) => void;
+  /** Registration compensation (PageOffsetControl.tsx) - added to every slot's page-absolute
+   * position AFTER `computeLayout` has already resolved the fit, never fed into `computeLayout`
+   * itself: it must never change card counts or granted bleed, and must never be clamped to the
+   * layout's own slack (a real correction can legitimately exceed it). Defaults to 0 so every
+   * existing caller renders at the exact position it always did. */
+  offsetXMM?: number;
+  offsetYMM?: number;
 }
 
 export function PagePreview({
@@ -358,6 +371,8 @@ export function PagePreview({
   screenPresentation = false,
   onSlotContextMenu,
   onSlotFlip,
+  offsetXMM = 0,
+  offsetYMM = 0,
 }: PagePreviewProps) {
   const layout = useMemo(
     () =>
@@ -423,8 +438,8 @@ export function PagePreview({
             key={index}
             index={index}
             content={slots[index]}
-            xMM={slot.xMM}
-            yMM={slot.yMM}
+            xMM={slot.xMM + offsetXMM}
+            yMM={slot.yMM + offsetYMM}
             slotWidthMM={slot.widthMM}
             slotHeightMM={slot.heightMM}
             bleedMM={slot.bleedMM}
@@ -489,6 +504,30 @@ function PagePreviewSlotEl({
     onSlotContextMenu?.(index, x, y)
   );
 
+  // Recovery chain mirroring Card.tsx's own `onError` stepping (bucket -> worker -> thumbnail):
+  // `imageUrls` falls back to a single-entry `[imageUrl]` for callers that don't build the full
+  // chain (PDFGenerator's fast preview), so this behaves exactly as a static `imageUrl` there.
+  const candidateUrls =
+    content?.imageUrls != null && content.imageUrls.length > 0
+      ? content.imageUrls
+      : content?.imageUrl != null
+      ? [content.imageUrl]
+      : [];
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  // Keyed on `imageUrl` (the chain's first entry, unique per resolved card) rather than the
+  // `content` object itself, which is a fresh reference on nearly every parent render (bleed
+  // priors, search results, etc.) - resetting on every render would throw away an in-progress
+  // fallback and retry the same failing bucket URL forever.
+  useEffect(() => {
+    setCandidateIndex(0);
+  }, [content?.imageUrl]);
+  const activeImageUrl = candidateUrls[candidateIndex];
+  const onImageError = () => {
+    setCandidateIndex((current) =>
+      current + 1 < candidateUrls.length ? current + 1 : current
+    );
+  };
+
   return (
     <div
       data-testid="page-preview-slot"
@@ -531,12 +570,13 @@ function PagePreviewSlotEl({
       {/* Everything below sits within the slot's own box (bottom:2px/right:2px insets for the
           cue, well within 0..100%), so the removed wrapper's overflow:hidden is safely restored
           directly on this outer element - no extra DOM node needed just to clip the <img>. */}
-      {content?.imageUrl != null && (
+      {content?.imageUrl != null && activeImageUrl != null && (
         <img
-          src={content.imageUrl}
+          src={activeImageUrl}
           alt={content.name}
           loading="lazy"
           decoding="async"
+          onError={onImageError}
           style={{
             width: "100%",
             height: "100%",

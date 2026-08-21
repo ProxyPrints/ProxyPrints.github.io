@@ -28,12 +28,32 @@
  *     volume-rewarding/direction-neutral, the ONLY reward surface; no streak/score/confetti)
  *     and the quiet "confirm-lands" fade (ANNEX C) shown on a successful confirm/pick while the
  *     next item is in flight.
- *   - Preserved verbatim: Level 1/2/3 flows, `getAutoTagChips` auto-tagging on candidate pick,
- *     no-re-presentation (`rejectedCandidateIds`), the singleton-NO terminal vote, per-item
- *     state reset inside the fetch `.then()` (not a keyed `useEffect` - the stale-filter fix),
- *     the rate-limit banner, `data-card-*` attributes + the `mpc:card-selected` event (via
- *     `getPrintingCandidateDataAttributes`, unchanged), every `data-testid` this file's own
- *     Playwright/jest coverage keys off of.
+ *   - Preserved verbatim: the candidate question's interaction contract (issue #728 removed
+ *     the level1 -> level2 funnel, not the answers - see the de-laddering notes at
+ *     `initialStage`'s old site, `rejectSuggestion`, and `candidateQuestionBody`),
+ *     `getAutoTagChips` auto-tagging on candidate pick, the singleton-NO terminal vote,
+ *     per-item state reset inside the fetch `.then()` (not a keyed `useEffect` - the
+ *     stale-filter fix), the rate-limit banner, `data-card-*` attributes + the
+ *     `mpc:card-selected` event (via `getPrintingCandidateDataAttributes`, unchanged), every
+ *     `data-testid` this file's own Playwright/jest coverage keys off of.
+ *   - Added (UX repass, 2026-08-09): #748 - a rejected Level 1 suggestion stays reachable in
+ *     the Level 2 grid as a de-emphasised (`data-rejected`) re-selectable tile instead of
+ *     vanishing (see gridCandidates / renderCandidateTile); #745 - illustration groups flow
+ *     side-by-side via IllustrationGroupFlow; #744 - a viewport-relative min-height on WtcHero
+ *     gives Subject's container-scoped sticky real scroll slack even on a short Level 1
+ *     question.
+ *
+ * COMPOSITION PASS (2026-08-11) - the interaction contract above no longer covers
+ * confirm_suggestion. Its own render now carries only the subject, the suggested printing and
+ * its own answer set - no chip panel, no candidate grid, on first render.
+ * `identificationBody` is the shared candidate-grid identification question (identify_printing,
+ * and confirm_suggestion's own "Not this art" follow-up). The answer set changed from
+ * Yes/Not sure/No to Yes / Same art, but... / Not this art / Skip (`markSameArtBut` /
+ * `markNotThisArt` / `abstainAndAdvance`) - "Same art, but..." casts the suggested printing's
+ * illustration vote on tap and summons a border/frame `AttributeChipPanel` follow-up
+ * (`sameArtButActive`). Illustration grouping (issue #503) dropped its `>= 2` cluster rule -
+ * a singleton illustration still renders as a cluster of one and still votes through
+ * `selectIllustrationGroup`, never `selectCandidate`.
  */
 
 import styled from "@emotion/styled";
@@ -58,13 +78,16 @@ import {
   initialChipStates,
 } from "@/features/attributeChips/AttributeChipPanel";
 import {
+  AUTO_DERIVED_TAG_VOTE_SURFACE,
   ChipVoteState,
   EXCLUSION_GROUPS,
   ExclusionGroup,
   filterCandidatesByChipStates,
   getAutoTagChips,
   getOpenExclusionGroups,
+  isChipContradicted,
 } from "@/features/attributeChips/attributeChips";
+import { BorderColorQuestion } from "@/features/attributeChips/BorderColorQuestion";
 import { ArtistVotePicker } from "@/features/attributeVoting/ArtistVotePicker";
 import {
   NO_MATCH_REASON_TAG_GROUPS,
@@ -78,16 +101,20 @@ import {
   CandidateGrid,
   CARD_ASPECT_RATIO,
   CardPanel,
+  ILLUSTRATION_CROP_ASPECT_RATIO,
+  IllustrationArtPlaceholder,
   MysteryCard,
   randomFlavorText,
   RevealWrapper,
-  StaticCardPanel,
   ZoomableThumbnail,
 } from "@/features/printingTags/cardPanel";
+import { IllustrationQuestion } from "@/features/questionFeed/IllustrationQuestion";
 import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
+import { ReportCardPanel } from "@/features/reporting/ReportCardPanel";
 import { recordSessionContribution } from "@/features/stats/sessionContributionSlice";
 import {
   APIGetQuestionFeed,
+  APISubmitIllustrationRejection,
   APISubmitIllustrationVote,
   APISubmitPrintingTag,
   APISubmitQuestionAbstention,
@@ -97,7 +124,6 @@ import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
 import { setNotification } from "@/store/slices/toastsSlice";
 
 type FollowUp = "none" | "no-match-reason";
-type CandidateStage = "level1" | "level2" | "level3";
 
 // ---------------------------------------------------------------------------------------
 // Layout primitives (SPEC-wtc-rebuild.md section 1c's per-element binding table + section 3's
@@ -174,6 +200,15 @@ const WtcHero = styled.div`
   flex-wrap: wrap;
   gap: clamp(12px, 2.2cqi, 22px);
   align-items: start;
+  /* Issue #744 - scroll slack for Subject's 'position: sticky'. Sticky can only visibly pin
+     while its containing block (this hero) has vertical travel room beyond the subject's own
+     height; a Level 1 question with a short QPanel column (a singleton suggestion, or few
+     candidates) used to collapse the hero to ~the subject's own height, leaving ~12px of
+     slack, so the pinned reference card scrolled off 1:1 with the page. A viewport-relative
+     min-height (SIZING, not positioning - A2's container-scoped sticky policy is untouched)
+     guarantees the hero spans roughly the first fold of the scroll container even when the
+     question is short, which is exactly the travel room sticky needs. */
+  min-height: calc(100dvh - 132px);
 `;
 
 // Reference-card visibility (issue #710, A2 amendment) - pinned WITHIN the hero container via
@@ -217,29 +252,45 @@ const SubjectCardBox = styled.div`
   }
 `;
 
+// Issue #741 - the art frame and the title bar are now two stacked boxes rather than one
+// box with the title absolutely positioned over the art's own bottom edge (SubjectArtImage
+// owns the sizing/aspect-ratio, SubjectArtTitle is a normal-flow sibling below it), so the
+// title can never cover the artwork it labels. SubjectArt itself is just the flex column
+// that holds both - at the hero's compact fold it becomes the 132px-wide row item WD3
+// specifies, stretched to the row's height by SubjectCardBox's `align-items: stretch`.
 const SubjectArt = styled.div`
-  aspect-ratio: ${CARD_ASPECT_RATIO};
   position: relative;
 
   @container hero (max-width: 560px) {
+    display: flex;
+    flex-direction: column;
     flex: 0 0 132px;
     width: 132px;
+  }
+`;
+
+// DESIGN-REPASS Rule 3 (#746) - `$landscape` is set only by the artist-question subject slot,
+// whose image is the harvested Scryfall illustration crop (a landscape 584/444 region, not a
+// card scan). Rendering it in the portrait card frame cropped its top and bottom off inside a
+// box sized for a card; the landscape frame is the same ratio the illustration-group candidate
+// tiles already use, so the same artwork reads at the same proportions wherever it appears.
+const SubjectArtImage = styled.div<{ $landscape?: boolean }>`
+  position: relative;
+  aspect-ratio: ${(props) =>
+    props.$landscape ? ILLUSTRATION_CROP_ASPECT_RATIO : CARD_ASPECT_RATIO};
+
+  @container hero (max-width: 560px) {
+    flex: 1;
     aspect-ratio: auto;
   }
 `;
 
 const SubjectArtTitle = styled.div`
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 2;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+  background: rgba(0, 0, 0, 0.72);
   color: #fff;
   font-weight: 700;
   font-size: clamp(13px, 3.4cqi, 17px);
-  padding: 22px 10px 8px;
-  text-shadow: 0 1px 2px #000;
+  padding: 6px 10px;
 `;
 
 const SubjectCap = styled.div`
@@ -328,17 +379,32 @@ const QHint = styled.p`
   margin: -6px 0 12px;
 `;
 
+// Issue #745 - the wrapper that makes multiple illustration groups flow side-by-side (the way
+// `CandidateGrid`'s own tiles do) instead of each group stacking as its own block row down the
+// page. Each group (representative tile + label + credit) is one grid item; auto-fill keeps
+// every group in a single column on a narrow container and lets several sit alongside each
+// other when the question panel has the width. `align-items: start` so a taller group never
+// stretches its shorter neighbours.
+const IllustrationGroupFlow = styled.div`
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(clamp(150px, 26cqi, 240px), 1fr)
+  );
+  gap: clamp(12px, 2.4cqi, 20px);
+  align-items: start;
+  margin-bottom: 6px;
+`;
+
 // Issue #503 (WTC phase C1) - a small labelled cluster around one `CandidateGrid` (imported,
 // unmodified) per shared Scryfall illustration, so candidates that are visually near-identical
 // group together instead of forcing a guess across a flat grid. Deliberately reuses
 // `CandidateGrid`'s own grid/gap/columns rather than a new grid primitive - this is a
-// regrouping of the same tiles, not a new component family.
+// regrouping of the same tiles, not a new component family. Inside IllustrationGroupFlow the
+// group is purely its own box (label + credit + the representative tile) - spacing between
+// groups comes from the wrapper's grid gap, so this carries no margin of its own.
 const IllustrationGroup = styled.div`
-  margin-bottom: 10px;
-
-  &:last-child {
-    margin-bottom: 0;
-  }
+  min-width: 0;
 `;
 
 const IllustrationGroupLabel = styled.p`
@@ -353,21 +419,28 @@ const IllustrationGroupLabel = styled.p`
 // Caps the width of the reused ArtistSupportLink applet so a full-bleed button (its own
 // "stretch to fill" rule - see the component's docstring, not overridden here) reads as a
 // compact cluster credit rather than a page-width CTA repeated once per cluster.
-const IllustrationCredit = styled.div`
+// DESIGN-REPASS Rule 6 (#711-adjacent MTGAC work) - the ArtistSupportLink applet renders in two
+// places on this surface (under an illustration cluster's credit, and under the artist
+// question's post-answer moment) and must look the same in both. The illustration credit
+// always capped it at 220px; the post-answer banner had no cap and let the collapsed row's
+// primary link stretch to the full question-panel width. One shared cap makes the two renders
+// identical instead of one tidy 220px line and one full-width button.
+const ArtistCredit = styled.div`
   max-width: 220px;
-  margin-bottom: 8px;
+`;
+
+const IllustrationCredit = styled(ArtistCredit)`
+  margin-top: 8px;
 `;
 
 // Issue #707 - the attribute-chip panel's home now that it no longer replaces the subject
-// card slot (see plainCardPanel's own comment). Framed like the page's other secondary
-// panels (SuggestedCard/NegWrap/OpenWrap) rather than left bare, so it reads as a distinct,
-// dismissible section of QPanel instead of loose content between the prompt and the grid.
+// card slot (see plainCardPanel's own comment). Every prior compaction pass (648a7117/
+// 317c8e65/a3942f2d "compact flowing attribute-chip list") shortened the chip ROWS themselves
+// (killing the exclusion-group column-stack) but never touched this wrapper's own background/
+// border/padding - the "wastes space" box was always this frame, not the chip layout inside
+// it, so shrinking the chips left the box behind every time. Plain spacing only; no frame.
 const FilterPanelWrap = styled.div`
-  background: var(--conf);
-  border: 1px solid var(--divider);
-  border-radius: var(--r-card);
-  padding: 10px 12px;
-  margin: 10px 0;
+  margin: 8px 0;
 `;
 
 // The spec's `.btn` base + variants (section 1c) - min 44px thumb targets (mobile funnel
@@ -390,16 +463,13 @@ const Btn = styled.button`
   cursor: pointer;
   line-height: 1.2;
   text-align: center;
+  /* DESIGN-REPASS Rule 2 (#715) - opt out of the mobile double-tap-zoom gesture, which
+     otherwise swallows a fast single tap and reads as "this button needs two taps". */
+  touch-action: manipulation;
 
   &:disabled {
     opacity: 0.6;
     cursor: default;
-  }
-
-  &.big {
-    font-size: 17px;
-    font-weight: 800;
-    padding: 10px 20px;
   }
 
   &.block {
@@ -445,6 +515,14 @@ const ActionStack = styled.div`
   flex-direction: column;
   gap: 9px;
   margin-top: 4px;
+
+  /* Issue #740 - dropping .block from the Yes button (this stack's first child) only sizes
+     it to its content if it also opts out of the flex column's default align-items: stretch;
+     ActionGrid (the second child) keeps stretching, since its own grid needs the full row
+     width to lay out its three siblings. */
+  > button:first-child {
+    align-self: flex-start;
+  }
 `;
 
 const ActionGrid = styled.div`
@@ -542,6 +620,11 @@ const ConfidencePill = styled.span`
   }
 `;
 
+const ExactWord = styled.span`
+  text-decoration: underline;
+  text-underline-offset: 2px;
+`;
+
 // Confirm-lands micro-feedback (ANNEX C) - a brief fade-in on a successful cast, instant under
 // reduced motion (no transition at all, per the media query below), then advance. Quiet by
 // design (WD6): success-tinted pill, no motion beyond the fade, no sound, no confetti.
@@ -622,6 +705,7 @@ const TriStateChip = styled.button`
   color: var(--text);
   border: 1px solid var(--muted);
   border-radius: var(--r-btn);
+  touch-action: manipulation;
 
   &:disabled {
     opacity: 0.6;
@@ -676,13 +760,13 @@ function normalizeQuestionFeedCounts(
   return raw;
 }
 
-function initialStage(item: QuestionFeedItem | null): CandidateStage {
-  return item?.type === "confirm_suggestion" && item?.suggestedPrinting != null
-    ? "level1"
-    : "level2";
+export interface QuestionFeedProps {
+  // Set only by PDFWaitGameEmbed (features/pdf/PDFWaitPanel.tsx), whose own EmbedHead already
+  // supplies the heading above this component. whatsthat.tsx never sets this.
+  hideHeading?: boolean;
 }
 
-export function QuestionFeed() {
+export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
   const dispatch = useAppDispatch();
   const backendURL = useAppSelector(selectRemoteBackendURL);
 
@@ -710,6 +794,16 @@ export function QuestionFeed() {
   const [imageGeneration, setImageGeneration] = useState<number>(0);
   const cardImageRef = useRef<HTMLImageElement>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  // DESIGN-REPASS Rule 2 (#715) - `disabled={submitting}` only takes effect on the re-render
+  // React batches AFTER the current event handler returns, so two taps inside that window (a
+  // double-click, or a stray second tap on a tile) both re-enter the vote handler and cast the
+  // vote twice. This ref is set synchronously at handler entry and read at the top of every
+  // handler, closing the window - the second entry is dropped, not queued - while the state
+  // flag keeps driving the disabled/visual state. Advance-only handlers (skip, Not sure) hold
+  // it until the next item lands (the fetch effect clears it) so a double-tap can't skip two
+  // cards; vote handlers release it in their own `.finally` (a Level 3 transition must re-enable
+  // the chips immediately).
+  const voteInFlightRef = useRef<boolean>(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
     null
   );
@@ -717,32 +811,46 @@ export function QuestionFeed() {
     initialChipStates()
   );
   const [followUp, setFollowUp] = useState<FollowUp>("none");
-  // Candidate identifiers the user has explicitly said NO to (Level 1 only - "Not sure" is
-  // genuine uncertainty, not a rejection, and deliberately never adds here) within THIS item's
-  // flow - reset on every new item below. Design rule (owner-directed): a candidate the user
-  // has just rejected is never re-presented as a selectable answer at a later level within the
-  // same item - see rejectSuggestion below and the filtered candidate list this feeds.
+  // The one candidate the user has explicitly said NO to within THIS item's flow (issue #728:
+  // with the ladder gone this can only ever be the suggested candidate - the only candidate
+  // rejected by name; "Not sure" is genuine uncertainty, not a rejection, and deliberately
+  // never adds here). Drives the suggestion slot's "you said not this one" collapse - reset on
+  // every new item below.
   const [rejectedCandidateIds, setRejectedCandidateIds] = useState<Set<string>>(
     new Set()
   );
   const [fetchToken, setFetchToken] = useState<number>(0);
   // Artist Support Links v1 - set once the user casts a real (non-"Unknown") artist vote on an
   // "artist"-type item, via ArtistVotePicker's onArtistConfirmed below. Drives the post-answer
-  // "Art by <Name> - support them" banner - reset on every new item alongside the other
-  // per-question state, so it can't bleed into the next question.
+  // ArtistSupportLink banner - reset on every new item alongside the other per-question state,
+  // so it can't bleed into the next question.
   const [confirmedArtistName, setConfirmedArtistName] = useState<string | null>(
     null
   );
+  // Completion gate for the artist question's Confirm answer - true once ANY artist vote has
+  // landed (named via onArtistConfirmed's flow, or "Unknown artist" via onVoteCast alone -
+  // onArtistConfirmed never fires for the Unknown answer). Reset with the rest of the
+  // per-item state below.
+  const [artistVoteCast, setArtistVoteCast] = useState<boolean>(false);
   // A 429 from any vote-casting call below (printing, tag, artist) sets this instead of firing
   // the usual error toast - see the banner rendered near the top of the item below. In a
   // one-tap funnel, a rate-limit pause is an expected, honest condition, not a failure, so it
   // gets a persistent inline notice rather than a transient, alarm-toned toast.
   const [rateLimited, setRateLimited] = useState<boolean>(false);
 
-  const [stage, setStage] = useState<CandidateStage>("level2");
-  // Collapsed by default (decision: chip-as-filter survives on Level 2, but off-path for the
-  // common case). Selecting a candidate below ignores this entirely; it only ever narrows
-  // which tiles are shown.
+  // The de-laddered feed (issue #728) has no fixed level1 -> level2 -> level3 sequence. The
+  // only remaining "stage" is the data-driven post-selection attribute confirmation (formerly
+  // Level 3), entered solely when a selected candidate leaves an exclusion group open - never
+  // a fixed-sequence step.
+  const [level3Active, setLevel3Active] = useState<boolean>(false);
+  // "Same art, but..." (confirm_suggestion only) - set once the illustration vote for the
+  // suggested printing has been cast on tap, which summons the border/frame chip follow-up in
+  // place of the suggestion slot. Reset alongside every other per-item flag in the fetch
+  // effect below.
+  const [sameArtButActive, setSameArtButActive] = useState<boolean>(false);
+  // Collapsed by default (decision: chip-as-filter survives on the candidate grid, but
+  // off-path for the common case). Selecting a candidate below ignores this entirely; it only
+  // ever narrows which tiles are shown.
   const [filterExpanded, setFilterExpanded] = useState<boolean>(false);
   // Level 3 only ever asks about groups an already-selected candidate left open - keyed by
   // tagName, but only ever contains chips from getOpenExclusionGroups(pendingCandidate).
@@ -778,9 +886,22 @@ export function QuestionFeed() {
     if (backendURL == null) {
       return;
     }
+    // Stale-response guard - without this, a second effect run (a genuine dependency change,
+    // or React re-invoking the effect for its own reasons e.g. StrictMode) leaves the FIRST
+    // fetch in flight with nothing stopping its eventual response from landing after the
+    // second one and silently replacing whatever the user is now looking at with no action on
+    // their part. Aborting the previous request on every re-run (and on unmount) makes that
+    // structurally impossible - the abort turns the superseded fetch into a rejected promise
+    // routed to the ignored branch below, rather than a competing resolved one.
+    const controller = new AbortController();
     setLoading(true);
     setFetchError(false);
-    APIGetQuestionFeed(backendURL, getOrCreateAnonymousId())
+    APIGetQuestionFeed(
+      backendURL,
+      getOrCreateAnonymousId(),
+      undefined,
+      controller.signal
+    )
       .then((response) => {
         const newItem = response.item ?? null;
         setItem(newItem);
@@ -798,6 +919,12 @@ export function QuestionFeed() {
         setImageLoaded(false);
         setImageErrored(false);
         setImageGeneration((previous) => previous + 1);
+        // A new item has landed (or the feed is empty) - release any advance-only in-flight
+        // ref (skip / Not sure) so the next question's controls are live immediately.
+        voteInFlightRef.current = false;
+        // A synchronous throw inside a vote handler strands submitting true; a landed
+        // question must always start with both flags live so no button is silently disabled.
+        setSubmitting(false);
         // A genuinely empty configured URL (this test suite's own fixture convention - real
         // cards always carry a real CDN URL) has nothing to load at all, so it's settled right
         // here rather than waiting on any image event.
@@ -809,25 +936,38 @@ export function QuestionFeed() {
         setRejectedCandidateIds(new Set());
         setSelectedCandidateId(null);
         setConfirmedArtistName(null);
+        setArtistVoteCast(false);
         setRateLimited(false);
-        // Issue #707 / A4 amendment - shown automatically for the two candidate-type shapes
-        // (identify_printing's shortlist, confirm_suggestion once dropped to Level 2), where
-        // the attribute chips actually narrow something; artist/tag items never reach the
-        // branch that reads this at all, so their default is moot.
+        // Issue #707 / A4 amendment - shown automatically for identify_printing's shortlist,
+        // where the attribute chips actually narrow something on first render. confirm_suggestion
+        // never auto-shows this: its own question renders the subject, suggested printing and
+        // answer set only - nothing summons the chip panel until "Same art, but..." is tapped,
+        // which has its own dedicated render below rather than reusing this flag.
         setFilterExpanded(
-          newItem != null &&
-            (newItem.type === "identify_printing" ||
-              newItem.type === "confirm_suggestion")
+          newItem != null && newItem.type === "identify_printing"
         );
         setLevel3ChipStates({});
         setLanded(false);
-        setStage(initialStage(newItem));
+        // The only remaining "stage" (issue #728) is the post-selection attribute
+        // confirmation - every new item starts outside it.
+        setLevel3Active(false);
+        setSameArtButActive(false);
       })
       .catch(() => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        voteInFlightRef.current = false;
+        setSubmitting(false);
         setItem(null);
         setFetchError(true);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendURL, fetchToken]);
 
@@ -894,9 +1034,10 @@ export function QuestionFeed() {
     candidate: PrintingCandidate | undefined,
     isNoMatch: boolean
   ) => {
-    if (backendURL == null || item == null) {
+    if (backendURL == null || item == null || voteInFlightRef.current) {
       return;
     }
+    voteInFlightRef.current = true;
     setSubmitting(true);
     setSelectedCandidateId(candidate?.identifier ?? "no-match");
     const anonymousId = getOrCreateAnonymousId();
@@ -911,7 +1052,22 @@ export function QuestionFeed() {
       .then(() => {
         bumpSessionCount();
         if (candidate != null) {
-          const autoTagChips = getAutoTagChips(candidate);
+          // A candidate can surface in the identification grid while carrying an attribute
+          // the voter has already explicitly voted against in this same chip panel -
+          // filterCandidatesByChipStates keeps an illustration's other printings reachable
+          // even when one of them doesn't match an active chip (see that function's own
+          // comment), so the printing actually tapped here can still disagree with a chip
+          // the voter set moments earlier. Auto-tagging that attribute would silently
+          // overwrite the voter's own explicit statement with a derived one that disputes
+          // it, so any chip the voter has already contradicted - directly, by tapping it
+          // negative, or indirectly, by tapping a different sibling in its exclusion group
+          // positive - is dropped from the auto-tag batch. Every other derived vote still
+          // casts exactly as before.
+          const autoTagChips = getAutoTagChips(candidate).filter(
+            (chip) =>
+              (chipStates[chip.tagName] ?? "untouched") !== "negative" &&
+              !isChipContradicted(chip.tagName, chipStates)
+          );
           Promise.all(
             autoTagChips.map((chip) =>
               APISubmitTagVote(
@@ -921,7 +1077,7 @@ export function QuestionFeed() {
                 chip.tagName,
                 1,
                 "same-origin",
-                "question-feed"
+                AUTO_DERIVED_TAG_VOTE_SURFACE
               )
             )
           ).catch(() => undefined); // best-effort - a failed auto-tag shouldn't block advancing
@@ -938,7 +1094,7 @@ export function QuestionFeed() {
                 )
               )
             );
-            setStage("level3");
+            setLevel3Active(true);
           } else {
             setLanded(true);
             advance();
@@ -949,6 +1105,7 @@ export function QuestionFeed() {
       })
       .catch(reportVoteFailed)
       .finally(() => {
+        voteInFlightRef.current = false;
         setSubmitting(false);
         setSelectedCandidateId(null);
       });
@@ -969,9 +1126,10 @@ export function QuestionFeed() {
     illustrationId: string,
     tappedCandidate: PrintingCandidate
   ) => {
-    if (backendURL == null || item == null) {
+    if (backendURL == null || item == null || voteInFlightRef.current) {
       return;
     }
+    voteInFlightRef.current = true;
     setSubmitting(true);
     setSelectedCandidateId(tappedCandidate.identifier);
     const anonymousId = getOrCreateAnonymousId();
@@ -990,6 +1148,7 @@ export function QuestionFeed() {
       })
       .catch(reportVoteFailed)
       .finally(() => {
+        voteInFlightRef.current = false;
         setSubmitting(false);
         setSelectedCandidateId(null);
       });
@@ -999,9 +1158,10 @@ export function QuestionFeed() {
   // instead of "None of these" -> the reason strip, since the tap already told us why (see
   // reason_tags.py's existing seeded "custom-art" tag - no new endpoint).
   const classifyAsCustomArt = () => {
-    if (backendURL == null || item == null) {
+    if (backendURL == null || item == null || voteInFlightRef.current) {
       return;
     }
+    voteInFlightRef.current = true;
     setSubmitting(true);
     setSelectedCandidateId("custom-art");
     const anonymousId = getOrCreateAnonymousId();
@@ -1028,6 +1188,7 @@ export function QuestionFeed() {
       })
       .catch(reportVoteFailed)
       .finally(() => {
+        voteInFlightRef.current = false;
         setSubmitting(false);
         setSelectedCandidateId(null);
       });
@@ -1037,6 +1198,11 @@ export function QuestionFeed() {
   // resets any other member of the same group back to untouched, unlike the funnel's usual
   // independent tri-state cycling that Level 2's optional filter panel keeps.
   const tapLevel3Chip = (group: ExclusionGroup, tagName: string) => {
+    // Issue #715 - chips stay inert while a Level 3 submission is in flight; the visual
+    // `disabled={submitting}` only applies on the post-render, so the ref closes the window.
+    if (voteInFlightRef.current) {
+      return;
+    }
     setLevel3ChipStates((previous) => {
       const next = { ...previous };
       group.chips.forEach((chip) => {
@@ -1049,6 +1215,9 @@ export function QuestionFeed() {
   };
 
   const confirmLevel3 = () => {
+    if (voteInFlightRef.current) {
+      return;
+    }
     if (backendURL == null || item == null) {
       advance();
       return;
@@ -1061,6 +1230,7 @@ export function QuestionFeed() {
       advance();
       return;
     }
+    voteInFlightRef.current = true;
     setSubmitting(true);
     Promise.all(
       picked.map(([tagName]) =>
@@ -1080,53 +1250,140 @@ export function QuestionFeed() {
         advance();
       })
       .catch(reportVoteFailed)
-      .finally(() => setSubmitting(false));
+      .finally(() => {
+        voteInFlightRef.current = false;
+        setSubmitting(false);
+      });
   };
 
-  const skip = () => advance();
+  // Advance-only handlers hold the in-flight ref until the next item lands (the fetch effect
+  // clears it) - a double-tap on Skip / Not sure must not advance two cards at once.
+  const skip = () => {
+    if (voteInFlightRef.current) {
+      return;
+    }
+    voteInFlightRef.current = true;
+    advance();
+  };
 
-  // Records the "Not sure" abstention (issue #712) and moves on - fire-and-forget, same
-  // best-effort convention as the auto-tag-chip casts in selectCandidate above: the write is
-  // informative, not gating, so a failed request never blocks the stage transition.
-  const submitNotSure = () => {
+  // Records an abstention (issue #712) and moves on - fire-and-forget, same best-effort
+  // convention as the auto-tag-chip casts in selectCandidate above: the write is informative,
+  // not gating, so a failed request never blocks the transition. Used by confirm_suggestion's
+  // own Skip answer, which - unlike a bare advance - must leave a distinguishable trace that
+  // this question was seen and abstained on rather than never served.
+  const abstainAndAdvance = (reason?: string) => {
+    if (voteInFlightRef.current) {
+      return;
+    }
+    voteInFlightRef.current = true;
     if (backendURL != null && item != null) {
       APISubmitQuestionAbstention(
         backendURL,
         item.card.identifier,
         getOrCreateAnonymousId(),
-        item.type
+        item.type,
+        reason
       ).catch(() => undefined);
     }
-    setStage("level2");
+    advance();
   };
 
-  // Level 1's NO. In the general case this casts no vote itself - there's no backend concept of
-  // "reject just this one candidate specifically," only a positive vote for a specific printing
-  // or a generic isNoMatch for the whole set (see selectCandidate above) - so it purely records
-  // the rejection client-side so Level 2's candidate list (below) excludes it, then falls
-  // through to the SAME setStage("level2") transition as before.
+  // confirm_suggestion's "Not this art" answer. Two things happen on tap.
   //
-  // EXCEPTION - the singleton case (owner-reported dedup bug, docs/features/printing-tags.md's
-  // questionFeed section): when the suggested printing is the card's ONLY candidate, rejecting
-  // it leaves nothing else to ask - "No" IS the terminal answer for this surface. Detecting the
-  // singleton case and immediately calling the same isNoMatch vote "None of these" casts closes
-  // that gap: the vote persists at the moment "No" is tapped, with or without any further tap.
-  const rejectSuggestion = () => {
-    if (item?.suggestedPrinting == null) {
-      setStage("level2");
+  // 1. A negative ILLUSTRATION signal is recorded when the suggested printing carries an
+  //    illustrationId: a fire-and-forget POST to /2/submitIllustrationRejection/
+  //    (`APISubmitIllustrationRejection` -> `CardIllustrationRejection` - see
+  //    docs/features/wtc-question-model.md §7.1 and printing-tags.md's illustration-elimination
+  //    section for the mechanism). Best-effort, same convention as `abstainAndAdvance`'s
+  //    abstention write. This is the write path #770's comment below could not name - it was
+  //    landed by the same series that introduced the answer set, closing the loop so a
+  //    rejected suggestion is not re-served to a different voter as if it were new
+  //    (`question_feed._confirm_suggestion_item` consumes the resulting elimination consensus).
+  // 2. The client-side collapse #770 describes: the suggestion slot gives way to the
+  //    candidate-grid identification question on the SAME page, carrying the #748
+  //    re-selectable-tile mechanic (the rejected printing stays reachable, not the terminal
+  //    isNoMatch vote a truly-empty grid used to force here - "wrong artwork entirely" and
+  //    "no official printing at all" are different claims, and only the latter has a vote to cast).
+  const markNotThisArt = () => {
+    if (item?.suggestedPrinting == null || voteInFlightRef.current) {
       return;
+    }
+    const illustrationId = item.suggestedPrinting.illustrationId;
+    if (backendURL != null && illustrationId != null) {
+      APISubmitIllustrationRejection(
+        backendURL,
+        item.card.identifier,
+        getOrCreateAnonymousId(),
+        illustrationId
+      ).catch(() => undefined);
     }
     const rejectedIdentifier = item.suggestedPrinting.identifier;
     setRejectedCandidateIds((previous) =>
       new Set(previous).add(rejectedIdentifier)
     );
-    setStage("level2");
-    const remainingCandidates = (item.candidates ?? []).filter(
-      (candidate) => candidate.identifier !== rejectedIdentifier
-    );
-    if (remainingCandidates.length === 0) {
-      selectCandidate(undefined, true);
+  };
+
+  // confirm_suggestion's "Same art, but..." answer - casts the illustration vote for the
+  // suggested printing's own illustration the moment this is tapped, true regardless of
+  // whether the border/frame follow-up below is ever completed, then summons that follow-up.
+  // Falls straight through to the follow-up with no cast when the suggested printing carries
+  // no illustrationId - best-effort, same convention as the auto-tag-chip casts above.
+  const markSameArtBut = () => {
+    if (
+      backendURL == null ||
+      item?.suggestedPrinting == null ||
+      voteInFlightRef.current
+    ) {
+      return;
     }
+    const illustrationId = item.suggestedPrinting.illustrationId;
+    if (illustrationId == null) {
+      setSameArtButActive(true);
+      return;
+    }
+    voteInFlightRef.current = true;
+    setSubmitting(true);
+    APISubmitIllustrationVote(
+      backendURL,
+      item.card.identifier,
+      getOrCreateAnonymousId(),
+      illustrationId,
+      false,
+      "question-feed"
+    )
+      .then(() => {
+        bumpSessionCount();
+        setSameArtButActive(true);
+      })
+      .catch(reportVoteFailed)
+      .finally(() => {
+        voteInFlightRef.current = false;
+        setSubmitting(false);
+      });
+  };
+
+  // Leaves the border/frame follow-up (any chip taps already cast their own votes as they
+  // happened - see useTagVoting) and advances - guarded the same way as skip() above so a
+  // double-tap can't advance two cards.
+  const finishSameArtBut = () => {
+    if (voteInFlightRef.current) {
+      return;
+    }
+    voteInFlightRef.current = true;
+    advance();
+  };
+
+  // Border and artist questions' completion answer - the chip taps / picker selections
+  // already cast their own real votes as they happened, so this only advances, carrying them
+  // WITHOUT recording an abstention (unlike the "Can't tell"/"Skip" answers beside it).
+  // Guarded exactly like finishSameArtBut/skip() above. Rendered only once a vote has
+  // actually been cast - see each ActionRow's gate below.
+  const advanceCarryingVotes = () => {
+    if (voteInFlightRef.current) {
+      return;
+    }
+    voteInFlightRef.current = true;
+    advance();
   };
 
   if (loading && item == null) {
@@ -1174,25 +1431,50 @@ export function QuestionFeed() {
 
   const isCandidateType =
     item.type === "confirm_suggestion" || item.type === "identify_printing";
-  const allCandidates = item.candidates ?? [];
-  // Excludes anything the user rejected at Level 1 ("No" - see rejectSuggestion) BEFORE the
-  // chip filter applies, so a rejected candidate is never offered again as a selectable tile
-  // for the rest of this item's flow, regardless of chip state.
-  const nonRejectedCandidates = allCandidates.filter(
-    (candidate) => !rejectedCandidateIds.has(candidate.identifier)
+  const rawCandidates = item.candidates ?? [];
+  // A confirm_suggestion item's own suggestedPrinting is not guaranteed to also appear inside
+  // `candidates` (that field is primarily identify_printing's shortlist) - without it here,
+  // rejecting the suggestion via "Not this art" has no tile left to keep reachable (the #748
+  // comment below), landing on a candidate area with no image and nothing to identify from.
+  // Folding it in once, here, guarantees the rejected printing always has somewhere to live.
+  const allCandidates =
+    item.type === "confirm_suggestion" &&
+    item.suggestedPrinting != null &&
+    !rawCandidates.some(
+      (candidate) => candidate.identifier === item.suggestedPrinting!.identifier
+    )
+      ? [...rawCandidates, item.suggestedPrinting]
+      : rawCandidates;
+  // Issue #728 - the suggested candidate is judged exactly ONCE in its own slot above and is
+  // never re-offered as a grid tile while that slot is still asking (the old Level 2
+  // re-presented it "highlighted" - the same candidate asked about twice). The grid is the
+  // REST of the candidates, plus - since #748 - any the user has explicitly rejected at the
+  // suggestion slot, which stay accessible as de-emphasised, re-selectable tiles rather than
+  // vanishing (the rejected set drives both that grid inclusion below and the "you said not
+  // this one" context further down).
+  const suggestedCandidateId =
+    item.type === "confirm_suggestion"
+      ? item.suggestedPrinting?.identifier ?? null
+      : null;
+  const gridCandidates = allCandidates.filter(
+    (candidate) =>
+      rejectedCandidateIds.has(candidate.identifier) ||
+      candidate.identifier !== suggestedCandidateId
   );
   const visibleCandidates = filterCandidatesByChipStates(
-    nonRejectedCandidates,
+    gridCandidates,
     chipStates
   );
-  const hiddenCount = nonRejectedCandidates.length - visibleCandidates.length;
+  const hiddenCount = gridCandidates.length - visibleCandidates.length;
 
-  // Issue #503 (WTC phase C1) - group the level-2 grid by shared Scryfall illustration. A
-  // cluster only forms for >=2 candidates sharing a non-null illustrationId; every other
-  // candidate - a unique illustrationId, or no illustrationId at all
-  // (CanonicalPrintingMetadata.illustration_id is nullable and frequently absent, see
-  // local_illustration.py:137) - renders in the flat "ungrouped" grid below the clusters, so
-  // nothing is ever dropped from the grid.
+  // Issue #503 (WTC phase C1) - group the candidate grid by shared Scryfall illustration,
+  // including a group of one: group size is orthogonal to which question is being asked (a
+  // singleton is still an illustration whose printing hasn't been narrowed - the thing being
+  // identified is a proxy scan that may be an unofficial variant of that artwork, and per this
+  // catalog's own corpus the most common such variant is an altered frame, not different art).
+  // Every candidate with no illustrationId at all (CanonicalPrintingMetadata.illustration_id is
+  // nullable and frequently absent, see local_illustration.py:137) renders in the flat
+  // "ungrouped" grid below the clusters instead, so nothing is ever dropped from the grid.
   //
   // Phase C2: tapping a tile inside one of these clusters submits through
   // selectIllustrationGroup (ONE illustrationId, /2/submitIllustrationVote/) rather than
@@ -1201,7 +1483,14 @@ export function QuestionFeed() {
   // /2/submitPrintingTag/ path.
   const illustrationGroupsById = new Map<string, PrintingCandidate[]>();
   visibleCandidates.forEach((candidate) => {
-    if (!candidate.illustrationId) {
+    // Issue #748 - a rejected candidate never joins an illustration cluster: clusters render
+    // only one representative tile, so burying the rejected suggestion inside one would
+    // silently drop it again. It always renders as a standalone (de-emphasised) ungrouped tile
+    // instead, guaranteeing the reconsider path stays visible.
+    if (
+      !candidate.illustrationId ||
+      rejectedCandidateIds.has(candidate.identifier)
+    ) {
       return;
     }
     const existingGroup = illustrationGroupsById.get(candidate.illustrationId);
@@ -1211,9 +1500,7 @@ export function QuestionFeed() {
       illustrationGroupsById.set(candidate.illustrationId, [candidate]);
     }
   });
-  const illustrationGroups = Array.from(illustrationGroupsById.values()).filter(
-    (group) => group.length > 1
-  );
+  const illustrationGroups = Array.from(illustrationGroupsById.values());
   const groupedCandidateIds = new Set(
     illustrationGroups.flatMap((group) =>
       group.map((candidate) => candidate.identifier)
@@ -1223,18 +1510,20 @@ export function QuestionFeed() {
     (candidate) => !groupedCandidateIds.has(candidate.identifier)
   );
 
-  const suggestionRejectedWithNoneLeft =
+  // The user tapped "Not this art" - the suggestion slot gives way to the candidate-grid
+  // identification question on the SAME page (issue #728: not a stage transition), carrying
+  // the #748 re-selectable-tile mechanic. See markNotThisArt's own comment for why no vote is
+  // forced here even when that leaves the grid empty.
+  const notThisArtActive =
     item.type === "confirm_suggestion" &&
     item.suggestedPrinting != null &&
-    rejectedCandidateIds.has(item.suggestedPrinting.identifier) &&
-    nonRejectedCandidates.length === 0;
+    rejectedCandidateIds.has(item.suggestedPrinting.identifier);
 
   // Shape (d) - open-ended (ANNEX B): an `identify_printing` item with no shortlist at all
   // (the smallest slice - cold-start/no-evidence). Framed as the "tricky one" (WD7) instead of
   // the neutral pick-grid shape.
   const isOpenEndedShape =
     isCandidateType &&
-    stage === "level2" &&
     item.type === "identify_printing" &&
     allCandidates.length === 0;
 
@@ -1280,13 +1569,18 @@ export function QuestionFeed() {
   );
 
   // The full subject card composition (SPEC-wtc-rebuild.md's "subject card"/"subject art"/
-  // "subject art title"/"subject caption" rows) - art with the card name overlaid at its own
-  // bottom edge, plus a caption strip below explaining what the subject IS.
+  // "subject art title"/"subject caption" rows) - art, the card name below it in its own row
+  // (issue #741 - previously overlaid on the art's own bottom edge), plus a caption strip
+  // explaining what the subject IS.
   const subjectCard = (
     <SubjectCardBox>
       <SubjectArt data-testid="question-feed-subject-art">
-        {cardArt}
-        <SubjectArtTitle>{item.card.name}</SubjectArtTitle>
+        <SubjectArtImage data-testid="question-feed-subject-art-image">
+          {cardArt}
+        </SubjectArtImage>
+        <SubjectArtTitle data-testid="question-feed-subject-art-title">
+          {item.card.name}
+        </SubjectArtTitle>
       </SubjectArt>
       <SubjectCap>
         <span className="glyph">?</span>
@@ -1295,119 +1589,19 @@ export function QuestionFeed() {
     </SubjectCardBox>
   );
 
-  // The one card panel Level 2 ever renders now (issue #707) - the attribute-chip panel no
-  // longer replaces this with a ring-around-card composition; it renders separately in QPanel
-  // (level2Body below) instead, so the pinned reference card (Subject, A2) is never swapped
-  // out or occluded by it.
+  // The one card panel the candidate question renders (issue #707) - the attribute-chip panel
+  // no longer replaces this with a ring-around-card composition; it renders separately in
+  // QPanel (identificationBody / the "Same art, but..." follow-up below) instead, so the
+  // pinned reference card (Subject, A2) is never swapped out or occluded by it.
   const plainCardPanel = (
     <CardPanel data-testid="question-feed-card-panel">{subjectCard}</CardPanel>
-  );
-
-  // Level 1 only - the compact single-card confirmation screen.
-  const level1CardPanel = (
-    <StaticCardPanel data-testid="question-feed-level1-card-panel">
-      {subjectCard}
-    </StaticCardPanel>
   );
 
   let cardNode: React.ReactNode;
   let questionsNode: React.ReactNode;
 
   if (isCandidateType) {
-    if (stage === "level1" && item.suggestedPrinting != null) {
-      cardNode = level1CardPanel;
-      questionsNode = (
-        <div data-testid="question-feed-level1">
-          {!revealed ? (
-            <div className="text-center py-4">
-              <Spinner size={2} />
-            </div>
-          ) : (
-            <>
-              <QHead>
-                <ShapePill
-                  className="easy"
-                  data-testid="question-feed-tier-badge"
-                >
-                  Suggested match
-                </ShapePill>
-              </QHead>
-              <SuggestedCard>
-                <SuggestedThumb data-testid="question-feed-level1-reference-image">
-                  <ArtPlaceholder>
-                    <MysteryCard />
-                    <ZoomableThumbnail>
-                      <img
-                        src={item.suggestedPrinting.mediumThumbnailUrl}
-                        alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
-                      />
-                    </ZoomableThumbnail>
-                  </ArtPlaceholder>
-                </SuggestedThumb>
-                <SuggestedMeta>
-                  <SuggestedName>{item.card.name}</SuggestedName>
-                  <SuggestedSet>
-                    <SetIcon
-                      expansionCode={item.suggestedPrinting.expansionCode}
-                    />{" "}
-                    {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                    {item.suggestedPrinting.collectorNumber}
-                  </SuggestedSet>
-                  <ConfidencePill data-testid="question-feed-suggestion-prompt">
-                    <i />
-                    Is it this one?
-                  </ConfidencePill>
-                </SuggestedMeta>
-              </SuggestedCard>
-              <ActionStack>
-                <Btn
-                  className="primary block"
-                  disabled={submitting}
-                  onClick={() =>
-                    item.suggestedPrinting != null &&
-                    selectCandidate(item.suggestedPrinting, false)
-                  }
-                  data-testid="question-feed-level1-yes"
-                >
-                  {submitting ? <Spinner size={1} /> : "Yes — that's the one"}
-                </Btn>
-                <ActionGrid>
-                  <Btn
-                    className="secondary"
-                    disabled={submitting}
-                    onClick={submitNotSure}
-                    data-testid="question-feed-level1-not-sure"
-                  >
-                    Not sure
-                  </Btn>
-                  <Btn
-                    className="secondary"
-                    disabled={submitting}
-                    onClick={rejectSuggestion}
-                    data-testid="question-feed-level1-no"
-                  >
-                    No, different printing
-                  </Btn>
-                  <Btn
-                    className="ghost"
-                    disabled={submitting}
-                    onClick={skip}
-                    data-testid="question-feed-level1-skip"
-                  >
-                    Skip
-                  </Btn>
-                </ActionGrid>
-              </ActionStack>
-              {landed && (
-                <LandedFeedback data-testid="question-feed-landed">
-                  ✓ Tagged — nice. Next card loading…
-                </LandedFeedback>
-              )}
-            </>
-          )}
-        </div>
-      );
-    } else if (stage === "level3") {
+    if (level3Active) {
       cardNode = plainCardPanel;
       questionsNode = (
         <div data-testid="question-feed-level3">
@@ -1415,7 +1609,7 @@ export function QuestionFeed() {
             <ShapePill className="easy">
               &#10003; matched &middot; one more thing
             </ShapePill>
-            <Prompt>Confirm the attributes</Prompt>
+            <Prompt>Anything else true of this card?</Prompt>
           </QHead>
           <QHint>
             Auto-tagged from your pick; adjust only what&apos;s wrong, then
@@ -1433,6 +1627,7 @@ export function QuestionFeed() {
                     <TriStateChip
                       key={chip.tagName}
                       className={state === "positive" ? "pos" : ""}
+                      disabled={submitting}
                       onClick={() => tapLevel3Chip(group, chip.tagName)}
                       data-testid={`question-feed-level3-chip-${chip.tagName}`}
                     >
@@ -1456,7 +1651,9 @@ export function QuestionFeed() {
             <Btn
               className="ghost"
               disabled={submitting}
-              onClick={() => advance()}
+              // Issue #715 - route through the guarded skip() rather than a raw advance():
+              // a double-tap on this button must not skip two cards.
+              onClick={skip}
               data-testid="question-feed-level3-skip"
             >
               Skip this question
@@ -1465,15 +1662,11 @@ export function QuestionFeed() {
         </div>
       );
     } else {
-      // Level 2 - the candidate grid, or (isOpenEndedShape) the dashed "tricky one" framing
-      // for a zero-candidate identify_printing item (shape d, ANNEX B).
+      // The single candidate question (issue #728 - the level1/level2 ladder is gone): the
+      // candidate grid, or (isOpenEndedShape) the dashed "tricky one" framing for a
+      // zero-candidate identify_printing item (shape d, ANNEX B). The suggested candidate
+      // (when present) renders in its own slot above the grid and never as a tile.
       cardNode = plainCardPanel;
-      const shapePillClass =
-        item.type === "confirm_suggestion"
-          ? "easy"
-          : isOpenEndedShape
-          ? "hard"
-          : "pick";
       // Shared by both the illustration-clustered and flat/ungrouped rendering below - keeps
       // the tile markup (and its data-card-* attributes / mpc:card-selected event / testids)
       // byte-for-byte identical regardless of which grid a candidate ends up in. `onSelect`
@@ -1493,52 +1686,68 @@ export function QuestionFeed() {
         // Illustration clusters (below) pass candidate.artCropUrl, falling back to the full
         // scan when a candidate's metadata sidecar has none - see this function's own comment
         // on showArtistCaption for why grouped tiles diverge from the ungrouped default here.
-        imageUrl: string = candidate.mediumThumbnailUrl
-      ) => (
-        <CandidateButton
-          key={candidate.identifier}
-          className={
-            item.type === "confirm_suggestion" &&
-            item.suggestedPrinting?.identifier === candidate.identifier
-              ? "highlighted"
-              : ""
-          }
-          disabled={submitting}
-          onClick={onSelect}
-          {...getPrintingCandidateDataAttributes(item.card.name, candidate)}
-        >
-          <ArtPlaceholder>
-            <MysteryCard />
-            <ZoomableThumbnail>
-              <img
-                src={imageUrl}
-                alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
-              />
-            </ZoomableThumbnail>
-            {submitting && selectedCandidateId === candidate.identifier && (
-              <div
-                data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
-              >
-                <Spinner size={1.5} zIndex={2} positionAbsolute />
+        imageUrl: string = candidate.mediumThumbnailUrl,
+        // Issue #746 - an illustration crop isn't card-shaped, so illustration clusters (below)
+        // pass IllustrationArtPlaceholder instead of the card-ratio ArtPlaceholder every
+        // ungrouped (full-scan) tile keeps by default.
+        Frame: typeof ArtPlaceholder = ArtPlaceholder
+      ) => {
+        // Issue #748 - a rejected Level 1 suggestion stays in the grid as a de-emphasised tile
+        // that is still fully selectable: tap it to reconsider and cast it as a real pick (the
+        // recover path for a mis-tapped "Not this art").
+        const isRejected = rejectedCandidateIds.has(candidate.identifier);
+        return (
+          <CandidateButton
+            key={candidate.identifier}
+            className={isRejected ? "rejected" : undefined}
+            data-rejected={isRejected ? "true" : undefined}
+            disabled={submitting}
+            onClick={onSelect}
+            {...getPrintingCandidateDataAttributes(item.card.name, candidate)}
+          >
+            <Frame data-testid="question-feed-candidate-art-frame">
+              <MysteryCard />
+              <ZoomableThumbnail>
+                <img
+                  src={imageUrl}
+                  alt={`${candidate.expansionCode} ${candidate.collectorNumber}`}
+                />
+              </ZoomableThumbnail>
+              {submitting && selectedCandidateId === candidate.identifier && (
+                <div
+                  data-testid={`question-feed-candidate-submitting-${candidate.identifier}`}
+                >
+                  <Spinner size={1.5} zIndex={2} positionAbsolute />
+                </div>
+              )}
+            </Frame>
+            <CandidateCaption>
+              <div className="cn">
+                <SetIcon expansionCode={candidate.expansionCode} />{" "}
+                {candidate.expansionCode.toUpperCase()}{" "}
+                {candidate.collectorNumber}
               </div>
-            )}
-          </ArtPlaceholder>
-          <CandidateCaption>
-            <div className="cn">
-              <SetIcon expansionCode={candidate.expansionCode} />{" "}
-              {candidate.expansionCode.toUpperCase()}{" "}
-              {candidate.collectorNumber}
-            </div>
-            {showArtistCaption && <div className="cs">{candidate.artist}</div>}
-          </CandidateCaption>
-        </CandidateButton>
-      );
+              {isRejected && (
+                <div
+                  className="rej"
+                  data-testid="question-feed-rejected-tile-note"
+                >
+                  you said no &middot; tap to reconsider
+                </div>
+              )}
+              {showArtistCaption && (
+                <div className="cs">{candidate.artist}</div>
+              )}
+            </CandidateCaption>
+          </CandidateButton>
+        );
+      };
       // Problem 2 (owner report, 2026-08-04): a not-official-printing reason (the artwork is
       // genuine, this scan just isn't one of the listed printings) means the remaining
       // question - which printing - is still answerable from this same item's own candidate
-      // list, so this returns to the existing Level 2 grid with its filter panel already
-      // expanded instead of skipping to the next item, reusing the funnel's existing chip
-      // narrowing (filterCandidatesByChipStates) rather than any new selector or vote shape.
+      // list, so this returns to the candidate grid with its filter panel already expanded
+      // instead of skipping to the next item, reusing the existing chip narrowing
+      // (filterCandidatesByChipStates) rather than any new selector or vote shape.
       // A not-official-art reason (custom-art/ai-art/external-ip) has nothing left to narrow
       // towards - that axis keeps advancing straight through, unchanged.
       const onNoMatchReasonDone = (chosenTagName?: string) => {
@@ -1548,68 +1757,28 @@ export function QuestionFeed() {
             NO_MATCH_REASON_TAG_GROUPS["not-official-printing"]
               .tagNames as readonly string[]
           ).includes(chosenTagName);
-        if (isNotOfficialPrinting && nonRejectedCandidates.length > 0) {
+        if (isNotOfficialPrinting && gridCandidates.length > 0) {
           setFollowUp("none");
           setFilterExpanded(true);
           return;
         }
         advance();
       };
-      const level2Body = (
+      // The candidate-grid identification question - shared by identify_printing's own item
+      // type and confirm_suggestion's "Not this art" follow-up (rejectedContext renders the
+      // "you said not this one" line above the prompt in the latter case, null in the former).
+      const identificationBody = (rejectedContext: React.ReactNode) => (
         <>
           <QHead>
             <ShapePill
-              className={shapePillClass}
+              className={isOpenEndedShape ? "hard" : "pick"}
               data-testid="question-feed-tier-badge"
             >
-              {item.type === "confirm_suggestion"
-                ? "Suggested match"
-                : "Needs identification"}
+              Needs identification
             </ShapePill>
           </QHead>
-          {item.type === "confirm_suggestion" &&
-            item.suggestedPrinting != null &&
-            (suggestionRejectedWithNoneLeft ? (
-              <>
-                <Prompt data-testid="question-feed-suggestion-prompt">
-                  Got it - not that one. Is it any official printing at all?
-                </Prompt>
-                <div
-                  className="d-flex align-items-center gap-2 my-2 opacity-50"
-                  data-testid="question-feed-rejected-context"
-                >
-                  <div style={{ width: 40, flexShrink: 0 }}>
-                    <img
-                      src={item.suggestedPrinting.mediumThumbnailUrl}
-                      alt=""
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                  <div className="text-muted small">
-                    You said: not{" "}
-                    <SetIcon
-                      expansionCode={item.suggestedPrinting.expansionCode}
-                    />{" "}
-                    {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                    {item.suggestedPrinting.collectorNumber}
-                  </div>
-                </div>
-              </>
-            ) : (
-              <Prompt data-testid="question-feed-suggestion-prompt">
-                Which of these is it?{" "}
-                <SetIcon expansionCode={item.suggestedPrinting.expansionCode} />{" "}
-                {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
-                {item.suggestedPrinting.collectorNumber} was suggested
-              </Prompt>
-            ))}
-          {item.type === "identify_printing" && (
-            <Prompt>
-              {isOpenEndedShape
-                ? "You tell us — which printing?"
-                : "Which printing is this?"}
-            </Prompt>
-          )}
+          {rejectedContext}
+          <Prompt>Which printing is this?</Prompt>
           {isOpenEndedShape && (
             <QHint>
               No strong machine candidate. This is one of the harder ones - take
@@ -1625,6 +1794,7 @@ export function QuestionFeed() {
                 chipStates={chipStates}
                 onChipStatesChange={setChipStates}
                 onRateLimited={() => setRateLimited(true)}
+                pruneContradicted
               />
             </FilterPanelWrap>
           )}
@@ -1646,69 +1816,76 @@ export function QuestionFeed() {
               </a>
             </p>
           )}
-          {!suggestionRejectedWithNoneLeft && (
-            <div className="mb-2">
-              <Btn
-                className="ghost"
-                onClick={() => setFilterExpanded((previous) => !previous)}
-                data-testid="question-feed-filter-toggle"
-              >
-                {filterExpanded ? "Hide filters" : "Filter by attribute"}
-              </Btn>
-            </div>
+          <div className="mb-2">
+            <Btn
+              className="ghost"
+              onClick={() => setFilterExpanded((previous) => !previous)}
+              data-testid="question-feed-filter-toggle"
+            >
+              {filterExpanded ? "Hide filters" : "Filter by attribute"}
+            </Btn>
+          </div>
+          {illustrationGroups.length > 0 && (
+            <IllustrationGroupFlow data-testid="question-feed-illustration-groups">
+              {illustrationGroups.map((group) => {
+                // Every member of `group` shares one illustrationId, i.e. one artwork - artist
+                // should be identical across them too, but source data can disagree, so take the
+                // first non-blank rather than assuming group[0] is always populated.
+                const illustrationArtist = group
+                  .map((candidate) => candidate.artist)
+                  .find((artist) => artist.trim() !== "");
+                // selectIllustrationGroup already submits one illustrationId for the whole
+                // cluster (see that function's own comment), so one tile fully represents what
+                // is being voted on - showing every member here just repeats the same artwork
+                // up to N times. Prefer a member with an art crop, the same signal a tile's own
+                // image already prefers (renderCandidateTile's imageUrl default below), and fall
+                // back to the first member so the same data always picks the same tile.
+                const representative =
+                  group.find((candidate) => candidate.artCropUrl) ?? group[0];
+                return (
+                  <IllustrationGroup
+                    key={group[0].illustrationId}
+                    data-testid="question-feed-illustration-group"
+                    data-illustration-id={group[0].illustrationId}
+                  >
+                    <IllustrationGroupLabel>
+                      {group.length > 1
+                        ? `Same illustration - ${group.length} printings`
+                        : "Illustration"}
+                    </IllustrationGroupLabel>
+                    <CandidateGrid>
+                      {renderCandidateTile(
+                        representative,
+                        () =>
+                          // every member of `group` shares this non-null illustrationId - see
+                          // the grouping logic above, which only clusters candidates that have
+                          // one - so submitting the representative's illustrationId is
+                          // identical to submitting any other member's, whatever the group size.
+                          selectIllustrationGroup(
+                            representative.illustrationId as string,
+                            representative
+                          ),
+                        false,
+                        representative.artCropUrl ||
+                          representative.mediumThumbnailUrl,
+                        // Only the illustration-crop image is landscape-shaped - the
+                        // mediumThumbnailUrl fallback above is still a full card scan, so it
+                        // keeps the card-ratio frame.
+                        representative.artCropUrl
+                          ? IllustrationArtPlaceholder
+                          : ArtPlaceholder
+                      )}
+                    </CandidateGrid>
+                    {illustrationArtist != null && (
+                      <IllustrationCredit data-testid="question-feed-illustration-credit">
+                        <ArtistSupportLink artistName={illustrationArtist} />
+                      </IllustrationCredit>
+                    )}
+                  </IllustrationGroup>
+                );
+              })}
+            </IllustrationGroupFlow>
           )}
-          {illustrationGroups.map((group) => {
-            // Every member of `group` shares one illustrationId, i.e. one artwork - artist
-            // should be identical across them too, but source data can disagree, so take the
-            // first non-blank rather than assuming group[0] is always populated.
-            const illustrationArtist = group
-              .map((candidate) => candidate.artist)
-              .find((artist) => artist.trim() !== "");
-            // selectIllustrationGroup already submits one illustrationId for the whole
-            // cluster (see that function's own comment), so one tile fully represents what
-            // is being voted on - showing every member here just repeats the same artwork
-            // up to N times. Prefer a member with an art crop, the same signal a tile's own
-            // image already prefers (renderCandidateTile's imageUrl default below), and fall
-            // back to the first member so the same data always picks the same tile.
-            const representative =
-              group.find((candidate) => candidate.artCropUrl) ?? group[0];
-            return (
-              <IllustrationGroup
-                key={group[0].illustrationId}
-                data-testid="question-feed-illustration-group"
-                data-illustration-id={group[0].illustrationId}
-              >
-                <IllustrationGroupLabel>
-                  Same illustration - {group.length} printings
-                </IllustrationGroupLabel>
-                {illustrationArtist != null && (
-                  <IllustrationCredit data-testid="question-feed-illustration-credit">
-                    <div className="text-muted small mb-1">
-                      Illustration by {illustrationArtist}
-                    </div>
-                    <ArtistSupportLink artistName={illustrationArtist} />
-                  </IllustrationCredit>
-                )}
-                <CandidateGrid>
-                  {renderCandidateTile(
-                    representative,
-                    () =>
-                      // every member of `group` shares this non-null illustrationId - see
-                      // the grouping logic above, which only clusters candidates that have
-                      // one - so submitting the representative's illustrationId is
-                      // identical to submitting any other member's.
-                      selectIllustrationGroup(
-                        representative.illustrationId as string,
-                        representative
-                      ),
-                    false,
-                    representative.artCropUrl ||
-                      representative.mediumThumbnailUrl
-                  )}
-                </CandidateGrid>
-              </IllustrationGroup>
-            );
-          })}
           {ungroupedCandidates.length > 0 && (
             <CandidateGrid data-testid="question-feed-candidate-grid-ungrouped">
               {ungroupedCandidates.map((candidate) =>
@@ -1759,7 +1936,7 @@ export function QuestionFeed() {
                 {submitting && selectedCandidateId === "custom-art" ? (
                   <Spinner size={1} />
                 ) : (
-                  "\u{1F3A8} Art matches, not an official printing"
+                  "This is custom art"
                 )}
               </Btn>
               <Btn
@@ -1774,17 +1951,209 @@ export function QuestionFeed() {
           )}
         </>
       );
-      questionsNode = !revealed ? (
+
+      const spinnerNode = (
         <div className="text-center py-4">
           <Spinner size={2} />
         </div>
-      ) : isOpenEndedShape ? (
-        <div data-testid="question-feed-level2">
-          <OpenWrap>{level2Body}</OpenWrap>
-        </div>
-      ) : (
-        <div data-testid="question-feed-level2">{level2Body}</div>
       );
+
+      if (item.type === "confirm_suggestion") {
+        if (notThisArtActive) {
+          // "Not this art" - the suggestion slot gives way to the same candidate-grid
+          // identification question identify_printing uses, carrying the #748 reconsider-tile
+          // mechanic above a "you said not this one" context line.
+          const rejectedContext = item.suggestedPrinting != null && (
+            <>
+              <Prompt data-testid="question-feed-suggestion-prompt">
+                Got it - let&apos;s find the actual printing.
+              </Prompt>
+              <div
+                className="d-flex align-items-center gap-2 my-2 opacity-50"
+                data-testid="question-feed-rejected-context"
+              >
+                <div style={{ width: 40, flexShrink: 0 }}>
+                  <img
+                    src={item.suggestedPrinting.mediumThumbnailUrl}
+                    alt=""
+                    style={{ width: "100%" }}
+                  />
+                </div>
+                <div className="text-muted small">
+                  You said: not{" "}
+                  <SetIcon
+                    expansionCode={item.suggestedPrinting.expansionCode}
+                  />{" "}
+                  {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                  {item.suggestedPrinting.collectorNumber}
+                </div>
+              </div>
+            </>
+          );
+          questionsNode = !revealed ? (
+            spinnerNode
+          ) : (
+            <div data-testid="question-feed-candidate-question">
+              {identificationBody(rejectedContext)}
+            </div>
+          );
+        } else if (sameArtButActive) {
+          // "Same art, but..." follow-up - the illustration (and derived artist) vote already
+          // landed on tap (markSameArtBut); these chips narrow what actually differs, each
+          // casting its own real CardTagVote as it's tapped (useTagVoting, same as every other
+          // AttributeChipPanel caller). There is no candidate grid here to filter, so the panel
+          // renders standalone rather than inside FilterPanelWrap's grid-adjacent framing.
+          questionsNode = !revealed ? (
+            spinnerNode
+          ) : (
+            <div data-testid="question-feed-same-art-but">
+              <QHead>
+                <ShapePill className="easy">same art</ShapePill>
+                <Prompt>What actually differs?</Prompt>
+              </QHead>
+              <QHint>
+                Tap whichever of these are true - narrows the printing without
+                confirming the wrong one.
+              </QHint>
+              <AttributeChipPanel
+                backendURL={backendURL}
+                cardIdentifier={item.card.identifier}
+                tagConfidence={item.tagConfidence ?? {}}
+                chipStates={chipStates}
+                onChipStatesChange={setChipStates}
+                onRateLimited={() => setRateLimited(true)}
+              />
+              <ActionRow>
+                <Btn
+                  className="primary"
+                  onClick={finishSameArtBut}
+                  data-testid="question-feed-same-art-but-continue"
+                >
+                  Continue
+                </Btn>
+              </ActionRow>
+            </div>
+          );
+        } else {
+          // The fresh confirm_suggestion question - subject card (cardNode above), the
+          // suggested printing, and exactly its own answer set. No chip panel, no candidate
+          // grid - any answer besides Yes summons its own follow-up above instead of
+          // pre-rendering here.
+          questionsNode = !revealed ? (
+            spinnerNode
+          ) : (
+            <div data-testid="question-feed-candidate-question">
+              <QHead>
+                <ShapePill
+                  className="easy"
+                  data-testid="question-feed-tier-badge"
+                >
+                  Suggested match
+                </ShapePill>
+              </QHead>
+              {item.suggestedPrinting != null && (
+                <>
+                  <SuggestedCard>
+                    <SuggestedThumb data-testid="question-feed-suggestion-reference-image">
+                      <ArtPlaceholder>
+                        <MysteryCard />
+                        <ZoomableThumbnail>
+                          <img
+                            src={item.suggestedPrinting.mediumThumbnailUrl}
+                            alt={`${item.suggestedPrinting.expansionCode} ${item.suggestedPrinting.collectorNumber}`}
+                          />
+                        </ZoomableThumbnail>
+                      </ArtPlaceholder>
+                    </SuggestedThumb>
+                    <SuggestedMeta>
+                      <SuggestedName>{item.card.name}</SuggestedName>
+                      <SuggestedSet>
+                        <SetIcon
+                          expansionCode={item.suggestedPrinting.expansionCode}
+                        />{" "}
+                        {item.suggestedPrinting.expansionCode.toUpperCase()}{" "}
+                        {item.suggestedPrinting.collectorNumber}
+                      </SuggestedSet>
+                      <ConfidencePill data-testid="question-feed-suggestion-prompt">
+                        <i />
+                        Is this the <ExactWord>EXACT</ExactWord> printing?
+                      </ConfidencePill>
+                      {item.suggestedPrinting.artist.trim() !== "" && (
+                        <ArtistSupportLink
+                          artistName={item.suggestedPrinting.artist}
+                          className="mt-1"
+                        />
+                      )}
+                    </SuggestedMeta>
+                  </SuggestedCard>
+                  <ActionStack>
+                    <Btn
+                      className="primary"
+                      disabled={submitting}
+                      onClick={() =>
+                        item.suggestedPrinting != null &&
+                        selectCandidate(item.suggestedPrinting, false)
+                      }
+                      data-testid="question-feed-suggestion-yes"
+                    >
+                      {submitting ? (
+                        <Spinner size={1} />
+                      ) : (
+                        "Yes — that's the one"
+                      )}
+                    </Btn>
+                    <ActionGrid>
+                      <Btn
+                        className="secondary"
+                        disabled={submitting}
+                        onClick={markSameArtBut}
+                        data-testid="question-feed-suggestion-same-art-but"
+                      >
+                        Same art, but…
+                      </Btn>
+                      <Btn
+                        className="secondary"
+                        disabled={submitting}
+                        onClick={markNotThisArt}
+                        data-testid="question-feed-suggestion-not-this-art"
+                      >
+                        Not this art
+                      </Btn>
+                      <Btn
+                        className="ghost"
+                        disabled={submitting}
+                        onClick={() => abstainAndAdvance()}
+                        data-testid="question-feed-suggestion-skip"
+                      >
+                        Skip
+                      </Btn>
+                    </ActionGrid>
+                  </ActionStack>
+                  {landed && (
+                    <LandedFeedback data-testid="question-feed-landed">
+                      ✓ Tagged — nice. Next card loading…
+                    </LandedFeedback>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        }
+      } else {
+        // identify_printing - unchanged shape: the candidate-grid identification question,
+        // dashed "tricky one" framing (isOpenEndedShape) for a zero-candidate item.
+        questionsNode = !revealed ? (
+          spinnerNode
+        ) : isOpenEndedShape ? (
+          <div data-testid="question-feed-candidate-question">
+            <OpenWrap>{identificationBody(null)}</OpenWrap>
+          </div>
+        ) : (
+          <div data-testid="question-feed-candidate-question">
+            {identificationBody(null)}
+          </div>
+        );
+      }
     }
   } else {
     // Artist / tag question types - the plain reference image these have always used moves
@@ -1792,21 +2161,28 @@ export function QuestionFeed() {
     // substitute the Scryfall art crop when the item carries one (see subjectImageSrc).
     cardNode = (
       <SubjectCardBox>
-        <SubjectArt>
-          <img
-            ref={cardImageRef}
-            src={subjectImageSrc}
-            alt={item.card.name}
-            data-testid={
-              item.type === "artist" ? "question-feed-artist-art" : undefined
-            }
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            onLoad={() => onCardImageSettled(false)}
-            onError={() =>
-              onCardImageSettled(item.card.mediumThumbnailUrl !== "")
-            }
-          />
-          <SubjectArtTitle>{item.card.name}</SubjectArtTitle>
+        <SubjectArt data-testid="question-feed-subject-art">
+          <SubjectArtImage
+            $landscape={item.type === "artist"}
+            data-testid="question-feed-subject-art-image"
+          >
+            <img
+              ref={cardImageRef}
+              src={subjectImageSrc}
+              alt={item.card.name}
+              data-testid={
+                item.type === "artist" ? "question-feed-artist-art" : undefined
+              }
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              onLoad={() => onCardImageSettled(false)}
+              onError={() =>
+                onCardImageSettled(item.card.mediumThumbnailUrl !== "")
+              }
+            />
+          </SubjectArtImage>
+          <SubjectArtTitle data-testid="question-feed-subject-art-title">
+            {item.card.name}
+          </SubjectArtTitle>
         </SubjectArt>
       </SubjectCardBox>
     );
@@ -1816,7 +2192,7 @@ export function QuestionFeed() {
           <>
             <QHead>
               <ShapePill className="pick">artist</ShapePill>
-              <Prompt>Who&apos;s the artist?</Prompt>
+              <Prompt>Who made this art?</Prompt>
             </QHead>
             <ArtistVotePicker
               backendURL={backendURL}
@@ -1824,23 +2200,33 @@ export function QuestionFeed() {
               confidentlyKnownArtistName={item.confidentlyKnownArtistName}
               onRateLimited={() => setRateLimited(true)}
               voteSurface="question-feed"
+              onVoteCast={() => setArtistVoteCast(true)}
               onArtistConfirmed={(name) => {
                 bumpSessionCount();
                 setConfirmedArtistName(name);
               }}
             />
             {confirmedArtistName != null && (
-              <div className="mt-2" data-testid="question-feed-artist-support">
-                <div className="text-muted small mb-1">
-                  Art by {confirmedArtistName} - support them
-                </div>
+              <ArtistCredit
+                className="mt-2"
+                data-testid="question-feed-artist-support"
+              >
                 <ArtistSupportLink artistName={confirmedArtistName} />
-              </div>
+              </ArtistCredit>
             )}
             <ActionRow>
               <Btn className="ghost" onClick={skip}>
                 Skip
               </Btn>
+              {artistVoteCast && (
+                <Btn
+                  className="primary"
+                  onClick={advanceCarryingVotes}
+                  data-testid="question-feed-artist-confirm"
+                >
+                  Confirm
+                </Btn>
+              )}
             </ActionRow>
           </>
         )}
@@ -1861,6 +2247,67 @@ export function QuestionFeed() {
             />
           </>
         )}
+        {item.type === "border" && (
+          <>
+            <QHead>
+              <ShapePill className="pick">border</ShapePill>
+              <Prompt>Which border colour is this?</Prompt>
+            </QHead>
+            <BorderColorQuestion
+              backendURL={backendURL}
+              cardIdentifier={item.card.identifier}
+              tagConfidence={item.tagConfidence ?? {}}
+              chipStates={chipStates}
+              onChipStatesChange={setChipStates}
+              onRateLimited={() => setRateLimited(true)}
+            />
+            <ActionRow>
+              <Btn
+                className="ghost"
+                onClick={() => abstainAndAdvance("cannot-tell")}
+                data-testid="question-feed-cant-tell"
+              >
+                Can&apos;t tell from this scan.
+              </Btn>
+              <Btn className="ghost" onClick={() => abstainAndAdvance()}>
+                Skip
+              </Btn>
+              {Object.values(chipStates).some(
+                (state) => state !== "untouched"
+              ) && (
+                <Btn
+                  className="primary"
+                  onClick={advanceCarryingVotes}
+                  data-testid="question-feed-border-continue"
+                >
+                  Continue
+                </Btn>
+              )}
+            </ActionRow>
+          </>
+        )}
+        {item.type === "illustration" && (
+          <>
+            <QHead>
+              <ShapePill className="pick">artwork</ShapePill>
+              <Prompt>Is this the artwork?</Prompt>
+            </QHead>
+            <IllustrationQuestion
+              item={item}
+              backendURL={backendURL}
+              onAnswered={() => {
+                bumpSessionCount();
+                advance();
+              }}
+              onRateLimited={() => setRateLimited(true)}
+            />
+            <ActionRow>
+              <Btn className="ghost" onClick={() => abstainAndAdvance()}>
+                Skip
+              </Btn>
+            </ActionRow>
+          </>
+        )}
       </>
     );
   }
@@ -1868,7 +2315,7 @@ export function QuestionFeed() {
   return (
     <FeedRoot data-testid="question-feed">
       <WtcHead>
-        <WhatsThatWords />
+        {!hideHeading && <WhatsThatWords />}
         <SolvedPill
           data-testid="question-feed-session-counter"
           title="quiet resolved-count - not a score or streak"
@@ -1903,6 +2350,17 @@ export function QuestionFeed() {
             </Alert>
           )}
           {questionsNode}
+          {/* The shared report panel from the card-detail modal (ReportCardPanel - the same
+              component, same reason chips, same /2/reportCard/ submission flow the legacy
+              page uses), mounted for the current question's card. Keyed by identifier so the
+              panel's one-report-per-card state resets when the feed advances to the next
+              card (the component is designed to collapse into a thank-you line and stay that
+              way for the rest of a card's visit - on this page a card's visit ends at the
+              advance, so the remount restores the closed button). */}
+          <ReportCardPanel
+            key={item.card.identifier}
+            cardDocument={item.card}
+          />
           {counts != null && (
             <StatsLine data-testid="question-feed-stats">
               {counts.confirmable} ready &middot; {counts.total} in catalog

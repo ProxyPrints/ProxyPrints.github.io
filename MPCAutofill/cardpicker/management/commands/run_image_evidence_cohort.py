@@ -158,10 +158,10 @@ cards SOME run once finished, so a plain invocation redoes the catalogue from sc
 resume is `--run-id <the killed run's id>`. `--only-never-extracted` narrows back to the old
 identity-scoped predicate. See `already_extracted_card_ids`' own docstring for the full argument
 and for the `bleed_diff_mm` case that made the old predicate a permanent blind spot.
-`MANIFEST_EXTRACTOR_KEYS` and `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` are kept in sync with
-`image_evidence.compute_card_evidence`'s own `extractor_versions` assignments (11 keys as of
-color_profile's retirement 2026-07-27) - stale here would silently under-count "already done"
-and re-pay fetch+OCR cost this resume filter exists specifically to avoid.
+    `MANIFEST_EXTRACTOR_KEYS` and `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` are kept in sync with
+    `image_evidence.compute_card_evidence`'s own `extractor_versions` assignments (12 keys as of
+    pinline_inset's addition, see below) - stale here would silently under-count "already done"
+    and re-pay fetch+OCR cost this resume filter exists specifically to avoid.
 
 That sync is now ENFORCED, not merely requested: `.github/scripts/check_extractor_manifest_sync.py`
 derives {key: version} from image_evidence.py by AST and fails CI if either constant below
@@ -170,12 +170,18 @@ than a sterner comment - it said "12" when the manifest carried 11 keys, and it 
 `extract_card_evidence` when the assignments actually live in `compute_card_evidence`. A
 hand-written anchor drifts exactly like a hand-written list.
 
-`artbox_phash` (issue #480, added 2026-07-25) has the same "adding a manifest key stales every
-row's `has_keys` check" consequence every prior manifest addition has had, deliberately - see
-that issue's own binding sequencing comment: this key merges into the manifest, but the resulting
-whole-catalog Stage C pass it makes eligible does NOT run until the owner schedules it (riding
-`#473`/`#472`'s own deploy first, per that comment) - never a standalone `artbox_phash`-only
-backfill, which would duplicate ~218k fetches the combined pass already needs to make anyway.
+    `artbox_phash` (issue #480, added 2026-07-25) has the same "adding a manifest key stales every
+    row's `has_keys` check" consequence every prior manifest addition has had, deliberately - see
+    that issue's own binding sequencing comment: this key merges into the manifest, but the resulting
+    whole-catalog Stage C pass it makes eligible does NOT run until the owner schedules it (riding
+    `#473`/`#472`'s own deploy first, per that comment) - never a standalone `artbox_phash`-only
+    backfill, which would duplicate ~218k fetches the combined pass already needs to make anyway.
+
+    `pinline_inset` (added alongside the pinline-inset measurement, 2026-08-14) has the identical
+    consequence: every one of the ~220k existing `ImageEvidence` rows now fails `has_keys` for
+    lacking this key and becomes eligible for re-extraction, and the resulting whole-catalog Stage C
+    pass does not run until the owner schedules it - same posture as `artbox_phash` above, not a
+    standalone `pinline_inset`-only backfill.
 
 EVIDENCE TRANSFER (2026-07-25, issue #473 PR-2, folded with issue #472): `_fetch_one_card` checks
 `evidence_transfer.find_transfer_source(card)` BEFORE the network fetch call below - a card with a
@@ -291,9 +297,9 @@ from cardpicker.utils import get_baked_git_sha, read_card_ids_file
 
 logger = logging.getLogger(__name__)
 
-# The full Stage C manifest as of 2026-07-27 (fetch_health + geometry-bleed + geometry-group +
-# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals; color_profile retired
-# 2026-07-27, never consumed downstream) - matches
+# The full Stage C manifest as of 2026-08-14 (fetch_health + geometry-bleed + geometry-group +
+# OCR-group + artbox-phash + symbol-region + legal-line + quality-signals + pinline-inset;
+# color_profile retired 2026-07-27, never consumed downstream) - matches
 # image_evidence.compute_card_evidence's own extractor_versions keys exactly. Keep this set in
 # sync with that function whenever a new extractor group lands (see module docstring) - and note
 # that "keep in sync" is now CHECKED by .github/scripts/check_extractor_manifest_sync.py, so a
@@ -304,6 +310,7 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
         "geometry_bleed",
         "layout_class",
         "crop_coordinates",
+        "art_edge",
         "collector_line_ocr",
         "artist_ocr",
         "collector_line_tsv",
@@ -311,6 +318,7 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
         "symbol_region",
         "legal_line",
         "quality_signals",
+        "pinline_inset",
     }
 )
 
@@ -329,6 +337,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "geometry_bleed": "geometry-bleed-v1",
     "layout_class": "layout-class-v1",
     "crop_coordinates": "crop-coordinates-v1",
+    "art_edge": "art-edge-v1",
     "collector_line_ocr": "collector-line-ocr-v3",
     "artist_ocr": "artist-ocr-v4",
     "collector_line_tsv": "collector-line-tsv-v3",
@@ -336,6 +345,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "symbol_region": "symbol-region-v1",
     "legal_line": "legal-line-v2",
     "quality_signals": "quality-signals-v1",
+    "pinline_inset": "pinline-inset-v1",
 }
 
 
@@ -493,7 +503,16 @@ class _FetchOutcome:
     `Card.name` this fetch step already loaded, carried back so `_run_cohort` can resolve the
     card's `card_artist_names` narrowing tuple in the PARENT process (one shared
     `CandidateNameIndex`) rather than in each compute worker (seven of them). Empty string for
-    every terminal outcome that never reaches the compute stage."""
+    every terminal outcome that never reaches the compute stage.
+
+    `stale_extractor_keys`/`stored_evidence_fields` (2026-08-19, perf/per-extractor-reextraction):
+    read here on the fetch thread (a plain DB read, not itself fetch-bound work) from this card's
+    own `current_evidence_queryset` row, if one exists, and carried across so the compute stage
+    can carry forward every non-stale extractor's already-stored values rather than recomputing
+    them - see `image_evidence.compute_card_evidence`'s own docstring for the mechanism. `None`/
+    `None` (a card with no current row yet - e.g. its content_hash just changed, or this is its
+    first-ever pass) means "nothing to carry forward," which `compute_card_evidence` already
+    treats as "every key is stale" via its own `stored_extractor_versions` absence check."""
 
     card_id: int
     content_hash: Optional[int] = None
@@ -503,6 +522,42 @@ class _FetchOutcome:
     fetch_latency_ms: float = 0.0
     outcome: Optional[str] = None
     card_name: str = ""
+    stale_extractor_keys: Optional[frozenset[str]] = None
+    stored_evidence_fields: Optional[dict[str, Any]] = None
+    stored_extractor_versions: Optional[dict[str, Any]] = None
+
+
+def _stale_extractor_keys_and_stored_fields(
+    card: Card,
+) -> "tuple[Optional[frozenset[str]], Optional[dict[str, Any]], Optional[dict[str, Any]]]":
+    """PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction): reads this
+    card's own CURRENT `ImageEvidence` row (`image_evidence.current_evidence_queryset` - the same
+    content_hash+md5 currency rule every other reader of stored evidence uses, imported not
+    reimplemented), diffs its `extractor_versions` against `MANIFEST_EXTRACTOR_CURRENT_VERSIONS`,
+    and returns `(stale_keys, stored_fields, stored_extractor_versions)` for
+    `compute_card_evidence`'s own carry-forward parameters. `(None, None, None)` when there is no
+    current row yet (first-ever pass, or the card's content_hash just changed) -
+    `compute_card_evidence` already treats an absent `stored_extractor_versions` as "every key is
+    stale," so this is the correct "nothing to carry forward" signal, not a special case here.
+
+    Runs on the FETCH thread (a plain DB read, not network I/O, but this function already shares
+    the fetch stage's own thread pool and DB connection - no new connection, no new thread)."""
+    from cardpicker.image_evidence import (
+        EXTRACTOR_OWNED_FIELDS,
+        current_evidence_queryset,
+    )
+
+    owned_field_names = [name for names in EXTRACTOR_OWNED_FIELDS.values() for name in names]
+    row = current_evidence_queryset(card).values("extractor_versions", *owned_field_names).first()
+    if row is None:
+        return None, None, None
+    stored_extractor_versions: dict[str, str] = row.pop("extractor_versions") or {}
+    stale_keys = frozenset(
+        key
+        for key, current_version in MANIFEST_EXTRACTOR_CURRENT_VERSIONS.items()
+        if stored_extractor_versions.get(key) != current_version
+    )
+    return stale_keys, row, stored_extractor_versions
 
 
 def _fetch_one_card(
@@ -552,6 +607,10 @@ def _fetch_one_card(
     from cardpicker.harvest_fetch_limiter import DestinationThrottledError
     from cardpicker.image_cdn_fetch import DEFAULT_FETCH_DPI, fetch_card_image_bytes
 
+    stale_extractor_keys, stored_evidence_fields, stored_extractor_versions = _stale_extractor_keys_and_stored_fields(
+        card
+    )
+
     fetch_started_at = time.monotonic()
     try:
         image_bytes = fetch_card_image_bytes(card, dpi=DEFAULT_FETCH_DPI)
@@ -576,6 +635,9 @@ def _fetch_one_card(
             fetch_latency_ms=(time.monotonic() - fetch_started_at) * 1000,
             outcome=None,
             card_name=card.name,
+            stale_extractor_keys=stale_extractor_keys,
+            stored_evidence_fields=stored_evidence_fields,
+            stored_extractor_versions=stored_extractor_versions,
         )
     except GoogleFetchLockoutError:
         stop_event.set()
@@ -595,6 +657,9 @@ def _fetch_one_card(
         fetch_latency_ms=fetch_latency_ms,
         outcome=None,
         card_name=card.name,
+        stale_extractor_keys=stale_extractor_keys,
+        stored_evidence_fields=stored_evidence_fields,
+        stored_extractor_versions=stored_extractor_versions,
     )
 
 
@@ -611,6 +676,9 @@ def _compute_one_card(
     md5_checksum: Optional[str] = None,
     sha256_checksum: Optional[str] = None,
     card_artist_names: tuple[str, ...] = (),
+    stale_extractor_keys: Optional[frozenset[str]] = None,
+    stored_evidence_fields: Optional[dict[str, Any]] = None,
+    stored_extractor_versions: Optional[dict[str, Any]] = None,
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Module-level (picklable) compute-only work unit for the process pool - takes plain,
     already-fetched data (never a `Card`/`Image` instance re-fetched or re-decoded elsewhere), and
@@ -655,6 +723,14 @@ def _compute_one_card(
     list stays picklable exactly as `compute_card_evidence`'s own docstring requires. `()` (the
     default) means "don't narrow", byte-identical to the pre-2026-07-29 behaviour.
 
+    `stale_extractor_keys`/`stored_evidence_fields`/`stored_extractor_versions` (2026-08-19,
+    perf/per-extractor-reextraction): resolved on the fetch thread by
+    `_stale_extractor_keys_and_stored_fields` and forwarded straight through to
+    `compute_card_evidence`'s own parameters of the same names - see that function's own docstring
+    for the carry-forward mechanism this drives. All three `None` (a card with no current stored
+    row) means "nothing to carry forward," which `compute_card_evidence` already resolves to
+    "every extractor is stale," i.e. today's full-recompute behaviour.
+
     THE OTHER ARTIST INPUTS ARE PROCESS STATE, NOT ARGUMENTS. `artist_lexicon`,
     `printing_artist_lookup`, and (2026-08-04) `modern_artist_lexicon` are read off
     `_WORKER_ARTIST_LEXICON`/`_WORKER_PRINTING_ARTIST_LOOKUP`/`_WORKER_MODERN_ARTIST_LEXICON`,
@@ -690,6 +766,9 @@ def _compute_one_card(
         modern_artist_lexicon=_WORKER_MODERN_ARTIST_LEXICON,
         md5_checksum=md5_checksum,
         sha256_checksum=sha256_checksum,
+        stale_extractor_keys=stale_extractor_keys,
+        stored_evidence_fields=stored_evidence_fields,
+        stored_extractor_versions=stored_extractor_versions,
     )
     if not dry_run:
         persist_evidence(result, run_id=run_id)
@@ -956,6 +1035,9 @@ def _run_cohort(
                     fetch_result.md5_checksum,
                     fetch_result.sha256_checksum,
                     card_artist_names,
+                    fetch_result.stale_extractor_keys,
+                    fetch_result.stored_evidence_fields,
+                    fetch_result.stored_extractor_versions,
                 )
                 pending[compute_future] = fetch_result.card_id
             _submit_more_fetch()

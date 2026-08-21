@@ -85,6 +85,31 @@ PRINTING_TAG_IMPLICIT_WEIGHT = env.float("PRINTING_TAG_IMPLICIT_WEIGHT", default
 # ratified 2026-07-22 vote-weight scenario matrix, decision D5/S3). See
 # cardpicker.vote_consensus.resolve_weighted_consensus's own docstring for the full mechanism.
 PRINTING_TAG_IMPLICIT_CAP = env.float("PRINTING_TAG_IMPLICIT_CAP", default=1.0)
+# Hard ceiling on the SUM of machine-derived weight (VoteSource.DEDUCTION/OCR, each at
+# PRINTING_TAG_MACHINE_WEIGHT) counted per (card, tag, polarity) outcome group in
+# resolve_weighted_consensus - the same invariant PRINTING_TAG_IMPLICIT_CAP enforces for implicit
+# weight, applied to its sibling non-human-backed channel. This is NOT what stops a machine-only
+# group from resolving a card - `has_human_backed` is a separate, hard gate in
+# resolve_weighted_consensus that does that unconditionally, at any cap value. What this cap
+# bounds is how far machine weight can carry a group TOWARD quorum alongside a real human vote,
+# and how much it can inflate that group's share of the total weight once one is present - the
+# "no machine tipping of a human contest" mechanism (formerly labeled D1 in the owner-ratified
+# 2026-07-22 vote-weight scenario matrix, docs/reference/vote-weight-matrix.md). The matrix
+# ratifies no machine-cap value directly; the default of 1.0 mirrors the one cap it does ratify
+# (decision D5/S3, the sibling implicit cap at w=0.25/cap=1.0) rather than reasoning a fresh
+# number for an unratified constant: two independent machine channels (0.5 each) still count in
+# full - genuine corroboration from separate evidence sources - while a third adds nothing, and a
+# single human vote (weight 1.0) still carries that group to the default PRINTING_TAG_MIN_VOTES
+# quorum (2). Strictly below PRINTING_TAG_MIN_VOTES by the same policy as the implicit cap - the
+# assertion below fails loudly if a future env override ever violates that margin. See
+# cardpicker.vote_consensus.resolve_weighted_consensus's own docstring for the full mechanism.
+PRINTING_TAG_MACHINE_CAP = env.float("PRINTING_TAG_MACHINE_CAP", default=1.0)
+assert PRINTING_TAG_MACHINE_CAP < PRINTING_TAG_MIN_VOTES, (
+    f"PRINTING_TAG_MACHINE_CAP ({PRINTING_TAG_MACHINE_CAP}) must be strictly below "
+    f"PRINTING_TAG_MIN_VOTES ({PRINTING_TAG_MIN_VOTES}) - the same margin policy applied to "
+    "PRINTING_TAG_IMPLICIT_CAP, keeping this non-human-backed weight channel's influence on "
+    "quorum and share bounded on the same terms as its sibling."
+)
 # Illustration-vote consensus thresholds (see cardpicker.illustration_consensus). Their own
 # settings, DEFAULTING TO THE PRINTING VALUES ABOVE - so this changes nothing anywhere today, and
 # the illustration bar can later be tuned without moving the printing bar with it. Whether an
@@ -104,6 +129,52 @@ ILLUSTRATION_MIN_SHARE = env.float("ILLUSTRATION_MIN_SHARE", default=PRINTING_TA
 # Selection-layer only - this setting is never read by vote_consensus.py and changes no vote's
 # weight/threshold/gate. See docs/features/printing-tags.md's "Unified question feed" section.
 QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO = env.float("QUESTION_FEED_LIKELY_RESOLVE_MIX_RATIO", default=0.51)
+
+# Ceiling share of a session's own LIKELY-RESOLVE-pool servings that may be a narrowing
+# question (border/illustration) rather than a printing question (confirm_suggestion/
+# identify_printing) - see cardpicker.question_feed._likely_resolve_narrowing_ratio. No card
+# in the catalogue carries a RESOLVED_APPLY border-colour tag (measured 2026-08-21), so
+# uncapped, the border/illustration branches preempt a printing question for nearly every
+# likely-resolve card. 0.5 keeps both question types reachable rather than 0.0 (deletes
+# narrowing questions) or 1.0 (today's unbounded behavior).
+QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO = env.float(
+    "QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO", default=0.5
+)
+
+# QUESTION_FEED_CONFIRM_MIX_WEIGHT/_CONTESTED_MIX_WEIGHT/_COLD_MIX_WEIGHT (2026-08-10, defaults
+# 3/2/1) removed (issue #766): they rationed a fixed SHARE of a session's questions to
+# confirm_suggestion regardless of whether the machine's own evidence justified asking it. The
+# ratified question model (docs/features/wtc-question-model.md §2/§3) replaces the ratio with a
+# GATE instead - confirm_suggestion is offered only when the card's own recorded evidence is
+# complete (`cardpicker.question_feed._evidence_justifies_confirmation`) - so there is no target
+# share left to tune here.
+
+# issue #727: per-lane candidate-pool warm cadence (minutes) - each is its own settings-driven
+# knob, not one global interval, so lane 1 ("churns with every vote cast, wants minutes") and
+# lane 4 ("changes only as the pipeline extracts new evidence, tolerates hours") can be tuned
+# independently without a migration or code change. See cardpicker.question_feed_pools's own
+# module docstring for the full architecture and cardpicker/migrations/
+# 0105_question_feed_pools_schedule.py for the django-q2 Schedule rows these back.
+QUESTION_FEED_POOL_WARM_MINUTES_RESOLUTION_IMMINENT = env.int(
+    "QUESTION_FEED_POOL_WARM_MINUTES_RESOLUTION_IMMINENT", default=5
+)
+QUESTION_FEED_POOL_WARM_MINUTES_CONFIRM = env.int("QUESTION_FEED_POOL_WARM_MINUTES_CONFIRM", default=15)
+QUESTION_FEED_POOL_WARM_MINUTES_CONTESTED = env.int("QUESTION_FEED_POOL_WARM_MINUTES_CONTESTED", default=60)
+QUESTION_FEED_POOL_WARM_MINUTES_COLD = env.int("QUESTION_FEED_POOL_WARM_MINUTES_COLD", default=240)
+
+# Cadence (minutes) for `warm_question_feed_remaining_estimate` (migration `0115_question_feed_
+# remaining_estimate_schedule.py`) - refreshes `question_feed.get_remaining_estimate`'s and
+# `printing_consensus.get_contested_card_ids`'s own 300s-TTL shared caches on a schedule, so a
+# live request never lands right after both expire and pays their ~9.2s uncached cost (measured
+# 2026-08-16 - see `question_feed.warm_feed_supply_cache`'s own docstring). Default 4: comfortable
+# margin under the 300s (5 minute) TTL both caches share, without warming needlessly often.
+QUESTION_FEED_REMAINING_ESTIMATE_WARM_MINUTES = env.int("QUESTION_FEED_REMAINING_ESTIMATE_WARM_MINUTES", default=4)
+
+# Max candidates materialised per lane per sub-kind (printing/artist/tag) at each warm - bounds
+# both the cache blob size and the read-time random-offset scan cost. A generous cap, not a
+# tuned-to-the-edge number - see cardpicker.question_feed_pools's own module docstring.
+QUESTION_FEED_POOL_SIZE = env.int("QUESTION_FEED_POOL_SIZE", default=500)
+
 # django-ratelimit rate string (see cardpicker.views.post_submit_printing_tag), keyed by the
 # client-generated anonymous ID (IP as a fallback if that header is somehow missing). Shared
 # across printing-tag/artist-vote/tag-vote submission (_printing_tag_rate_limit_key/_rate are
@@ -611,40 +682,84 @@ STAGE_E_MICRO_BATCH_SIZE = env.int("STAGE_E_MICRO_BATCH_SIZE", default=None)
 # django-q2 worker PROCESS (Q_CLUSTER["workers"] = 8 above) to this value - the shakedown's first
 # live run had eight concurrent dispatches, each running CPU-bound OCR/phash extraction, trip the
 # host-load envelope bar on a host with only 7 usable compute cores (docs/features/catalog-
-# completion-plan.md L1794/2248/2366's hardware profile). Default 2 is a conservative starting
-# point (well under the 7-core ceiling even accounting for other concurrent host activity - Stage
-# C's own bulk driver, image-cdn fetch threads, etc.), not a measured/considered answer - tunable
-# without a code change (env var) pending real shakedown data, matching STAGE_E_MICRO_BATCH_SIZE's
-# own "placeholder, not invented precision" convention immediately above.
-STAGE_E_MAX_CONCURRENT_DISPATCHES = env.int("STAGE_E_MAX_CONCURRENT_DISPATCHES", default=2)
+# completion-plan.md L1794/2248/2366's hardware profile). Default raised 2 -> 5 (2026-08-17):
+# DPI-460 rendering (PR #826) roughly doubled the per-card OCR cost of each dispatch, and at the
+# 250-card batch the previous 2/3-work settings throttled the full-catalog rescan's throughput
+# well below what the 7-core ceiling allows - 5 concurrent dispatches restores it while still
+# sitting under that ceiling with room for other concurrent host activity (Stage C's own bulk
+# driver, image-cdn fetch threads, etc.). Env-tunable without a code change, matching
+# STAGE_E_MICRO_BATCH_SIZE's own convention immediately above.
+#
+# Default raised 5 -> 6 (2026-08-19): the host has 8 cores, shared with Postgres, Elasticsearch
+# and this same qcluster worker set - measured, the pass was compute-bound (67.3% of per-card
+# wall time) rather than fetch-bound (1.367 cards/s achieved against a 4.18 cards/s fetch-alone
+# ceiling at concurrency 5), so the lever that raises throughput here is concurrency, up to the
+# point cores saturate. 6, not higher: `operating_envelope.HOST_LOAD_CEILING` (7.0) is the hard
+# trip, unmoved by this change, and a default that routinely reaches it converts throughput into
+# halted passes rather than more of it - 6 leaves headroom under that ceiling for the rest of
+# this host's concurrent load (the AIMD load governor above still adapts within that ceiling; this
+# constant is only its seed - see STAGE_E_GOVERNOR_CONCURRENCY_CAP below).
+STAGE_E_MAX_CONCURRENT_DISPATCHES = env.int("STAGE_E_MAX_CONCURRENT_DISPATCHES", default=6)
 
-# Host-load soft brake (2026-08-05 - cardpicker/stage_e_load_brake.py's own module docstring
-# carries the full mechanism). Delays a dispatch,
-# never bypasses the hard ceiling: `STAGE_E_HOST_LOAD_SOFT_CEILING` opens the band below
-# `operating_envelope.HOST_LOAD_CEILING` (7.0) in which a dispatch sleeps and re-samples instead
-# of proceeding straight to the envelope check that would otherwise trip it. All three default to
-# values that make the brake active out of the box - matching STAGE_E_MAX_CONCURRENT_DISPATCHES's
-# own "safe by default, no opt-in required" convention above, since an instance maintainer running
+# Host-load AIMD governor (2026-08-13, replacing the 2026-08-05 three-band soft brake - see
+# cardpicker/stage_e_load_brake.py's own module docstring for the full control law and the
+# incident that prompted the replacement). Modulates a pass's own dispatch concurrency between
+# the soft and hard ceilings instead of only delaying a dispatch decision: below soft, concurrency
+# climbs by one; between soft and hard, concurrency holds; above hard, concurrency halves (floor 1)
+# and this call backs off proportionally to the overshoot. Never bypasses the hard ceiling itself -
+# `operating_envelope.HOST_LOAD_CEILING` (7.0) is unmoved, and a genuine sustained breach at the
+# concurrency floor still reaches the envelope's own trip. All settings below default to values
+# that make the governor active out of the box - matching STAGE_E_MAX_CONCURRENT_DISPATCHES's own
+# "safe by default, no opt-in required" convention above, since an instance maintainer running
 # their own catalogue for the first time cannot know to enable a knob they don't know exists.
 #
-# STAGE_E_HOST_LOAD_SOFT_CEILING - ~85% of the hard 7.0 ceiling, read off the two load-average
-# trips this brake exists to prevent (7.0796 and 7.17236328125 - both trips were already inside
-# 15% of the bar when the pass that produced them was launched, well above this 6.0 line).
-STAGE_E_HOST_LOAD_SOFT_CEILING = env.float("STAGE_E_HOST_LOAD_SOFT_CEILING", default=6.0)
+# STAGE_E_HOST_LOAD_SOFT_CEILING - moved 6.0 -> 4.5 for this governor (HOST_LOAD_CEILING, the hard
+# ceiling, is unmoved at 7.0). The old value was sized only to leave room to notice the hard
+# ceiling approaching; this governor also climbs concurrency in the space below it, and needs room
+# to do so before load nears the ceiling at all, not just room to notice it arriving.
+STAGE_E_HOST_LOAD_SOFT_CEILING = env.float("STAGE_E_HOST_LOAD_SOFT_CEILING", default=4.5)
 
-# STAGE_E_LOAD_BRAKE_INTERVAL_S - base sleep per brake iteration, before jitter
-# (`stage_e_load_brake.run_load_brake`'s own `uniform(0.75, 1.5)` multiplier). 15s is short
-# relative to the 1-minute load average it re-samples on each wake so the loop still notices a
-# quick recovery, without being so short that a sustained band spends most of its time waking up
-# rather than waiting.
+# STAGE_E_LOAD_BRAKE_INTERVAL_S - base sleep per equilibrium-band iteration, before jitter
+# (`stage_e_load_brake.run_governor`'s own `uniform(0.75, 1.5)` multiplier), and the same
+# per-unit-of-overshoot coefficient the above-ceiling backoff scales by
+# (`interval_s * (load_avg - HOST_LOAD_CEILING)`). 15s is short relative to the 1-minute load
+# average it re-samples on each wake so the loop still notices a quick recovery, without being so
+# short that a sustained band spends most of its time waking up rather than waiting.
 STAGE_E_LOAD_BRAKE_INTERVAL_S = env.float("STAGE_E_LOAD_BRAKE_INTERVAL_S", default=15.0)
 
-# STAGE_E_LOAD_BRAKE_MAX_WAIT_S - the absolute bound on how long one dispatch call may spend
-# braking before proceeding anyway. `os.getloadavg()`'s one-minute figure is an EWMA with a ~60s
-# time constant, so 240s is ~4 time constants (~98% decay of a step change) - long enough for the
-# brake to be more than a token gesture, short enough that a sustained real breach still reaches
-# the envelope's own hard trip within one dispatch call rather than stalling indefinitely.
+# STAGE_E_LOAD_BRAKE_MAX_WAIT_S - the absolute bound on how long one dispatch call may spend in
+# the equilibrium (soft..hard) band before proceeding anyway. `os.getloadavg()`'s one-minute
+# figure is an EWMA with a ~60s time constant, so 240s is ~4 time constants (~98% decay of a step
+# change) - long enough to be more than a token gesture, short enough that a sustained real breach
+# still reaches the envelope's own hard trip within a bounded number of dispatch calls rather than
+# stalling indefinitely. Does NOT bound the above-ceiling backoff - that path is bounded by
+# STAGE_E_LOAD_GOVERNOR_SUSTAINED_TRIP_WINDOW_S below instead, once concurrency is at its floor.
 STAGE_E_LOAD_BRAKE_MAX_WAIT_S = env.float("STAGE_E_LOAD_BRAKE_MAX_WAIT_S", default=240.0)
+
+# STAGE_E_LOAD_GOVERNOR_SUSTAINED_TRIP_WINDOW_S - how long load must stay above
+# HOST_LOAD_CEILING, with concurrency already at its floor of 1, before this governor stops
+# backing off and lets the caller's own next envelope sample trip honestly (the new trip
+# condition: the pass has throttled as far as it can, so a still-overloaded box is not this
+# pass's own concurrency to shed). 120s is two of `os.getloadavg()`'s own ~60s EWMA time
+# constants - a window shorter than that would be measuring the sensor's own lag, not a genuine
+# sustained condition.
+STAGE_E_LOAD_GOVERNOR_SUSTAINED_TRIP_WINDOW_S = env.float(
+    "STAGE_E_LOAD_GOVERNOR_SUSTAINED_TRIP_WINDOW_S", default=120.0
+)
+
+# STAGE_E_GOVERNOR_CONCURRENCY_CAP - the upper bound this governor's own additive-increase step
+# will climb dispatch concurrency to, explicit and configurable rather than left implicit in
+# whatever concurrency the pass happens to reach. STAGE_E_MAX_CONCURRENT_DISPATCHES above is now
+# only this governor's SEED value (its concurrency the first time a process calls it), not its
+# ongoing ceiling - a static cap and a live-adjusted one both trying to be the enforced ceiling
+# would fight each other. Default `cores - 1` (floored at 1): more concurrent dispatches means
+# more concurrent Postgres work, and Postgres also serves the live site - one core held back is
+# that reserve. Live load is the real, moment-to-moment constraint this governor already responds
+# to; this cap only exists because `os.getloadavg()`'s ~60s EWMA lag (see the sustained-window
+# comment above) means load alone cannot be trusted to catch an unbounded climb fast enough.
+STAGE_E_GOVERNOR_CONCURRENCY_CAP = env.int(
+    "STAGE_E_GOVERNOR_CONCURRENCY_CAP", default=max(1, (os.cpu_count() or 2) - 1)
+)
 
 # Persistent sweep cursor sizing (issue #458 - see cardpicker/stage_e_dispatch.py's
 # `_select_micro_batch` and docs/features/stage-e-operations.md's Phase 2 section for the full

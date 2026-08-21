@@ -10,7 +10,8 @@
  * page link, the MTGAC credit line) rather than a single caller-styled `<a>` wrapping caller-
  * supplied `children` - this caller no longer passes `className`/children for button styling,
  * the applet owns its own layout ("buttons stretch to fill the applet", owner instruction). The
- * plain credit line ("Art by <Name>") stays separate, non-linked text above the applet.
+ * applet's own page-link button already names the artist, so this caller renders no separate
+ * name label alongside it (issue #747).
  *
  * Upstream-divergence note (docs/upstreaming/readiness-audit.md's styling-divergence ledger):
  * chilli-axe/mpc-autofill has no artist-support surface at all - ArtistSupportLink is a
@@ -39,18 +40,13 @@ export function ArtistSection({ cardDocument }: ArtistSectionProps) {
   return (
     <div data-testid="display-artist-section">
       {cardDocument.canonicalArtist != null ? (
-        <>
-          <div className="by mb-1">
-            Art by{" "}
-            <span className="fw-semibold">
-              {cardDocument.canonicalArtist.name}
-            </span>
-          </div>
-          <ArtistSupportLink
-            artistName={cardDocument.canonicalArtist.name}
-            defaultExpanded
-          />
-        </>
+        // Rail restructure ruling 3 (docs/proposals/mockups/editor-repass round, owner
+        // directive) - REV: no longer `defaultExpanded`. The rail no longer has room to spend on
+        // an always-open commerce-link stack (the owner's own "artist applet ... too large"
+        // complaint); this caller now behaves like every OTHER space-constrained mount
+        // (question feed, card-detail modal) - one compact line (artist link + a visible
+        // disclosure toggle) by default, full applet still one tap away, never removed.
+        <ArtistSupportLink artistName={cardDocument.canonicalArtist.name} />
       ) : (
         <span className="text-muted">Unknown</span>
       )}

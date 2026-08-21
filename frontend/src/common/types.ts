@@ -275,8 +275,7 @@ export type Modals =
   | "cardDetailedView"
   | "gridSelector"
   | "changeQuery"
-  | "invalidIdentifiers"
-  | "PDFGenerator";
+  | "invalidIdentifiers";
 
 export type NoPropModals = Exclude<
   Modals,

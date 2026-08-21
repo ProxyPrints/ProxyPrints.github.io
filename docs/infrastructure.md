@@ -224,8 +224,11 @@ directly.
 - `web-ci.yml`: `build-frontend`'s `needs:` deliberately drops
   `test-backend` — 4 backend tests fail in CI for missing fork secrets (2
   Moxfield, 2 Google Drive creds) — environmental, not code bugs.
-- `web-ci` has `on: push` path filters — pure `.md`/workflow-only commits
-  don't trigger it. Manual trigger: Actions → Web CI → Run workflow.
+- `web-ci` runs the full matrix (backend tests + all four Playwright
+  shards + report merge + frontend build) on **every** push to master —
+  no `on: push` path filters, no per-surface gating (issue #773, see the
+  `web-ci.yml` header comment for the under-reporting rationale).
+  Manual trigger: Actions → Web CI → Run workflow.
 - `cloudflare-workers-ci.yml` deploys `image-cdn/` and
   `github-release-reverse-proxy/` on push to master touching those paths,
   or manually. Its `publish-github-release-reverse-proxy` job will
@@ -263,18 +266,20 @@ directly.
   `coverage-ack: <test id or glob> — <reason>` line (same tether discipline
   as `docs_lint.py`'s in-file `ALLOWLIST`). New tests and un-skipping are
   always fine.
-- `web-ci.yml` per-surface change gating (PR #466): a `changes` job runs
-  first on every push and diffs `HEAD` against the push's pre-image SHA using
-  plain `git diff --name-only` (same pattern as other workflows in this repo,
-  not a paths-filter action). It sets two boolean outputs — `backend`
-  (`MPCAutofill/**` prefix) and `frontend` (`frontend/**` prefix) — and every
-  downstream job gates itself on `needs.changes.outputs.<surface> == 'true'`.
-  `cloudflare-static-site/**` is not wired to any surface. Fallback: on
-  `workflow_dispatch`, a new branch push, or a force-push where no before SHA
-  is available, both outputs are set to `true` (run everything). A
-  `test-pre-commit` job that had been duplicated in `web-ci.yml` was removed
-  in this PR rather than scoped — `test-pre-commit.yml` already runs it
-  unconditionally.
+- `web-ci.yml` **removed** per-surface change gating (issue #773): the
+  PR #466 `changes` job diffed `HEAD` against the push's pre-image SHA
+  via plain `git diff --name-only` and set two boolean outputs (`backend`
+  for `MPCAutofill/**`, `frontend` for `frontend/**`) that downstream
+  jobs gated on. That scoping was unsound for a deploy: a merge whose
+  own diff touched one surface shipped its PARENT's other-surface change
+  with no CI at the deployed SHA (observed at `29b29601`, whose parent
+  `fec94ee6` rewrote a frontend file — frontend jobs ran SKIPPED). The
+  full matrix now runs unconditionally on every push to master, so the
+  deployed SHA always carries every surface's CI. A regression guard
+  (`web-ci-scoping-rules.yml` → `.github/scripts/tests/test_web_ci_surface_scoping.py`)
+  fails if surface-scoping is reintroduced. A `test-pre-commit` job that had been duplicated in
+  `web-ci.yml` was removed in PR #466 rather than scoped —
+  `test-pre-commit.yml` already runs it unconditionally.
 
 ## Push policy
 
@@ -641,6 +646,21 @@ gain `--workers` — tracked on issue #538, not to be done as a drive-by.
   fine for a handful of hourly-warmed blobs and is not fine for a hot path.
   If usage grows past that, the next step is a real cache service (issue
   #538, option 2), not a bigger table.
+
+**Consumers (as of 2026-08-07).** The four question-feed candidate pools
+(`cardpicker/question_feed_pools.py`, warmed per-lane by django-q2 — see
+`0105_question_feed_pools_schedule.py`), and `question_feed. get_remaining_estimate`'s four header counts (300s TTL, keyed by the
+resolved contested id-set — advisory copy, so the TTL is the invalidation
+policy; see that function's docstring). That read is one small SELECT on
+`shared_cache` per request, replacing ~7.45s of live scans/counts measured
+on the 2026-08-06 deploy wave.
+
+**Schedule uniqueness.** `django_q.Schedule.name` is UNIQUE as of
+`0107_question_feed_pools_schedule_dedupe.py`, which also collapsed the
+duplicate schedule rows that wave produced (two concurrent `migrate` runs
+raced 0105's `get_or_create`). All schedule-creating migrations now use
+`get_or_create`; any future one must too, or the constraint turns a re-run
+into an unhandled `IntegrityError`.
 
 ## Database footprint (baseline snapshot)
 

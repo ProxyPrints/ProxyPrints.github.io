@@ -130,10 +130,11 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(
       page.getByTestId("display-sheet-position-indicator")
     ).toContainText("1/1");
-    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless
-    // margins (0mm) + 3.175mm bleed + D18's 14.5mm row / 0mm column gutter now lands EXACTLY on
-    // the spec's own fit-check: 4 columns (width axis binds, 1.9mm slack) x 2 rows (height axis
-    // non-binding, 12.6mm slack) = 8 grid slots per sheet.
+    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + the
+    // default Rear-feed margins (3mm top/bottom, 20mm trailing) + 3.175mm bleed + D18's 14.5mm
+    // row / 0mm column gutter lands the spec's own 4x2 fit: 4 columns (width axis binds) x 2
+    // rows (height axis non-binding) = 8 grid slots per sheet - the same slot count every margin
+    // profile in this repo produces at this page/card geometry, only the granted bleed differs.
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
 
     // The rail starts idle - selecting the newly-imported slot swaps it in, exactly as it would
@@ -146,7 +147,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     );
   });
 
-  // Issue #286's own headline assertion: at the shipped defaults (Letter landscape, Borderless
+  // Issue #286's own headline assertion: at the shipped defaults (Letter landscape, Rear-feed
   // margin profile, 3.175mm bleed, PR #296's 0/14.5 spacing), the sheet renders a true 4x2 grid
   // (8 slots/page) - not the pre-#286 4x1 this test used to assert (see git history: A4 + 5mm
   // margins + 3.048mm bleed dropped the row axis to a single row once #296's 14.5mm row gutter
@@ -164,10 +165,12 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
       page.getByTestId("display-sheet-position-indicator")
     ).toContainText("1/1");
     await expect(page.getByTestId("display-sheet-wrapper")).toHaveCount(1);
-    // Letter landscape (279.4x215.9mm) + Borderless (0mm) margins + 3.175mm bleed + D18's 0mm
-    // column/14.5mm row spacing: width axis 4*(63+2*3.175)+0.1=277.5mm < 279.4mm (4 columns,
-    // 1.9mm slack); height axis 2*(88+2*3.175)+14.5+0.1=203.3mm < 215.9mm (2 rows, 12.6mm slack).
-    // See the design doc's D6/D18 fit-check tables for the full derivation.
+    // Letter landscape (279.4x215.9mm) + the default Rear-feed (3mm top/bottom, 20mm trailing)
+    // margins + 3.175mm bleed + D18's 0mm column/14.5mm row spacing: width axis still bare-fits
+    // 4 columns (256.4mm available, 252.1mm for 4 bare cards - the bleed itself crops to
+    // ~0.5375mm, see BleedGrantedReadout's own coverage, but the CARD COUNT is unaffected);
+    // height axis bare-fits 2 rows the same way every profile does. See the design doc's
+    // granted-vs-requested addendum for the full derivation.
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
     await expect(page.getByTestId("display-rail-idle")).toBeVisible();
   });
@@ -331,9 +334,13 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
 
-    await expect(page.getByText("Showing: Fronts")).toBeVisible();
-    await page.getByText("Showing: Fronts").click();
-    await expect(page.getByText("Showing: Backs")).toBeVisible();
+    await expect(page.getByTestId("display-view-toggle-fronts")).toHaveClass(
+      /active/
+    );
+    await page.getByTestId("display-view-toggle-backs").click();
+    await expect(page.getByTestId("display-view-toggle-backs")).toHaveClass(
+      /active/
+    );
   });
 
   test("toggling Guides shows and hides the cut-line overlay", async ({
@@ -355,19 +362,19 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   });
 
   // Issue #286 (D5, proposal-h-display-layout-spec.md) - the Page Setup margin-profile control:
-  // defaults to Borderless with no cap warning at the D6 default bleed, and switching profiles
-  // actually re-flows the live sheet (real computeLayout() inputs, not a cosmetic-only control),
-  // surfacing the D6 trade-off as a warning rather than silently clamping the bleed input.
+  // defaults to Rear-feed, states the granted-vs-requested bleed via BleedGrantedReadout rather
+  // than a boolean cap warning, and switching profiles actually re-flows the live sheet (real
+  // computeLayout() inputs, not a cosmetic-only control).
   //
-  // #301 (croppable bleed, merged bleed boxes, split-the-difference gutters) changed what
-  // exceeding the cap actually DOES: the pre-#301 rigid layout dropped the sheet from 4x2 to
+  // #301 (croppable bleed, merged bleed boxes, split-the-difference gutters) changed what an
+  // insufficient bleed cap actually DOES: the pre-#301 rigid layout dropped the sheet from 4x2 to
   // 3x2 the moment full bleed didn't fit at 4 columns - this test used to assert exactly that
   // (title/body updated below; the old title is ack'd in .github/coverage-acks.txt since it
   // asserted behavior #301 deliberately removed, not a coverage regression). layout.ts's fit
-  // math is now bare-card-count-first (see layout.ts's own module comment / fitAxisWithBleed) -
-  // the 4th column no longer disappears; bleed on the affected edge crops down to the cap
-  // instead, all 8 slots intact.
-  test("the margin-profile control defaults to Borderless (no warning) and switching to Bordered crops bleed rather than dropping to 3x2, with a cap warning shown (#301)", async ({
+  // math is bare-card-count-first (see layout.ts's own module comment / fitAxisWithBleed) - the
+  // 4th column never disappears; bleed on the affected edge crops down to what's actually
+  // granted instead, all 8 slots intact.
+  test("the margin-profile control defaults to Rear-feed, the readout states the granted (not just requested) bleed, and switching to Bordered still renders a full 4x2 with a different granted number", async ({
     page,
     network,
   }) => {
@@ -378,18 +385,20 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
 
     const profileSelect = page.getByTestId("display-margin-profile-select");
-    await expect(profileSelect).toHaveValue("borderless");
+    await expect(profileSelect).toHaveValue("rearFeed");
+    // Rear-feed's ~256.4mm printable width caps 4-column horizontal bleed at ~0.5375mm - the
+    // requested 3.175mm crops hard on this default profile.
     await expect(
-      page.getByTestId("display-margin-profile-note")
-    ).not.toContainText("⚠");
+      page.getByTestId("display-bleed-granted-readout")
+    ).toContainText("0.537mm");
 
-    // Bordered (3mm all sides) caps 4-column bleed at ~2.6625mm (D6 table) - below the D6
-    // default 3.175mm bleed this page ships with. #301: the sheet stays a full 4x2 (all 8
-    // slots) - bleed on the cropped edge is what gives, not a card.
+    // Bordered (3mm all sides) caps 4-column bleed at ~2.6625mm - a different granted number,
+    // still below the 3.175mm request. #301: the sheet stays a full 4x2 (all 8 slots) - bleed on
+    // the cropped edge is what gives, not a card.
     await profileSelect.selectOption("bordered");
-    const note = page.getByTestId("display-margin-profile-note");
-    await expect(note).toContainText("⚠");
-    await expect(note).toContainText("cropped to");
+    await expect(
+      page.getByTestId("display-bleed-granted-readout")
+    ).toContainText("2.662mm");
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
   });
 
@@ -436,12 +445,15 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
   // Issue #240 (design doc §5's CommonCardback row) - the toolbar previously had no way to reach
   // the project-wide cardback picker at all on this page (only the classic editor's own right
-  // panel could). CardbackToolbarButton (CommonCardback.tsx) reuses
-  // MemoizedCommonCardbackGridSelector's existing GridSelectorModal verbatim - this test only
-  // needs to confirm it opens from the toolbar and that a selection made through it actually
-  // updates the shared project cardback (visible via a back-face slot on the sheet), not that the
-  // grid selector's own internals work (already covered by CardSlot.spec.ts's cardback tests).
-  test("the Cardback toolbar button opens the same project-wide cardback picker the classic editor uses, and a selection made through it updates back-face slots on the sheet", async ({
+  // panel could). R9 (editor-repass round, item 2) retires CardbackToolbarButton in favour of the
+  // shared CardbackSwatchStrip + two plain buttons (CardbackRailControl, CommonCardback.tsx) and
+  // keeps the full picker reachable via the strip section's "Browse all cardbacks…" button, which
+  // reuses MemoizedCommonCardbackGridSelector's existing GridSelectorModal verbatim - this test
+  // only needs to confirm it opens from the right rail and that a selection made through it
+  // actually updates the shared project cardback (visible via a back-face slot on the sheet), not
+  // that the grid selector's own internals work (already covered by CardSlot.spec.ts's cardback
+  // tests).
+  test("the right rail's Browse all cardbacks… opens the same project-wide cardback picker the classic editor uses, and a selection made through it updates back-face slots on the sheet", async ({
     page,
     network,
   }) => {
@@ -460,7 +472,11 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
-    await page.getByText("Showing: Fronts").click();
+    // R9 - the right rail's Cardback section is the shared swatch strip; the strip's own
+    // selected swatch reflects the project cardback (cardDocument1) even before any pick here.
+    await expect(page.getByTestId("cardback-rail-control")).toBeVisible();
+    await expect(page.getByTestId("cardback-rail-strip")).toBeVisible();
+    await page.getByTestId("display-view-toggle-backs").click();
     const backSheetSlot = page.getByTestId("page-preview-slot").first();
     await expect(backSheetSlot.locator("img")).toHaveAttribute(
       "alt",
@@ -470,7 +486,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     // Cardback flow round (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3) - a dedicated testid, not
     // a name-based locator, since a sheet slot's own "⟲" flip button can carry an accessible name
     // mentioning "cardback" too (the custom-cardback indicator's aria-label).
-    await page.getByTestId("cardback-toolbar-button").click();
+    await page.getByTestId("cardback-browse-all-button").click();
     const cardbackModal = page.getByTestId("cardback-grid-selector");
     await expect(cardbackModal).toBeVisible();
     await cardbackModal.getByAltText(cardDocument2.name).click();
@@ -847,9 +863,9 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
   }) => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page);
-    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless
-    // margins + 3.175mm bleed + D18's spacing now lands the spec's own 4x2 (8/sheet) grid. 18
-    // slots at 8-per-sheet chunks into 3 sheets: 8, 8, 2.
+    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + the
+    // default Rear-feed margins + 3.175mm bleed + D18's spacing lands the spec's own 4x2
+    // (8/sheet) grid. 18 slots at 8-per-sheet chunks into 3 sheets: 8, 8, 2.
     await importTextOnEditorLanding(page, "18x my search query");
 
     await expect(page.getByTestId("display-page")).toBeVisible();
@@ -928,7 +944,7 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await expect(select).toHaveValue("force-bleed");
   });
 
-  test("the promoted artist line shows a plain credit + the MTG Artist Connection applet (page-link button, credit line) for a card with a known canonical artist (M2 applet round, docs/features/artist-support-links.md)", async ({
+  test("the promoted artist line shows the MTG Artist Connection applet (page-link button, credit line) for a card with a known canonical artist (M2 applet round, docs/features/artist-support-links.md)", async ({
     page,
     network,
   }) => {
@@ -942,14 +958,6 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1 card 8 (xyz) 001");
     await page.getByTestId("page-preview-slot").first().click();
-
-    // Plain (non-linked) credit line names the artist.
-    await expect(page.getByTestId("display-artist-section")).toContainText(
-      "Art by"
-    );
-    await expect(page.getByTestId("display-artist-section")).toContainText(
-      "Alpha Artist"
-    );
 
     // M2 round: ArtistSupportLink is now a self-contained applet (RTK Query fetch, no
     // caller-supplied children/className for button styling - see ArtistSupportLink.tsx's own
@@ -1279,9 +1287,10 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
     const regionBox = await sheetRegion.boundingBox();
     expect(regionBox).not.toBeNull();
     expect(regionBox?.width ?? Infinity).toBeLessThanOrEqual(390);
-    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless
-    // margins + 3.175mm bleed + D18's spacing lands the spec's own 4x2 (8) grid, same as every
-    // other breakpoint - fit-to-width only shrinks the render, it never changes cardsPerPage.
+    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + the
+    // default Rear-feed margins + 3.175mm bleed + D18's spacing lands the spec's own 4x2 (8)
+    // grid, same as every other breakpoint - fit-to-width only shrinks the render, it never
+    // changes cardsPerPage.
     await expect(page.getByTestId("page-preview-slot")).toHaveCount(8);
 
     // Closed by default at this viewport - only opens once a slot is tapped.
@@ -1383,9 +1392,10 @@ test.describe("DisplayPage - phone viewport (issue #266)", () => {
     network.use(...threeCardHandlers);
     await loadPageWithDefaultBackend(page, "display");
     await expect(page.getByTestId("display-empty-state")).toBeVisible();
-    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + Borderless
-    // margins + 3.175mm bleed + D18's spacing lands the spec's own 4x2 (8/sheet) grid. 18 slots at
-    // 8-per-sheet chunks into 3 sheets: 8, 8, 2 - matching the desktop-viewport scroll test above.
+    // D1/D4/D5/D6 (proposal-h-display-layout-spec.md, issue #286) - Letter landscape + the
+    // default Rear-feed margins + 3.175mm bleed + D18's spacing lands the spec's own 4x2
+    // (8/sheet) grid. 18 slots at 8-per-sheet chunks into 3 sheets: 8, 8, 2 - matching the
+    // desktop-viewport scroll test above.
     await page
       .getByRole("textbox", { name: "import-text" })
       .fill("18x my search query");

@@ -180,6 +180,9 @@ def _install_ok_stage_c_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         modern_artist_lexicon: Any = None,
         md5_checksum: Any = None,
         sha256_checksum: Any = None,
+        stale_extractor_keys: Any = None,
+        stored_evidence_fields: Any = None,
+        stored_extractor_versions: Any = None,
     ) -> Any:
         return ExtractionResult(
             card_id=card_id,
@@ -871,7 +874,10 @@ class TestThrottleBackoffAndRetry:
         assert "stopped_reason=cohort-exhausted" in output
 
     @STREAMING_ON
-    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1)
+    # STAGE_E_GOVERNOR_CONCURRENCY_CAP=1 - same reasoning as the identical fix in
+    # test_stage_e_dispatch.py::TestConcurrencyCapIntegration and test_stage_e_shakedown.py: pins
+    # the governor's ceiling to this test's single held slot.
+    @override_settings(STAGE_E_MAX_CONCURRENT_DISPATCHES=1, STAGE_E_GOVERNOR_CONCURRENCY_CAP=1)
     def test_a_real_saturated_cap_backs_off_then_gives_up(
         self, db: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
     ) -> None:

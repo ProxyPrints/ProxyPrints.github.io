@@ -85,6 +85,7 @@ import cardpicker.image_evidence as module
 from cardpicker.collector_line_artist import build_artist_lexicon
 from cardpicker.harvest_fetch_limiter import GoogleFetchLockoutError
 from cardpicker.image_evidence import (
+    ART_EDGE_EXTRACTOR_VERSION,
     ARTBOX_MODERN_CROP_BOX,
     ARTBOX_OLD_CROP_BOX,
     ARTBOX_PHASH_EXTRACTOR_VERSION,
@@ -92,14 +93,17 @@ from cardpicker.image_evidence import (
     COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
     COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
     CROP_COORDINATES_EXTRACTOR_VERSION,
+    EXTRACTOR_OWNED_FIELDS,
     FETCH_HEALTH_EXTRACTOR_VERSION,
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
     LAYOUT_CLASS_EXTRACTOR_VERSION,
     LEGAL_LINE_EXTRACTOR_VERSION,
+    PINLINE_INSET_EXTRACTOR_VERSION,
     QUALITY_SIGNALS_EXTRACTOR_VERSION,
     SYMBOL_REGION_EXTRACTOR_VERSION,
     ExtractionResult,
     build_reconciliation_report,
+    compute_card_evidence,
     fetch_and_compute_card_evidence_for_tests,
     persist_evidence,
 )
@@ -112,6 +116,12 @@ from cardpicker.local_fallback import (
 )
 from cardpicker.local_ocr import DEFAULT_CROP_BOX, LEGAL_LINE_CROP_BOX
 from cardpicker.local_phash import ART_CROP_BOX
+from cardpicker.local_pinline_inset import (
+    CALL_MEASURED,
+    VERDICT_MEASURED,
+    EdgeReading,
+    PinlineInsetResult,
+)
 from cardpicker.models import CardScanLog, CardTagVote, ImageEvidence
 from cardpicker.modern_artist_credit import build_lexicon_index
 from cardpicker.tests.factories import CardFactory, ImageEvidenceFactory, TagFactory
@@ -127,7 +137,7 @@ class _StubImage:
         return self
 
 
-# A real fetched image at DEFAULT_FETCH_DPI (250) is ~925px tall - these stub sizes just need to
+# A real fetched image at DEFAULT_FETCH_DPI (460) is ~1702px tall - these stub sizes just need to
 # land at the right aspect ratio, not the right absolute resolution, since classify_bleed_edge
 # only looks at the width/height ratio.
 _BLEED_IMAGE = _StubImage(size=(round(1000 * BLEED_ASPECT_RATIO), 1000))
@@ -143,6 +153,15 @@ def _stub_border_color(monkeypatch, value=None):
     own outcome pass a fixed non-None value to keep skip_reasons/extractor_versions assertions
     unaffected by an incidental "ambiguous" entry."""
     monkeypatch.setattr(module, "classify_border_color", lambda image, bleed_class=None: value)
+
+
+def _stub_art_edge(monkeypatch, value=None):
+    """`_StubImage` has no `.crop()`/`.convert()`/`.getdata()`, so any test feeding one through
+    `fetch_and_compute_card_evidence_for_tests` must stub out `classify_art_edge_continuity`
+    itself (same rationale as `_stub_border_color` above - `art_edge` runs right after
+    `crop_coordinates`, before every OCR-group/symbol/artbox extractor, so it needs stubbing
+    wherever `_stub_border_color` does)."""
+    monkeypatch.setattr(module, "classify_art_edge_continuity", lambda image, art_crop_px: value)
 
 
 def _stub_ocr(monkeypatch, collector_raw_text: str = "158/287 R MOM EN"):
@@ -205,6 +224,27 @@ def _stub_quality_signals(monkeypatch, truncated: bool = False, blur: float = 42
     monkeypatch.setattr(module, "compute_entropy", lambda image: entropy)
 
 
+def _a_pinline_inset_result() -> PinlineInsetResult:
+    """A concrete, non-skip `measure_pinline_inset` outcome (all four edges confidently
+    measured) - used by tests that stub `_StubImage` through the full pipeline but want
+    `pinline_inset` to genuinely NOT skip, mirroring `_stub_border_color`'s own
+    caller-supplied-non-None-value convention above."""
+    reading = EdgeReading(inset_frac=0.01, call=CALL_MEASURED)
+    return PinlineInsetResult(top=reading, bottom=reading, left=reading, right=reading, verdict=VERDICT_MEASURED)
+
+
+def _stub_pinline_inset(monkeypatch, result=None):
+    """`_StubImage` has no `.convert()`/pixel data a real PIL image needs, so any test feeding
+    one through `fetch_and_compute_card_evidence_for_tests` (and whose image has a
+    non-degenerate width/height, so the `pinline_inset` extractor's own guard doesn't already
+    skip it - see `image_evidence.py`'s module docstring) must stub `measure_pinline_inset`
+    itself (same rationale as `_stub_border_color`/`_stub_ocr`/`_stub_symbol_region`/
+    `_stub_quality_signals` above). Defaults to `None` (the extractor's own degenerate-input
+    abstention outcome) so tests that don't care about pinline_inset's own result keep an
+    "ambiguous" skip_reasons entry rather than an incidental fields write."""
+    monkeypatch.setattr(module, "measure_pinline_inset", lambda image: result)
+
+
 def _build_card_image(
     regions: list[tuple[tuple[float, float, float, float], str]], bleed: bool = True
 ) -> "Image.Image":
@@ -231,9 +271,11 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch, result=_a_pinline_inset_result())
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -248,6 +290,7 @@ class TestExtractCardEvidence:
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
             "layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION,
             "crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION,
+            "art_edge": ART_EDGE_EXTRACTOR_VERSION,
             "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
@@ -255,6 +298,7 @@ class TestExtractCardEvidence:
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
             "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
+            "pinline_inset": PINLINE_INSET_EXTRACTOR_VERSION,
         }
         # _stub_ocr's default raw text ("158/287 R MOM EN") is a realistic modern-frame collector
         # line with no artist credit in it - artist_ocr genuinely skips here, which is the
@@ -264,15 +308,19 @@ class TestExtractCardEvidence:
         # module-level patch of run_tesseract). artbox_phash does NOT skip: the same stubbed text
         # parses a real collector number, so classify_frame_style reads "modern" - see
         # TestExtractCardEvidenceArtboxPhash below for the extractor's own dedicated tests.
+        # pinline_inset does NOT skip either - _stub_pinline_inset above is given a concrete
+        # non-skip result rather than its own default (see this test's own "no_skip" name).
         assert result.skip_reasons == {"artist_ocr": "no-text", "legal_line": "no-text"}
 
     def test_forwards_the_cards_own_md5_checksum_onto_the_result(self, db, monkeypatch):
         card = CardFactory(content_phash=12345, md5_checksum="abc123")
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -302,6 +350,7 @@ class TestExtractCardEvidence:
             "geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION,
             "layout_class": LAYOUT_CLASS_EXTRACTOR_VERSION,
             "crop_coordinates": CROP_COORDINATES_EXTRACTOR_VERSION,
+            "art_edge": ART_EDGE_EXTRACTOR_VERSION,
             "collector_line_ocr": COLLECTOR_LINE_OCR_EXTRACTOR_VERSION,
             "artist_ocr": ARTIST_OCR_EXTRACTOR_VERSION,
             "collector_line_tsv": COLLECTOR_LINE_TSV_EXTRACTOR_VERSION,
@@ -309,12 +358,14 @@ class TestExtractCardEvidence:
             "symbol_region": SYMBOL_REGION_EXTRACTOR_VERSION,
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
             "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
+            "pinline_inset": PINLINE_INSET_EXTRACTOR_VERSION,
         }
         assert result.skip_reasons == {
             "fetch_health": "fetch_failed",
             "geometry_bleed": "fetch_failed",
             "layout_class": "fetch_failed",
             "crop_coordinates": "fetch_failed",
+            "art_edge": "fetch_failed",
             "collector_line_ocr": "fetch_failed",
             "artist_ocr": "fetch_failed",
             "collector_line_tsv": "fetch_failed",
@@ -322,15 +373,18 @@ class TestExtractCardEvidence:
             "symbol_region": "fetch_failed",
             "legal_line": "fetch_failed",
             "quality_signals": "fetch_failed",
+            "pinline_inset": "fetch_failed",
         }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
         card = CardFactory(content_phash=None)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -351,9 +405,11 @@ class TestExtractCardEvidence:
         card = CardFactory(content_phash=12345)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         fetch_and_compute_card_evidence_for_tests(card)
 
@@ -368,9 +424,11 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -385,9 +443,11 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -398,9 +458,11 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _AMBIGUOUS_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -418,6 +480,7 @@ class TestExtractCardEvidenceGeometryBleed:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
@@ -587,9 +650,11 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(1000, 2000)))
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -605,9 +670,11 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -624,9 +691,11 @@ class TestExtractCardEvidenceCropCoordinates:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -765,6 +834,7 @@ class TestExtractCardEvidenceSymbolRegion:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
@@ -810,9 +880,11 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch, "158/287 R MOM EN")  # digit-bearing -> a real collector number
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -832,11 +904,13 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         # no digit anywhere - _COLLECTOR_NUMBER_RE never matches, so collector_number stays None;
         # "Illus." anchor fires via extract_artist_name's own regex (see local_fallback.py).
         _stub_ocr(monkeypatch, "Illus. John Avon")
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -858,11 +932,13 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         # neither a collector number nor an "Illus." credit - classify_frame_style's own
         # documented "neither -> abstain (None)" outcome (see local_fallback.py's own comment).
         _stub_ocr(monkeypatch, "no signal here at all")
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -875,9 +951,11 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _TRIMMED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
@@ -897,6 +975,7 @@ class TestExtractCardEvidenceArtboxPhash:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _StubImage(size=(100, 0)))
         _stub_border_color(monkeypatch)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch, "158/287 R MOM EN")
 
         result = fetch_and_compute_card_evidence_for_tests(card)
@@ -2270,9 +2349,11 @@ class TestTheTestOnlyWrapperCastsNoVoteAtAll:
         cards = [CardFactory(content_phash=i + 1) for i in range(3)]
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         for card in cards:
             fetch_and_compute_card_evidence_for_tests(card)
@@ -2284,9 +2365,11 @@ class TestTheTestOnlyWrapperCastsNoVoteAtAll:
         card = CardFactory(content_phash=1)
         monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
         _stub_border_color(monkeypatch, None)
+        _stub_art_edge(monkeypatch)
         _stub_ocr(monkeypatch)
         _stub_symbol_region(monkeypatch)
         _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
 
         fetch_and_compute_card_evidence_for_tests(card)
 
@@ -2636,3 +2719,186 @@ class TestBuildReconciliationReport:
         assert report.voted == 0
         assert report.dropped == 1
         assert report.is_consistent()
+
+
+class TestPerExtractorReextraction:
+    """perf/per-extractor-reextraction (2026-08-19): `compute_card_evidence`'s
+    `stale_extractor_keys`/`stored_evidence_fields`/`stored_extractor_versions` carry-forward
+    path. Every test here poisons its stubs between the "stored" pass and the "current" pass -
+    each stub returns a DIFFERENT value the second time - so a field that ends up matching the
+    STORED value proves it was genuinely carried forward, not recomputed and coincidentally
+    identical."""
+
+    def _stub_everything(self, monkeypatch, border_color, art_edge, collector_raw_text, symbol_phash, blur):
+        _stub_border_color(monkeypatch, border_color)
+        _stub_art_edge(monkeypatch, art_edge)
+        _stub_ocr(monkeypatch, collector_raw_text)
+        _stub_symbol_region(monkeypatch, symbol_phash)
+        _stub_quality_signals(monkeypatch, blur=blur)
+        _stub_pinline_inset(monkeypatch, result=_a_pinline_inset_result())
+
+    def _compute(self, card, image, **overrides):
+        return compute_card_evidence(card.pk, card.content_phash, image, fetch_latency_ms=1.0, **overrides)
+
+    def test_non_stale_extractors_are_carried_forward_byte_identical(self, db, monkeypatch):
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+
+        # Every stub now returns something ELSE - if any non-stale extractor actually reran, its
+        # field would pick up one of these instead of the stored value below.
+        self._stub_everything(
+            monkeypatch,
+            border_color="white",
+            art_edge="mixed",
+            collector_raw_text="200/287 M MOM EN",
+            symbol_phash=999,
+            blur=1000.0,
+        )
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset({"art_edge"}),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert result.extractor_versions == stored.extractor_versions
+        # art_edge is the one stale key - it alone reflects the fresh (poisoned) stub.
+        assert result.fields["art_edge_class"] == "mixed"
+        assert stored.fields["art_edge_class"] == "framed"
+        # every other extractor's owned fields are byte-identical to the stored pass, proving
+        # they were carried forward rather than recomputed against the poisoned stubs.
+        for extractor_key, owned in EXTRACTOR_OWNED_FIELDS.items():
+            if extractor_key == "art_edge":
+                continue
+            for field_name in owned:
+                assert result.fields.get(field_name) == stored.fields.get(field_name), field_name
+        # skip_reasons is NOT carried forward - a carried-forward extractor did not run THIS
+        # pass, so it must not write a fresh CardScanLog row claiming it did (persist_evidence
+        # writes one row per ExtractionResult.skip_reasons entry); art_edge is the only key that
+        # ran, and it produced a real value ("mixed"), not a skip.
+        assert result.skip_reasons == {}
+
+    def test_stale_extractor_reads_a_carried_forward_dependency(self, db, monkeypatch):
+        """art_edge reads crop_coordinates' own art_crop_px - proves a stale extractor sees its
+        non-stale dependency's value from storage, not from a fresh (never-run) computation."""
+        card = CardFactory(content_phash=12345)
+        received_boxes = []
+        monkeypatch.setattr(
+            module,
+            "classify_art_edge_continuity",
+            lambda image, art_crop_px: received_boxes.append(art_crop_px) or "framed",
+        )
+        _stub_border_color(monkeypatch, "black")
+        _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch, result=_a_pinline_inset_result())
+        stored = self._compute(card, _BLEED_IMAGE)
+        assert stored.fields["art_crop_px"]
+
+        received_boxes.clear()
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset({"art_edge"}),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert received_boxes == [stored.fields["art_crop_px"]]
+        assert result.fields["collector_line_crop_px"] == stored.fields["collector_line_crop_px"]
+        assert "crop_coordinates" not in (result.extractor_versions.keys() - stored.extractor_versions.keys())
+
+    def test_ocr_group_is_one_staleness_unit(self, db, monkeypatch):
+        """collector_line_ocr/artist_ocr/collector_line_tsv share one tesseract escalation loop -
+        marking only artist_ocr stale must still rerun (and therefore reflect fresh text in)
+        collector_line_ocr/collector_line_tsv too, since there is no stored per-attempt text to
+        carry forward artist_ocr's own reuse-before-recompute pass from."""
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+        assert stored.fields["collector_line_collector_number"] == "158"
+
+        _stub_ocr(monkeypatch, "200/287 M MOM EN")
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset({"artist_ocr"}),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert result.fields["collector_line_collector_number"] == "200"
+
+    def test_whole_card_carry_forward_recomputes_nothing(self, db, monkeypatch):
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+
+        calls = {"n": 0}
+        monkeypatch.setattr(
+            module, "classify_bleed_edge", lambda image: calls.__setitem__("n", calls["n"] + 1) or "bleed"
+        )
+
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset(),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert calls["n"] == 0
+        assert result.fields == stored.fields
+        assert result.extractor_versions == stored.extractor_versions
+        # Nothing ran this pass, so skip_reasons is empty - see the sibling test above for why.
+        assert result.skip_reasons == {}
+
+    def test_a_key_missing_from_stored_versions_is_treated_as_stale(self, db, monkeypatch):
+        """An extractor this row has never run (no stored version at all) cannot be carried
+        forward from nothing - it must compute, regardless of stale_extractor_keys membership."""
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+        incomplete_versions = {k: v for k, v in stored.extractor_versions.items() if k != "art_edge"}
+
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset(),  # caller says "nothing is stale"...
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=incomplete_versions,  # ...but art_edge was never stored
+        )
+
+        assert result.extractor_versions["art_edge"] == ART_EDGE_EXTRACTOR_VERSION
+        assert result.fields["art_edge_class"] == "framed"

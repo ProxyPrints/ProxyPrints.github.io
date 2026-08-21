@@ -91,3 +91,23 @@ otherwise be direct Google Drive image URLs.
   only, in which case the Worker's custom domain needs the same manual
   Custom Domain setup (Workers & Pages → image-cdn → Settings → Domains &
   Routes) rather than happening automatically on deploy.
+- A production spot-check found the R2 bucket (`img.proxyprints.ca`)
+  serving only 2 of 8 real card identifiers directly, while the Worker
+  (`cdn.proxyprints.ca`) served all 8. That ~75% bucket miss rate is not a
+  broken import pipeline: the bucket only backs the small/large size
+  tiers and is a lazily-filled cache, populated by the Worker the moment
+  anyone requests a card image through it. A card that nobody has ever
+  fetched through the Worker has simply never landed in R2 — a cold
+  cache, not a gap in the catalogue.
+- The catalogue must NOT be pre-warmed; demand-fill is deliberate, for
+  two reasons independent of hit rate (so a "warming would raise the hit
+  rate" argument does not override either): warming the whole catalogue
+  means paying to store images nobody has asked for, and it means holding
+  more card images on our own infrastructure than we need to serve at any
+  given moment — every speculatively-warmed image is one stored without a
+  user having requested it. The one permitted exception is warming driven
+  by something the user actually did, on deck import and on deck open:
+  both are bounded to images that user is about to look at, demand
+  anticipated by seconds rather than a catalogue walk. Neither is built —
+  this records the exception as permitted, not as a to-do. Nothing
+  broader is permitted absent a large measured performance gain.

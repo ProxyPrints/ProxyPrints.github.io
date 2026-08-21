@@ -52,6 +52,19 @@ ALLOWLIST = {
         "architecture (publish_wiki.py/publish_site.py) — not a live "
         "reference, not a forward-reference to something not yet built"
     ),
+    "frontend/src/pages/print.tsx": (
+        "docs/proposals/proposal-h-display-layout-spec.md (F5) cites this "
+        "as its proposed /print route wrapper — the page was built and then "
+        "retired with the /print page 2026-08-14 (commit 7c96b217), so the "
+        "citation is deliberate history, not a live reference"
+    ),
+    "frontend/src/features/pdf/PDFGenerator.tsx": (
+        "docs/proposals/proposal-h-unified-display-page.md and "
+        "docs/reports/proposal-b-pr1-bleed-prior-batch-resolution.md cite "
+        "it as point-in-time analysis/report of the file's internals — "
+        "deleted in the /print retirement 2026-08-14 (commit 7c96b217), "
+        "deliberate history, not a live reference"
+    ),
 }
 
 PATH_EXTENSIONS = (

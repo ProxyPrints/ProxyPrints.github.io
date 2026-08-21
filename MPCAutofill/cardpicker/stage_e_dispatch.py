@@ -118,7 +118,7 @@ from cardpicker.pilot_run_lifecycle import mark_ledger_failed, merge_counters
 from cardpicker.process_metrics import get_process_rss_mb
 from cardpicker.stage_e_batch_sizing import MODE_INCREMENTAL, resolve_micro_batch_size
 from cardpicker.stage_e_concurrency import try_acquire_dispatch_slot
-from cardpicker.stage_e_load_brake import apply_load_brake
+from cardpicker.stage_e_load_brake import apply_load_governor
 from cardpicker.stage_e_signals import suppress_evidence_change_echo
 from cardpicker.utils import get_baked_git_sha
 from cardpicker.vote_write import purge_and_write_votes
@@ -176,6 +176,21 @@ def _stage_c_manifest_versions() -> "dict[str, str]":
     )
 
     return MANIFEST_EXTRACTOR_CURRENT_VERSIONS
+
+
+def _stage_c_stale_extractor_keys_and_stored_fields(
+    card: "Card",
+) -> "tuple[Optional[frozenset[str]], Optional[dict[str, Any]], Optional[dict[str, Any]]]":
+    """PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction): same lazy-import
+    posture as `_stage_c_manifest_versions`/`_stage_c_manifest_extractor_keys` immediately above -
+    imports and calls `run_image_evidence_cohort._stale_extractor_keys_and_stored_fields` (the
+    single source of truth for this diff, imported not duplicated) rather than re-deriving it
+    here."""
+    from cardpicker.management.commands.run_image_evidence_cohort import (
+        _stale_extractor_keys_and_stored_fields,
+    )
+
+    return _stale_extractor_keys_and_stored_fields(card)
 
 
 class _FetchOutcomeWindow:
@@ -270,15 +285,30 @@ class DispatchOutcome:
     stage_d_illustration_votes: int = 0
     stage_d_illustration_already_voted: int = 0
     # ATTRIBUTE-CHIP CASTERS (2026-07-30, the 2026-07-29 composition audit's §1 Q1 items 1-3).
-    # All three chip families were reachable from NEITHER engine: the border caster only via the
-    # standalone `local_layout_class_cast` command, and frame-style/bleed-edge only via the
+    # Border and frame-style were reachable from NEITHER engine at the audit: the border caster
+    # only via the standalone `local_layout_class_cast` command, and frame-style only via the
     # live-fetch pilot and via `image_evidence.extract_card_evidence`, which has no production
-    # callers at all - which is why frame-style and bleed-edge sat at literally zero machine rows
-    # after the 2026-07-29 purge with nothing able to re-derive them. Both casters read stored
-    # `ImageEvidence` and fetch nothing, so they cost the conveyor no network budget.
+    # callers at all - which is why both sat at literally zero machine rows after the 2026-07-29
+    # purge with nothing able to re-derive them. The casters read stored `ImageEvidence` and fetch
+    # nothing, so they cost the conveyor no network budget. `appropriate-bleed` is deliberately NOT
+    # counted here: the bleed half of `local_attribute_chip_cast` (identity `bleed-edge-cast-v1`)
+    # is RETIRED - superseded by the cross-checked bleed calculator below, which is the SOLE
+    # machine channel for that tag.
     stage_d_border_chip_votes: int = 0
     stage_d_frame_chip_votes: int = 0
-    stage_d_bleed_chip_votes: int = 0
+    # BLEED CALCULATOR (cardpicker.local_bleed_calculator, bleed-calculator-cast-v1) - the only
+    # machine channel for `appropriate-bleed`, replacing the retired `bleed-edge-cast-v1` chip
+    # caster (which voted on `bleed_class == "trimmed"` alone). Cross-checks the closed-form
+    # aspect-ratio bleed against the pinline-ruler per-edge bleed and withholds a vote on
+    # disagreement past a 2mm gate - the abstention the old single-signal caster could not make.
+    # Reads stored `ImageEvidence`/`CanonicalPrintingMetadata` and fetches nothing.
+    stage_d_bleed_calculator_votes: int = 0
+    # FILENAME-DECLARATION CASTER (cardpicker.local_filename_declarations,
+    # filename-declaration-cast-v1) - reads only Card.name (present and immutable from ingest,
+    # independent of Stage C), so it needs no ImageEvidence at all, unlike its siblings above. A
+    # single card can cast several tags at once (Extended and Borderless are not exclusive), so
+    # this counter is a vote count, not a card count - see that module's own docstring.
+    stage_d_filename_declaration_votes: int = 0
     # EVIDENCE-ONLY CALCULATORS (2026-08-05, closing the "10 of ~28 channels" wiring audit - see
     # `_run_evidence_only_calculators`' own docstring for the FREE/EXPENSIVE classification of
     # every channel this closes and every one it deliberately leaves open). All four read only
@@ -290,6 +320,13 @@ class DispatchOutcome:
     stage_d_lands_already_voted: int = 0
     stage_d_residual_artist_votes: int = 0
     stage_d_residual_tag_votes: int = 0
+    # ART-EDGE CONTINUITY CASTER (2026-08-19, closing issue #721's own wiring gate -
+    # `art-edge-continuity-v1`/`cardpicker.local_art_edge.run_art_edge_continuity_cast`). Reads
+    # `ImageEvidence.art_edge_class`, already populated at Stage C, and fetches nothing - same
+    # FREE reasoning `_run_evidence_only_calculators`' own docstring gives for the four channels
+    # above. Casts the pre-existing "Extended" attribute chip only on an `extended` reading;
+    # `framed`/`mixed` abstain (see `cast_art_edge_continuity_vote`'s own docstring).
+    stage_d_art_edge_votes: int = 0
     # Stream B (md5 verdict-transfer gate): how many cards in this batch had their Stage D verdict
     # satisfied via propagation from a same-md5 sibling's existing CardPrintingTag row instead of
     # running through the four calculators and three chips. Zero when the gate found nothing to
@@ -305,13 +342,13 @@ class DispatchOutcome:
     # selection).
     stage_c_backlog_found: int = 0
     stage_c_backlog_wrapped: bool = False
-    # Stage E host-load soft brake (`stage_e_load_brake.py`) -
+    # Stage E host-load AIMD governor (`stage_e_load_brake.py`) -
     # how many times, and for how long in total, THIS dispatch call slept before its own fresh
-    # envelope sample below, because live load was in the soft-to-hard band. Zero/0.0 means either
-    # the brake never engaged (the common case) or this outcome was constructed before the brake
-    # ever ran (`halted-open-trip`, returned before the brake's insertion point) - both read the
-    # same as "no delay", which is the correct reading for a caller that only wants to know
-    # whether THIS call was delayed.
+    # envelope sample below, because live load was in the equilibrium band or above the hard
+    # ceiling. Zero/0.0 means either the governor never engaged (the common case) or this outcome
+    # was constructed before the governor ever ran (`halted-open-trip`, returned before its
+    # insertion point) - both read the same as "no delay", which is the correct reading for a
+    # caller that only wants to know whether THIS call was delayed.
     load_brake_waits: int = 0
     load_brake_seconds: float = 0.0
     trip_id: Optional[str] = None
@@ -776,6 +813,9 @@ def _stage_c_compute_one_card(
     card_name: str,
     run_id: str,
     dry_run: bool,
+    stale_extractor_keys: "Optional[frozenset[str]]" = None,
+    stored_evidence_fields: "Optional[dict[str, Any]]" = None,
+    stored_extractor_versions: "Optional[dict[str, Any]]" = None,
 ) -> "tuple[bool, Optional[Exception]]":
     """Picklable per-card compute function for the ProcessPoolExecutor.
 
@@ -789,6 +829,12 @@ def _stage_c_compute_one_card(
     modern_artist_lexicon, short_circuit) are read from process-global module variables set by
     _stage_c_compute_worker_init — no second build, no imports at call time beyond PIL and the
     two evidence functions themselves.
+
+    `stale_extractor_keys`/`stored_evidence_fields`/`stored_extractor_versions` (2026-08-19,
+    perf/per-extractor-reextraction): forwarded straight through to `compute_card_evidence`'s own
+    parameters of the same names - see that function's own docstring for the carry-forward
+    mechanism. `_run_stage_c` is the caller that decides what to pass here, including forcing all
+    three to `None` under `force_stage_c_reextract` - see that function's own docstring.
     """
     from io import BytesIO
 
@@ -812,6 +858,9 @@ def _stage_c_compute_one_card(
             modern_artist_lexicon=_compute_pool_modern_artist_lexicon,
             md5_checksum=md5_checksum,
             sha256_checksum=sha256_checksum,
+            stale_extractor_keys=stale_extractor_keys,
+            stored_evidence_fields=stored_evidence_fields,
+            stored_extractor_versions=stored_extractor_versions,
         )
         if not dry_run:
             with suppress_evidence_change_echo():
@@ -879,6 +928,11 @@ def _stage_c_fetch_one(card: "Card") -> "_StageCFetchOutcome":
         )
 
     fetch_latency_ms = (time.monotonic() - fetch_started_at) * 1000
+    (
+        stale_extractor_keys,
+        stored_evidence_fields,
+        stored_extractor_versions,
+    ) = _stage_c_stale_extractor_keys_and_stored_fields(card)
     return _StageCFetchOutcome(
         card_id=card.pk,
         content_hash=card.content_phash,
@@ -887,6 +941,9 @@ def _stage_c_fetch_one(card: "Card") -> "_StageCFetchOutcome":
         image_bytes=image_bytes,
         fetch_latency_ms=fetch_latency_ms,
         card_name=card.name,
+        stale_extractor_keys=stale_extractor_keys,
+        stored_evidence_fields=stored_evidence_fields,
+        stored_extractor_versions=stored_extractor_versions,
     )
 
 
@@ -937,6 +994,14 @@ class _StageCFetchOutcome:
     # let sustained rate pressure trip `EnvelopeTrip.Bar.FETCH_FAILURE_RATE` and hard-stop the
     # whole unattended pass.
     throttled: bool = False
+    # PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction) - resolved by
+    # `_stage_c_fetch_one` from this card's own current `ImageEvidence` row, if one exists, and
+    # forwarded to `_stage_c_compute_one_card` -> `compute_card_evidence`'s own carry-forward
+    # parameters of the same names. All `None` (no current row yet) means "recompute everything,"
+    # `compute_card_evidence`'s own existing default behaviour.
+    stale_extractor_keys: "Optional[frozenset[str]]" = None
+    stored_evidence_fields: "Optional[dict[str, Any]]" = None
+    stored_extractor_versions: "Optional[dict[str, Any]]" = None
 
 
 def _run_stage_c(
@@ -1144,6 +1209,13 @@ def _run_stage_c(
                 fetch_outcome.card_name,
                 run_id,
                 dry_run,
+                # `force_stage_c_reextract` keeps meaning "ignore versions, recompute EVERYTHING"
+                # (see this function's own docstring) - passing `None` here is what makes
+                # `compute_card_evidence` treat every extractor as stale, exactly as before this
+                # per-extractor carry-forward mechanism existed.
+                None if force_stage_c_reextract else fetch_outcome.stale_extractor_keys,
+                None if force_stage_c_reextract else fetch_outcome.stored_evidence_fields,
+                None if force_stage_c_reextract else fetch_outcome.stored_extractor_versions,
             )
             pending_compute[cf] = fetch_outcome.card_id
 
@@ -1187,18 +1259,30 @@ def _run_attribute_chip_casters(
     composition audit's §1 Q1 items 1-3). Same lazy-import posture as
     `_run_illustration_calculator` above, same reasoning.
 
-    WHAT THIS FIXES. The three attribute-chip families - border colour, frame style, bleed edge -
-    were reachable from NEITHER engine. `local_fallback`'s three casters are called only from
-    `local_identify_printing_tags.run_pilot` (a live-FETCH pilot with ONE completed run in its
-    history, 2026-07-16) and from `image_evidence.extract_card_evidence`, which has ZERO production
-    callers because both engines call `compute_card_evidence` + `persist_evidence` directly. Border
-    colour survived the 2026-07-29 purge only because `local_layout_class_cast` independently
-    re-derives it, and even that was reachable only from its own standalone management command.
-    Frame style and bleed edge had no such twin and sat at literally zero machine rows.
+    WHAT THIS FIXES. Border colour, frame style and the bleed chip were reachable from NEITHER
+    engine. `local_fallback`'s casters are called only from `local_identify_printing_tags.run_pilot`
+    (a live-FETCH pilot with ONE completed run in its history, 2026-07-16) and from
+    `image_evidence.extract_card_evidence`, which has ZERO production callers because both engines
+    call `compute_card_evidence` + `persist_evidence` directly. Border colour survived the
+    2026-07-29 purge only because `local_layout_class_cast` independently re-derives it, and even
+    that was reachable only from its own standalone management command. Frame style and the bleed
+    chip had no such twin and sat at literally zero machine rows.
 
-    BOTH CASTERS READ STORED EVIDENCE AND FETCH NOTHING, which is why they can run inside a
+    ONE CHANNEL PER TAG. `run_attribute_chip_cast` casts the frame-style chip only; its bleed half
+    (identity `bleed-edge-cast-v1`) is RETIRED and `run_bleed_calculator_cast` is the SOLE machine
+    channel for `appropriate-bleed`. The old caster voted on `bleed_class == "trimmed"` alone, the
+    calculator votes on a cross-checked reading and withholds on disagreement past a 2mm gate -
+    running both would double-count one signal and the old caster's unconditional vote would land
+    on exactly the cards the calculator abstains on, defeating the abstention.
+
+    FILENAME DECLARATIONS (2026-08-19) are the fourth caster wired here:
+    `local_filename_declarations.run_filename_declaration_cast` parses `Card.name` for uploader-
+    declared treatments and needs no `ImageEvidence` at all - its `Tag` dependency is the same
+    seed gap as its siblings, so it shares this function's try/except rather than getting its own.
+
+    THE CASTERS READ STORED EVIDENCE AND FETCH NOTHING, which is why they can run inside a
     micro-batch at all: the conveyor's fetch budget and the operating envelope's bars are about
-    network and host load, and these two consume neither. Re-deriving these chips through the only
+    network and host load, and these consume neither. Re-deriving these chips through the only
     pre-existing path (the pilot) would instead have meant re-fetching ~220,000 images to recompute
     facts already sitting in the database.
 
@@ -1209,18 +1293,20 @@ def _run_attribute_chip_casters(
     after Stage D's printing calculators only because the printing verdict is the higher-value work
     and should not be delayed behind chips.
 
-    A MISSING TAG SEED MUST NOT DESTROY A MICRO-BATCH. Both casters raise `RuntimeError` when their
+    A MISSING TAG SEED MUST NOT DESTROY A MICRO-BATCH. The casters raise `RuntimeError` when their
     attribute-chip `Tag` rows have not been seeded - the right behaviour for a standalone management
     command an operator is watching, and the wrong behaviour here: by the time this runs, the four
     printing calculators above have ALREADY written their votes, and letting the exception out would
     mark the whole dispatch FAILED (`mark_ledger_failed`) over an operator setup gap in an advisory
-    chip. So the seed gap is caught, logged at ERROR, and leaves the three counters at 0. It is NOT
+    chip. So the seed gap is caught, logged at ERROR, and leaves the counters at 0. It is NOT
     silently swallowed - a persistent zero on a chip counter is precisely the signal the 2026-07-29
     audit says to read as "this channel never ran", and the log line names the fix. Only that
     `RuntimeError` is caught; every other exception propagates exactly as the printing calculators'
     already do.
     """
     from cardpicker.local_attribute_chip_cast import run_attribute_chip_cast
+    from cardpicker.local_bleed_calculator import run_bleed_calculator_cast
+    from cardpicker.local_filename_declarations import run_filename_declaration_cast
     from cardpicker.local_layout_class_cast import run_layout_class_cast
 
     try:
@@ -1229,13 +1315,18 @@ def _run_attribute_chip_casters(
 
         chip_result = run_attribute_chip_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
         outcome.stage_d_frame_chip_votes = chip_result.frame_votes_written
-        outcome.stage_d_bleed_chip_votes = chip_result.bleed_votes_written
+
+        bleed_calc_result = run_bleed_calculator_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_bleed_calculator_votes = bleed_calc_result.votes_written
+
+        filename_result = run_filename_declaration_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_filename_declaration_votes = filename_result.votes_written
     except RuntimeError as exc:
         logger.error(
             "Attribute-chip casters skipped for run_id=%s: %s Stage D's printing votes for this "
             "batch are unaffected and already written. Run `seed_default_tags`/`seed_attribute_tags`"
-            "/`seed_sensitive_tags` to close this - until then the border/frame/bleed chip counters "
-            "stay at zero on every dispatch.",
+            "/`seed_sensitive_tags` to close this - until then the border/frame chip, bleed "
+            "calculator and filename-declaration counters stay at zero on every dispatch.",
             run_id,
             exc,
         )
@@ -1256,23 +1347,31 @@ def _run_evidence_only_calculators(
     never runs and a channel that runs and casts zero votes are indistinguishable from the
     outside, which is the whole defect this wiring closes.
 
-    WHY THESE FOUR AND NOT THE OTHER SIX UNWIRED IDENTITIES the same audit found (`docs/
-    pipeline-fidelity-gate.md`'s roster has the full accounting): every one of these four reads
-    ONLY data this pass has already stored - `ImageEvidence` OCR text, `Card.content_phash`,
-    already-resolved artist/printing chains - and fetches no image, runs no tesseract, calls no
-    external API. `run_frame_mismatch_recovery`/`run_lands_identify` each accept an OCR/fallback
-    refetch budget for the LIVE-FETCH portion of their own pipeline; both are called here with
-    every such budget forced to 0, which their own docstrings document as "the scoped, genuinely
-    free [...] path" - the live-fetch branches stay unreachable from this conveyor, exactly like
-    every other calculator's own fetch work stays inside Stage C, never Stage D.
-    `deductive-backfill-v1`/`local-name-frequency-v1` were the other two candidates that looked
-    fetch-free on the same reading; both were left OUT because neither has a `card_ids` parameter
-    at all - each rebuilds a whole-catalogue in-memory index (`CanonicalNameIndex`,
+    A FIFTH CHANNEL WIRED HERE 2026-08-19: `art-edge-continuity-v1`
+    (`local_art_edge.run_art_edge_continuity_cast`) - reads the already-stored
+    `ImageEvidence.art_edge_class` and casts the pre-existing "Extended" attribute chip on an
+    `extended` reading. Left deliberately unwired at the 2026-08-05 pass behind issue #721's own
+    validation precondition, which has since been measured against real catalog images (see
+    `local_art_edge.cast_art_edge_continuity_vote`'s own docstring for the numbers and
+    `docs/pipeline-fidelity-gate.md`'s calculator roster for the full measurement).
+
+    WHY THESE FIVE AND NOT THE OTHER FIVE UNWIRED IDENTITIES the same audit found (`docs/
+    pipeline-fidelity-gate.md`'s roster has the full accounting): every one of these five reads
+    ONLY data this pass has already stored - `ImageEvidence` OCR/pixel-derived fields,
+    `Card.content_phash`, already-resolved artist/printing chains - and fetches no image, runs no
+    tesseract, calls no external API. `run_frame_mismatch_recovery`/`run_lands_identify` each
+    accept an OCR/fallback refetch budget for the LIVE-FETCH portion of their own pipeline; both
+    are called here with every such budget forced to 0, which their own docstrings document as
+    "the scoped, genuinely free [...] path" - the live-fetch branches stay unreachable from this
+    conveyor, exactly like every other calculator's own fetch work stays inside Stage C, never
+    Stage D. `deductive-backfill-v1`/`local-name-frequency-v1` were the other two candidates that
+    looked fetch-free on the same reading; both were left OUT because neither has a `card_ids`
+    parameter at all - each rebuilds a whole-catalogue in-memory index (`CanonicalNameIndex`,
     113k+ `CanonicalCard` rows) from scratch on every call, so wiring either one here would mean
     paying that full-catalogue rebuild on every single micro-batch rather than once per pass. See
-    `docs/pipeline-fidelity-gate.md` for that finding and the other four EXPENSIVE identities
-    (`art-edge-continuity-v1`, `local-ocr-v1`, `local-phash-v1`, `local-fallback-v1`) this same
-    audit left deliberately unwired, with a reason and a tracked issue for each.
+    `docs/pipeline-fidelity-gate.md` for that finding and the three remaining EXPENSIVE identities
+    (`local-ocr-v1`, `local-phash-v1`, `local-fallback-v1`) this same audit left deliberately
+    unwired, with a reason and a tracked issue for each.
 
     ORDER: `run_frame_mismatch_recovery` runs BEFORE `run_d0_sibling_artist_propagation`
     deliberately - the former calls `resolve_and_persist_artist` on every card it recovers, and a
@@ -1282,18 +1381,21 @@ def _run_evidence_only_calculators(
     later in the SAME batch. Getting this backwards costs nothing this batch cannot recover next
     time it revisits the same card, but costs one batch's worth of reach for free. Otherwise order
     is irrelevant here, same reasoning as `_run_attribute_chip_casters`' own docstring: none of
-    these four reads any other NEW calculator's output, only stored evidence and pre-existing
+    these five reads any other NEW calculator's output, only stored evidence and pre-existing
     resolved fields.
 
     A MISSING TAG SEED MUST NOT DESTROY A MICRO-BATCH, same discipline as
-    `_run_attribute_chip_casters`. Only `run_ai_art_detector` can raise for this (a missing
-    "AI-Generated" `Tag` row) - `run_frame_mismatch_recovery` already degrades gracefully when
-    "altered-frame" is unseeded (skips the tag vote, still casts the artist vote; see its own
-    docstring), and the other two calculators here have no `Tag` dependency at all. By the time
-    this runs, the four printing calculators and the three attribute chips above have already
-    written their votes, so letting a `RuntimeError` out would fail the WHOLE dispatch over an
-    operator setup gap in one advisory tag - caught, logged, `stage_d_ai_art_votes` stays 0.
+    `_run_attribute_chip_casters`. `run_ai_art_detector` (a missing "AI-Generated" `Tag` row) and
+    `run_art_edge_continuity_cast` (a missing "Extended" `Tag` row, in practice never seen in
+    production since that tag is a pre-existing `DEFAULT_TAGS` row) both raise `RuntimeError` for
+    this - `run_frame_mismatch_recovery` already degrades gracefully when "altered-frame" is
+    unseeded (skips the tag vote, still casts the artist vote; see its own docstring), and the
+    other two calculators here have no `Tag` dependency at all. By the time this runs, the four
+    printing calculators and the three attribute chips above have already written their votes, so
+    letting a `RuntimeError` out would fail the WHOLE dispatch over an operator setup gap in one
+    advisory tag - caught, logged, the affected counter stays 0.
     """
+    from cardpicker.local_art_edge import run_art_edge_continuity_cast
     from cardpicker.local_detect_ai_art import run_ai_art_detector
     from cardpicker.local_lands_identify import run_lands_identify
     from cardpicker.local_residual_classify import (
@@ -1309,6 +1411,19 @@ def _run_evidence_only_calculators(
             "AI-art detector skipped for run_id=%s: %s Stage D's printing votes for this batch "
             "are unaffected and already written. Run `seed_default_tags` to close this - until "
             "then stage_d_ai_art_votes stays at zero on every dispatch.",
+            run_id,
+            exc,
+        )
+
+    try:
+        art_edge_result = run_art_edge_continuity_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_art_edge_votes = art_edge_result.votes_written
+    except RuntimeError as exc:
+        logger.error(
+            "Art-edge continuity caster skipped for run_id=%s: %s Stage D's printing votes for "
+            "this batch are unaffected and already written. Run `seed_default_tags`/"
+            "`seed_attribute_tags` to close this - until then stage_d_art_edge_votes stays at "
+            "zero on every dispatch.",
             run_id,
             exc,
         )
@@ -1608,8 +1723,9 @@ def dispatch_micro_batch(
     unique per-attempt, per-batch ledger row while `run_id` keeps stamping every data row with
     the clean identity. When `ledger_run_id` is None this function behaves exactly as before.
 
-    Ordering: no-self-resume gate -> load brake (`cardpicker.stage_e_load_brake`) -> fresh envelope
-    sample -> batch selection -> concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`) ->
+    Ordering: no-self-resume gate -> load governor (`cardpicker.stage_e_load_brake`) -> fresh envelope
+    sample -> batch selection -> concurrency-cap slot acquire (`cardpicker.stage_e_concurrency`,
+    bounded by the governor's own chosen concurrency) ->
     Stage C (sequential, per-card) -> Stage D (AS-IS entry points, scoped) -> ledger write -> slot
     release. Every gate below returns WITHOUT touching the DB (aside from the envelope check's own
     trip-persist side effect, the concurrency-cap check's own advisory-lock round trip, plus -
@@ -1634,13 +1750,14 @@ def dispatch_micro_batch(
         )
         return DispatchOutcome(status="halted-open-trip", run_id=run_id, trip_id=existing_trip.trip_id)
 
-    # LOAD BRAKE (`stage_e_load_brake.py`): a delay, never a
-    # bypass, sits here - after the no-self-resume gate so a braking process never blocks a check
-    # of an already-open trip, and before the fresh envelope sample below so the brake's own
+    # LOAD GOVERNOR (`stage_e_load_brake.py`): a delay, never a
+    # bypass, sits here - after the no-self-resume gate so a governing process never blocks a
+    # check of an already-open trip, and before the fresh envelope sample below so its own
     # (possibly repeated) reads are never reused as that sample and can never suppress a genuine
-    # breach. Also before `try_acquire_dispatch_slot`, so a braking process holds no
-    # concurrency-cap slot while it waits.
-    brake_outcome = apply_load_brake()
+    # breach. Also before `try_acquire_dispatch_slot`, so a governing process holds no
+    # concurrency-cap slot while it waits, and its chosen concurrency is what that call below
+    # actually enforces (`max_slots=governor_outcome.state.concurrency`).
+    governor_outcome = apply_load_governor()
 
     signals = _sample_envelope_signals()
     fresh_trip = check_envelope(signals, run_id=run_id)
@@ -1655,8 +1772,8 @@ def dispatch_micro_batch(
             status="halted-new-trip",
             run_id=run_id,
             trip_id=fresh_trip.trip_id,
-            load_brake_waits=brake_outcome.waits,
-            load_brake_seconds=brake_outcome.seconds,
+            load_brake_waits=governor_outcome.waits,
+            load_brake_seconds=governor_outcome.seconds,
         )
 
     # BATCH SIZE (2026-07-29 - `cardpicker.stage_e_batch_sizing`'s own module docstring carries the
@@ -1677,37 +1794,37 @@ def dispatch_micro_batch(
             run_id=run_id,
             stage_c_backlog_found=stage_c_fill.found,
             stage_c_backlog_wrapped=stage_c_fill.wrapped,
-            load_brake_waits=brake_outcome.waits,
-            load_brake_seconds=brake_outcome.seconds,
+            load_brake_waits=governor_outcome.waits,
+            load_brake_seconds=governor_outcome.seconds,
         )
 
     # CONCURRENCY CAP (companion to PR #448's vote-collision fix - cardpicker.stage_e_concurrency's
     # own module docstring has the full incident/mechanism writeup): acquired around exactly the
     # CPU-heavy segment below (ledger create through Stage C/D completion), not around the cheap
     # batch-selection query above - holding a scarce slot while doing nothing but a bounded read
-    # would only starve other dispatches for no benefit. `slot is None` means every
-    # `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` slot is already held elsewhere - PROACTIVE
+    # would only starve other dispatches for no benefit. `slot is None` means every one of the
+    # governor's OWN currently-chosen concurrency slots is already held elsewhere - PROACTIVE
     # throttling, distinct from the envelope's own REACTIVE halted-new-trip below.
-    with try_acquire_dispatch_slot() as slot:
+    with try_acquire_dispatch_slot(max_slots=governor_outcome.state.concurrency) as slot:
         if slot is None:
             logger.info(
                 "Stage E dispatch throttled - all %s concurrency-cap slots already held",
-                getattr(settings, "STAGE_E_MAX_CONCURRENT_DISPATCHES", 2),
+                governor_outcome.state.concurrency,
             )
             # Observability signal (Tron gate anomaly 4, 2026-07-25): a throttled dispatch writes
             # no PilotRunLedger row (see the comment above this `with` block for why), so this
             # singleton counter (StageEThrottleCounter's own docstring has the full "why a
             # counter, not a per-event row" reasoning) is the ONLY durable, queryable record that
-            # throttling happened - the runbook's "tune STAGE_E_MAX_CONCURRENT_DISPATCHES against
-            # the observed throttle rate" instruction has nothing else to check against.
+            # throttling happened - the runbook's own tuning instruction now has the governor's
+            # own live concurrency, not a static setting, to check against.
             StageEThrottleCounter.record()
             return DispatchOutcome(
                 status="throttled-concurrency-cap",
                 run_id=run_id,
                 stage_c_backlog_found=stage_c_fill.found,
                 stage_c_backlog_wrapped=stage_c_fill.wrapped,
-                load_brake_waits=brake_outcome.waits,
-                load_brake_seconds=brake_outcome.seconds,
+                load_brake_waits=governor_outcome.waits,
+                load_brake_seconds=governor_outcome.seconds,
             )
 
         dispatch_run_id = run_id or f"stage-e-stream-{timezone.now().strftime('%Y%m%dT%H%M%S%f')}Z"
@@ -1736,8 +1853,8 @@ def dispatch_micro_batch(
             card_ids=batch_ids,
             stage_c_backlog_found=stage_c_fill.found,
             stage_c_backlog_wrapped=stage_c_fill.wrapped,
-            load_brake_waits=brake_outcome.waits,
-            load_brake_seconds=brake_outcome.seconds,
+            load_brake_waits=governor_outcome.waits,
+            load_brake_seconds=governor_outcome.seconds,
         )
         batch_start = time.monotonic()
 
@@ -1784,18 +1901,21 @@ def dispatch_micro_batch(
                     "stage_d_slow_path_routed": outcome.stage_d_slow_path_routed,
                     "stage_d_border_chip_votes": outcome.stage_d_border_chip_votes,
                     "stage_d_frame_chip_votes": outcome.stage_d_frame_chip_votes,
-                    "stage_d_bleed_chip_votes": outcome.stage_d_bleed_chip_votes,
+                    "stage_d_bleed_calculator_votes": outcome.stage_d_bleed_calculator_votes,
+                    "stage_d_filename_declaration_votes": outcome.stage_d_filename_declaration_votes,
                     "stage_d_ai_art_votes": outcome.stage_d_ai_art_votes,
                     "stage_d_art_hash_artist_votes": outcome.stage_d_art_hash_artist_votes,
                     "stage_d_lands_votes": outcome.stage_d_lands_votes,
                     "stage_d_lands_already_voted": outcome.stage_d_lands_already_voted,
                     "stage_d_residual_artist_votes": outcome.stage_d_residual_artist_votes,
                     "stage_d_residual_tag_votes": outcome.stage_d_residual_tag_votes,
+                    "stage_d_art_edge_votes": outcome.stage_d_art_edge_votes,
                     "stage_d_verdict_transfer_votes": outcome.stage_d_verdict_transfer_votes,
                     "peak_rss_mb": peak_rss_mb,
                     "lockout_trip_id": lockout_trip.trip_id if lockout_trip is not None else None,
                     "load_brake_waits": outcome.load_brake_waits,
                     "load_brake_seconds": outcome.load_brake_seconds,
+                    "load_governor_concurrency": governor_outcome.state.concurrency,
                 },
             )
             ledger.save(update_fields=["status", "finished_at", "counters"])

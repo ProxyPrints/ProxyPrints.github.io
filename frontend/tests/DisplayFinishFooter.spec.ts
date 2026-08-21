@@ -22,13 +22,16 @@ import {
 } from "./test-utils";
 
 // Issue #275 (proposal-h-display-layout-spec.md ADDENDUM D9/D10) - the /display Finish footer
-// (FinishFooter.tsx: co-equal "Save Deck"/"Print / Export ->", the draft-backed-up note) and its
-// D9(3) pre-print save gate (PrePrintSaveGate.tsx). These are real, new user journeys - not just
-// selector renames of the old three-button "Prepare Print" stack these replace (that stack's own
-// dedicated coverage, DisplayPageExport.spec.ts, is retired alongside it - its subject no longer
-// exists on this page; PDFGenerator.spec.ts already covers the underlying pipeline mechanics
-// unchanged, since PDF generation now lives solely on the Print page via the same unforked
-// PDFGenerator.tsx).
+// (FinishFooter.tsx: "Save Deck", the Export dropdown, the draft-backed-up note) and its D9(3)
+// pre-export save gate (PrePrintSaveGate.tsx).
+//
+// Editor export rescue (docs/features/pdf-generator.md's "Page cut guide lines, Google Drive
+// save, and retiring the Finish footer's own print route") - the footer's separate co-equal
+// "Print / Export ->" button (which used to client-side navigate to /print) is gone; PDF export
+// lives solely in the Export dropdown's own "PDF" item (DisplayExportPDF.tsx), and its Download/
+// Save-to-Drive buttons now run the same D9(3) gate sequence this file's own tests below drive
+// (draft flush -> cardback reminder -> save-before-export prompt) before the export itself runs
+// in place, no navigation anywhere.
 
 const TEST_ITERATIONS = 100;
 const PASSPHRASE = "the real one";
@@ -49,20 +52,21 @@ const goToDisplay = async (page: Page) => {
   await expect(page.getByTestId("display-page")).toBeVisible();
 };
 
+// Opens the Export dropdown's PDF settings modal - the editor's own export entry point, now that
+// FinishFooter.tsx no longer has a separate Print/Export button.
+const openPDFExportSettings = async (page: Page) => {
+  const footer = page.getByTestId("display-finish-footer");
+  await footer.getByTestId("display-export-menu-toggle").click();
+  await footer.getByTestId("display-export-pdf-button").click();
+  const settingsModal = page.getByTestId("display-export-pdf-settings-modal");
+  await expect(settingsModal).toBeVisible();
+  return settingsModal;
+};
+
 test.describe("/display Finish footer (issue #275)", () => {
-  // Same dev-mode on-demand-compile cost DisplayPage.spec.ts's own describe.configure documents
-  // for a brand-new route's first hit (this file transitively pulls in /print's own
-  // FinishedMyProject -> PDFGenerator -> @react-pdf/renderer chain) - observed here directly
-  // (2026-07-23, while verifying the Proposal H route swap) as flaky `net::ERR_ABORTED`/timeout
-  // failures on the `/print` navigation under PARALLEL workers racing to cold-compile the same
-  // route simultaneously on this dev server; a `--workers=1` rerun passed every time (first hit
-  // pays the compile cost once, every later test in the file is fast). `mode: "serial"` avoids
-  // the race outright by construction, matching that empirical finding, rather than just hoping a
-  // longer timeout wins the race. Pre-existing dev-mode characteristic, not a swap regression -
-  // /print itself is untouched routing.
   test.describe.configure({ mode: "serial", timeout: 60_000 });
 
-  test("anonymous: shows a sign-in link in place of Save Deck, and Print / Export navigates straight to the Print page", async ({
+  test("anonymous: shows a sign-in link in place of Save Deck, no Print/Export button, and PDF export runs in place after the cardback gate (no save gate)", async ({
     page,
     network,
   }) => {
@@ -74,23 +78,31 @@ test.describe("/display Finish footer (issue #275)", () => {
       footer.getByTestId("finish-footer-save-deck-signin")
     ).toBeVisible();
     await expect(footer.getByTestId("finish-footer-save-deck")).toHaveCount(0);
+    // The old co-equal Print/Export button is gone entirely - PDF export lives solely in the
+    // Export dropdown now (see this file's own module comment).
+    await expect(footer.getByTestId("finish-footer-print-export")).toHaveCount(
+      0
+    );
 
-    await footer.getByTestId("finish-footer-print-export").click();
+    const settingsModal = await openPDFExportSettings(page);
 
-    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still "riding
-    // the untouched default" cardback, so the reminder gate fires before the (absent, for an
-    // anonymous session) save gate / navigation. "Use current & continue" is the equivalent of
-    // this test's own old "no save gate, straight through" assertion for the NEW gate.
-    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-    await expect(cardbackGate).toBeVisible();
-    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      (async () => {
+        await settingsModal
+          .getByTestId("display-export-pdf-download-button")
+          .click();
 
-    // No save gate for an anonymous session (D9(3): "authenticated AND dirty" gates the prompt) -
-    // straight through to the Print page.
-    // Explicit generous timeout, not the default assertion timeout - see this describe block's
-    // own comment on /print's cold on-demand-compile cost.
-    await page.waitForURL(/\/print/, { timeout: 30_000 });
-    await expect(page.getByRole("tab", { name: "PDF" })).toBeVisible();
+        // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still "riding
+        // the untouched default" cardback, so the reminder gate fires before the (absent, for an
+        // anonymous session) save gate / the export itself. "Use current & continue" is the
+        // equivalent of this test's own old "no save gate, straight through" assertion.
+        const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+        await expect(cardbackGate).toBeVisible();
+        await cardbackGate.getByTestId("cardback-gate-use-current").click();
+      })(),
+    ]);
+    expect(download.suggestedFilename()).toBe("cards.pdf");
   });
 
   test("authenticated: shows the Save Deck button and, once a draft has backed up, the compact note", async ({
@@ -119,7 +131,7 @@ test.describe("/display Finish footer (issue #275)", () => {
     });
   });
 
-  test("authenticated + dirty: Print / Export shows the save gate; choosing Save unlocks, saves, and lands on the Print page", async ({
+  test("authenticated + dirty: PDF export shows the save gate; choosing Save unlocks, saves, and the export still runs", async ({
     page,
     network,
   }) => {
@@ -137,41 +149,45 @@ test.describe("/display Finish footer (issue #275)", () => {
     );
     await goToDisplay(page);
 
-    await page
-      .getByTestId("display-finish-footer")
-      .getByTestId("finish-footer-print-export")
-      .click();
+    const settingsModal = await openPDFExportSettings(page);
 
-    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
-    // save gate (a deck-completeness decision precedes the persistence one).
-    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-    await expect(cardbackGate).toBeVisible();
-    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      (async () => {
+        await settingsModal
+          .getByTestId("display-export-pdf-download-button")
+          .click();
 
-    const gate = page.getByTestId("pre-print-save-gate-modal");
-    await expect(gate).toBeVisible();
-    await gate.getByTestId("pre-print-save-gate-save").click();
+        // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
+        // save gate (a deck-completeness decision precedes the persistence one).
+        const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+        await expect(cardbackGate).toBeVisible();
+        await cardbackGate.getByTestId("cardback-gate-use-current").click();
 
-    // Crypto session starts locked this "session" (a fresh page load) - Save routes through
-    // Unlock first, exactly like the toolbar's own Save button would.
-    await page.getByLabel("unlock-passphrase").fill(PASSPHRASE);
-    await page.getByRole("button", { name: "Unlock" }).click();
+        const gate = page.getByTestId("pre-print-save-gate-modal");
+        await expect(gate).toBeVisible();
+        await gate.getByTestId("pre-print-save-gate-save").click();
 
-    const saveModal = page.getByTestId("save-deck-modal");
-    await expect(saveModal).toBeVisible();
-    await page.getByLabel("save-deck-name").fill("My Print Test Deck");
-    await saveModal.getByRole("button", { name: "Save", exact: true }).click();
+        // Crypto session starts locked this "session" (a fresh page load) - Save routes through
+        // Unlock first, exactly like the toolbar's own Save button would.
+        await page.getByLabel("unlock-passphrase").fill(PASSPHRASE);
+        await page.getByRole("button", { name: "Unlock" }).click();
 
-    // Persistence resolves -> THEN navigation - D9(3)c, "saving gates PDF; PDF never gates
-    // saving" the other way around.
-    // Explicit generous timeout, not the default assertion timeout - see this describe block's
-    // own comment on /print's cold on-demand-compile cost.
-    await page.waitForURL(/\/print/, { timeout: 30_000 });
-    await expect(page.getByRole("tab", { name: "PDF" })).toBeVisible();
+        const saveModal = page.getByTestId("save-deck-modal");
+        await expect(saveModal).toBeVisible();
+        await page.getByLabel("save-deck-name").fill("My Print Test Deck");
+        await saveModal
+          .getByRole("button", { name: "Save", exact: true })
+          .click();
+      })(),
+    ]);
+    // Persistence resolves -> THEN the export itself runs - D9(3)c, "saving gates PDF; PDF never
+    // gates saving" the other way around.
+    expect(download.suggestedFilename()).toBe("cards.pdf");
     expect(saveDeckRequests).toHaveLength(1);
   });
 
-  test("authenticated + dirty: Skip on the save gate navigates to the Print page without saving", async ({
+  test("authenticated + dirty: Skip on the save gate runs the export without saving", async ({
     page,
     network,
   }) => {
@@ -189,24 +205,27 @@ test.describe("/display Finish footer (issue #275)", () => {
     );
     await goToDisplay(page);
 
-    await page
-      .getByTestId("display-finish-footer")
-      .getByTestId("finish-footer-print-export")
-      .click();
+    const settingsModal = await openPDFExportSettings(page);
 
-    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
-    // save gate (a deck-completeness decision precedes the persistence one).
-    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-    await expect(cardbackGate).toBeVisible();
-    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      (async () => {
+        await settingsModal
+          .getByTestId("display-export-pdf-download-button")
+          .click();
 
-    const gate = page.getByTestId("pre-print-save-gate-modal");
-    await expect(gate).toBeVisible();
-    await gate.getByTestId("pre-print-save-gate-skip").click();
+        // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
+        // save gate (a deck-completeness decision precedes the persistence one).
+        const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+        await expect(cardbackGate).toBeVisible();
+        await cardbackGate.getByTestId("cardback-gate-use-current").click();
 
-    // Explicit generous timeout, not the default assertion timeout - see this describe block's
-    // own comment on /print's cold on-demand-compile cost.
-    await page.waitForURL(/\/print/, { timeout: 30_000 });
+        const gate = page.getByTestId("pre-print-save-gate-modal");
+        await expect(gate).toBeVisible();
+        await gate.getByTestId("pre-print-save-gate-skip").click();
+      })(),
+    ]);
+    expect(download.suggestedFilename()).toBe("cards.pdf");
     expect(saveDeckCalls).toBe(0);
   });
 });
@@ -243,7 +262,7 @@ test.describe("/display local draft auto-backup + restore nudge (issue #275)", (
 
     await expect(page.getByTestId("display-empty-state")).toHaveCount(0);
     // Every grid position still renders a `page-preview-slot` placeholder (8, this page's own
-    // default Letter/Borderless/3.175mm-bleed 4x2 capacity) regardless of how many are filled -
+    // default Letter/Rear-feed/3.175mm-bleed 4x2 capacity) regardless of how many are filled -
     // only the resolved `<img>` count reflects the actually-restored member (DisplayPage.spec.ts's
     // own established pattern for this same distinction).
     await expect(

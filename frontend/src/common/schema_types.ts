@@ -146,6 +146,7 @@ export interface QuestionFeedItem {
   candidates?: PrintingCandidate[];
   card: Card;
   confidentlyKnownArtistName?: null | string;
+  illustrationCandidates?: PrintingCandidate[];
   scryfallIllustrationUrl?: null | string;
   suggestedPrinting?: PrintingCandidate;
   tagConfidence?: { [key: string]: number };
@@ -318,8 +319,10 @@ export enum TagVoteDisplayStatus {
 
 export enum Type {
   Artist = "artist",
+  Border = "border",
   ConfirmSuggestion = "confirm_suggestion",
   IdentifyPrinting = "identify_printing",
+  Illustration = "illustration",
   Tag = "tag",
 }
 
@@ -832,6 +835,7 @@ export interface PrintingTagQueueResponse {
 
 export interface ReportCardRequest {
   anonymousId: string;
+  hide?: boolean;
   identifier: string;
   reason: Reason;
   text?: string;
@@ -1068,6 +1072,24 @@ export interface SubmitIllustrationVoteResponse {
   isUnknown: boolean;
   printingVoteCast: boolean;
   resolvedPrinting?: PrintingCandidate;
+}
+
+/**
+ * 2/submitIllustrationRejection/ ("Not this art") - mirrors
+ * MPCAutofill/cardpicker/schema_types.py's SubmitIllustrationRejectionRequest. Always names the
+ * rejected artwork - no isUnknown counterpart, see CardIllustrationRejection's own model
+ * docstring for why a rejection has no "unknown" claim to make.
+ */
+export interface SubmitIllustrationRejectionRequest {
+  anonymousId: string;
+  identifier: string;
+  illustrationId: string;
+  voteSurface?: null | string;
+}
+
+/** Response to 2/submitIllustrationRejection/ - mirrors SubmitIllustrationRejectionResponse. */
+export interface SubmitIllustrationRejectionResponse {
+  illustrationId: string;
 }
 
 /**
@@ -3720,6 +3742,7 @@ const typeMap: any = {
   ReportCardRequest: o(
     [
       { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "hide", js: "hide", typ: u(undefined, true) },
       { json: "identifier", js: "identifier", typ: "" },
       { json: "reason", js: "reason", typ: r("Reason") },
       { json: "text", js: "text", typ: u(undefined, "") },

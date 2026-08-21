@@ -12,6 +12,13 @@ export const CardWidthMM = 63;
 export const CardHeightMM = 88;
 // 36 pixels (each side) at 300 dpi -> 0.12 inches, convert to MM. ref: https://www.makeplayingcards.com/pops/faq-photo.html
 export const BleedEdgeMM = Math.round(0.12 * 25.4 * 1000) / 1000;
+// Verified (2026-08-20, fix/print-cut-guides) against mtg.wiki's "Card" page
+// (https://mtg.wiki/page/Card), the same source already backing CardWidthMM/CardHeightMM above:
+// "They measure 63 mm x 88 mm ... The corners of the card are cut with a radius of 2.5 mm
+// (approx. 1/10")". Corroborated verbatim by the mtg.fandom.com mirror of the same page. Other
+// web sources round this to a generic "~3mm / 1/8-inch playing card" figure, but that's the
+// industry-generic poker-card convention, not Magic's own documented die spec - 2.5mm is the
+// correct, citable value and this constant was already set to it.
 export const CornerRadiusMM = 2.5;
 
 /**
@@ -26,14 +33,18 @@ export const DefaultCardSpacing: CardSpacingState = { row: 14.5, col: 0 };
 
 /**
  * Proposal H D5 (docs/proposals/proposal-h-display-layout-spec.md) - the /display Page Setup's
- * default margin profile: Borderless (0mm), which the Epson ET-8500/8550 supports up to Letter/
- * Legal (spec sheet CPD-59931R2) and is the only profile that fits the D6 default bleed
- * (3.175mm) alongside the D4 4x2 grid. `marginProfileSlice.ts`'s initial state and
+ * default margin profile: Rear-feed (3mm top/bottom, 20mm trailing edge). Borderless renders the
+ * largest theoretical bleed, but the ET-8500/8550 only actually loads Letter through its rear
+ * tray for this print run's paper stock - a fresh project's on-screen sheet should match the
+ * margins the printer really imposes, not the best case the hardware merely supports. The bleed
+ * this profile actually grants is small (see marginProfiles.ts's own D6 table) and the new
+ * granted-vs-requested readout (BleedGrantedReadout.tsx) is what makes that honest at a glance
+ * instead of silently assuming full bleed. `marginProfileSlice.ts`'s initial state and
  * `deckPayload.ts`'s legacy-payload backfill both import this single constant, mirroring
  * `DefaultCardSpacing`'s own precedent immediately above.
  */
 export const DefaultMarginProfile: MarginProfileState = {
-  profile: "borderless",
+  profile: "rearFeed",
 };
 
 export const ProjectName = "ProxyPrints";
@@ -110,6 +121,11 @@ export const SourceToggleWidth = 88; // pixels
 // cardpicker/constants.py NSFW constant - it's the same string filename-bracket tagging
 // writes into Card.tags and the seeded sensitive tag uses (docs/features/moderation.md).
 export const NSFW_TAG_NAME = "NSFW";
+// The tag name marking non-official art borrowing an external property (a custom
+// Warhammer proxy, for example) rather than original Magic art. Must match the backend's
+// EXTERNAL_IP_TAG_NAME in cardpicker/reason_tags.py - the same string voting from the
+// report button and the What's That Card feed writes into Card.tags.
+export const EXTERNAL_IP_TAG_NAME = "external-ip";
 export const NavbarHeight = 50; // pixels - aligns with the natural height of the navbar
 export const RibbonHeight = 54; // pixels
 export const NavbarLogoHeight = 40; // pixels
@@ -137,6 +153,11 @@ export const ManualOverridesKey = "manualOverrides";
 // full rationale on why this specific, narrow, owner-approved case is exempt from this repo's
 // usual "no localStorage for state that should survive a clear-site-data test" rule.
 export const PinnedSourcesKey = "pinnedSources";
+// Per-anonymous_id set of card identifiers the visitor hid for themselves via a `hide=True`
+// card report (issue #714 - see docs/features/moderation.md's hidden-card section). A prefix:
+// the full storage key appends the anonymous_id, so a new anonymous identity starts with an
+// empty hidden set (the server-side `HiddenCard` rows are scoped the same way).
+export const HiddenCardIdsKey = "hiddenCardIds";
 
 export const Brackets: Array<number> = [
   18, 36, 55, 72, 90, 108, 126, 144, 162, 180, 198, 216, 234, 396, 504, 612,

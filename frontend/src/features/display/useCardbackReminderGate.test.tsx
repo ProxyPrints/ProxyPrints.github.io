@@ -137,24 +137,24 @@ describe("useCardbackReminderGate (SPEC-cardback-pdfwait.md §C.1)", () => {
     expect(screen.getByTestId("proceeded-count")).toHaveTextContent("1");
   });
 
-  test("'Choose a cardback' opens the project-wide grid selector instead of the reminder, and closing it (with or without a pick) proceeds", async () => {
+  test("'Choose a cardback' swaps the gate modal's body to the shared swatch strip, and closing it (with or without a pick) proceeds", async () => {
     const user = userEvent.setup();
     renderHarness(baseProject());
 
     await user.click(screen.getByText("start print flow"));
     await user.click(screen.getByTestId("cardback-gate-choose"));
 
-    expect(screen.queryByTestId("pre-print-cardback-gate")).toBeNull();
-    expect(screen.getByTestId("cardback-grid-selector")).toBeInTheDocument();
+    // R9 - the gate stays mounted; its body now carries the same CardbackSwatchStrip primitive
+    // the two rails use (the old separate grid-selector modal mount is retired).
+    expect(screen.getByTestId("pre-print-cardback-gate")).toBeInTheDocument();
+    expect(screen.getByTestId("cardback-gate-strip")).toBeInTheDocument();
     expect(screen.getByTestId("proceeded-count")).toHaveTextContent("0");
 
-    // Closing the grid selector (its own header X) resumes the guarded print/export action -
-    // no genuine cancel path exists anywhere in this gate (Amendment 1).
-    const grid = screen.getByTestId("cardback-grid-selector");
-    await user.click(
-      grid.querySelector('button[aria-label="Close"]') as HTMLElement
-    );
+    // Closing the gate (its own header X) resumes the guarded print/export action - no genuine
+    // cancel path exists anywhere in this gate (Amendment 1).
+    await user.click(screen.getByLabelText("Close"));
 
+    expect(screen.queryByTestId("pre-print-cardback-gate")).toBeNull();
     expect(screen.getByTestId("proceeded-count")).toHaveTextContent("1");
   });
 

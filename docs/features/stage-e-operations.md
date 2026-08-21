@@ -60,7 +60,7 @@ of them crosses its bar. The four ratified bars
 | -------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Google fetch lockout | any occurrence — **instant** pause                                               | the existing `GoogleFetchLockoutError`/`lockout_hit` signal, unchanged            |
 | Host load average    | **> 7.0**                                                                        | the existing escalation threshold (`docs/reports/2026-07-23-4c-pilot-dry-run.md`) |
-| RSS per worker       | **> 768MB**                                                                      | `stage-e-streaming.md` §10(a), a new, streaming-specific per-worker bar           |
+| RSS per worker       | **> 1024MB**                                                                     | `stage-e-streaming.md` §10(a), a new, streaming-specific per-worker bar           |
 | Fetch-failure rate   | **> 1%** over a rolling 500-card window, **excluding rate pressure** — see below | `stage-e-streaming.md` §10(a), narrowed 2026-07-30                                |
 
 None of these numbers are invented on this page or in `operating_envelope.py`
@@ -68,11 +68,13 @@ itself — every one is cited to the ratifying brief section in that module's
 own docstring, which is the place to check if a bar's exact value is ever in
 question.
 
-**One bar has moved since §10(a) was written.** The per-worker RSS ceiling
-was ratified at 512MB and raised 512 → 768 by `70225df8` (2026-07-28, an
-owner ops ruling — itself the ratifying act for 768). 768 is the live bar and
-the value `operating_envelope.RSS_MB_PER_WORKER_CEILING` carries; a 512 in an
-older report or test is pre-`70225df8` history, not a competing number.
+**One bar has moved since §10(a) was written — twice.** The per-worker RSS
+ceiling was ratified at 512MB, raised 512 → 768 by `70225df8` (2026-07-28, an
+owner ops ruling — itself the ratifying act for 768), then raised 768 → 1024
+(2026-08-17) to fit the DPI-460 rendering footprint the full-catalog rescan
+repeatedly tripped (813MB observed against the 768 ceiling). 1024 is the live
+bar and the value `operating_envelope.RSS_MB_PER_WORKER_CEILING` carries; an
+older figure in a report or test is pre-raise history, not a competing number.
 
 ### Rate pressure is throttled, not halted (owner ruling, 2026-07-30)
 
@@ -446,17 +448,22 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
    Phase 1's own review: no code path in `stage_e_dispatch.py` ever calls
    `acknowledge_trip` — resume is always `resolve_envelope_trip`'s own
    command, a fresh, explicit owner action (see the runbook above).
-3. **Load brake** (`cardpicker.stage_e_load_brake`, added 2026-08-05) —
-   before the fresh envelope sample below, re-samples `os.getloadavg()` on
-   its own account and, while the reading sits between
-   `settings.STAGE_E_HOST_LOAD_SOFT_CEILING` (default 6.0) and the hard
-   `operating_envelope.HOST_LOAD_CEILING` (7.0), sleeps and re-samples
-   rather than proceeding straight to the trip check. See "The host-load
-   soft brake" below for the full mechanism; the ordering guarantee that
-   matters here is that it runs after the no-self-resume gate (so it never
-   blocks a check of an already-open trip) and before both the fresh
-   envelope sample and the concurrency-cap slot acquire (so a braking
-   process holds no slot while it waits).
+3. **Load governor** (`cardpicker.stage_e_load_brake`, added 2026-08-05,
+   replaced with an AIMD control law 2026-08-13) — before the fresh
+   envelope sample below, re-samples `os.getloadavg()` on its own account
+   and adjusts this pass's own dispatch concurrency: below
+   `settings.STAGE_E_HOST_LOAD_SOFT_CEILING` (default 4.5) concurrency
+   climbs by one; between soft and the hard
+   `operating_envelope.HOST_LOAD_CEILING` (7.0) it holds, sleeping and
+   re-sampling; above hard it halves (floor 1) and backs off
+   proportionally to the overshoot, rather than proceeding straight to the
+   trip check. See "The host-load AIMD governor" below for the full
+   mechanism; the ordering guarantee that matters here is that it runs
+   after the no-self-resume gate (so it never blocks a check of an
+   already-open trip) and before both the fresh envelope sample and the
+   concurrency-cap slot acquire (so a governing process holds no slot
+   while it waits, and its chosen concurrency is what that slot acquire
+   below actually enforces).
 4. **Fresh envelope sample** — live host load (`os.getloadavg()`), this
    worker process's own RSS (`cardpicker.process_metrics.get_process_rss_mb`),
    and a rolling fetch-outcome window feed `check_envelope`. If THIS sample
@@ -472,11 +479,13 @@ entry points (`run_join_key_calculator`/`run_fallback_calculator`/
 6. **Concurrency-cap slot acquire** (companion change, 2026-07-24 —
    `cardpicker.stage_e_concurrency`) — refuses PROACTIVELY
    (`status="throttled-concurrency-cap"`, zero DB writes beyond the
-   advisory-lock check itself) once `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`
-   (default 2) dispatches are already running concurrently, anywhere across
-   this box's django-q2 worker processes. See "Concurrency cap" below for
-   the full mechanism and the incident that motivated it — distinct from,
-   and a proactive complement to, the envelope's own reactive host-load bar.
+   advisory-lock check itself) once step 3's own governor-chosen
+   concurrency (seeded from `settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`,
+   default 2, then live-adjusted) worth of dispatches are already running
+   concurrently, anywhere across this box's django-q2 worker processes. See
+   "Concurrency cap" below for the full mechanism and the incident that
+   motivated it — distinct from, and a proactive complement to, the
+   envelope's own reactive host-load bar.
 7. **Stage C** (COMPUTE sequential, per-card, not pooled — a micro-batch is
    far too small for BULK mode's process-pool concurrency to help; FETCH
    overlapped with compute since 2026-07-25, issue #472 — see "Evidence
@@ -512,68 +521,119 @@ otherwise a card whose only sibling sits outside the batch silently loses it
 and nothing errors. PR #541's `run_d0_sibling_artist_propagation` scoping is
 the worked example of the second.
 
-### The host-load soft brake (2026-08-05)
+### The host-load AIMD governor (2026-08-05, replaced with an AIMD control law 2026-08-13)
 
 `operating_envelope.HOST_LOAD_CEILING` (7.0) is a binary cliff: the instant
 a fresh sample reads above it, the dispatch halts and demands a fresh owner
 action to resume (no self-resume, above). Two real passes tripped on narrow
 overshoots of that cliff a day apart (7.0796, then 7.17236328125 — 1.1% and
 2.5% over) despite the box otherwise running comfortably under load, each
-costing a stopped pipeline and a human interaction.
-`cardpicker.stage_e_load_brake` adds a throttle on approach, upstream of
-that cliff — it does not move the cliff itself, and every genuine breach
-still halts exactly as before.
+costing a stopped pipeline and a human interaction. A three-band soft brake
+shipped 2026-08-05 to throttle on approach, but it treated a two-second
+spike and an hour of real overload identically — any single reading above
+the cliff simply stopped braking and let the envelope trip, with no
+distinction between the two. That gap is what a 2026-08-13 incident hit: a
+9-hour backfill launched alongside several other host processes tripped on
+a momentary spike (load 7.0796-class overshoot; external sampling moments
+later already read 6.27) and halted permanently. `cardpicker.stage_e_load_brake`
+now implements additive-increase, multiplicative-decrease (AIMD) — the same
+control law TCP uses for congestion — with host load as the congestion
+signal and this pass's own dispatch concurrency as the throttle position.
+It still does not move the 7.0 cliff itself, and a genuinely sustained
+breach still halts.
 
 **Mechanism.** Step 3 of the ordering above re-samples `os.getloadavg()`
-independently of the envelope's own sample a moment later, and classifies
-the reading into a band:
+independently of the envelope's own sample a moment later, and responds
+according to the band the reading falls in:
 
-- `load < STAGE_E_HOST_LOAD_SOFT_CEILING` (default 6.0) — proceed
-  immediately. The common case; zero added cost.
-- `soft <= load <= HOST_LOAD_CEILING` — sleep, re-sample, repeat.
-- `load > HOST_LOAD_CEILING` — stop braking at once; the envelope's own
-  fresh sample, checked a moment later, trips honestly. The brake never
-  itself decides "trip" and never suppresses a genuine breach.
-- cumulative wait exceeds `STAGE_E_LOAD_BRAKE_MAX_WAIT_S` (default 240s) —
-  proceed anyway. Best-effort, and must never deadlock an unattended
-  multi-hour run.
+- `load < STAGE_E_HOST_LOAD_SOFT_CEILING` (default `4.5`) — ADDITIVE
+  INCREASE. Concurrency +1, bounded by `STAGE_E_GOVERNOR_CONCURRENCY_CAP`.
+  No sleep — a quiet box is used properly, not delayed on the way to using
+  it.
+- `soft <= load <= HOST_LOAD_CEILING` — HOLD, the intended equilibrium.
+  Concurrency unchanged; sleeps and re-samples (bounded by
+  `STAGE_E_LOAD_BRAKE_MAX_WAIT_S`, then proceeds anyway) exactly as the old
+  brake's own WAIT band did.
+- `load > HOST_LOAD_CEILING` — MULTIPLICATIVE DECREASE. If concurrency is
+  above its floor of 1, it halves and this call sleeps
+  `interval * (load - HOST_LOAD_CEILING)` (jittered) — proportional to the
+  overshoot, not a flat interval — then re-samples: a narrow, transient
+  spike recovers and returns without ever reaching the envelope's fresh
+  sample while load was still high, which is what makes a spike NOT trip.
+- **The new trip condition.** Concurrency is ALREADY at its floor of 1 and
+  load has stayed above the hard ceiling for
+  `STAGE_E_LOAD_GOVERNOR_SUSTAINED_TRIP_WINDOW_S` (default `120`, two of
+  `os.getloadavg()`'s own ~60s EWMA time constants) — the pass has
+  throttled as far as it can and the box is still overloaded, so that
+  overload is not this pass's own concurrency to shed. This state stops
+  governing at once (no further sleep) and lets the caller's own next
+  envelope sample — moments later, still reading above 7.0 — trip
+  honestly. The governor never itself persists a trip.
 
-**Why it reduces load rather than just delaying it.** The load a pass
-generates is mostly its own concurrency
-(`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES`). When every resident
-dispatcher enters the band, each one pauses independently at its own next
-batch boundary — the resident process count falls, load decays, and they
-resume. The pass self-throttles down to whatever concurrency fits under the
-ceiling, continuously, instead of running at full concurrency until it hits
-the wall and halts.
+**Why concurrency, not just a delay.** The load a pass generates is mostly
+its own concurrency. Every resident dispatcher (django-q2 worker process,
+shakedown/pipeline driver) independently classifies the SAME shared
+`os.getloadavg()` reading and independently adjusts its own idea of how
+much concurrency to use, exactly as independent TCP flows sharing one
+bottleneck link converge on a fair split with no central coordinator — the
+shared signal IS the coordination. "Back off fast, recover slowly" (halve
+vs. +1) is the asymmetry that makes AIMD converge instead of oscillate.
+
+**Where the concurrency state lives.** A module-level global in
+`cardpicker.stage_e_load_brake`, seeded once per OS process from
+`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (now a SEED only, not an
+ongoing ceiling — `STAGE_E_GOVERNOR_CONCURRENCY_CAP` is the live ceiling).
+Safe with multiple resident dispatchers for the same reason a shared cache
+counter was already rejected for the concurrency cap itself (see
+"Concurrency cap" below): django-q2 workers are separate OS processes, so
+there is no shared memory to race over, and AIMD needs none — each process
+converges independently against the shared load signal. Within one
+process, dispatch calls are never concurrent with each other either (one
+task at a time per worker; every other caller drives `dispatch_micro_batch`
+synchronously in its own loop), so the module global needs no lock.
 
 **Jitter is load-bearing.** Every dispatcher reads the same global
 `os.getloadavg()`; without randomizing each sleep
-(`interval * uniform(0.75, 1.5)`), every braking process would back off and
-resume in lockstep — a sawtooth, and a thundering herd on every resume.
+(`interval * uniform(0.75, 1.5)`), every governing process would back off
+and resume in lockstep — a sawtooth, and a thundering herd on every resume.
 
-**Settings** (all default to values that make the brake active out of the
-box — no opt-in required):
+**Settings** (all default to values that make the governor active out of
+the box — no opt-in required):
 
-- `STAGE_E_HOST_LOAD_SOFT_CEILING` (default `6.0`) — the top of the band.
+- `STAGE_E_HOST_LOAD_SOFT_CEILING` (default `4.5`, moved down from the old
+  brake's `6.0`) — the top of the additive-increase band. Moved down to
+  leave room for concurrency to climb before load nears the ceiling at
+  all, not just room to notice the ceiling arriving.
 - `STAGE_E_LOAD_BRAKE_INTERVAL_S` (default `15`) — base sleep per
-  iteration, before jitter.
+  equilibrium-band iteration, before jitter, and the per-unit-of-overshoot
+  coefficient the above-ceiling backoff scales by.
 - `STAGE_E_LOAD_BRAKE_MAX_WAIT_S` (default `240`) — the absolute bound on
-  one dispatch call's cumulative brake time.
+  one dispatch call's cumulative time in the equilibrium band.
+- `STAGE_E_LOAD_GOVERNOR_SUSTAINED_TRIP_WINDOW_S` (default `120`) — how
+  long load must stay above the hard ceiling, with concurrency already at
+  its floor, before the governor stops backing off (the new trip
+  condition above).
+- `STAGE_E_GOVERNOR_CONCURRENCY_CAP` (default `os.cpu_count() - 1`, floored
+  at 1) — the live ceiling additive increase climbs to. Explicit and
+  configurable rather than left implicit: more concurrent dispatches means
+  more concurrent Postgres work, and Postgres also serves the live site —
+  one core held back is that reserve.
 
 **Seeing whether it engaged.** `DispatchOutcome.load_brake_waits`/
-`load_brake_seconds`, merged into `PilotRunLedger.counters` on every
-completed micro-batch (see "Observability" below) — both `0`/`0.0` when the
-brake never engaged, which is expected on a quiet box. A run showing
-non-zero values under contention and zero when the box is quiet is the
-brake behaving as designed, not a bug.
+`load_brake_seconds`, merged into `PilotRunLedger.counters` (alongside the
+new `load_governor_concurrency`) on every completed micro-batch (see
+"Observability" below) — waits/seconds are both `0`/`0.0` when the
+governor never slept, which is expected on a quiet box (additive increase
+never sleeps). A run showing non-zero wait values under contention and
+`load_governor_concurrency` tracking up on a quiet box, down under load, is
+the governor behaving as designed, not a bug.
 
-**Failure posture.** Wrapped in a bare `try`/`except` that proceeds as if
-unbraked on any error (a malformed setting, a transient `os.getloadavg`
-failure) — matching `stage_e_batch_sizing.resolve_micro_batch_size`'s own
-stated posture that a typo'd env var must not be able to take the run down.
-The brake is a convenience; the envelope's own hard ceiling does not depend
-on it.
+**Failure posture.** Wrapped in a bare `try`/`except` that proceeds
+unbraked at the LAST KNOWN GOOD concurrency on any error (a malformed
+setting, a transient `os.getloadavg` failure) — matching
+`stage_e_batch_sizing.resolve_micro_batch_size`'s own stated posture that a
+typo'd env var must not be able to take the run down. The governor is a
+convenience; the envelope's own hard ceiling does not depend on it.
 
 ### Evidence transfer and decoupled fetch-ahead (issues #473 PR-2 and #472, 2026-07-25)
 
@@ -892,9 +952,13 @@ it as an incident.
 
 Caps the number of `dispatch_micro_batch` calls running CONCURRENTLY, across
 every django-q2 worker process on the box, to
-`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (default `2`, env-tunable —
-same "placeholder pending real measurement" posture as
-`STAGE_E_MICRO_BATCH_SIZE` above). Motivated by the shakedown incident PR
+`settings.STAGE_E_MAX_CONCURRENT_DISPATCHES` (default `6`, env-tunable —
+raised 2026-08-17 from 2 to 5: DPI-460 rendering raised the per-card OCR cost of
+each dispatch, and at batch 250 the old 2/3-work settings throttled the
+rescan's throughput below what the 7-core ceiling allows; raised again
+2026-08-19 from 5 to 6 on measurement that the pass was 67.3% compute-bound
+rather than fetch-bound, still one below the host-load hard ceiling of 7.0).
+Motivated by the shakedown incident PR
 #448 also fixed (the vote-collision half of the same run) — see
 `local_calculate_verdicts._split_new_printing_tag_votes`'s own docstring for
 the full incident numbers: eight concurrent dispatches, all running
@@ -1035,9 +1099,10 @@ streamed micro-batch" below; non-zero occasionally is healthy, not a bug),
 streaming conveyor), `stage_d_slow_path_routed`, `elapsed_s`, `peak_rss_mb` (via the same
 `process_metrics.get_process_rss_mb` Phase 1 wired in), `lockout_trip_id`
 (non-null only when a Google lockout tripped mid-batch), and
-`load_brake_waits`/`load_brake_seconds` (2026-08-05 — see "The host-load
-soft brake" below; both `0`/`0.0` whenever the brake never engaged for this
-batch, which is the common case). A halted call
+`load_brake_waits`/`load_brake_seconds`/`load_governor_concurrency`
+(2026-08-05, governor added 2026-08-13 — see "The host-load AIMD governor"
+below; waits/seconds are both `0`/`0.0` whenever the governor never slept
+for this batch, which is the common case on a quiet box). A halted call
 (`disabled`/`halted-open-trip`/`halted-new-trip`)
 writes NO ledger row at all — a halted dispatch never partially starts, so
 there's nothing to record beyond the `EnvelopeTrip` row `check_envelope`
@@ -2135,6 +2200,118 @@ guarantees the stale row is gone rather than merely superseded, and it is still
 required whenever the stale row must stop counting toward consensus
 immediately.
 
+## `backfill_survivor_pks` — reaching the historical fallback-channel corpus (2026-08-11)
+
+`MPCAutofill/cardpicker/management/commands/backfill_survivor_pks.py` re-dispatches
+`stage-d-fallback-v1` `CardScanLog` rows that predate PR #764 (the fix that made
+`run_fallback_calculator` persist `evidence_types_used`/`survivor_pks` onto every row it writes)
+through the SAME streaming conveyor `stream_full_catalog.py` uses
+(`cardpicker.stage_e_dispatch.dispatch_micro_batch`), so the fields land on the affected corpus
+rather than staying `[]`/`NULL` forever.
+
+### Why re-dispatching is safe rather than a second calculator
+
+The command computes nothing. It picks a cohort and drives it through the existing conveyor;
+`dispatch_micro_batch` calls `_run_stage_d`, which calls the unchanged `run_fallback_calculator`,
+which recomputes `calculate_fallback_verdict` off the card's own already-persisted `ImageEvidence`
+exactly as every other Stage D pass does.
+
+Re-running Stage D under a fresh `run_id` does not re-cast or corrupt any existing vote, for a
+reason established by reading `local_calculate_verdicts._eligible_cards_queryset` rather than
+assumed: a fresh `run_id` only self-suppresses that run's own output, never an earlier run's, so
+every card in the cohort is eligible again. Two things follow:
+
+- A card whose prior fallback pass reached a SKIP (the only rows this command targets — a skip
+  never casts a `CardPrintingTag`) gets a NEW `CardScanLog` row under the new `run_id`, this time
+  carrying both fields. The OLD, field-less row is left exactly where it is — `CardScanLog` is an
+  append-only audit trail by design, never updated or deduplicated in place — which is harmless:
+  every reader of these two fields wants the current/latest row for a card.
+- A card whose prior fallback pass reached a MATCH is safe from a double-cast because the evidence
+  feeding the verdict is unchanged (this command never re-extracts): the recomputed verdict is
+  identical to the stored one, and `_split_new_printing_tag_votes` skips — counts as
+  `already_voted`, never purges or rewrites — a proposed vote that already matches what is stored.
+  No card ALREADY carrying a MATCH row is even in this command's own cohort (it only selects
+  skip-reason rows), but it is the reasoning that makes the re-dispatch safe for Stage D in
+  general.
+
+**A card in the cohort can genuinely flip from a repeat skip to a fresh MATCH.** This command
+never re-extracts evidence itself, but the card's `ImageEvidence` can have moved since the
+ORIGINAL skip was scanned through some other pass entirely (a later evidence-transfer hit, a
+reparse, a Stage C re-extraction) — Stage D reads whatever is CURRENTLY persisted, not what was
+persisted the day the original skip was written. The preflight audit for the 2026-08-11 cohort
+put this at scale: roughly 13,200–17,000 cards expected to flip skip→MATCH and cast a brand-new
+fallback vote, plus ~3,400 new join-key votes, on the strength of evidence that improved after
+the original scan. That is real Stage D work, not pure field-fill — see "Fidelity gate" below.
+
+### Cohort
+
+Every `Card` carrying a `stage-d-fallback-v1` `CardScanLog` row whose `skip_reason` is one
+`calculate_fallback_verdict` can reach WITH a computed survivor set
+(`no-sub-check-evidence`/`eliminated`/`ambiguous` — never `no-evidence`, which never reaches that
+function and correctly stays `survivor_pks=None` forever) and whose `survivor_pks` is still
+`NULL`, excluding any card that already carries some OTHER row for that anonymous_id with
+`survivor_pks` populated. That exclusion is self-terminating: the moment a batch backfills a card,
+it drops out of the very next cohort query, so the pass runs to genuine exhaustion.
+
+No stage-0 Scryfall freshness gate — unlike `stream_full_catalog`/`run_pipeline`, this command
+never re-extracts evidence, so it has no dependency on reference-data freshness. `dispatch_micro_batch`
+still runs Stage C first exactly as every other dispatch does; its own already-done manifest check
+makes that a no-op for the ~99.99% of the cohort with current evidence.
+
+### Resume, stop conditions, exit codes
+
+Reuses `cardpicker.models.StageEFullCatalogCursor` — the SAME resume model `stream_full_catalog`
+uses — under its own scope key (`RESUME_SCOPE = "survivor-backfill"`), never shared with that
+command's own scopes. The stop-condition and exit-code contract (envelope halt → exit 3, no retry
+ever; concurrency-cap throttle → bounded exponential backoff, budget exhaustion → exit 4; genuine
+cohort exhaustion → exit 0; fidelity-gate violation → exit 7, see below) is imported from
+`stream_full_catalog`, not redeclared, so the codes can never drift apart across the three
+commands that share them. `--dry-run` is a real pass that walks and sizes the cohort and reports
+the plan without dispatching a single batch or touching the resume mark.
+
+### Fidelity gate (2026-08-13)
+
+Because a real pass can genuinely flip a card to a fresh MATCH (see "Why re-dispatching is safe"
+above), this command carries the same fidelity gate `run_pipeline.py` runs at the end of its own
+pass — `local_identify_printing_tags.run_fidelity_gate` — rather than a second, separately-written
+check. **Both commands call this ONE shared function**, extracted from `run_pipeline.py`'s own
+former `_run_fidelity_gate` method specifically so the two could never disagree on what "the gate"
+means. It answers one question over every card THIS invocation cast a `CardPrintingTag` vote for
+(scoped by the pass's own `run_id`, the same identity stamped on every batch's votes): did any of
+them reach a RESOLVED printing state? The check itself is `verify_zero_resolutions` — a pure
+`resolve_printing` re-read against live DB state — and `resolve_weighted_consensus`'s own
+human-backed hard gate means a card can never resolve from machine votes with literally zero
+human vote anywhere on it; what the fidelity gate actually catches is a card that already carried
+a stale human vote reaching quorum on the strength of THIS pass's own fresh machine vote(s) — a
+resolution nobody explicitly signed off on for the printing this pass just helped settle.
+
+**Never a rollback.** A violation is reported — logged, and returned so the caller can exit
+non-zero on it — but nothing written by this pass (or any earlier one) is purged, retracted, or
+undone. Every row stays exactly where it landed, queryable by `run_id`.
+
+**Precedence.** An envelope halt (exit 3) or an exhausted throttle-retry budget (exit 4) keeps its
+own exit code and its own required next action unchanged — the gate is skipped ENTIRELY on those
+two paths, never merely non-overriding, so it can neither change either exit code nor add a
+second, conflicting report to a pass a human is already required to act on. On every other stop
+path — genuine cohort exhaustion, or the operator's own `--max-batches` bound — a violation
+outranks the exit code that path would otherwise report (`EXIT_FIDELITY_GATE_VIOLATION`, exit 7):
+everything written stays written, but the pass cannot report success, or merely "bounded", while
+machine votes alone resolved a card.
+
+**Coherent with `--dry-run`.** A dry run casts no vote, so the gate has nothing to check — it is
+reported skipped (`FIDELITY GATE: skipped (--dry-run wrote no votes to check).`) rather than
+silently never mentioned, the same handling `run_pipeline.py` gives its own gate under `--dry-run`.
+
+### Running it
+
+```
+python manage.py backfill_survivor_pks --dry-run
+python manage.py backfill_survivor_pks --batch-size auto
+```
+
+Only the owner triggers a real (non-dry-run) invocation against production, after this lands and
+is deployed — resumable with a bare re-invocation, or `--start-pk <resume_pk>` to reset the mark.
+
 ## `channel_report` — what every channel produced, after a run
 
 `manage.py channel_report` answers one question for one run: **what did
@@ -2295,6 +2472,76 @@ by an earlier run and merely skipped in this one.
 - `--family vote|extractor|abstention` — report one family only.
 - `--json` — machine-readable output for a wrapper script.
 - `--no-gate` — report without failing the exit code.
+
+## Per-extractor re-extraction (2026-08-19)
+
+Both Stage C compute engines — `run_image_evidence_cohort.py`'s decoupled
+fetch/compute pool and `stage_e_dispatch._run_stage_c` — used to treat a
+card's re-extraction as all-or-nothing: `image_evidence.compute_card_evidence`
+had no notion of "only some of this row's extractors are stale," so bumping
+any single extractor's version (`MANIFEST_EXTRACTOR_CURRENT_VERSIONS`) forced
+every one of the other twelve to recompute too, including the 6-attempt OCR
+escalation ladder that dominates per-card compute time.
+
+`compute_card_evidence` now accepts three additional, purely-additive
+parameters — `stale_extractor_keys`, `stored_evidence_fields`,
+`stored_extractor_versions` — all `None` by default, which reproduces the
+old full-recompute behaviour byte-for-byte. When a caller passes a
+`frozenset` of stale keys plus the card's current stored row, every
+extractor NOT in that set is **carried forward**: its already-persisted
+field values are copied into this pass's result and its stored version tag
+is kept, without running that extractor's own compute at all. A key absent
+from `stored_extractor_versions` (a row that has never run that extractor)
+is always treated as stale, regardless of `stale_extractor_keys` membership —
+there is nothing to carry forward from.
+
+Both engines resolve `stale_extractor_keys`/`stored_evidence_fields` on the
+FETCH thread, from the card's own `current_evidence_queryset` row (the same
+content*hash+md5 currency rule every other stored-evidence reader uses), and
+carry them across to the compute stage alongside the fetched image bytes —
+see `run_image_evidence_cohort._stale_extractor_keys_and_stored_fields` (the
+single source of truth `stage_e_dispatch.\_stage_c_stale_extractor_keys_and*
+stored*fields`lazily imports rather than reimplements).`force_stage_c*
+reextract`(issue #465) is unaffected:`\_run_stage_c`passes`None` for all
+three whenever it's set, forcing a full recompute exactly as before this
+mechanism existed.
+
+**Dependency ordering, not a dependency graph.** Extractors read each
+other's outputs through the `fields` dict they all write to (`art_edge`
+reads `crop_coordinates`' own `art_crop_px`, `artbox_phash` reads the OCR
+group's `collector_line_collector_number`/`illus_anchor_fired`). The
+carry-forward pass populates `fields` with every non-stale extractor's
+stored values BEFORE any extractor block runs, in the same file order the
+extractors already execute in — so a stale extractor reading a non-stale
+dependency's value from `fields` gets the correct (carried-forward) value
+automatically, with no explicit dependency graph to maintain.
+
+**One exception: the OCR group is one staleness unit.**
+`collector_line_ocr`/`artist_ocr`/`collector_line_tsv` share a single
+tesseract escalation loop and cannot be split — `artist_ocr`'s own
+reuse-before-recompute pass needs every attempt's raw text from that loop,
+not the single stored winning text a carry-forward could offer instead. If
+ANY of the three is stale, the whole group reruns (recomputing the other
+two too, even if their own version didn't change — a bounded, accepted
+redundancy given they're already coupled by construction).
+
+**Measured, not guessed** (2026-08-19, read-only production query): 235,865
+`ImageEvidence` rows exist, 235,848 of them fully current against today's
+13-key manifest. Under the OLD all-or-nothing resume filter, bumping any
+ONE extractor's version (e.g. `art_edge`) would force a full re-extraction
+of all 235,848 rows — 235,848 × 13 = 3,066,024 extractor-computations.
+Under this PR's per-extractor carry-forward, the same pass runs exactly
+235,848 extractor-computations (the one stale extractor per row), skipping
+2,830,176 — a 92.3% reduction in extractor-computations for a single-
+extractor version bump.
+
+**Known limitation, not fixed here.** A carried-forward extractor does not
+run this pass, so it correctly writes no `CardScanLog` row under this run's
+`run_id`. `image_evidence.build_reconciliation_report(run_id=...)` infers
+"voted" from "ran AND no matching run-scoped skip row," so a card whose
+carried-forward value was actually a skip from an earlier run misreports as
+"voted" for a run that only ever carried it forward. The whole-catalogue
+(not run-scoped) report is unaffected.
 
 ## See also
 
