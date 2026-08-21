@@ -464,6 +464,78 @@ def identity_group_expanded_card_ids(card_ids: Iterable[int]) -> set[int]:
     return expanded
 
 
+def identity_groups_for_card_ids(card_ids: Iterable[int]) -> dict[int, list[int]]:
+    """
+    Batch analogue of calling `identity_group_card_ids(card)` once per member of `card_ids`,
+    returning EACH card's own full identity group keyed by its pk - deliberately NOT the single
+    flattened union `identity_group_expanded_card_ids` returns. A caller that needs to check each
+    card's OWN group in isolation (e.g. `purge_machine_votes.verify_no_machine_only_resolutions`,
+    which must not let one card's identity group silently absorb an unrelated card's votes) cannot
+    use that flattened set the moment two of the input cards belong to different identity groups -
+    it would conflate them.
+
+    Four queries total regardless of how many `card_ids` are passed in - own checksums, own
+    phashes, checksum-group reverse lookup, phash-group reverse lookup - never one query per card.
+    That is the only reason this function exists beside the single-card `identity_group_card_ids`:
+    looping that per card, over a batch the size a whole-catalogue gate check can see, turns an
+    O(1)-per-card local operation into an O(n) query fan-out.
+    """
+    ids = set(card_ids)
+    if not ids:
+        return {}
+
+    if _md5_checksum_column_exists():
+        own_checksums: dict[int, str] = {
+            pk: checksum
+            for pk, checksum in Card.objects.filter(pk__in=ids).values_list("pk", MD5_CHECKSUM_FIELD)
+            if checksum
+        }
+    else:
+        own_checksums = {}
+    own_phashes: dict[int, int] = {
+        pk: phash
+        for pk, phash in _current_artbox_phash_queryset().filter(card_id__in=ids).values_list("card_id", "artbox_phash")
+        if phash is not None
+    }
+
+    checksum_to_card_ids: dict[str, set[int]] = {}
+    checksums = set(own_checksums.values())
+    if checksums:
+        for sibling_pk, sibling_checksum in _card_ids_with_md5_checksums_grouped(checksums):
+            checksum_to_card_ids.setdefault(sibling_checksum, set()).add(sibling_pk)
+
+    phash_to_card_ids: dict[int, set[int]] = {}
+    phashes = set(own_phashes.values())
+    if phashes:
+        for sibling_pk, sibling_phash in (
+            _current_artbox_phash_queryset().filter(artbox_phash__in=phashes).values_list("card_id", "artbox_phash")
+        ):
+            if sibling_phash is not None:
+                phash_to_card_ids.setdefault(sibling_phash, set()).add(sibling_pk)
+
+    groups: dict[int, list[int]] = {}
+    for card_id in ids:
+        group = {card_id}
+        own_checksum = own_checksums.get(card_id)
+        if own_checksum is not None:
+            group |= checksum_to_card_ids.get(own_checksum, set())
+        own_phash = own_phashes.get(card_id)
+        if own_phash is not None:
+            group |= phash_to_card_ids.get(own_phash, set())
+        groups[card_id] = sorted(group)
+    return groups
+
+
+def _card_ids_with_md5_checksums_grouped(checksums: set[str]) -> list[tuple[int, str]]:
+    """
+    The pk/checksum pairs backing `identity_groups_for_card_ids`' reverse lookup - the same
+    underlying query as `_card_ids_with_md5_checksums`, but keeping the checksum alongside each
+    pk (that function discards it, correct for its own single-checksum-set callers but useless
+    here, where multiple checksums are being reverse-mapped in the same pass).
+    """
+    return list(Card.objects.filter(**{f"{MD5_CHECKSUM_FIELD}__in": checksums}).values_list("pk", MD5_CHECKSUM_FIELD))
+
+
 @dataclass(frozen=True)
 class ResolvedPrinting:
     expansion_code: str
