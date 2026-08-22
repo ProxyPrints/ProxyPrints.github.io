@@ -110,6 +110,19 @@ class CanonicalPrintingMetadataFactory(factory.django.DjangoModelFactory):
     lang = "en"
 
 
+class CanonicalOracleCardFactory(factory.django.DjangoModelFactory):
+    class Meta:
+        model = models.CanonicalOracleCard
+
+    canonical_id = factory.LazyFunction(uuid.uuid4)
+    oracle_text = ""
+    cmc = 0.0
+    colors = factory.LazyFunction(list)
+    color_identity = factory.LazyFunction(list)
+    type_line = ""
+    legalities = factory.LazyFunction(dict)
+
+
 class CardPrintingTagFactory(factory.django.DjangoModelFactory):
     class Meta:
         model = models.CardPrintingTag

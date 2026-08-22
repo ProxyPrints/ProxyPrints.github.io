@@ -313,6 +313,38 @@ class CanonicalPrintingMetadata(models.Model):
         ]
 
 
+class CanonicalOracleCard(models.Model):
+    """
+    Oracle-level facts - identical across every printing of a card - keyed on `canonical_id`
+    (Scryfall's oracle id), populated by `oracle_card_import.import_scryfall_oracle_cards` from
+    the `oracle_cards` bulk-data cache. Split out of `CanonicalPrintingMetadata`, which is 1:1
+    with `CanonicalCard` (i.e. per PRINTING): measured 2026-08-22, 113,224
+    `CanonicalPrintingMetadata` rows carried oracle-level facts duplicated across only 35,990
+    distinct oracle cards actually represented in this catalogue (~3.15x duplication) - this
+    table holds each oracle card's facts exactly once regardless of how many printings exist.
+
+    Not every `CanonicalCard` has a matching row here: rows with `canonical_id=None` (81
+    measured 2026-07-29, see `CanonicalPrintingMetadata.catalogued_printings_count`'s own
+    comment for the same population) have no oracle card to look up at all - callers must
+    treat a missing match as expected, not an error.
+
+    `color_identity`/`type_line` ALSO still live on `CanonicalPrintingMetadata` - this table
+    duplicates rather than replaces them there; see `oracle_card_import`'s module docstring for
+    why the old columns were left in place.
+    """
+
+    canonical_id = models.UUIDField(unique=True, primary_key=True)
+    oracle_text = models.TextField(blank=True, default="")
+    cmc = models.FloatField(default=0)
+    colors = models.JSONField(default=list, blank=True)
+    color_identity = models.JSONField(default=list, blank=True)
+    type_line = models.CharField(max_length=255, blank=True, default="")
+    legalities = models.JSONField(default=dict, blank=True)
+
+    def __str__(self) -> str:
+        return f"Oracle card {self.canonical_id}"
+
+
 class Source(models.Model):
     key = models.CharField(max_length=50, unique=True)  # must be a valid HTML id
     user = models.ForeignKey(to=User, on_delete=models.SET_NULL, null=True, blank=True)
