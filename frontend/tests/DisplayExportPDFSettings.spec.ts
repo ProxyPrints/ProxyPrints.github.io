@@ -112,21 +112,20 @@ test.describe("DisplayExportPDF - Save PDF to Google Drive (rescued from /print'
 });
 
 test.describe("DisplayExportPDF - editor export controls", () => {
-  test("opens with a safe default selection mode and a real, non-guessed total page count", async ({
+  test("the rail defaults to a safe selection mode and shows a real, non-guessed total page count", async ({
     page,
     network,
   }) => {
     network.use(...tenCardHandlers);
     await loadPageWithDefaultBackend(page);
     // 10 identical fronts, 8 cards per page at the rail's default LETTER/rearFeed/D18 layout
-    // (see displayPdfProps.test.ts's own documented 4x2 grid) -> 2 real pages.
+    // (see displayPdfProps.test.ts's own documented 4x2 grid) -> 2 real pages. Both controls now
+    // live in the rail's own "Export" section, not the dialog - no dialog to open for this check.
     await importTextOnEditorLanding(page, "10x my search query");
 
-    await openPDFSettings(page);
-
-    await expect(
-      page.getByTestId("display-export-card-selection-mode")
-    ).toHaveValue("frontsAndBacks");
+    await expect(page.getByTestId("display-card-selection-mode")).toHaveValue(
+      "frontsAndBacks"
+    );
     await expect(page.getByText("Pages (2 total)")).toBeVisible();
   });
 
@@ -138,18 +137,20 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "10x my search query");
 
+    // Rail control now - set before opening the dialog, since its backdrop blocks the rail
+    // behind it while open.
+    await page.getByTestId("display-page-range-start").fill("1");
+    await page.getByTestId("display-page-range-end").fill("1");
     await openPDFSettings(page);
-    await page.getByTestId("display-export-page-range-start").fill("1");
-    await page.getByTestId("display-export-page-range-end").fill("1");
     const download1 = page.waitForEvent("download");
     await clickDownload(page);
     const path1 = await (await download1).path();
     if (!path1) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(path1))).toBe(1);
 
+    await page.getByTestId("display-page-range-start").fill("");
+    await page.getByTestId("display-page-range-end").fill("");
     await openPDFSettings(page);
-    await page.getByTestId("display-export-page-range-start").fill("");
-    await page.getByTestId("display-export-page-range-end").fill("");
     const download2 = page.waitForEvent("download");
     await clickDownload(page);
     const path2 = await (await download2).path();
@@ -174,10 +175,11 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     if (!defaultPath) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(defaultPath))).toBe(2);
 
-    await openPDFSettings(page);
+    // Rail control now, not the dialog's.
     await page
-      .getByTestId("display-export-card-selection-mode")
+      .getByTestId("display-card-selection-mode")
       .selectOption("backsOnly");
+    await openPDFSettings(page);
     const backsOnlyDownload = page.waitForEvent("download");
     await clickDownload(page);
     const backsOnlyPath = await (await backsOnlyDownload).path();
@@ -200,14 +202,15 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    // These two now live in the rail's own "Print quality" section, not the export dialog - set
-    // before opening it, since the dialog's backdrop blocks the rail behind it while it's open.
+    // These now live in the rail's own "Print quality"/"Export" sections, not the export dialog -
+    // set before opening it, since the dialog's backdrop blocks the rail behind it while it's
+    // open.
     await page.getByTestId("display-image-dpi").fill("100");
     await page.getByTestId("display-jpg-quality").fill("5");
+    await page.getByTestId("display-page-range-start").fill("1");
+    await page.getByTestId("display-page-range-end").fill("1");
 
     await openPDFSettings(page);
-    await page.getByTestId("display-export-page-range-start").fill("1");
-    await page.getByTestId("display-export-page-range-end").fill("1");
 
     const requestPromise = page.waitForRequest(
       (request) =>
@@ -333,20 +336,11 @@ test.describe("DisplayExportPDF - SCM cutting mode", () => {
 
     await openPDFSettings(page);
     await expect(
-      page.getByTestId("display-export-card-selection-mode")
-    ).toBeVisible();
-    await expect(
       page.getByTestId("display-export-scm-paper-size")
     ).not.toBeVisible();
 
     await page.getByTestId("display-export-scm-mode-switch").check();
 
-    await expect(
-      page.getByTestId("display-export-card-selection-mode")
-    ).not.toBeVisible();
-    await expect(
-      page.getByTestId("display-export-page-range-start")
-    ).toHaveCount(0);
     await expect(
       page.getByTestId("display-export-scm-paper-size")
     ).toBeVisible();
@@ -360,10 +354,13 @@ test.describe("DisplayExportPDF - SCM cutting mode", () => {
     await expect(
       page.getByTestId("display-export-scm-offset-angle")
     ).toBeVisible();
-    // Image quality now lives in the rail, not this dialog - stays visible and unaffected by
-    // which panel (standard/SCM) is showing. SCMCard reads it exactly like the standard grid's
-    // own card image does.
+    // Image quality, card selection mode, and page range now live in the rail, not this dialog -
+    // stay visible and unaffected by which panel (standard/SCM) the dialog is showing. SCMCard
+    // reads image quality exactly like the standard grid's own card image does; card selection
+    // mode and page range are simply outside the dialog's own SCM/standard split entirely.
     await expect(page.getByTestId("display-image-dpi")).toBeVisible();
+    await expect(page.getByTestId("display-card-selection-mode")).toBeVisible();
+    await expect(page.getByTestId("display-page-range-start")).toBeVisible();
   });
 
   test("an SCM export is a structurally different document from the standard export", async ({
@@ -485,10 +482,12 @@ test.describe("DisplayExportPDF - Custom page size (rail)", () => {
     await page.getByLabel("Paper size").selectOption("CUSTOM");
     await page.getByTestId("display-custom-page-width").fill("100");
     await page.getByTestId("display-custom-page-height").fill("150");
+    // Rail control now - set before opening the dialog, since its backdrop blocks the rail
+    // behind it while open.
+    await page.getByTestId("display-page-range-start").fill("1");
+    await page.getByTestId("display-page-range-end").fill("1");
 
     await openPDFSettings(page);
-    await page.getByTestId("display-export-page-range-start").fill("1");
-    await page.getByTestId("display-export-page-range-end").fill("1");
     const download = page.waitForEvent("download");
     await clickDownload(page);
     const downloadPath = await (await download).path();

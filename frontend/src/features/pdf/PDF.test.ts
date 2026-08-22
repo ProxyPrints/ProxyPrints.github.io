@@ -7,6 +7,7 @@ import {
   buildDisplayPDFProps,
   DisplayExportSettings,
   DisplayPDFPropsInput,
+  DisplaySheetExportSettings,
 } from "@/features/pdf/displayPdfProps";
 import {
   computePDFRenderPageCount,
@@ -57,12 +58,12 @@ const DEFAULT_SHEET_SETTINGS = {
   imageDPI: 600,
   jpgQuality: 100,
   roundCorners: false,
-};
-
-const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
+};
+
+const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,
@@ -118,6 +119,14 @@ const withExportSettings = (
   exportSettings: DisplayExportSettings
 ): DisplayPDFPropsInput => ({ ...input, exportSettings });
 
+const withSheetSettings = (
+  input: DisplayPDFPropsInput,
+  sheetSettings: Partial<DisplaySheetExportSettings>
+): DisplayPDFPropsInput => ({
+  ...input,
+  sheetSettings: { ...input.sheetSettings, ...sheetSettings },
+});
+
 // buildDisplayPDFProps stops at Omit<PDFProps, "fileHandles"> (the main-thread adapter has no
 // handles to populate; the render service adds them) - the functions under test take full
 // PDFProps, so the empty-handles case is supplied here.
@@ -141,11 +150,7 @@ describe("computePDFRenderPageCount - standard path", () => {
 
   it("counts the range-sliced page total, not the full deck", () => {
     const props = buildFullPDFProps(
-      withExportSettings(baseInput, {
-        ...DEFAULT_EXPORT_SETTINGS,
-        pageRangeStart: 2,
-        pageRangeEnd: 4,
-      })
+      withSheetSettings(baseInput, { pageRangeStart: 2, pageRangeEnd: 4 })
     );
     expect(computePDFRenderPageCount(props)).toBe(3);
     expect(countRenderedPages(createPDFElement(props))).toBe(3);
@@ -165,16 +170,20 @@ describe("computePDFRenderPageCount - standard path", () => {
 
 describe("computePDFRenderPageCount - SCM path", () => {
   const scmInput = (
-    overrides: Partial<DisplayExportSettings> = {}
+    exportOverrides: Partial<DisplayExportSettings> = {},
+    sheetOverrides: Partial<DisplaySheetExportSettings> = {}
   ): DisplayPDFPropsInput =>
-    withExportSettings(baseInput, {
-      ...DEFAULT_EXPORT_SETTINGS,
-      scmMode: true,
-      scmPaperSize: "letter",
-      scmVariant: "default",
-      scmDuplex: true,
-      ...overrides,
-    });
+    withSheetSettings(
+      withExportSettings(baseInput, {
+        ...DEFAULT_EXPORT_SETTINGS,
+        scmMode: true,
+        scmPaperSize: "letter",
+        scmVariant: "default",
+        scmDuplex: true,
+        ...exportOverrides,
+      }),
+      sheetOverrides
+    );
 
   it("counts the SCM render's own pagination (letter default 2x4, duplex -> 2/group)", () => {
     // 20 members -> ceil(20/8) = 3 groups -> 6 duplex pages.
@@ -192,7 +201,7 @@ describe("computePDFRenderPageCount - SCM path", () => {
 
   it("applies the range to the SCM page sequence (front/back interleaved)", () => {
     const props = buildFullPDFProps(
-      scmInput({ pageRangeStart: 2, pageRangeEnd: 4 })
+      scmInput({}, { pageRangeStart: 2, pageRangeEnd: 4 })
     );
     // Pages 2..4 = group0 back, group1 front, group1 back.
     expect(computePDFRenderPageCount(props)).toBe(3);
@@ -223,11 +232,7 @@ describe("computePDFRenderWindow - absolute start page + range-sliced total", ()
   it("a mid-deck range reports the slice's absolute start and its own length", () => {
     const { startPage, totalPages } = computePDFRenderWindow(
       buildFullPDFProps(
-        withExportSettings(baseInput, {
-          ...DEFAULT_EXPORT_SETTINGS,
-          pageRangeStart: 3,
-          pageRangeEnd: 5,
-        })
+        withSheetSettings(baseInput, { pageRangeStart: 3, pageRangeEnd: 5 })
       )
     );
     expect(startPage).toBe(3);

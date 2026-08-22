@@ -41,11 +41,11 @@
  * Everything else `PDF.tsx`'s own `PDFProps` interface exposes is now a real control, sourced
  * from either `DisplaySheetExportSettings` (the rail's own sheet state - page size including its
  * `Custom` option, bleed edge, guides and their colour/length/thickness/offset geometry plus an
- * opt-in crosshair-marks toggle, image DPI/JPG quality, and corner rounding - the last five moved
- * here from the export step's own settings so they're editable next to the live sheet they govern,
- * see `DisplayPage.tsx`'s own "Guides" and "Print quality" rail sections) or `DisplayExportSettings`
- * (the export affordance's own settings step - card selection mode, page range, SCM mode and its
- * six sub-settings, and the per-side page-margin override described below).
+ * opt-in crosshair-marks toggle, image DPI/JPG quality, corner rounding, card selection mode, and
+ * page range - the last seven moved here from the export step's own settings so they're editable
+ * next to the live sheet they govern, see `DisplayPage.tsx`'s own "Guides", "Print quality", and
+ * "Export" rail sections) or `DisplayExportSettings` (the export affordance's own settings step -
+ * SCM mode and its six sub-settings, and the per-side page-margin override described below).
  *
  * ## Margin-preset vs. per-side override
  *
@@ -123,6 +123,15 @@ export interface DisplaySheetExportSettings {
   jpgQuality: number;
   /** Same migration as `imageDPI`/`jpgQuality` above. */
   roundCorners: boolean;
+  /** Moved here from the export step's own `DisplayExportSettings` (this module's own comment) -
+   * which cards make it into the export and which of its pages actually render aren't a one-off
+   * export-run choice, they're a property of what the printed artifact IS, so they live in the
+   * rail's "Export" section next to the sheet they govern rather than behind the Export PDF
+   * dialog. `pageRangeStart`/`pageRangeEnd` are 1-indexed and inclusive (see
+   * `PDFProps.pageRangeStart`'s own comment); `undefined` on either means "all pages". */
+  cardSelectionMode: keyof typeof CardSelectionMode;
+  pageRangeStart?: number;
+  pageRangeEnd?: number;
 }
 
 /** An explicit per-side override for `DisplayExportSettings.marginOverride` — see the module
@@ -136,12 +145,8 @@ export interface PageMarginOverride {
 
 /** The export affordance's own settings (`DisplayExportPDF.tsx`) - export-time choices with no
  * relationship to the sheet's own layout, so they live separately from
- * `DisplaySheetExportSettings` above. `pageRangeStart`/`pageRangeEnd` are 1-indexed and inclusive
- * (see `PDFProps.pageRangeStart`'s own comment); `undefined` on either means "all pages". */
+ * `DisplaySheetExportSettings` above. */
 export interface DisplayExportSettings {
-  cardSelectionMode: keyof typeof CardSelectionMode;
-  pageRangeStart?: number;
-  pageRangeEnd?: number;
   /** The guillotine-cut page guide lines (as opposed to `sheetSettings.showCutLines`'s per-card
    * trim marks) - a full sheet's own cut guides, independent of whether card cut lines are drawn
    * at all. `/print`'s `PDFGenerator.tsx` exposes this as its own "Page Cut Guide Lines" toggle;
@@ -195,7 +200,7 @@ export const buildDisplayPDFProps = (
     sheetSettings.customPageHeightMM
   );
   return {
-    cardSelectionMode: exportSettings.cardSelectionMode,
+    cardSelectionMode: sheetSettings.cardSelectionMode,
     showCrossCutLines: sheetSettings.showCrossCutLines,
     pageSize: "CUSTOM",
     pageWidth: portraitSize.height,
@@ -216,8 +221,8 @@ export const buildDisplayPDFProps = (
     pageMarginRightMM: margins.right,
     pageOffsetXMM: sheetSettings.offsetXMM,
     pageOffsetYMM: sheetSettings.offsetYMM,
-    pageRangeStart: exportSettings.pageRangeStart,
-    pageRangeEnd: exportSettings.pageRangeEnd,
+    pageRangeStart: sheetSettings.pageRangeStart,
+    pageRangeEnd: sheetSettings.pageRangeEnd,
     cardDocumentsByIdentifier: input.cardDocumentsByIdentifier,
     projectMembers: input.projectMembers,
     projectCardback: input.projectCardback,

@@ -299,3 +299,15 @@ coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF 
 # controls before opening the export dialog instead of via the dialog's own (now-removed)
 # display-export-image-dpi/display-export-jpg-quality controls.
 coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - editor export controls > DPI and JPG quality sliders set the actual image-worker request's dpi/jpgQuality query params — renamed to "the rail's DPI and JPG quality controls set the actual image-worker request's dpi/jpgQuality query params" when the two controls moved from the export dialog into the right rail's "Print quality" section; same dpi/jpgQuality query-param assertion, now driven through the rail's own testids ahead of opening the export dialog (the dialog's backdrop blocks the rail behind it while open).
+
+# Card-selection-and-page-range-to-rail round - "Cards to include" and the page range control
+# moved out of DisplayExportPDF.tsx's own settings step into the right rail's new "Export"
+# section (they decide which cards make it into the export and which of its pages actually
+# render - properties of the artifact, not a one-off export-run choice, same reasoning as the
+# DPI/JPG/corner-rounding and cut-line-appearance rounds before it). The renamed test's own
+# assertions are unchanged (default selection mode value, real non-guessed total page count),
+# now read straight off the rail with no dialog to open first; every other test in this file
+# that exercises either control kept its title and had only its body's testids/ordering updated
+# in place (fill the rail control before opening the dialog, since its backdrop blocks the rail
+# behind it while open - same constraint the DPI/JPG round above already documents).
+coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - editor export controls > opens with a safe default selection mode and a real, non-guessed total page count — renamed to "the rail defaults to a safe selection mode and shows a real, non-guessed total page count" when "Cards to include" and the page range control moved from the export dialog into the right rail's new "Export" section; same assertions (default selection mode value, real non-guessed total page count), now read directly off the rail with no dialog to open first.

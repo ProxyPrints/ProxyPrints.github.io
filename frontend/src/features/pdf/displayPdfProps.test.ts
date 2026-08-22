@@ -24,8 +24,9 @@ jest.mock("@react-pdf/renderer", () => ({
 // the standard 3.175mm MPC bleed, guides on, no registration offset. LETTER portrait dims from
 // the same getPageSizeMM lookup DisplayPage/displayPdfProps both use.
 const LETTER_PORTRAIT = getPageSizeMM("LETTER", undefined, undefined);
-// Includes the rail's "Print quality" defaults (imageDPI/jpgQuality/roundCorners) - migrated
-// here from DisplayExportPDF.tsx's own settings step, see displayPdfProps.ts's own comment.
+// Includes the rail's "Print quality" (imageDPI/jpgQuality/roundCorners) and "Export"
+// (cardSelectionMode/pageRangeStart/pageRangeEnd) defaults - both migrated here from
+// DisplayExportPDF.tsx's own settings step, see displayPdfProps.ts's own comment.
 // The same lime guide colour PagePreview.tsx's E19 screen-side guides render with.
 const DEFAULT_SHEET_SETTINGS = {
   pageSize: "LETTER" as const,
@@ -41,13 +42,13 @@ const DEFAULT_SHEET_SETTINGS = {
   imageDPI: 600,
   jpgQuality: 100,
   roundCorners: true,
+  cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
+  pageRangeStart: undefined,
+  pageRangeEnd: undefined,
 };
 
 // The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS).
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
-  cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
-  pageRangeStart: undefined,
-  pageRangeEnd: undefined,
   drawPageCutLines: true,
   marginOverride: undefined,
   scmMode: false,
@@ -333,12 +334,12 @@ describe("buildDisplayPDFProps - print-quality rail settings map straight throug
   });
 });
 
-describe("buildDisplayPDFProps - export settings map straight through", () => {
-  it("card selection mode maps straight through from export settings", () => {
+describe("buildDisplayPDFProps - card selection mode and page range map straight through from the rail's sheet settings", () => {
+  it("card selection mode maps straight through", () => {
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: {
-        ...DEFAULT_EXPORT_SETTINGS,
+      sheetSettings: {
+        ...DEFAULT_SHEET_SETTINGS,
         cardSelectionMode: "backsOnly",
       },
     });
@@ -351,8 +352,8 @@ describe("buildDisplayPDFProps - export settings map straight through", () => {
 
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: {
-        ...DEFAULT_EXPORT_SETTINGS,
+      sheetSettings: {
+        ...DEFAULT_SHEET_SETTINGS,
         pageRangeStart: 2,
         pageRangeEnd: 4,
       },

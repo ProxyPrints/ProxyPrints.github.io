@@ -408,48 +408,63 @@ produced it.
 ### Editor export controls (card selection, page range, quality, cut-line style)
 
 `displayPdfProps.ts`'s original defaults covered every `PDFProps` field the
-rail had no control for at all. Four of those are now real controls, owned
-by `DisplayExportPDF.tsx`'s own settings step (opened by clicking the
-Export ▾ menu's "PDF" item, shown before the actual download starts) rather
-than the right rail — these are choices about a given export RUN, not about
-the sheet's own layout, so they live with the export affordance itself. The
-`DisplayExportSettings` interface (`displayPdfProps.ts`) is this state's own
-shape; `buildDisplayPDFProps` maps it straight into the matching `PDFProps`
-fields, same as the rail's sheet settings.
+rail had no control for at all. Four of those became real controls in this
+pass. **Note, current-code correction**: card selection mode, page range,
+image quality, and cut-line appearance all subsequently migrated OUT of
+`DisplayExportPDF.tsx`'s own settings step into the right rail proper (card
+selection mode/page range into a new "Export" section, image quality/corner
+rounding into "Print quality", cut-line appearance next to the Guides
+toggle) - see `DisplaySheetExportSettings` in `displayPdfProps.ts` for where
+each one lives today. Only SCM mode and its six sub-settings, the per-side
+page-margin override, and the page-level cut guide toggle remain genuine
+export-RUN choices behind the dialog. The bullets below describe this pass's
+ORIGINAL shape (kept for history); treat `displayPdfProps.ts`'s own module
+comment as the current source of truth for which settings object owns which
+field.
 
 - **Card selection mode** — the four `CardSelectionMode` options
-  (`PDF.tsx`), each with a one-line explanation in the settings step, since
-  the names alone mislead ("Fronts + Distinct Backs" sounds like it emits
-  backs, and for a deck where every card uses the shared project cardback it
-  emits none). The starting value reads `DEFAULT_CARD_SELECTION_MODE`
-  (`PDF.tsx`) rather than a literal, so a change to that constant moves both
-  `/print` and `/editor` together.
+  (`PDF.tsx`), each with a one-line explanation, since the names alone
+  mislead ("Fronts + Distinct Backs" sounds like it emits backs, and for a
+  deck where every card uses the shared project cardback it emits none).
+  The starting value reads `DEFAULT_CARD_SELECTION_MODE` (`PDF.tsx`) rather
+  than a literal, so a change to that constant moves both `/print` and
+  `/editor` together. Now a rail control (the "Export" section), not the
+  export dialog's.
 - **Page range** — `PDFProps.pageRangeStart`/`pageRangeEnd` (1-indexed,
   inclusive, `undefined` on either bound meaning "no restriction on that
-  end"). `PDF.tsx`'s pagination itself is unchanged; a new `sliceToPageRange`
+  end"). `PDF.tsx`'s pagination itself is unchanged; a `sliceToPageRange`
   step slices the already-paginated `pages` array afterwards, clamped
   defensively against the real count. That real count is what
   `computePDFPageCount` (`PDF.tsx`, also exported) is for: pagination can
   only run once page size, margins, spacing, bleed, and card selection mode
-  are all known, so the settings step calls this on its own live props to
-  show "N total" and bound the range inputs against a real number, rather
-  than letting a request outlive the actual page count.
-- **Image quality (DPI, JPG quality)** — `DisplayExportSettings.imageDPI`/
-  `jpgQuality`, sliders at the same 100–1500 DPI / 5–100% ranges `/print`'s
-  own `CardQualitySettings` panel uses, so output is comparable between the
-  two surfaces while both exist. A one-line note in the settings step names
-  the trade this makes explicit: higher DPI and quality print sharper but
-  cost a much larger file and a slower export.
-- **Cut-line colour and shape** — `DisplayExportSettings.cutLineColor`/
-  `cutLineShape`, shown only when the rail's Guides toggle is on (nothing to
-  style when no cut lines are drawn).
+  are all known, so the rail's own "Export" section calls this against its
+  own live sheet state to show "N total" and bound the range inputs against
+  a real number, rather than letting a request outlive the actual page
+  count (deliberately computed against the margin PROFILE, not a live read
+  of the export dialog's own advanced margin override - that override is
+  scoped to a single dialog session and the rail has no reach into it, same
+  as the live sheet). Now a rail control, not the export dialog's.
+- **Image quality (DPI, JPG quality)** — sliders at the same 100–1500 DPI /
+  5–100% ranges `/print`'s own `CardQualitySettings` panel used, so output
+  stayed comparable between the two surfaces while both existed. Now a rail
+  control (the "Print quality" section) - see `DisplaySheetExportSettings. imageDPI`/`jpgQuality`.
+- **Cut-line colour and shape** — shown only when the rail's Guides toggle
+  is on (nothing to style when no cut lines are drawn). Now a rail control,
+  next to the Guides toggle it depends on - see
+  `DisplaySheetExportSettings.cutLineColor` (the shape select was later
+  retired outright in favour of a single crosshair-marks toggle, per the
+  "Print cut-guide redesign" coverage-ack entry).
 
 ### Editor export controls, part 2 (SCM cutting mode, corner rounding, cut-line geometry, page margins, custom page size)
 
-The remaining `displayPdfProps.ts` named defaults from the first pass above are now real
-controls too, all in `DisplayExportPDF.tsx`'s own settings step — every default they replace is
-removed from the adapter's default block, not left shadowed (the same pattern the first pass
-established).
+The remaining `displayPdfProps.ts` named defaults from the first pass above became real
+controls too, all in `DisplayExportPDF.tsx`'s own settings step at the time — every default they
+replaced was removed from the adapter's default block, not left shadowed (the same pattern the
+first pass established). **Note, current-code correction**: corner rounding subsequently migrated
+to the rail's "Print quality" section alongside image quality (see the note above the first
+"Editor export controls" section) - it is `DisplaySheetExportSettings.roundCorners` today, not
+`DisplayExportSettings.roundCorners`. SCM mode, its six sub-settings, and the per-side margin
+override remain genuine dialog-only export-RUN choices, unchanged.
 
 - **Silhouette (SCM) cutting mode** — `DisplayExportSettings.scmMode` plus its six sub-settings
   (`scmPaperSize`, `scmVariant`, `scmRegistration`, `scmDuplex`, `scmOffsetXMM`/`scmOffsetYMM`,
@@ -462,9 +477,10 @@ established).
   off, and the standard controls would be equally meaningless whenever SCM is on). Only image
   quality (DPI/JPG) is genuinely shared — `SCMCard` reads it exactly like the standard grid's own
   card image does — so it's the one group visible in both panels.
-- **Corner rounding** — `DisplayExportSettings.roundCorners`, a single Round/Square switch next
-  to the cut-line group below (standard-grid panel only; SCM's own template never reads
-  `roundCorners`).
+- **Corner rounding** — `DisplayExportSettings.roundCorners` at the time (now
+  `DisplaySheetExportSettings.roundCorners`, see the correction note above), a single
+  Round/Square switch next to the cut-line group below (standard-grid panel only; SCM's own
+  template never reads `roundCorners`).
 - **Cut-line geometry** — `cutLinePlacement`/`cutLineLengthMM`/`cutLineThicknessMM`/
   `cutLineOffsetMM` extend the existing colour/shape group from the first pass above (same
   `Form.Group`, same `showCutLines`-gated visibility) rather than starting a second one.
