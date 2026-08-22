@@ -1365,13 +1365,26 @@ def _run_evidence_only_calculators(
     "the scoped, genuinely free [...] path" - the live-fetch branches stay unreachable from this
     conveyor, exactly like every other calculator's own fetch work stays inside Stage C, never
     Stage D. `deductive-backfill-v1`/`local-name-frequency-v1` were the other two candidates that
-    looked fetch-free on the same reading; both were left OUT because neither has a `card_ids`
-    parameter at all - each rebuilds a whole-catalogue in-memory index (`CanonicalNameIndex`,
-    113k+ `CanonicalCard` rows) from scratch on every call, so wiring either one here would mean
-    paying that full-catalogue rebuild on every single micro-batch rather than once per pass. See
-    `docs/pipeline-fidelity-gate.md` for that finding and the three remaining EXPENSIVE identities
-    (`local-ocr-v1`, `local-phash-v1`, `local-fallback-v1`) this same audit left deliberately
-    unwired, with a reason and a tracked issue for each.
+    looked fetch-free on the same reading; both were left OUT because neither had a `card_ids`
+    parameter at all - each rebuilt a whole-catalogue in-memory index from scratch on every call,
+    so wiring either one here would have meant paying that full-catalogue rebuild on every single
+    micro-batch rather than once per pass. See `docs/pipeline-fidelity-gate.md` for that finding
+    and the three remaining EXPENSIVE identities (`local-ocr-v1`, `local-phash-v1`,
+    `local-fallback-v1`) this same audit left deliberately unwired, with a reason and a tracked
+    issue for each.
+
+    `deductive-backfill-v1` GAINED `card_ids` SCOPING AND THE SHARED CACHE (2026-07-30, issue
+    #722), BUT STAYS UNWIRED HERE STILL. `select_d1_candidates`/`select_d2_candidates` now push
+    `card_ids` into `_eligible_base_queryset`'s own SQL and resolve their index through
+    `local_calculate_verdicts._get_cached_candidate_name_index()` - the SAME cache
+    `run_frame_mismatch_recovery`/`run_lands_identify` above already share, not a second
+    implementation - so the "rebuilds every micro-batch" reason above no longer applies to it.
+    Measured read-only against live production data (2026-07-30): the uncached rebuild this
+    change eliminates cost 1.885s; the cached helper's warm-process reuse costs 45.56ms (a
+    version-stamp check, not a rebuild); the D1/D2 matching logic itself, over a real 250-card
+    sample at this deployment's actual `STAGE_E_MICRO_BATCH_SIZE`, costs ~0.012ms/card. Left
+    unwired anyway - issue #722 scoped the wiring itself to a separate, deliberate follow-up
+    decision, not a cost problem this measurement found.
 
     ORDER: `run_frame_mismatch_recovery` runs BEFORE `run_d0_sibling_artist_propagation`
     deliberately - the former calls `resolve_and_persist_artist` on every card it recovers, and a

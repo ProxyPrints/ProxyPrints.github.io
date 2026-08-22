@@ -1,15 +1,18 @@
 import pytest
 
 import cardpicker.deductive_backfill as module
+import cardpicker.local_calculate_verdicts as verdicts_module
 from cardpicker.deductive_backfill import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
     DeductiveVote,
     generate_run_id,
     run_backfill,
+    select_candidates,
     select_d1_candidates,
     select_d2_candidates,
     verify_zero_resolutions,
 )
+from cardpicker.local_identify_printing_tags import CandidateNameIndex
 from cardpicker.models import CardPrintingTag, PrintingTagStatus, VoteSource
 from cardpicker.printing_consensus import resolve_printing
 from cardpicker.tests.factories import (
@@ -70,31 +73,42 @@ class TestD1Selection:
         CardFactory(name="Forest")
         assert list(select_d1_candidates()) == []
 
-    def test_catalogued_printings_count_greater_than_one_excludes_from_d1(self, db):
-        # THIS TEST ASSERTS OVER A STATE THE IMPORTER CANNOT PRODUCE (labelled 2026-07-29).
-        # It builds, via the factory, one CanonicalCard row whose catalogued_printings_count is
-        # 2 - and `import_scryfall_printing_metadata` computes that column as the number of
-        # CanonicalCard rows sharing an oracle id, so one row can only ever score 1. The test
-        # passes, and proves nothing about production: measured on the live catalogue
-        # 2026-07-29, all 14,893 uniquely-named rows carry a count of exactly 1, and the
-        # condition under test excluded 0 of 137 D1 candidates.
-        #
-        # It used to be commented as proving a "Scryfall cross-check" catches printings we
-        # haven't imported. It does not - see `select_d1_candidates`' docstring and issue #600.
-        # Kept, deliberately: it pins the branch's behaviour so that whatever real check
-        # replaces the condition has a failing-first test to grow from.
-        _unique_printing("Gilded Drake", catalogued_printings_count=2)
-        CardFactory(name="Gilded Drake")
-        assert list(select_d1_candidates()) == []
+    def test_catalogued_printings_count_no_longer_affects_d1(self, db):
+        # RETIRED CHECK, TEST UPDATED NOT DELETED (2026-07-30, issue #722). D1 selection used to
+        # re-verify len(matches) == 1 against a second field, catalogued_printings_count, that
+        # this module's own (removed) CanonicalNameIndex carried alongside the name. Switching D1
+        # to the shared, process-cached CandidateNameIndex (local_calculate_verdicts.
+        # _get_cached_candidate_name_index) drops that field entirely - that index is shared with
+        # engines that have no use for it. This was always safe to drop: catalogued_printings_count
+        # counts CanonicalCard rows sharing an oracle id, rows sharing an oracle id share a name,
+        # so an oracle group of size > 1 already fails len(matches) == 1 above - the count check
+        # could only ever re-confirm what name-uniqueness already proved, never catch anything it
+        # missed (measured against the live catalogue 2026-07-29: 137 D1 candidates before the
+        # check, 137 after). This test now pins that a fabricated catalogued_printings_count=2
+        # (a state the real importer cannot produce - see `_unique_printing`) no longer has any
+        # bearing on D1 at all: the vote is cast on name-uniqueness alone.
+        printing = _unique_printing("Gilded Drake", catalogued_printings_count=2)
+        card = CardFactory(name="Gilded Drake")
+        votes = list(select_d1_candidates())
+        assert len(votes) == 1
+        assert votes[0].card_id == card.pk
+        assert votes[0].printing_id == printing.pk
 
-    def test_missing_printing_metadata_is_treated_as_unverifiable(self, db):
-        # a CanonicalCard with no CanonicalPrintingMetadata sidecar at all (predates that
-        # import) must never be silently treated as catalogued_printings_count == 1.
-        # Also unreachable in production as of 2026-07-29: all 113,224 CanonicalCard rows
-        # carry a metadata sidecar. Kept as a guard on the -1 sentinel, not as evidence.
-        CanonicalCardFactory(name="No Metadata Card")
-        CardFactory(name="No Metadata Card")
-        assert list(select_d1_candidates()) == []
+    def test_missing_printing_metadata_no_longer_blocks_d1(self, db):
+        # RETIRED CHECK, TEST UPDATED NOT DELETED (2026-07-30, issue #722 - see the sibling test
+        # immediately above for the full removal rationale). A CanonicalCard with no
+        # CanonicalPrintingMetadata sidecar used to be excluded via the -1 sentinel this module's
+        # own (removed) CanonicalNameIndex mapped a missing count to. The shared CandidateNameIndex
+        # carries no catalogued_printings_count field at all, so D1 now matches on name-uniqueness
+        # alone regardless of whether a metadata sidecar exists - unreachable in production as of
+        # 2026-07-29 (all 113,224 CanonicalCard rows carry a metadata sidecar), but this now pins
+        # what actually happens rather than a guard against a field D1 no longer reads.
+        printing = CanonicalCardFactory(name="No Metadata Card")
+        card = CardFactory(name="No Metadata Card")
+        votes = list(select_d1_candidates())
+        assert len(votes) == 1
+        assert votes[0].card_id == card.pk
+        assert votes[0].printing_id == printing.pk
 
     def test_resolved_card_is_excluded(self, db):
         _unique_printing("Already Resolved")
@@ -349,7 +363,7 @@ class TestPurgeWriteAtomicity:
         monkeypatch.setattr(
             module,
             "select_candidates",
-            lambda tier: iter([DeductiveVote(card_id=card.pk, printing_id=printing.pk, tier="d1")]),
+            lambda tier, card_ids=None: iter([DeductiveVote(card_id=card.pk, printing_id=printing.pk, tier="d1")]),
         )
 
         def _boom(*args, **kwargs):
@@ -361,3 +375,135 @@ class TestPurgeWriteAtomicity:
             run_backfill(tier="d1")
 
         assert CardPrintingTag.objects.filter(pk=stale.pk).exists()
+
+
+class TestCardIdsScoping:
+    """Issue #722: `card_ids` pushed into `_eligible_base_queryset`'s own SQL (`.filter(pk__in=...)`)
+    rather than filtered out of the yielded votes afterward - these tests prove the scoping is
+    real (a card outside `card_ids` never yields a vote, even though it is otherwise eligible),
+    not merely accepted-and-ignored, and that leaving it unset is byte-identical to every
+    pre-#722 test above."""
+
+    def test_d1_card_ids_excludes_an_otherwise_eligible_card(self, db):
+        _unique_printing("Included Card")
+        included = CardFactory(name="Included Card")
+        _unique_printing("Excluded Card")
+        CardFactory(name="Excluded Card")
+
+        votes = list(select_d1_candidates(card_ids=[included.pk]))
+
+        assert len(votes) == 1
+        assert votes[0].card_id == included.pk
+
+    def test_d2_card_ids_excludes_an_otherwise_eligible_card(self, db):
+        matching = _unique_printing("Scoped D2", expansion=CanonicalExpansionFactory(code="csp"))
+        _unique_printing("Scoped D2", expansion=CanonicalExpansionFactory(code="wwk"))
+        included = CardFactory(name="Scoped D2", expansion_hint="csp")
+
+        _unique_printing("Other D2", expansion=CanonicalExpansionFactory(code="mir"))
+        _unique_printing("Other D2", expansion=CanonicalExpansionFactory(code="vis"))
+        CardFactory(name="Other D2", expansion_hint="mir")
+
+        votes = list(select_d2_candidates(card_ids=[included.pk]))
+
+        assert len(votes) == 1
+        assert votes[0].card_id == included.pk
+        assert votes[0].printing_id == matching.pk
+
+    def test_select_candidates_card_ids_scopes_both_tiers(self, db):
+        _unique_printing("Scoped All D1")
+        included = CardFactory(name="Scoped All D1")
+        _unique_printing("Unscoped All D1")
+        CardFactory(name="Unscoped All D1")
+
+        votes = list(select_candidates("all", card_ids=[included.pk]))
+
+        assert [vote.card_id for vote in votes] == [included.pk]
+
+    def test_run_backfill_card_ids_scopes_the_write(self, db):
+        _unique_printing("Written Card")
+        written = CardFactory(name="Written Card")
+        _unique_printing("Unwritten Card")
+        unwritten = CardFactory(name="Unwritten Card")
+
+        result = run_backfill(tier="d1", card_ids=[written.pk])
+
+        assert result.d1_written == 1
+        assert written.printing_tags.exists()
+        assert not unwritten.printing_tags.exists()
+
+    def test_unscoped_call_is_unaffected_by_card_ids_existing(self, db):
+        # card_ids=None (every call above this class, and the default) must remain byte-identical
+        # to pre-#722 behaviour - both D1 candidates present in the full pool, not just one.
+        _unique_printing("Unscoped One")
+        card_one = CardFactory(name="Unscoped One")
+        _unique_printing("Unscoped Two")
+        card_two = CardFactory(name="Unscoped Two")
+
+        votes = list(select_d1_candidates())
+
+        assert {vote.card_id for vote in votes} == {card_one.pk, card_two.pk}
+
+
+class TestUsesTheSharedCandidateNameIndexCache:
+    """Issue #722's second acceptance criterion. `select_d1_candidates`/`select_d2_candidates`
+    used to build their own `CanonicalNameIndex()` from scratch on every call - a 113,224-row
+    scan. They now resolve through `local_calculate_verdicts._get_cached_candidate_name_index()`,
+    the same per-worker-process, version-stamped cache the other wired Stage D calculators share.
+    These tests count REAL `CandidateNameIndex.__init__` calls, matching
+    `TestRunLandsIdentifyUsesTheSharedCandidateNameIndexCache`'s own pattern in
+    test_local_lands_identify.py - a cache that silently rebuilds every time would still pass
+    every purely-behavioural test above."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self):
+        verdicts_module.reset_candidate_name_index_cache_for_tests()
+        yield
+        verdicts_module.reset_candidate_name_index_cache_for_tests()
+
+    @staticmethod
+    def _count_constructions(monkeypatch) -> list[int]:
+        count = [0]
+        real_init = CandidateNameIndex.__init__
+
+        def counting_init(self, *args, **kwargs):
+            count[0] += 1
+            real_init(self, *args, **kwargs)
+
+        monkeypatch.setattr(verdicts_module.CandidateNameIndex, "__init__", counting_init)
+        return count
+
+    def test_the_index_is_built_once_across_two_run_backfill_invocations(self, db, monkeypatch):
+        """Two invocations = two Stage E micro-batches in one worker process. No
+        CanonicalCard/CanonicalExpansion/CanonicalPrintingMetadata write happens between them, so
+        the version stamp is unchanged and the second invocation must reuse the first's index."""
+        count = self._count_constructions(monkeypatch)
+        _unique_printing("Cache One")
+        card_one = CardFactory(name="Cache One")
+        _unique_printing("Cache Two")
+        card_two = CardFactory(name="Cache Two")
+
+        first = run_backfill(tier="d1", card_ids=[card_one.pk])
+        second = run_backfill(tier="d1", card_ids=[card_two.pk])
+
+        # both invocations really used the index - not "one built, one no-op".
+        assert first.d1_written == 1
+        assert second.d1_written == 1
+        assert count[0] == 1
+
+    def test_a_canonical_card_write_between_invocations_still_rebuilds(self, db, monkeypatch):
+        """The cache must not go stale: the rebuilt index actually sees a newly added printing
+        rather than a stale snapshot."""
+        count = self._count_constructions(monkeypatch)
+        _unique_printing("Stale Check One")
+        card_one = CardFactory(name="Stale Check One")
+        run_backfill(tier="d1", card_ids=[card_one.pk])
+        assert count[0] == 1
+
+        _unique_printing("Stale Check Two")  # the invalidation event
+        card_two = CardFactory(name="Stale Check Two")
+
+        second = run_backfill(tier="d1", card_ids=[card_two.pk])
+
+        assert count[0] == 2
+        assert second.d1_written == 1  # the REBUILT index resolved "Stale Check Two"
