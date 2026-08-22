@@ -198,12 +198,14 @@ class TestBuildPoolContested:
 class TestBuildPoolCold:
     def test_includes_a_totally_fresh_card_with_the_fresh_reason(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CanonicalCardFactory(name=card.name)
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
         assert PoolEntry(kind=KIND_PRINTING, card_id=card.pk, reason="tier_4_fresh_printing") in without_scores(entries)
 
     def test_includes_a_quick_negative_card_with_the_quick_negative_reason(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CanonicalCardFactory(name=card.name)
         CardScanLog.objects.create(
             card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason=JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON
         )
@@ -369,7 +371,10 @@ class TestPoolSizeCap:
         # CardFactory() defaults artist_vote_status to UNRESOLVED too, which would otherwise
         # also pool each card a second time via the cold lane's artist half.
         for _ in range(5):
-            CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
+            card = CardFactory(
+                printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
+            )
+            CanonicalCardFactory(name=card.name)
         with override_settings(QUESTION_FEED_POOL_SIZE=2):
             count = warm_pool_cache(LANE_COLD)
         assert count == 2
@@ -417,6 +422,12 @@ class TestScoresPrecomputedAtWarmTime:
     def test_draw_of_a_warm_pool_performs_no_scoring(self, db):
         from cardpicker.question_feed import _CANDIDATE_SCORING_WINDOW
 
+        # A matching CanonicalCard so every fresh card below has a ranked printing candidate
+        # (`get_ranked_printing_candidates`'s word-match matches any name containing "card" -
+        # every fixture card's default name does, once digits are stripped) - without one, none
+        # of these cards would be servable as `identify_printing` and `drawn` below would be
+        # `None` regardless of the scoring behaviour this test actually exercises.
+        CanonicalCardFactory()
         for _ in range(_CANDIDATE_SCORING_WINDOW + 20):
             CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
         warm_pool_cache(LANE_COLD)  # scoring is paid here, once per pooled entry
@@ -619,6 +630,7 @@ class TestDrawColdEntry:
         card = CardFactory(
             printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
         )
+        CanonicalCardFactory(name=card.name)
         CardScanLog.objects.create(
             card=card, anonymous_id=JOIN_KEY_ANONYMOUS_ID, skip_reason=JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON
         )
@@ -662,6 +674,7 @@ class TestDrawColdEntry:
         card = CardFactory(
             printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED
         )
+        CanonicalCardFactory(name=card.name)
         warm_pool_cache(LANE_COLD)
 
         assert draw_cold_entry("anon-1", set(), set(), contested_card_ids=[], hidden_card_ids={card.pk}) is None

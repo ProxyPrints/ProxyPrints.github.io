@@ -141,6 +141,7 @@ from cardpicker.models import (
     TagVoteStatus,
     VoteSource,
 )
+from cardpicker.printing_candidates import get_ranked_printing_candidates
 from cardpicker.printing_consensus import get_contested_card_ids
 from cardpicker.tag_consensus import get_tag_review_queue_pairs
 
@@ -505,12 +506,20 @@ def _build_pool_contested() -> list[PoolEntry]:
     contested_card_ids = get_contested_card_ids()
     contested_artist_card_ids = get_contested_artist_card_ids()
 
+    # Full `Card` objects, not `.values_list("pk", "date_created")`: `question_feed.
+    # _identify_printing_item` - the only builder `KIND_PRINTING` entries are ever served
+    # through - declines (returns `None`) for a card with no ranked printing candidates at all
+    # (see that function's own docstring), so a card failing that check must never enter this
+    # pool in the first place; checking it here needs the full object (`get_ranked_printing_
+    # candidates` reads `card.name`), same as `_build_pool_confirm`'s own per-card gate above.
     printing_candidates = Card.objects.filter(
         printing_tag_status=PrintingTagStatus.UNRESOLVED, pk__in=contested_card_ids
-    ).values_list("pk", "date_created")
+    )
     printing_rows: list[tuple[int, Any]] = []
-    for pk, date_created in _sample_across_pk_strata(printing_candidates, chunk_size=_pool_sample_chunk_size(limit)):
-        printing_rows.append((pk, date_created))
+    for card in _sample_across_pk_strata(printing_candidates, chunk_size=_pool_sample_chunk_size(limit)):
+        if not get_ranked_printing_candidates(card, card.name):
+            continue
+        printing_rows.append((card.pk, card.date_created))
         if len(printing_rows) >= limit:
             break
     printing_rows.sort(key=lambda row: row[1], reverse=True)
@@ -592,6 +601,8 @@ def _build_pool_cold() -> list[PoolEntry]:
         for pk, _ in illustration_rows
     ]
 
+    # Full `Card` objects, not `.values_list(...)`, for the same reason `_build_pool_contested`'s
+    # printing branch switched: the candidate-emptiness gate below needs `card.name`.
     printing_candidates = (
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         .exclude(pk__in=contested_card_ids)
@@ -604,11 +615,12 @@ def _build_pool_cold() -> list[PoolEntry]:
                 output_field=IntegerField(),
             )
         )
-        .values_list("pk", "origin_reason", "vote_count", "is_quick_negative", "date_created")
     )
     printing_rows: list[tuple[int, Any, int, int, Any]] = []
-    for row in _sample_across_pk_strata(printing_candidates, chunk_size=_pool_sample_chunk_size(limit)):
-        printing_rows.append(row)
+    for card in _sample_across_pk_strata(printing_candidates, chunk_size=_pool_sample_chunk_size(limit)):
+        if not get_ranked_printing_candidates(card, card.name):
+            continue
+        printing_rows.append((card.pk, card.origin_reason, card.vote_count, card.is_quick_negative, card.date_created))
         if len(printing_rows) >= limit:
             break
     # Stable multi-pass sort reproduces `order_by("-vote_count", "is_quick_negative",

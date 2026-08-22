@@ -40,6 +40,7 @@ from cardpicker.question_feed import (
     _border_item,
     _confirm_suggestion_item,
     _evidence_justifies_confirmation,
+    _identify_printing_item,
     _illustration_item,
     _likely_resolve_item,
     _likely_resolve_narrowing_ratio,
@@ -47,6 +48,7 @@ from cardpicker.question_feed import (
     _scryfall_illustration_url,
     _tag_review_card_ids_by_status,
     _tier_1_confirm_suggestion,
+    _tier_2_contested,
     _tier_4_fresh,
     _voter_answered_printing_card_ids,
     get_next_question_feed_item,
@@ -57,8 +59,11 @@ from cardpicker.question_feed import (
 from cardpicker.question_feed_pools import (
     LANE_COLD,
     LANE_CONFIRM,
+    LANE_CONTESTED,
     LANE_RESOLUTION_IMMINENT,
     LANES,
+    SHARED_CACHE_ALIAS,
+    _cache_key,
     warm_pool_cache,
 )
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
@@ -227,12 +232,42 @@ class TestGetNextQuestionFeedItem:
 
     def test_tier_4_fresh_unresolved_printing_when_nothing_higher_priority_exists(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CanonicalCardFactory(name=card.name)
         _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
 
         assert item is not None
         assert item.type.value == "identify_printing"
+        assert item.card.identifier == card.identifier
+
+    def test_zero_candidate_card_is_never_served_identify_printing(self, db):
+        """docs/features/wtc-question-model.md §5 rule 5 ("never ask for a claim the user has
+        not been shown the evidence to make"): a card with no ranked printing candidates at all
+        has nothing in its identify_printing grid to pick from, so it must never be served that
+        question. `artist_vote_status=RESOLVED` isolates this card from every other question
+        type this feed could ask about it - with no matching `CanonicalCard` (so
+        `get_ranked_printing_candidates` is `[]`) and nothing else answerable, the feed must
+        return `None` rather than the dead question the pre-fix code served. FAILS against
+        pre-fix code, which served `identify_printing` with an empty `candidates` list here."""
+        CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
+        _warm_all_lanes()
+
+        assert get_next_question_feed_item("anon-1") is None
+
+    def test_zero_candidate_card_falls_through_to_its_still_answerable_artist_question(self, db):
+        """A card with zero ranked printing candidates is not necessarily unanswerable on every
+        axis (task's own requirement): if its artist question is still open, the feed must ask
+        that instead of dropping the card entirely."""
+        card = CardFactory(
+            printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.UNRESOLVED
+        )
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("anon-1")
+
+        assert item is not None
+        assert item.type.value == "artist"
         assert item.card.identifier == card.identifier
 
     def test_tier_4_prioritizes_a_card_one_vote_from_resolving_over_a_totally_fresh_one(self, db):
@@ -1068,6 +1103,8 @@ class TestMixComposition:
     def test_tier_4_prioritizes_quick_negative_to_review_origin_over_no_scan_log_at_all(self, db):
         no_origin_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
         quick_negative_card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CanonicalCardFactory(name=no_origin_card.name)
+        CanonicalCardFactory(name=quick_negative_card.name)
         CardScanLog.objects.create(
             card=quick_negative_card,
             anonymous_id=JOIN_KEY_ANONYMOUS_ID,
@@ -1770,3 +1807,91 @@ class TestTier4FreshServesIllustration:
         assert result is not None
         item, reason = result
         assert item.type.value != "illustration"
+
+
+class TestIdentifyPrintingCandidateGate:
+    """docs/features/wtc-question-model.md §5 rule 5: an `identify_printing` question with an
+    empty candidate grid asks the voter to pick a printing from a set with no options. Reproduces
+    the reported Urza's Saga defect (measured live 2026-08-22: ~10% of UNRESOLVED cards carry
+    zero ranked printing candidates and were served this question anyway) directly against
+    `_identify_printing_item`, the one function every serving path (live tiers and pools alike)
+    builds this question through."""
+
+    def test_declines_for_a_card_with_no_ranked_printing_candidates(self, db):
+        """FAILS against pre-fix code, which built and returned a `QuestionFeedItem` with
+        `candidates=[]` here instead of declining."""
+        card = CardFactory()  # no matching CanonicalCard - get_ranked_printing_candidates() is []
+
+        assert _identify_printing_item(card) is None
+
+    def test_still_serves_a_card_with_a_ranked_printing_candidate(self, db):
+        """The gate declines only an empty grid - a card with something to show is unaffected,
+        proving this isn't a blanket disable of `identify_printing`."""
+        card = CardFactory(name="Brainstorm")
+        CanonicalCardFactory(name="Brainstorm")
+
+        item = _identify_printing_item(card)
+
+        assert item is not None
+        assert item.type.value == "identify_printing"
+        assert len(item.candidates) > 0
+
+    def test_tier_2_contested_printing_skips_a_zero_candidate_card_for_a_servable_one(self, db):
+        """Two contested printing cards in the same window - one with no ranked candidates, one
+        with real candidates. The dead one must never win the tier; the servable one must.
+        `dead_card`'s name is deliberately disjoint from every `CanonicalCardFactory` default
+        name ("Canonical Card N", which contains the substring "card" every OTHER default
+        `CardFactory` name also normalises to) - both cards' own default names would otherwise
+        coincidentally cross-match on that shared word and defeat the fixture."""
+        dead_card = CardFactory(name="Zzyzx Qwerty Unmatched", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=dead_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=dead_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+
+        servable_card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CanonicalCardFactory(name="Brainstorm")
+        CardPrintingTagFactory(card=servable_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+        CardPrintingTagFactory(card=servable_card, printing=CanonicalCardFactory(), source=VoteSource.USER)
+
+        result = _tier_2_contested("anon-1")
+
+        assert result is not None
+        item, reason = result
+        assert item.type.value == "identify_printing"
+        assert item.card.identifier == servable_card.identifier
+
+    def test_zero_candidate_kind_printing_cards_never_enter_the_contested_or_cold_pools(self, db):
+        """Warm-time gate (`_build_pool_contested`/`_build_pool_cold`): a zero-candidate card
+        must never be materialised into a `KIND_PRINTING` pool entry in the first place, since
+        the pooled request path never re-derives item content before serving it."""
+        CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED, artist_vote_status=ArtistVoteStatus.RESOLVED)
+        _warm_all_lanes()
+
+        contested_entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_CONTESTED)) or []
+        cold_entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD)) or []
+
+        assert not any(entry.kind == "printing" for entry in contested_entries)
+        assert not any(entry.kind == "printing" for entry in cold_entries)
+
+    def test_confirm_suggestion_never_needs_the_ranked_candidate_list(self, db):
+        """Considered per the task's own requirement: unlike identify_printing,
+        confirm_suggestion's `suggestedPrinting` comes straight off the existing machine vote
+        (`ai_vote.printing`), never off `get_ranked_printing_candidates` - so a card with zero
+        ranked candidates can still be served a confirm_suggestion with something to act on.
+        `card`'s and `printing`'s names are deliberately disjoint nonsense words (see
+        `test_tier_2_contested_printing_skips_a_zero_candidate_card_for_a_servable_one`'s own
+        comment for why an ordinary default-named fixture would coincidentally cross-match)."""
+        card = CardFactory(name="Zzyzx Qwerty Unmatched", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        printing = CanonicalCardFactory(name="Wholly Disjoint Printing")
+        CardPrintingTagFactory(
+            card=card,
+            printing=printing,
+            source=VoteSource.DEDUCTION,
+            anonymous_id="ai-bot",
+            evidence_types_used=list(_COMPLETE_EVIDENCE_TYPES),
+        )
+
+        item = _confirm_suggestion_item(card)
+
+        assert item is not None
+        assert item.suggestedPrinting.identifier == str(printing.identifier)
+        assert item.candidates == []
