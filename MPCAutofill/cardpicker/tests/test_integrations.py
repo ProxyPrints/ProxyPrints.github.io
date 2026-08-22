@@ -21,6 +21,7 @@ from PIL import Image
 from django.conf import settings as conf_settings
 
 from cardpicker.integrations.game.mtg import (
+    MagicVille,
     ManaStack,
     Moxfield,
     MTGIntegration,
@@ -232,6 +233,26 @@ class TestMTGIntegration:
             mock.get(
                 re.compile(r"^https://api\.scryfall\.com/decks/"),
                 text="4 Brainstorm\r\n1 Delver of Secrets\r\n3 Past in Flames\r\n\r\n// Sideboard",
+            )
+            # CI baseline cleanup, 2026-08-21: MAGICVILLE/MAGICVILLE_WITH_WWW hit the exact same
+            # failure mode as tappedout and manastack - magic-ville.com now returns HTTP 403 to
+            # plain automated requests (confirmed via direct curl from the same runner), producing
+            # a false-red (InvalidURLException) unrelated to any code under test. Mocked (rather
+            # than named-skip like MOXFIELD above) because magic-ville.com's bot-protection is a
+            # live-network property with no config flag to gate on, and mocking keeps real coverage
+            # of MagicVille.retrieve_card_list's parsing instead of losing it. The response format
+            # below matches what magic-ville.com's deck-download endpoint actually returns:
+            # a header line (stripped by retrieve_card_list) and bare "N Cardname" card lines
+            # that form the actual deck list.
+            mock.get(
+                re.compile(r"^https://(?:{})/".format("|".join(re.escape(h) for h in MagicVille.get_host_names()))),
+                text=(
+                    "// www.magic-ville.com deck file\r\n"
+                    "4 Brainstorm\r\n"
+                    "3 Past in Flames\r\n"
+                    "1 Delver of Secrets\r\n"
+                    "\r\n"
+                ),
             )
             decklist = MTGIntegration.query_import_site(url)
         assert decklist
