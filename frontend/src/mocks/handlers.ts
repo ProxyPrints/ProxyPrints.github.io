@@ -1853,10 +1853,11 @@ export const questionFeedTag = http.get(buildRoute("2/questionFeed/"), () =>
   )
 );
 
-// The border question type's answer surface is the BORDER_COLOR_GROUP chips plus the Full Art
-// chip (see BorderColorQuestion.tsx) - the mock seeds tagConfidence the way the backend
-// `_border_item` builder does (question_feed.py's `_tag_confidence`: the full chip set), so
-// the chips render with a realistic lean the moment the question lands.
+// The border question type's answer surface is the BORDER_COLOR_GROUP chips, the Full Art
+// chip, and FRAME_TREATMENT_GROUP's Showcase/Extended Art chips (see BorderColorQuestion.tsx)
+// - the mock seeds tagConfidence the way the backend `_border_item` builder does
+// (question_feed.py's `_tag_confidence`: the full chip set), so the chips render with a
+// realistic lean the moment the question lands.
 export const questionFeedBorder = http.get(buildRoute("2/questionFeed/"), () =>
   HttpResponse.json(
     {
@@ -1869,6 +1870,8 @@ export const questionFeedBorder = http.get(buildRoute("2/questionFeed/"), () =>
           "Silver Border": 0,
           Borderless: 0,
           "Full Art": 0,
+          Showcase: 0,
+          Extended: 0,
         },
       },
       remainingEstimate: questionFeedCounts({ total: 1, fresh: 1 }),
