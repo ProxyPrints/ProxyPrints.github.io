@@ -8,7 +8,9 @@ import {
   moderationRemoveCardSucceeds,
   moderationRemoveDriveSucceeds,
   questionFeedCaughtUp,
+  questionFeedConfirmSuggestion,
   whoamiModerator,
+  whoamiModeratorAfterDelay,
   whoamiSignedInNotModerator,
 } from "@/mocks/handlers";
 
@@ -43,6 +45,49 @@ test.describe("Moderation tab gating", () => {
       /active/
     );
     await expect(page.getByRole("tab", { name: "Moderation" })).toBeVisible();
+  });
+
+  test("the moderator flag flipping after mount does not remount the question feed", async ({
+    page,
+    network,
+  }) => {
+    let questionFeedRequestCount = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/2/questionFeed/")) {
+        questionFeedRequestCount += 1;
+      }
+    });
+    network.use(
+      whoamiModeratorAfterDelay,
+      questionFeedConfirmSuggestion,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    // Anonymous-shaped first paint: the feed renders immediately, before whoami settles
+    // and before the Moderation tab exists at all.
+    await expect(
+      page.getByTestId("question-feed-subject-art-title")
+    ).toHaveText("Card 1");
+    await expect(
+      page.getByRole("tab", { name: "Moderation" })
+    ).not.toBeVisible();
+
+    // Snapshot the request count only after the first fetch has settled - dev mode's
+    // React StrictMode double-invokes mount effects, which fires the feed's own fetch
+    // twice before this point regardless of the bug under test; that's a StrictMode
+    // artifact, not the remount this test exists to catch.
+    const countBeforeFlip = questionFeedRequestCount;
+
+    // whoami settles (~300ms mock delay) and isModerator flips true.
+    await expect(page.getByRole("tab", { name: "Moderation" })).toBeVisible();
+
+    // The same QuestionFeed instance must have survived the flip: same rendered question,
+    // and no additional /2/questionFeed/ fetch fired from a remount.
+    await expect(
+      page.getByTestId("question-feed-subject-art-title")
+    ).toHaveText("Card 1");
+    await expect.poll(() => questionFeedRequestCount).toBe(countBeforeFlip);
   });
 });
 

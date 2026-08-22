@@ -1,4 +1,4 @@
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 
 import { Card, Cardback, Token } from "@/common/constants";
 import { computeSearchQueryHashKey } from "@/common/processing";
@@ -2074,6 +2074,29 @@ export const whoamiModerator = whoami({
   loginUrl: "/accounts/discord/login/",
   logoutUrl: "/accounts/logout/",
 });
+
+// `whoami` resolves asynchronously in production (~450ms measured live) - `isModerator`
+// starts false on first paint and flips true once this settles. Exercises that flip
+// directly, standing in for `whoamiModerator` above wherever a test needs the async gap
+// itself, not just the eventual moderator state (see whatsthat.tsx's PrintingQueueOrDefault
+// and its regression test in ModerationTab.spec.ts).
+export const whoamiModeratorAfterDelay = http.get(
+  buildRoute("2/whoami/"),
+  async () => {
+    await delay(300);
+    return HttpResponse.json(
+      {
+        authenticated: true,
+        username: "mod",
+        moderator: true,
+        discordEnabled: true,
+        loginUrl: "/accounts/discord/login/",
+        logoutUrl: "/accounts/logout/",
+      },
+      { status: 200 }
+    );
+  }
+);
 
 export const moderationQueueOneResult = http.post(
   buildRoute("2/moderationQueue/"),
