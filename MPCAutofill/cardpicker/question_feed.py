@@ -94,6 +94,21 @@ cards that fail the gate keep their existing home in tier 4's non-contested prin
 (222,105 cards, measured 2026-08-11), they simply ask a cheaper, evidence-agnostic question
 instead of an unjustified expensive one.
 
+Correction (2026-08-21): the gate above shipped requiring border/artist/symbol - the vocabulary
+`_KNOWN_EVIDENCE_TYPES` claimed was all the fallback calculator could ever produce - and never
+served a single confirmation. Measured live: 0 of 230,318 printing votes pass it. Two defects,
+both against the vocabulary claim itself. First, `symbol` is required but never recorded -
+`_filter_by_symbol_phash` abstains on every card (see `_REQUIRED_EVIDENCE_TYPES`'s own comment for
+its four abstention cases), so no vote has ever carried it; requiring an element no writer
+produces makes the gate unsatisfiable by construction, not merely strict. Second, `collector_line`
+- added to the vocabulary the same day as this gate (see `calculate_fallback_verdict`'s own
+docstring) and recorded 2,369 times live - was never added to what the gate REQUIRES, dropping
+the strongest of the four elements the ratified doc names. The gate now requires border/artist/
+collector_line (`_REQUIRED_EVIDENCE_TYPES`) and treats a recorded `symbol` as optional
+corroboration rather than a precondition; see that constant's own comment for the full reasoning.
+Measured post-fix: ~1,637 votes pass (`artist,border,collector_line` is the one combination
+observed live containing all three).
+
 Information-gain selection within the remainder tiers (issue #716, 2026-08-09): where each
 tier used to serve the first candidate of a fixed queryset, the tiers now score their
 candidates by expected information gain - the entropy of the existing vote distribution across
@@ -244,19 +259,37 @@ QUICK_NEGATIVE_SKIP_REASONS = frozenset(
 _HYPOTHETICAL_VOTE_ANONYMOUS_ID = "question-feed-hypothetical-vote"
 
 # The full vocabulary `evidence_types_used` can ever contain, on either the `CardScanLog` row a
-# skip writes or the `CardPrintingTag` vote a match writes (issue #797) - read off
-# `local_calculate_verdicts.calculate_fallback_verdict`'s own three sub-checks (border/artist/
-# symbol intersection), not restated as a fourth "collector line" element: the ratified question
-# model (docs/features/wtc-question-model.md §2) names border, artist credit, set symbol AND
-# collector line as the four things "the machine must have matched," but the fallback calculator
-# that populates this field never produces a "collector line" entry - the collector line is what
-# NARROWS the candidate set the calculator runs against in the first place (it is the precondition
-# for the calculator running at all, not one of its recorded sub-check outcomes), so there is no
-# fourth value this field could ever carry. This PR gates on the vocabulary that actually exists
-# rather than inventing a value the calculator doesn't produce - see this module's own docstring's
-# "Evidence-gated printing-confirmation policy" section for the full reasoning, and this PR's own
-# report for the doc correction this discrepancy earned.
-_KNOWN_EVIDENCE_TYPES = frozenset({"border", "artist", "symbol"})
+# skip writes or the `CardPrintingTag` vote a match writes (issue #797): border/artist/symbol are
+# `calculate_fallback_verdict`'s three FILTERING sub-checks, and collector_line (added 2026-08-11)
+# is RECORDED alongside them without filtering anything - see that function's own docstring and
+# its inline comment at the append site for the full mechanism.
+_KNOWN_EVIDENCE_TYPES = frozenset({"border", "artist", "symbol", "collector_line"})
+
+# The subset of `_KNOWN_EVIDENCE_TYPES` the confirmation gate actually REQUIRES. Two corrections
+# against the vocabulary above, both measured live 2026-08-21 against 230,318 printing votes:
+#
+# 1. `collector_line` is required. The ratified question model (docs/features/
+#    wtc-question-model.md §2) names border, artist credit, set symbol AND collector line as the
+#    four things "the machine must have matched" - collector_line is the strongest signal of the
+#    four (`CanonicalCard`'s unique constraint on `(expansion, collector_number)` resolves it to
+#    exactly one printing by construction) and it IS being recorded (2,369 times in the corpus),
+#    so a gate that omits it is dropping the element it should trust most.
+# 2. `symbol` is excluded. Every printing vote's `evidence_types_used` was inspected live: symbol
+#    appears in ZERO of them. This is not missing data - `_filter_by_symbol_phash` abstains
+#    (returns `None`, so `calculate_fallback_verdict` never appends "symbol") on every card it has
+#    ever run against, per its own docstring's four abstention cases (no glyph reading, no glyph
+#    rendered, distance over `SYMBOL_DISTANCE_THRESHOLD`, runner-up within `SYMBOL_MARGIN`).
+#    Requiring an element no writer has ever produced makes the gate unsatisfiable by construction
+#    - measured 2026-08-21, 0 of 230,318 printing votes passed a gate that required it.
+#
+# `symbol` stays in `_KNOWN_EVIDENCE_TYPES` above rather than being deleted from the vocabulary: an
+# abstention is not a missing element to demand, but a recorded "symbol" is still real
+# corroboration when the matcher does fire, and if that matcher is ever repaired a vote carrying
+# it should keep counting - see `_evidence_justifies_confirmation` below, which checks subset
+# containment, not equality, so a vote WITH "symbol" recorded still clears the gate. Do not add
+# "symbol" back to this frozenset without first fixing `_filter_by_symbol_phash` so it can
+# actually produce a reading; until then it would just re-break the gate the same way.
+_REQUIRED_EVIDENCE_TYPES = frozenset({"border", "artist", "collector_line"})
 
 # The four border-colour attribute-chip tags (`local_fallback.BORDER_COLOR_TO_TAG`'s own
 # values, not restated) - the likely-resolve routing gate below checks whether any of them has
@@ -265,31 +298,32 @@ _BORDER_COLOR_TAG_NAMES = frozenset(BORDER_COLOR_TO_TAG.values())
 
 
 def _evidence_justifies_confirmation(vote: CardPrintingTag) -> bool:
-    """True only when `vote`'s own recorded `evidence_types_used` covers every type the pipeline
-    can record (`_KNOWN_EVIDENCE_TYPES`) - the operational form of docs/features/
-    wtc-question-model.md §2's "all four matched" gate, applied to the vocabulary that actually
-    exists (see `_KNOWN_EVIDENCE_TYPES`'s own comment). False for a vote with partial evidence
-    (one or two of the three types recorded) and False for a vote with none recorded at all
-    (`evidence_types_used` is null on every vote no writer has populated it for - every vote cast
-    before this field existed, every human vote, every join-key/deductive-backfill vote) - both
-    cases are routed identically here, to the SAME fallback (tier 2/4's existing
-    `identify_printing` machinery), because there is no per-element question type in `TypeEnum`
-    to route a specific gap to (`artist`/`tag`/`identify_printing`/`confirm_suggestion` are the
-    only four - see `schema_types.TypeEnum`); the finer-grained "ask about specifically the
-    missing element" routing the ratified doc's §3 describes is not implementable at the
-    backend-selection layer without a new question type, which is out of this change's scope
-    (backend serving/selection only - no frontend, no new calculator work).
+    """True only when `vote`'s own recorded `evidence_types_used` covers every REQUIRED type
+    (`_REQUIRED_EVIDENCE_TYPES`) - the operational form of docs/features/wtc-question-model.md
+    §2's "all four matched" gate, applied to border/artist/collector_line (see
+    `_REQUIRED_EVIDENCE_TYPES`'s own comment for why symbol is excluded from the requirement
+    while staying in `_KNOWN_EVIDENCE_TYPES` as optional corroboration - subset containment below
+    means a vote that DOES carry "symbol" still clears the gate). False for a vote with partial
+    evidence and False for a vote with none recorded at all (`evidence_types_used` is null on
+    every vote no writer has populated it for - every vote cast before this field existed, every
+    human vote, every join-key/deductive-backfill vote) - both cases are routed identically here,
+    to the SAME fallback (tier 2/4's existing `identify_printing` machinery), because there is no
+    per-element question type in `TypeEnum` to route a specific gap to (`artist`/`tag`/
+    `identify_printing`/`confirm_suggestion` are the only four - see `schema_types.TypeEnum`);
+    the finer-grained "ask about specifically the missing element" routing the ratified doc's §3
+    describes is not implementable at the backend-selection layer without a new question type,
+    which is out of this change's scope (backend serving/selection only - no frontend, no new
+    calculator work).
 
     Reads the field directly off the vote being confirmed, not off `CardScanLog` (issue #797):
     the only outcome that can ever reach this gate is a MATCH (`_confirm_suggestion_item` only
     calls this once a `CardPrintingTag` already exists to confirm), and a MATCH never writes a
     `CardScanLog` row at all (`local_calculate_verdicts.run_fallback_calculator`'s skip-only scan-
     log write) - so a scan-log read here was always structurally unreachable for the population
-    this gate serves (measured 2026-08-11, pre-fix: 0 of 110,130 confirm-eligible cards cleared
-    it). `CardPrintingTag.evidence_types_used`'s own docstring is the single source of truth this
-    reads; `CardScanLog.evidence_types_used` remains the skip path's own unchanged record and has
-    no reader here."""
-    return _KNOWN_EVIDENCE_TYPES.issubset(frozenset(vote.evidence_types_used or []))
+    this gate serves. `CardPrintingTag.evidence_types_used`'s own docstring is the single source
+    of truth this reads; `CardScanLog.evidence_types_used` remains the skip path's own unchanged
+    record and has no reader here."""
+    return _REQUIRED_EVIDENCE_TYPES.issubset(frozenset(vote.evidence_types_used or []))
 
 
 def _tag_confidence(card: Card) -> dict[str, float]:

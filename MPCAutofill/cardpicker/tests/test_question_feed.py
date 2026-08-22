@@ -102,7 +102,7 @@ def make_shared_illustration_group(name: str = "Brainstorm") -> tuple:
     return card, illustration_id
 
 
-_COMPLETE_EVIDENCE_TYPES = ("border", "artist", "symbol")
+_COMPLETE_EVIDENCE_TYPES = ("border", "artist", "collector_line")
 
 
 def make_ai_suggested_card(
@@ -1103,14 +1103,37 @@ class TestEvidenceJustifiesConfirmation:
     """Direct unit coverage of `_evidence_justifies_confirmation` itself (issue #797), below the
     full `get_next_question_feed_item` integration tests in `TestEvidenceGatedConfirmation`."""
 
-    def test_a_vote_with_all_three_known_evidence_types_clears_the_gate(self, db):
+    def test_a_vote_with_all_three_required_evidence_types_clears_the_gate(self, db):
+        vote = CardPrintingTagFactory(
+            source=VoteSource.OCR,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            evidence_types_used=["border", "artist", "collector_line"],
+        )
+
+        assert _evidence_justifies_confirmation(vote) is True
+
+    def test_a_vote_additionally_carrying_symbol_still_clears_the_gate(self, db):
+        # symbol is optional corroboration, never a precondition (see
+        # `_REQUIRED_EVIDENCE_TYPES`'s own comment) - a vote that happens to carry it alongside
+        # the three required types must still pass, not be penalised for the extra evidence
+        vote = CardPrintingTagFactory(
+            source=VoteSource.OCR,
+            anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
+            evidence_types_used=["border", "artist", "collector_line", "symbol"],
+        )
+
+        assert _evidence_justifies_confirmation(vote) is True
+
+    def test_a_vote_missing_collector_line_does_not_clear_the_gate(self, db):
+        # border + artist + symbol - the pre-2026-08-21 gate's own requirement - now fails,
+        # since collector_line is required and symbol alone is not a substitute for it
         vote = CardPrintingTagFactory(
             source=VoteSource.OCR,
             anonymous_id=STAGE_D_FALLBACK_ANONYMOUS_ID,
             evidence_types_used=["border", "artist", "symbol"],
         )
 
-        assert _evidence_justifies_confirmation(vote) is True
+        assert _evidence_justifies_confirmation(vote) is False
 
     def test_a_vote_with_partial_evidence_does_not_clear_the_gate(self, db):
         vote = CardPrintingTagFactory(
@@ -1146,12 +1169,11 @@ class TestEvidenceGatedConfirmation:
         assert item.type.value == "confirm_suggestion"
         assert item.card.identifier == card.identifier
 
-    def test_a_card_with_collector_line_recorded_too_is_still_offered_as_confirm_suggestion(self, db):
-        # #776 (2026-08-11) added "collector_line" as a fourth, RECORDED-only value
-        # `evidence_types_used` can carry - the gate must still fire on the three it actually
-        # checks (`_KNOWN_EVIDENCE_TYPES`), via subset rather than equality, so a real four-element
-        # row does not silently stop clearing cards that used to clear with three
-        card, printing = make_ai_suggested_card(evidence_types_used=("border", "artist", "symbol", "collector_line"))
+    def test_a_card_with_symbol_recorded_too_is_still_offered_as_confirm_suggestion(self, db):
+        # symbol is optional corroboration (see `_REQUIRED_EVIDENCE_TYPES`'s own comment) - the
+        # gate must still fire via subset containment, not equality, so a vote carrying symbol
+        # alongside the three required types is not penalised for the extra evidence
+        card, printing = make_ai_suggested_card(evidence_types_used=("border", "artist", "collector_line", "symbol"))
         _warm_all_lanes()
 
         item = get_next_question_feed_item("anon-1")
@@ -1161,9 +1183,10 @@ class TestEvidenceGatedConfirmation:
         assert item.card.identifier == card.identifier
 
     def test_a_card_missing_one_evidence_type_is_not_offered_as_confirm_suggestion(self, db):
-        # two of three known evidence types recorded (missing "symbol") - the ratified doc's
-        # own ruling (§10 ruling 3) that three-of-four earns no special tier applies here too:
-        # anything less than complete evidence routes to identify_printing, no partial-credit tier
+        # two of three required evidence types recorded (missing "collector_line") - the ratified
+        # doc's own ruling (§10 ruling 3) that three-of-four earns no special tier applies here
+        # too: anything less than complete required evidence routes to identify_printing, no
+        # partial-credit tier
         incomplete_card, _ = make_ai_suggested_card(evidence_types_used=("border", "artist"))
         _warm_all_lanes()
 

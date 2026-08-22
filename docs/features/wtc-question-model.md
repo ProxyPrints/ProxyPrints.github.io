@@ -72,6 +72,18 @@ skip does), so the population this gate governs almost never has a row to read i
 place. See `cardpicker.question_feed._KNOWN_EVIDENCE_TYPES` for the vocabulary and this PR's own
 report for the measurement.
 
+**Correction (2026-08-21):** the claim above that "the collector line... was never produced by
+any code path" was overtaken the same day it was written: `calculate_fallback_verdict` was
+amended (also 2026-08-11) to append `"collector_line"` to `evidence_types_used` — RECORDED only,
+never filtering — whenever `ImageEvidence.collector_line_collector_number` is non-empty (see that
+function's own docstring). The gate this PR shipped never picked that value up: it required
+`border`/`artist`/`symbol`, and `symbol` turned out to be unsatisfiable on its own (`_filter_ by_symbol_phash` abstains on effectively every card, so `evidence_types_used` never carries
+`"symbol"`) - the two defects compounded into a gate that served zero confirmations. Measured
+2026-08-21: 0 of 230,318 printing votes passed it. The gate now requires `border`/`artist`/
+`collector_line` and treats a recorded `symbol` as optional corroboration rather than a
+precondition - see `cardpicker.question_feed._REQUIRED_EVIDENCE_TYPES` for the vocabulary and
+its own comment for the full reasoning. Measured post-fix: ~1,637 votes pass.
+
 **Resolved (§10 ruling 3):** three-of-four gets no special tier. The gap names the
 question — if the collector line is the unmatched element, ask about the collector line.
 Route to the gap, no extra tier: a tier earns its place only if it changes what we ask.
