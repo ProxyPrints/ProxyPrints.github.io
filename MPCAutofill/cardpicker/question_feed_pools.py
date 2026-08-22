@@ -467,18 +467,26 @@ def _build_pool_resolution_imminent() -> list[PoolEntry]:
 
 
 def _build_pool_confirm() -> list[PoolEntry]:
-    # `_confirm_suggestion_item` (issue #766) now returns `None` for a card whose recorded
-    # evidence is incomplete, not just for a card with no machine suggestion at all - so this
-    # builder can legitimately come back empty even though `candidates` below is non-empty,
-    # rather than that meaning a bug in the sampling. See question_feed.py's own "Evidence-gated
-    # printing-confirmation policy" docstring section for the measured scale of that today.
-    from cardpicker.question_feed import _confirm_suggestion_item
+    # The candidate query must require the same evidence `_confirm_suggestion_item` requires, not
+    # just source/status: measured 2026-08-22, 119,147 cards passed the source-only filter below
+    # but only 1,633 held a gate-passing vote (1.4%), so `_sample_across_pk_strata`'s fixed budget
+    # drew almost none of them and the pool filled to 2 entries instead of toward its cap. This is
+    # a coarser copy of the same containment check, not a second, divergent gate:
+    # `_evidence_justifies_confirmation` requires the SPECIFIC vote being confirmed to satisfy
+    # `_REQUIRED_EVIDENCE_TYPES`, while `evidence_types_used__contains` below only requires SOME
+    # DEDUCTION/OCR vote on the card to - so a card the query admits can still be rejected below
+    # (is_no_match/elimination-consensus/staleness) and is then simply not pooled, same as before.
+    from cardpicker.question_feed import (
+        _REQUIRED_EVIDENCE_TYPES,
+        _confirm_suggestion_item,
+    )
 
     limit = settings.QUESTION_FEED_POOL_SIZE
     candidates = (
         Card.objects.filter(
             printing_tag_status=PrintingTagStatus.UNRESOLVED,
             printing_tags__source__in=[VoteSource.DEDUCTION, VoteSource.OCR],
+            printing_tags__evidence_types_used__contains=list(_REQUIRED_EVIDENCE_TYPES),
         )
         .exclude(printing_tags__source__in=[VoteSource.USER, VoteSource.ADMIN, VoteSource.FEDERATED])
         .distinct()
