@@ -61,11 +61,11 @@ const DEFAULT_SHEET_SETTINGS = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
+  marginOverride: undefined,
 };
 
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   drawPageCutLines: true,
-  marginOverride: undefined,
   scmMode: false,
   scmPaperSize: "letter",
   scmVariant: "default",

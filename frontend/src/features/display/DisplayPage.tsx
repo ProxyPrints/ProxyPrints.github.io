@@ -302,6 +302,7 @@ import {
   willLikelyGenerateBleed,
 } from "@/features/pdf/bleedNormalize";
 import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
+import { PageMarginOverride } from "@/features/pdf/displayPdfProps";
 import { computeLayout } from "@/features/pdf/layout";
 import {
   PagePreview,
@@ -396,6 +397,13 @@ interface DisplaySheetSettings {
   cardSelectionMode: keyof typeof CardSelectionMode;
   pageRangeStart?: number;
   pageRangeEnd?: number;
+  // Advanced per-side margin override (Page Setup section, below) - moved from
+  // DisplayExportPDF.tsx's own settings step (this PR): a manual override of the margin-profile
+  // control right above it, not an unrelated export-run choice, so it's grouped with that control
+  // rather than left behind the Export PDF dialog. `undefined` = use the margin profile unchanged
+  // (see displayPdfProps.ts's "Margin-preset vs. per-side override" comment) - the live sheet
+  // below always reads `margins` (the profile), never this field, matching pre-migration behavior.
+  marginOverride?: PageMarginOverride;
 }
 
 // Proposal H D1/D4/D6 (docs/proposals/proposal-h-display-layout-spec.md, amended by issue #286's
@@ -429,6 +437,7 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
+  marginOverride: undefined,
 };
 
 // The mode names alone mislead ("Distinct Backs" sounds like it emits backs, and for a
@@ -2317,6 +2326,20 @@ export function DisplayPage() {
   const [settings, setSettings] = useState<DisplaySheetSettings>(
     DEFAULT_SHEET_SETTINGS
   );
+  // Advanced margin-override field setter (Page Setup section, below) - mirrors the identical
+  // helper DisplayExportPDF.tsx used to carry before this field moved into the rail.
+  const setMarginOverrideField = <K extends keyof PageMarginOverride>(
+    key: K,
+    value: number
+  ) =>
+    setSettings((previous) =>
+      previous.marginOverride
+        ? {
+            ...previous,
+            marginOverride: { ...previous.marginOverride, [key]: value },
+          }
+        : previous
+    );
   const [selectedSlotRef, setSelectedSlotRef] =
     useState<SelectedSlotRef | null>(null);
   // EP6 (item 6/E24, SPEC-editor-polish.md §D.8 `.slot-flip`) - which slots (by their own
@@ -2565,10 +2588,10 @@ export function DisplayPage() {
 
   // The real, un-ranged page count the rail's own Page range control needs to show/clamp
   // against (computePDFPageCount's own comment) - not meaningful in SCM mode, which is why this
-  // stays outside the (dialog-only) SCM branch entirely. Deliberately ignores the export
-  // dialog's own advanced per-side margin override (undefined here, same as
-  // DEFAULT_EXPORT_SETTINGS) - that override is scoped to a single dialog session and the rail
-  // has no reach into it, so this reflects the profile's own margins, same as the live sheet.
+  // stays outside the (dialog-only) SCM branch entirely. Deliberately ignores
+  // settings.marginOverride (this PR moved that field into the rail's own state, but its EFFECT
+  // stays scoped to the export only, unchanged) - `margins` here is always the profile's own
+  // value, same as the live sheet.
   const totalPages = useMemo(
     () =>
       computePDFPageCount({
@@ -3462,6 +3485,98 @@ export function DisplayPage() {
                     }
                   }
                 />
+
+                {/* Advanced per-side margin override - moved from DisplayExportPDF.tsx's own
+                    settings step (this PR), grouped directly under the margin-profile control
+                    above rather than living behind the Export PDF dialog: these four fields are
+                    a manual override of that same profile decision, not an unrelated export-run
+                    choice. Scoped to the export only, same as before the move - the live sheet
+                    above always reads the profile (`margins`), never this field (see
+                    displayPdfProps.ts's "Margin-preset vs. per-side override" comment). */}
+                <Form.Group className="mb-2">
+                  <Form.Check
+                    type="checkbox"
+                    id="display-margin-override-toggle"
+                    data-testid="display-margin-override-toggle"
+                    label="Override page margins for this export"
+                    checked={settings.marginOverride !== undefined}
+                    onChange={(event) =>
+                      setSettings((previous) => ({
+                        ...previous,
+                        marginOverride: event.target.checked
+                          ? { ...MARGIN_PROFILES[marginProfile].margins }
+                          : undefined,
+                      }))
+                    }
+                  />
+                  {settings.marginOverride && (
+                    <>
+                      <div className="d-flex gap-2 align-items-center mt-2">
+                        <Form.Control
+                          type="number"
+                          size="sm"
+                          step={0.1}
+                          min={0}
+                          aria-label="Top margin (mm)"
+                          data-testid="display-margin-override-top"
+                          value={settings.marginOverride.top}
+                          onChange={(event) => {
+                            const value = parseFloat(event.target.value);
+                            if (!Number.isNaN(value))
+                              setMarginOverrideField("top", value);
+                          }}
+                        />
+                        <Form.Control
+                          type="number"
+                          size="sm"
+                          step={0.1}
+                          min={0}
+                          aria-label="Bottom margin (mm)"
+                          data-testid="display-margin-override-bottom"
+                          value={settings.marginOverride.bottom}
+                          onChange={(event) => {
+                            const value = parseFloat(event.target.value);
+                            if (!Number.isNaN(value))
+                              setMarginOverrideField("bottom", value);
+                          }}
+                        />
+                        <Form.Control
+                          type="number"
+                          size="sm"
+                          step={0.1}
+                          min={0}
+                          aria-label="Left margin (mm)"
+                          data-testid="display-margin-override-left"
+                          value={settings.marginOverride.left}
+                          onChange={(event) => {
+                            const value = parseFloat(event.target.value);
+                            if (!Number.isNaN(value))
+                              setMarginOverrideField("left", value);
+                          }}
+                        />
+                        <Form.Control
+                          type="number"
+                          size="sm"
+                          step={0.1}
+                          min={0}
+                          aria-label="Right margin (mm)"
+                          data-testid="display-margin-override-right"
+                          value={settings.marginOverride.right}
+                          onChange={(event) => {
+                            const value = parseFloat(event.target.value);
+                            if (!Number.isNaN(value))
+                              setMarginOverrideField("right", value);
+                          }}
+                        />
+                      </div>
+                      <Form.Text className="text-muted">
+                        Top / bottom / left / right, seeded from the profile
+                        above. Overrides it for this export only - the live
+                        sheet and the profile itself are unaffected.
+                      </Form.Text>
+                    </>
+                  )}
+                </Form.Group>
 
                 <Form.Check
                   type="switch"

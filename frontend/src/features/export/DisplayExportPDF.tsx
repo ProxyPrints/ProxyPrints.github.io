@@ -17,15 +17,16 @@
  * the draft-flush, cardback-reminder, and save-before-export gate that used to run only ahead of
  * a `/print` navigation.
  *
- * Export-time settings (an advanced page-margin override and Silhouette/SCM cutting mode) are
- * choices about a single export RUN, not the sheet's own layout, so they live here - alongside
- * the export affordance itself, in a small settings step between clicking "PDF" and the actual
- * download - rather than joining the right rail's Page Setup section, which governs what the live
- * sheet shows. Image DPI/JPG quality, corner rounding, the guide colour/length/thickness/offset/
- * crosshair controls, card selection mode, and page range all moved OUT of this step into the
- * rail's "Print quality"/"Guides"/"Export" sections - they govern the printed artifact's own
- * appearance and contents, not a one-off run choice like the margin override or SCM mode above -
- * see `displayPdfProps.ts`'s `DisplaySheetExportSettings` for where they live now. Plain Bootstrap
+ * Export-time settings (Silhouette/SCM cutting mode) are choices about a single export RUN, not
+ * the sheet's own layout, so they live here - alongside the export affordance itself, in a small
+ * settings step between clicking "PDF" and the actual download - rather than joining the right
+ * rail's Page Setup section, which governs what the live sheet shows. Image DPI/JPG quality,
+ * corner rounding, the guide colour/length/thickness/offset/crosshair controls, card selection
+ * mode, page range, and the advanced per-side page-margin override all moved OUT of this step
+ * into the rail - the margin override in particular groups with the rail's own margin-profile
+ * control (Page Setup section) rather than living here, since it's a manual override of that same
+ * profile decision, not a one-off run choice like SCM mode above - see `displayPdfProps.ts`'s
+ * `DisplaySheetExportSettings` for where every migrated field lives now. Plain Bootstrap
  * form controls only (no `AutofillCollapse`/`StyledDropdownTreeSelect`/`NumericField` from
  * `PDFGenerator.tsx`) so this component stays free of that file's own import graph.
  *
@@ -50,7 +51,6 @@ import { useAppDispatch, useAppSelector } from "@/common/types";
 import { RightPaddedIcon } from "@/components/icon";
 import { Spinner } from "@/components/Spinner";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
-import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
 import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
 import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
 import { usePostExportContributionPrompt } from "@/features/export/usePostExportContributionPrompt";
@@ -58,7 +58,6 @@ import { isGoogleDriveAppConfigured } from "@/features/googleDrive/googleDriveCo
 import {
   DisplayExportSettings,
   DisplaySheetExportSettings,
-  PageMarginOverride,
   useDisplayPDFProps,
 } from "@/features/pdf/displayPdfProps";
 import {
@@ -79,7 +78,6 @@ import {
   ScmVariant,
 } from "@/features/pdf/scm/scmLayout";
 import { selectRemoteBackendURL } from "@/store/slices/backendSlice";
-import { selectMarginProfile } from "@/store/slices/marginProfileSlice";
 import { selectIsProjectEmpty } from "@/store/slices/projectSlice";
 
 export interface DisplayExportPDFProps {
@@ -100,7 +98,6 @@ const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   // Matches /print's PDFGenerator.tsx's own default - a guillotine cutting a printed stack
   // relies on these, independent of whether per-card cut lines are also on.
   drawPageCutLines: true,
-  marginOverride: undefined,
   scmMode: false,
   scmPaperSize: "letter",
   scmVariant: "default",
@@ -118,7 +115,6 @@ export function DisplayExportPDF({
   const dispatch = useAppDispatch();
   const isProjectEmpty = useAppSelector(selectIsProjectEmpty);
   const backendURL = useAppSelector(selectRemoteBackendURL);
-  const marginProfile = useAppSelector(selectMarginProfile).profile;
   const { clientSearchService } = useClientSearchContext();
 
   const [showSettings, setShowSettings] = useState<boolean>(false);
@@ -170,19 +166,6 @@ export function DisplayExportPDF({
     setImageFetchProgress,
     confirmDespiteFailures
   );
-
-  const setMarginOverrideField = <K extends keyof PageMarginOverride>(
-    key: K,
-    value: number
-  ) =>
-    setExportSettings((previous) =>
-      previous.marginOverride
-        ? {
-            ...previous,
-            marginOverride: { ...previous.marginOverride, [key]: value },
-          }
-        : previous
-    );
 
   return (
     <>
@@ -363,92 +346,6 @@ export function DisplayExportPDF({
                 Guide lines across the whole sheet for cutting a printed stack
                 with a guillotine - independent of the per-card cut lines below.
               </Form.Text>
-
-              <Form.Group className="mb-3">
-                <Form.Check
-                  type="checkbox"
-                  id="display-export-margin-override-toggle"
-                  data-testid="display-export-margin-override-toggle"
-                  label="Override page margins for this export"
-                  checked={exportSettings.marginOverride !== undefined}
-                  onChange={(event) =>
-                    setField(
-                      "marginOverride",
-                      event.target.checked
-                        ? { ...MARGIN_PROFILES[marginProfile].margins }
-                        : undefined
-                    )
-                  }
-                />
-                {exportSettings.marginOverride && (
-                  <>
-                    <div className="d-flex gap-2 align-items-center mt-2">
-                      <Form.Control
-                        type="number"
-                        size="sm"
-                        step={0.1}
-                        min={0}
-                        aria-label="Top margin (mm)"
-                        data-testid="display-export-margin-top"
-                        value={exportSettings.marginOverride.top}
-                        onChange={(event) => {
-                          const value = parseFloat(event.target.value);
-                          if (!Number.isNaN(value))
-                            setMarginOverrideField("top", value);
-                        }}
-                      />
-                      <Form.Control
-                        type="number"
-                        size="sm"
-                        step={0.1}
-                        min={0}
-                        aria-label="Bottom margin (mm)"
-                        data-testid="display-export-margin-bottom"
-                        value={exportSettings.marginOverride.bottom}
-                        onChange={(event) => {
-                          const value = parseFloat(event.target.value);
-                          if (!Number.isNaN(value))
-                            setMarginOverrideField("bottom", value);
-                        }}
-                      />
-                      <Form.Control
-                        type="number"
-                        size="sm"
-                        step={0.1}
-                        min={0}
-                        aria-label="Left margin (mm)"
-                        data-testid="display-export-margin-left"
-                        value={exportSettings.marginOverride.left}
-                        onChange={(event) => {
-                          const value = parseFloat(event.target.value);
-                          if (!Number.isNaN(value))
-                            setMarginOverrideField("left", value);
-                        }}
-                      />
-                      <Form.Control
-                        type="number"
-                        size="sm"
-                        step={0.1}
-                        min={0}
-                        aria-label="Right margin (mm)"
-                        data-testid="display-export-margin-right"
-                        value={exportSettings.marginOverride.right}
-                        onChange={(event) => {
-                          const value = parseFloat(event.target.value);
-                          if (!Number.isNaN(value))
-                            setMarginOverrideField("right", value);
-                        }}
-                      />
-                    </div>
-                    <Form.Text className="text-muted">
-                      Top / bottom / left / right, seeded from the rail&apos;s
-                      current margin profile. Overrides that profile for this
-                      export only - the live sheet and the profile itself are
-                      unaffected.
-                    </Form.Text>
-                  </>
-                )}
-              </Form.Group>
             </>
           )}
         </Modal.Body>
