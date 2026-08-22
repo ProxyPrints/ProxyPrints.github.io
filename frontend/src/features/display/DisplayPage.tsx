@@ -3379,6 +3379,15 @@ export function DisplayPage() {
                   id="display-rail-page-setup"
                   pad={0}
                   headerPadding="4px 8px"
+                  // WCAG contrast fix (2026-08-22): this section's Card.Body would otherwise
+                  // inherit $theme-panel-bg (#2f3549), the shared AutofillCollapse body default -
+                  // fine for $theme-text but only 5.91:1 for the spacing control's
+                  // `outline-light` LINK toggle ($light, #abb6c2), short of the 7:1 audit floor.
+                  // Before this section existed, that control sat directly on the rail
+                  // offcanvas's own background ($offcanvas-bg-color, set to $theme-body-bg),
+                  // which clears 8.3:1 - restored here rather than widening `$light` itself,
+                  // which backs `outline-light` everywhere sitewide.
+                  bodyBackground="var(--bs-body-bg)"
                   expanded={railSectionExpanded["page-setup"]}
                   onClick={() => toggleRailSection("page-setup")}
                   title={
@@ -3983,6 +3992,9 @@ export function DisplayPage() {
                   id="display-rail-view"
                   pad={0}
                   headerPadding="4px 8px"
+                  // Same contrast fix as the Page setup section above - the Fronts/Backs
+                  // `outline-light` toggle pair is the same $light-on-$theme-panel-bg failure.
+                  bodyBackground="var(--bs-body-bg)"
                   expanded={railSectionExpanded["view"]}
                   onClick={() => toggleRailSection("view")}
                   title={
