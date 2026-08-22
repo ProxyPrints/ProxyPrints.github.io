@@ -80,6 +80,12 @@ from cardpicker.printing_consensus import resolve_and_persist_printing
 # every derived-not-explicit artist vote, without inspecting anonymous_id shapes.
 DERIVED_ARTIST_VOTE_SURFACE = "illustration_vote_derived_artist"
 
+# Same discipline as DERIVED_ARTIST_VOTE_SURFACE above, for the CardPrintingTag this endpoint
+# derives from a 1:1 illustration match. The voter answered a question about artwork, not
+# printing - this vote_surface keeps that inference queryable/auditable on its own, distinct
+# from the "question-feed" surface a genuine printing-confirmation answer carries.
+DERIVED_PRINTING_VOTE_SURFACE = "illustration_vote_derived_printing"
+
 # THE ONLY SEPARATOR TESTED, AND WHY (issue #503, prod census over 2,523 CanonicalArtist rows):
 #   ' & '   -> 219 rows (8.7%), ALL real combined credits - the separator this module tests.
 #   ', '    ->  20 rows, ALL FALSE POSITIVES: Unfinity "age N" credits ("Aliya, age 5½",
@@ -179,13 +185,18 @@ def cast_illustration_vote(
        behaviour for the machine writer) rather than colliding with it.
 
     2. `CardPrintingTag` - ONLY when `printings_for_card_and_illustration` resolves to EXACTLY
-       ONE live candidate printing. Reuses `post_submit_printing_tag`'s own delete-then-create
-       semantics unchanged (that view's own docstring: "a person changing their mind updates
-       their vote rather than erroring on the unique constraint"). At N>1 printings, nothing is
-       written on this channel at all - `post_submit_printing_tag` itself deletes every prior
-       vote for (card, anonymous_id) before creating one, so N sequential submissions here would
-       leave exactly one arbitrary survivor holding full human weight; the endpoint has no way
-       to express "one of these N", so it must not try.
+       ONE live candidate printing AND no `CardPrintingTag` already exists for (card,
+       anonymous_id) - explicit or previously derived. Checked with a plain `.exists()` query
+       INSIDE this transaction, never by deleting first: the voter answered a question about
+       ARTWORK here, not printing, so this write is an INFERENCE, not the voter's own assertion -
+       `source=VoteSource.DEDUCTION` (machine weight, `PRINTING_TAG_MACHINE_WEIGHT`; can never
+       resolve a printing alone under the human-backed gate, see `printing_consensus.py`) and
+       `vote_surface=DERIVED_PRINTING_VOTE_SURFACE` (never the surface the illustration vote
+       itself carried) so the derivation stays queryable/auditable on its own - the same
+       "never override an existing vote" precedence rule point 3 below applies to the artist
+       channel (see module docstring's #483 section). An existing vote, whatever its source, is
+       left completely untouched. At N>1 printings, nothing is written on this channel at all -
+       the derivation has no way to express "one of these N", so it must not try.
 
     3. `CardArtistVote` - decoupled from outcome (2) above: `illustration_id -> artist` is
        functional regardless of how many PRINTINGS share the artwork (they all carry the same
@@ -245,17 +256,19 @@ def cast_illustration_vote(
         if not is_unknown and illustration_id is not None:
             matching_printings = printings_for_card_and_illustration(card, illustration_id)
 
-            if len(matching_printings) == 1:
+            if (
+                len(matching_printings) == 1
+                and not CardPrintingTag.objects.filter(card=card, anonymous_id=anonymous_id).exists()
+            ):
                 printing = matching_printings[0]
-                CardPrintingTag.objects.filter(card=card, anonymous_id=anonymous_id).delete()
                 CardPrintingTag.objects.create(
                     card=card,
                     printing=printing,
                     is_no_match=False,
                     anonymous_id=anonymous_id,
-                    source=VoteSource.USER,
+                    source=VoteSource.DEDUCTION,
                     user=user,
-                    vote_surface=vote_surface,
+                    vote_surface=DERIVED_PRINTING_VOTE_SURFACE,
                 )
                 resolve_and_persist_printing(card)
                 printing_vote_cast = True

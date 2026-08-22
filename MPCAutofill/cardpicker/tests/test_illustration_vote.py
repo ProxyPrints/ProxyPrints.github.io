@@ -17,6 +17,7 @@ from cardpicker.models import (
     CardIllustrationRejection,
     CardIllustrationVote,
     CardPrintingTag,
+    PrintingTagStatus,
     VoteSource,
 )
 from cardpicker.tests.factories import (
@@ -124,7 +125,72 @@ class TestCastIllustrationVote:
         tag = CardPrintingTag.objects.get(card=card, anonymous_id="voter-1")
         assert tag.printing == printing
         assert tag.is_no_match is False
-        assert tag.source == VoteSource.USER
+        # The voter answered a question about artwork, not printing - this write is a
+        # DEDUCTION-weight inference, never full human weight, and carries its own vote_surface
+        # so it stays distinguishable from a genuine printing-confirmation answer.
+        assert tag.source == VoteSource.DEDUCTION
+        assert tag.vote_surface == illustration_vote.DERIVED_PRINTING_VOTE_SURFACE
+
+    def test_existing_printing_vote_is_left_untouched(self, db):
+        illustration_id = uuid.uuid4()
+        card = CardFactory(name="Brainstorm")
+        _printing_with_illustration("Brainstorm", illustration_id)
+        explicit_printing = _printing_with_illustration("Fireball", uuid.uuid4())
+        existing_tag = CardPrintingTag.objects.create(
+            card=card,
+            printing=explicit_printing,
+            is_no_match=False,
+            anonymous_id="voter-1",
+            source=VoteSource.USER,
+            vote_surface="question-feed",
+        )
+
+        outcome = cast_illustration_vote(
+            card=card,
+            anonymous_id="voter-1",
+            illustration_id=illustration_id,
+            is_unknown=False,
+            user=None,
+            vote_surface="question-feed",
+        )
+
+        assert outcome.printing_vote_cast is False
+        assert outcome.resolved_printing is None
+        tags = list(CardPrintingTag.objects.filter(card=card, anonymous_id="voter-1"))
+        assert len(tags) == 1
+        assert tags[0].pk == existing_tag.pk
+        assert tags[0].printing == explicit_printing
+        assert tags[0].source == VoteSource.USER
+        assert tags[0].vote_surface == "question-feed"
+
+    def test_two_derived_printing_votes_do_not_resolve_the_printing(self, db):
+        # At PRINTING_TAG_MACHINE_WEIGHT (0.5) each, two DEDUCTION votes alone can never clear
+        # the human-backed gate - this is the user-visible property the fix protects.
+        illustration_id = uuid.uuid4()
+        card = CardFactory(name="Brainstorm")
+        _printing_with_illustration("Brainstorm", illustration_id)
+
+        cast_illustration_vote(
+            card=card,
+            anonymous_id="voter-1",
+            illustration_id=illustration_id,
+            is_unknown=False,
+            user=None,
+            vote_surface="question-feed",
+        )
+        cast_illustration_vote(
+            card=card,
+            anonymous_id="voter-2",
+            illustration_id=illustration_id,
+            is_unknown=False,
+            user=None,
+            vote_surface="question-feed",
+        )
+
+        assert CardPrintingTag.objects.filter(card=card, source=VoteSource.DEDUCTION).count() == 2
+        card.refresh_from_db()
+        assert card.printing_tag_status == PrintingTagStatus.UNRESOLVED
+        assert card.inferred_canonical_card is None
 
     def test_n_gt_1_group_casts_nothing_on_the_printing_channel(self, db):
         illustration_id = uuid.uuid4()
