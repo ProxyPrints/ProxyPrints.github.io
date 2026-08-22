@@ -862,6 +862,24 @@ export const ensureDisplayRightRailOpen = async (page: Page) => {
   }
 };
 
+// The right rail's print/export settings regroup into five `AutofillCollapse` sections (Page
+// setup, Cut lines & snip guides, Export, Print quality, View) - "Cut lines & snip guides" and
+// "Print quality" default to collapsed, so any control inside either one is unreachable until
+// its section header is clicked open. Each header's title node carries a dedicated
+// `display-rail-section-<id>-toggle` testid (DisplayPage.tsx) - clicking it bubbles to
+// AutofillCollapse's own header `onClick`, same pattern as the Sources accordion's
+// `display-sources-summary-label`. `sectionId` matches the key used in that file's
+// `railSectionExpanded` state (e.g. "cut-lines-guides", "print-quality").
+export const expandRailSection = async (page: Page, sectionId: string) => {
+  const toggle = page.getByTestId(`display-rail-section-${sectionId}-toggle`);
+  // `aria-expanded` lives on AutofillCollapse's own `Card.Header` (the click target the title
+  // testid sits inside), not on the title node itself.
+  const header = toggle.locator("xpath=ancestor::*[@aria-expanded][1]");
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+};
+
 /**
  * Open a StyledDropdownTreeSelect and click an option by its exact label text.
  * The container should be the `.react-dropdown-tree-select` element (or a

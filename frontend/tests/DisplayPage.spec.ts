@@ -32,6 +32,7 @@ import {
 
 import { test } from "../playwright.setup";
 import {
+  expandRailSection,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
   openSearchSettingsModal,
@@ -351,7 +352,12 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
 
+    // "Cut lines & snip guides" is collapsed by default - the toggle isn't reachable until the
+    // section is opened.
     const guidesToggle = page.getByLabel("Guides");
+    await expect(guidesToggle).not.toBeVisible();
+    await expandRailSection(page, "cut-lines-guides");
+
     await expect(guidesToggle).toBeChecked();
     await expect(
       page.getByTestId("page-preview-cut-line").first()
