@@ -100,13 +100,20 @@ function PrintingQueueOrDefault() {
     <>
       <WtcTokenScope>
         <WtcField>
-          {isModerator ? (
-            <Tab.Container
-              activeKey={activeTab}
-              onSelect={(key) => {
-                if (key) setActiveTab(key as WhatsThatTab);
-              }}
-            >
+          {/* `isModerator` flips asynchronously once `whoami` resolves (~450ms live). The
+              feed must sit at the SAME position in the element tree in both the pre- and
+              post-resolution render, or React treats it as a different element on that flip
+              and unmounts/remounts QuestionFeed - discarding whatever question the user was
+              looking at and double-logging QuestionFeedServedLog. So the Tab.Container/
+              Tab.Content wrapper and the "feed" Tab.Pane render unconditionally; only the Nav
+              switcher and the "moderation" Tab.Pane are gated on isModerator. */}
+          <Tab.Container
+            activeKey={isModerator ? activeTab : "feed"}
+            onSelect={(key) => {
+              if (key) setActiveTab(key as WhatsThatTab);
+            }}
+          >
+            {isModerator && (
               <Nav variant="pills" className="mb-3">
                 <Nav.Item>
                   <Nav.Link eventKey="feed">Question Feed</Nav.Link>
@@ -115,22 +122,22 @@ function PrintingQueueOrDefault() {
                   <Nav.Link eventKey="moderation">Moderation</Nav.Link>
                 </Nav.Item>
               </Nav>
-              <Tab.Content>
-                {/* mountOnEnter on both, unmountOnExit only on moderation - the question feed's
-                    own behavior/mount timing is unchanged from before this switcher existed
-                    for the common (non-moderator) case, matching the pre-redesign printing/
-                    artist/tag tab switcher's identical rationale for the same asymmetry. */}
-                <Tab.Pane eventKey="feed" mountOnEnter>
-                  <QuestionFeed />
-                </Tab.Pane>
+            )}
+            <Tab.Content>
+              {/* mountOnEnter on both, unmountOnExit only on moderation - the question feed's
+                  own behavior/mount timing is unchanged from before this switcher existed
+                  for the common (non-moderator) case, matching the pre-redesign printing/
+                  artist/tag tab switcher's identical rationale for the same asymmetry. */}
+              <Tab.Pane eventKey="feed" mountOnEnter>
+                <QuestionFeed />
+              </Tab.Pane>
+              {isModerator && (
                 <Tab.Pane eventKey="moderation" mountOnEnter unmountOnExit>
                   <ModerationTab />
                 </Tab.Pane>
-              </Tab.Content>
-            </Tab.Container>
-          ) : (
-            <QuestionFeed />
-          )}
+              )}
+            </Tab.Content>
+          </Tab.Container>
         </WtcField>
       </WtcTokenScope>
       <Footer />
