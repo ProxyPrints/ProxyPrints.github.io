@@ -35,7 +35,11 @@ import {
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { toTitleCase } from "@/common/utils";
 import { RightPaddedIcon } from "@/components/icon";
-import { useGetDFCPairsQuery, useGetSampleCardsQuery } from "@/store/api";
+import {
+  useGetDFCPairsQuery,
+  useGetSampleCardsQuery,
+  useGetSplitCardNamesQuery,
+} from "@/store/api";
 import { addMembers, selectProjectSize } from "@/store/slices/projectSlice";
 import { selectFuzzySearch } from "@/store/slices/searchSettingsSlice";
 
@@ -69,6 +73,7 @@ export function ImportText({
   const dispatch = useAppDispatch();
   const sampleCardsQuery = useGetSampleCardsQuery();
   const dfcPairsQuery = useGetDFCPairsQuery();
+  const splitCardNamesQuery = useGetSplitCardNamesQuery();
   const fuzzySearch = useAppSelector(selectFuzzySearch);
   const projectSize = useAppSelector(selectProjectSize);
 
@@ -83,7 +88,10 @@ export function ImportText({
     const processedLines = processStringAsMultipleLines(
       textValue,
       dfcPairsQuery.data ?? {},
-      fuzzySearch
+      fuzzySearch,
+      new Set(
+        (splitCardNamesQuery.data ?? []).map((name) => name.toLowerCase())
+      )
     );
     dispatch(
       addMembers({
@@ -103,7 +111,7 @@ export function ImportText({
     }
   };
 
-  const disabled = dfcPairsQuery.isFetching;
+  const disabled = dfcPairsQuery.isFetching || splitCardNamesQuery.isFetching;
   const placeholderText =
     sampleCardsQuery.data != null
       ? formatPlaceholderText(sampleCardsQuery.data)

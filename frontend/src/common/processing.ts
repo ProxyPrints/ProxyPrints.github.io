@@ -177,6 +177,15 @@ export const extractDriveIdBracketToken = (
   return [text.replace(match[0], "").trim(), candidateId];
 };
 
+// Scryfall names split/adventure/flip/aftermath cards with the exact same " // " convention
+// `FaceSeparator` uses for the manual front/back override below (e.g. "Fire // Ice"), so a
+// literal card name and a two-query directive are textually identical - `splitCardNames` is
+// what tells them apart.
+const isKnownSingleFacedCompoundName = (
+  trimmedLine: string,
+  splitCardNames: ReadonlySet<string>
+): boolean => splitCardNames.has(trimmedLine.toLowerCase());
+
 /**
  * Unpack `line` into its constituents.
  *
@@ -191,11 +200,16 @@ export const extractDriveIdBracketToken = (
  * takes precedence over a trailing `@id` for that same face if somehow both are present.
  */
 function unpackLine(
-  line: string
+  line: string,
+  splitCardNames: ReadonlySet<string> = new Set()
 ): [number, [string, string | null] | null, [string, string | null] | null] {
   const [quantity, trimmedLine] = extractQuantity(line);
 
-  const [rawFrontLine, rawBackLine] = trimmedLine.split(FaceSeparator);
+  const faceParts = trimmedLine.split(FaceSeparator);
+  const [rawFrontLine, rawBackLine]: [string, string | undefined] =
+    isKnownSingleFacedCompoundName(trimmedLine, splitCardNames)
+      ? [trimmedLine, undefined]
+      : [faceParts[0], faceParts[1]];
   const [frontLine, frontBracketId] = extractDriveIdBracketToken(rawFrontLine);
   const [backLine, backBracketId] =
     rawBackLine !== undefined
@@ -233,16 +247,22 @@ export const getDfcBack = (
   dfcPairs: DFCPairs,
   fuzzySearch: boolean
 ): string | null => {
+  // `query` has already been through `processQuery` (lowercased); `dfcPairs` keys retain
+  // Scryfall's original capitalisation (e.g. "Huntmaster of the Fells"), so matching must
+  // lowercase the keys too - a case-sensitive comparison here never matches real data.
   let dfcPairMatchFront: string | null = null;
   if (fuzzySearch) {
     const matches = Object.keys(dfcPairs).filter((dfcPairFront) =>
-      dfcPairFront.startsWith(query)
+      dfcPairFront.toLowerCase().startsWith(query)
     );
     if (matches.length === 1) {
       dfcPairMatchFront = matches[0];
     }
-  } else if (query in dfcPairs) {
-    dfcPairMatchFront = query;
+  } else {
+    dfcPairMatchFront =
+      Object.keys(dfcPairs).find(
+        (dfcPairFront) => dfcPairFront.toLowerCase() === query
+      ) ?? null;
   }
   return dfcPairMatchFront ? dfcPairs[dfcPairMatchFront] : null;
 };
@@ -262,9 +282,13 @@ export const getDfcBack = (
 export function processLine(
   line: string,
   dfcPairs: DFCPairs,
-  fuzzySearch: boolean
+  fuzzySearch: boolean,
+  splitCardNames: ReadonlySet<string> = new Set()
 ): ProcessedLine {
-  const [quantity, frontRawQuery, backRawQuery] = unpackLine(line);
+  const [quantity, frontRawQuery, backRawQuery] = unpackLine(
+    line,
+    splitCardNames
+  );
 
   let frontQuery: SearchQuery | null = null;
   let frontSelectedImage: string | undefined = undefined;
@@ -310,7 +334,8 @@ export function processLine(
 export function processLines(
   lines: Array<string>,
   dfcPairs: DFCPairs,
-  fuzzySearch: boolean
+  fuzzySearch: boolean,
+  splitCardNames: ReadonlySet<string> = new Set()
 ): Array<ProcessedLine> {
   const queries: Array<[number, ProjectMember | null, ProjectMember | null]> =
     [];
@@ -319,7 +344,8 @@ export function processLines(
       const [quantity, frontMember, backMember] = processLine(
         line,
         dfcPairs,
-        fuzzySearch
+        fuzzySearch,
+        splitCardNames
       );
       if (quantity > 0 && (frontMember != null || backMember != null)) {
         queries.push([quantity, frontMember, backMember]);
@@ -332,9 +358,15 @@ export function processLines(
 export function processStringAsMultipleLines(
   lines: string,
   dfcPairs: DFCPairs,
-  fuzzySearch: boolean
+  fuzzySearch: boolean,
+  splitCardNames: ReadonlySet<string> = new Set()
 ): Array<ProcessedLine> {
-  return processLines(lines.split(/\r?\n|\r|\n/g), dfcPairs, fuzzySearch);
+  return processLines(
+    lines.split(/\r?\n|\r|\n/g),
+    dfcPairs,
+    fuzzySearch,
+    splitCardNames
+  );
 }
 
 /**

@@ -292,6 +292,64 @@ test("line that doesn't fuzzy match to dfc pair is processed correctly", () => {
   ]);
 });
 
+test("dfc pair matching is case-insensitive against the front query", () => {
+  // dfcPairs keys carry Scryfall's original capitalisation ("Huntmaster of the Fells");
+  // the front query has already been lowercased by processSearchQuery before reaching here.
+  expect(
+    processLine(
+      "Huntmaster of the Fells",
+      { "Huntmaster of the Fells": "Ravager of the Fells" },
+      false
+    )
+  ).toEqual([
+    1,
+    {
+      query: { cardType: Card, query: "huntmaster of the fells" },
+      selectedImage: undefined,
+      selected: false,
+    },
+    {
+      query: { cardType: Card, query: "Ravager of the Fells" },
+      selectedImage: undefined,
+      selected: false,
+    },
+  ]);
+});
+
+test("a split card's full printed name is not split into two queries", () => {
+  const splitCardNames = new Set(["fire // ice"]);
+  expect(
+    processLine("3x Fire // Ice", dfcPairs, false, splitCardNames)
+  ).toEqual([
+    3,
+    {
+      query: { cardType: Card, query: "fire ice" },
+      selectedImage: undefined,
+      selected: false,
+    },
+    null,
+  ]);
+});
+
+test("a name matching FaceSeparator but not a known split card name still splits", () => {
+  const splitCardNames = new Set(["fire // ice"]);
+  expect(
+    processLine(`5 Opt${FaceSeparator}Char`, dfcPairs, false, splitCardNames)
+  ).toEqual([
+    5,
+    {
+      query: { cardType: Card, query: "opt" },
+      selectedImage: undefined,
+      selected: false,
+    },
+    {
+      query: { cardType: Card, query: "char" },
+      selectedImage: undefined,
+      selected: false,
+    },
+  ]);
+});
+
 test("line that fuzzy matches ambiguously to dfc pair is processed correctly", () => {
   expect(
     processLine("2 bat", { batman: "ratman", batwoman: "ratwoman" }, true)
