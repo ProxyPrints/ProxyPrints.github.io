@@ -92,11 +92,20 @@ from cardpicker.models import (
 from cardpicker.vote_consensus import is_human_backed_source
 
 # See this module's own docstring's "WHY (card_id, anonymous_id) ALONE IS NOT ENOUGH" section -
-# a genuine same-transaction pair is always sub-second apart; 5 seconds is a generous margin over
-# that (covering the one DB call - `resolve_and_persist_illustration` - that runs between the two
-# `.create()` calls) while staying far below the minutes/days gap a later, unrelated resubmission
-# would show.
-SIBLING_CORRELATION_WINDOW = timedelta(seconds=5)
+# a genuine same-transaction pair is always written by two back-to-back `.create()` calls inside
+# one `transaction.atomic()` block, with a single DB call (`resolve_and_persist_illustration`)
+# between them and no external I/O. Per that same docstring's "WHY THE CORRELATION WINDOW THIS
+# ADDS" reasoning plus `question_feed._voter_answered_printing_card_ids`'s unconditional
+# CardIllustrationVote exclusion (issue #713/#738, live since 2026-08-06), a voter can never be
+# re-served a genuine printing question for this card - or its identity group - once they've cast
+# an illustration vote on it, so this window's only remaining job is separating same-transaction
+# latency from an unrelated LATER resubmission, and those two populations sit at wholly different
+# scales: one transaction's round trip vs. the minutes-to-days gap a real resubmission requires
+# (the later endpoint is a separate HTTP request the voter has to consciously make). 60 seconds
+# gives generous headroom to absorb request queueing, lock contention, or a GC pause stretching
+# that single DB call well past its typical sub-second cost under load, while staying roughly two
+# orders of magnitude below the minimum gap a genuine resubmission would show.
+SIBLING_CORRELATION_WINDOW = timedelta(seconds=60)
 
 
 @dataclass
@@ -236,6 +245,11 @@ class Command(BaseCommand):
         would_leave_resolved_card_ids = sorted({row.card_id for row in result.derived if row.card_would_leave_resolved})
 
         self.stdout.write(f"[{mode}] retract_derived_illustration_printing_tags")
+        self.stdout.write(
+            f"  sibling correlation window: {SIBLING_CORRELATION_WINDOW.total_seconds():.0f}s "
+            "(rows sharing (card, anonymous_id) with a derived-artist-vote sibling are retracted "
+            "if created within this window of it, else reported as skipped/ambiguous below)"
+        )
         self.stdout.write(
             f"Identified {len(result.derived)} derived CardPrintingTag row(s) across "
             f"{len(affected_card_ids)} distinct card(s)."

@@ -122,6 +122,31 @@ class TestFindDerivedPrintingTags:
         assert {row.tag_id for row in result.derived} == {tag.pk}
         assert result.skipped_ambiguous_ids == []
 
+    def test_pair_just_outside_the_window_is_skipped_not_retracted(self, db):
+        card = CardFactory(name="Brainstorm")
+        tag, vote = _cast_derived_pair(card, "voter-1")
+        nudged_sibling_at = tag.created_at - (SIBLING_CORRELATION_WINDOW + timedelta(seconds=1))
+        CardArtistVote.objects.filter(pk=vote.pk).update(created_at=nudged_sibling_at)
+
+        result = find_derived_printing_tags()
+
+        assert result.derived == []
+        assert result.skipped_ambiguous_ids == [tag.pk]
+
+    def test_pair_at_a_production_observed_latency_is_retracted(self, db):
+        """Pins the widened window against a concrete delay on the order of the slowest
+        same-transaction gaps actually seen for this population (~17s) - would have been
+        wrongly skipped under the pre-widening 5s window this command shipped with."""
+        card = CardFactory(name="Brainstorm")
+        tag, vote = _cast_derived_pair(card, "voter-1")
+        nudged_sibling_at = tag.created_at - timedelta(seconds=17)
+        CardArtistVote.objects.filter(pk=vote.pk).update(created_at=nudged_sibling_at)
+
+        result = find_derived_printing_tags()
+
+        assert {row.tag_id for row in result.derived} == {tag.pk}
+        assert result.skipped_ambiguous_ids == []
+
     def test_is_no_match_escape_vote_within_the_window_is_not_retracted(self, db):
         """Pre-#713 (question_feed._voter_answered_printing_card_ids's own docstring), an
         illustration vote that derived ONLY the artist channel (N>1 matching printings - no
