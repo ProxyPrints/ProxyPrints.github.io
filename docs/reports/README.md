@@ -121,6 +121,15 @@ a `detail` object read only when the summary signals it's needed.
   callers, the missing illustration exclusion in the slow-path queryset, and
   six Stage C → Stage D dependencies that no `extractor_versions` gate
   enforces.
+- `2026-08-21-name-frequency-elimination-soundness.md` — issue #858:
+  `local-name-frequency-v1`'s "79.8% unsound" claim in
+  `collector_line_artist.py` had no supporting measurement anywhere in the
+  repo. A read-only backtest of the calculator's structural double gate
+  against 23,203 confirmed-match ground-truth cards finds it wrong on
+  64.9% of its 2,996 checkable simulated firings (35.1% precision) - the
+  "unsound" direction holds, the number and its claimed private-normaliser
+  cause did not; both corrected in `collector_line_artist.py` to cite this
+  report.
 
 - `2026-08-06-card-location-landmark-gate.md` — STEP 1 gate result (NOT
   MET) for locating the card's own rectangle inside a possibly
