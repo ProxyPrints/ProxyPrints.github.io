@@ -17,15 +17,15 @@
  * the draft-flush, cardback-reminder, and save-before-export gate that used to run only ahead of
  * a `/print` navigation.
  *
- * Export-time settings (card selection mode, page range, an advanced page-margin override, and
- * Silhouette/SCM cutting mode) are choices about a single export RUN, not the sheet's own layout,
- * so they live here - alongside the export affordance itself, in a small settings step between
- * clicking "PDF" and the actual download - rather than joining the right rail's Page Setup
- * section, which governs what the live sheet shows. Image DPI/JPG quality, corner rounding, and
- * the guide colour/length/thickness/offset/crosshair controls moved OUT of this step into the
- * rail (the last five sit next to the Guides toggle they depend on) - they govern the printed
- * artifact's own appearance, not a one-off run choice like a page range - see
- * `displayPdfProps.ts`'s `DisplaySheetExportSettings` for where they live now. Plain Bootstrap
+ * Export-time settings (an advanced page-margin override and Silhouette/SCM cutting mode) are
+ * choices about a single export RUN, not the sheet's own layout, so they live here - alongside
+ * the export affordance itself, in a small settings step between clicking "PDF" and the actual
+ * download - rather than joining the right rail's Page Setup section, which governs what the live
+ * sheet shows. Image DPI/JPG quality, corner rounding, the guide colour/length/thickness/offset/
+ * crosshair controls, card selection mode, and page range all moved OUT of this step into the
+ * rail's "Print quality"/"Guides"/"Export" sections - they govern the printed artifact's own
+ * appearance and contents, not a one-off run choice like the margin override or SCM mode above -
+ * see `displayPdfProps.ts`'s `DisplaySheetExportSettings` for where they live now. Plain Bootstrap
  * form controls only (no `AutofillCollapse`/`StyledDropdownTreeSelect`/`NumericField` from
  * `PDFGenerator.tsx`) so this component stays free of that file's own import graph.
  *
@@ -39,7 +39,7 @@
  * list. Image quality (DPI/JPG, now the rail's) is read by `SCMCard` exactly like the standard
  * grid's own card image, so both panels agree on it without either one rendering a control here.
  */
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import Button from "react-bootstrap/Button";
 import Dropdown from "react-bootstrap/Dropdown";
 import Form from "react-bootstrap/Form";
@@ -61,11 +61,6 @@ import {
   PageMarginOverride,
   useDisplayPDFProps,
 } from "@/features/pdf/displayPdfProps";
-import {
-  CardSelectionMode,
-  computePDFPageCount,
-  DEFAULT_CARD_SELECTION_MODE,
-} from "@/features/pdf/PDF";
 import {
   ConfirmDespiteFailures,
   ImageFailureConfirmModal,
@@ -96,28 +91,12 @@ export interface DisplayExportPDFProps {
   runExportGate: (proceed: () => void) => void;
 }
 
-// The mode names alone mislead ("Distinct Backs" sounds like it emits backs, and for a
-// shared-cardback deck it emits none), so each option carries its own one-line explanation.
-const CARD_SELECTION_MODE_DESCRIPTIONS: {
-  [mode in keyof typeof CardSelectionMode]: string;
-} = {
-  frontsAndBacks:
-    "Every front and every back, front/back pages interleaved - safe default for a deck that relies on the shared project cardback.",
-  frontsAndDistinctBacks:
-    "Every front, plus only backs that differ from the project's shared cardback. Omits the shared cardback entirely - a deck where every card uses it exports no backs at all.",
-  frontsOnly: "Fronts only, no back pages.",
-  backsOnly: "Backs only, no front pages.",
-};
-
 const SCM_VARIANT_LABELS: { [variant in ScmVariant]: string } = {
   default: "Normal",
   borderless: "Borderless",
 };
 
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
-  cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
-  pageRangeStart: undefined,
-  pageRangeEnd: undefined,
   // Matches /print's PDFGenerator.tsx's own default - a guillotine cutting a printed stack
   // relies on these, independent of whether per-card cut lines are also on.
   drawPageCutLines: true,
@@ -152,12 +131,6 @@ export function DisplayExportPDF({
   ) => setExportSettings((previous) => ({ ...previous, [key]: value }));
 
   const pdfProps = useDisplayPDFProps(sheetSettings, exportSettings);
-  // The real page count, ignoring the range fields themselves - computePDFPageCount doesn't
-  // read them (see its own comment) - so this always reflects what pagination actually
-  // resolves to, letting the range control clamp against a real number instead of a guess.
-  // Not meaningful in SCM mode (SCM paginates independently - see computePDFPageCount's own
-  // comment), so the Pages control itself is hidden whenever scmMode is on (below).
-  const totalPages = useMemo(() => computePDFPageCount(pdfProps), [pdfProps]);
 
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
@@ -249,7 +222,7 @@ export function DisplayExportPDF({
             </Form.Text>
           </div>
 
-          {exportSettings.scmMode ? (
+          {exportSettings.scmMode && (
             <>
               <Form.Group className="mb-3">
                 <Form.Label>Paper size</Form.Label>
@@ -365,80 +338,6 @@ export function DisplayExportPDF({
                       setField("scmOffsetAngleDeg", value);
                   }}
                 />
-              </Form.Group>
-            </>
-          ) : (
-            <>
-              <Form.Group className="mb-3">
-                <Form.Label>Cards to include</Form.Label>
-                <Form.Select
-                  size="sm"
-                  data-testid="display-export-card-selection-mode"
-                  value={exportSettings.cardSelectionMode}
-                  onChange={(event) =>
-                    setField(
-                      "cardSelectionMode",
-                      event.target.value as keyof typeof CardSelectionMode
-                    )
-                  }
-                >
-                  {Object.entries(CardSelectionMode).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </Form.Select>
-                <Form.Text className="text-muted">
-                  {
-                    CARD_SELECTION_MODE_DESCRIPTIONS[
-                      exportSettings.cardSelectionMode
-                    ]
-                  }
-                </Form.Text>
-              </Form.Group>
-
-              <Form.Group className="mb-3">
-                <Form.Label>Pages ({totalPages} total)</Form.Label>
-                <div className="d-flex gap-2 align-items-center">
-                  <Form.Control
-                    type="number"
-                    size="sm"
-                    min={1}
-                    max={totalPages}
-                    placeholder="1"
-                    aria-label="First page to export"
-                    data-testid="display-export-page-range-start"
-                    value={exportSettings.pageRangeStart ?? ""}
-                    onChange={(event) => {
-                      const value = parseInt(event.target.value, 10);
-                      setField(
-                        "pageRangeStart",
-                        Number.isNaN(value) ? undefined : value
-                      );
-                    }}
-                  />
-                  <span className="text-muted small">to</span>
-                  <Form.Control
-                    type="number"
-                    size="sm"
-                    min={1}
-                    max={totalPages}
-                    placeholder={`${totalPages}`}
-                    aria-label="Last page to export"
-                    data-testid="display-export-page-range-end"
-                    value={exportSettings.pageRangeEnd ?? ""}
-                    onChange={(event) => {
-                      const value = parseInt(event.target.value, 10);
-                      setField(
-                        "pageRangeEnd",
-                        Number.isNaN(value) ? undefined : value
-                      );
-                    }}
-                  />
-                </div>
-                <Form.Text className="text-muted">
-                  Leave blank on either end to export all pages.
-                </Form.Text>
               </Form.Group>
             </>
           )}
