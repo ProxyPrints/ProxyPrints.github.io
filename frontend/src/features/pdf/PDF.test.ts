@@ -10,6 +10,7 @@ import {
   DisplaySheetExportSettings,
 } from "@/features/pdf/displayPdfProps";
 import {
+  computeExportedCardIdentifiers,
   computePDFRenderPageCount,
   computePDFRenderWindow,
   createPDFElement,
@@ -237,6 +238,43 @@ describe("computePDFRenderWindow - absolute start page + range-sliced total", ()
     );
     expect(startPage).toBe(3);
     expect(totalPages).toBe(3);
+  });
+});
+
+describe("computeExportedCardIdentifiers", () => {
+  it("returns every distinct identifier across the full, unranged deck", () => {
+    const props = buildFullPDFProps(baseInput);
+    expect(computeExportedCardIdentifiers(props).sort()).toEqual(
+      [...DECK_MEMBERS.map((m) => m.front.selectedImage), "cardback"].sort()
+    );
+  });
+
+  it("scopes to only the ranged page's identifiers, not the whole project", () => {
+    const props = buildFullPDFProps(
+      withSheetSettings(baseInput, { pageRangeStart: 2, pageRangeEnd: 2 })
+    );
+    // Page 2 (index 1) is group 0's back page - every slot's back is the shared "cardback"
+    // identifier, deduplicated to the one entry actually needed for this ranged export.
+    expect(computeExportedCardIdentifiers(props)).toEqual(["cardback"]);
+  });
+
+  it("scopes to a front-only page's identifiers", () => {
+    const props = buildFullPDFProps(
+      withSheetSettings(baseInput, { pageRangeStart: 3, pageRangeEnd: 3 })
+    );
+    expect(computeExportedCardIdentifiers(props).sort()).toEqual(
+      Array.from({ length: 8 }, (_, i) => `front-${i + 8}`).sort()
+    );
+  });
+
+  it("returns no identifiers for SCM mode, which never reads bleedPriors", () => {
+    const props = buildFullPDFProps(
+      withExportSettings(baseInput, {
+        ...DEFAULT_EXPORT_SETTINGS,
+        scmMode: true,
+      })
+    );
+    expect(computeExportedCardIdentifiers(props)).toEqual([]);
   });
 });
 
