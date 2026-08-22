@@ -62,10 +62,10 @@ const DEFAULT_SHEET_SETTINGS = {
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
   marginOverride: undefined,
+  drawPageCutLines: true,
 };
 
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
-  drawPageCutLines: true,
   scmMode: false,
   scmPaperSize: "letter",
   scmVariant: "default",

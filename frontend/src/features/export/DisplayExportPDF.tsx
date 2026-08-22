@@ -21,14 +21,17 @@
  * the sheet's own layout, so they live here - alongside the export affordance itself, in a small
  * settings step between clicking "PDF" and the actual download - rather than joining the right
  * rail's Page Setup section, which governs what the live sheet shows. Image DPI/JPG quality,
- * corner rounding, the guide colour/length/thickness/offset/crosshair controls, card selection
- * mode, page range, and the advanced per-side page-margin override all moved OUT of this step
- * into the rail - the margin override in particular groups with the rail's own margin-profile
- * control (Page Setup section) rather than living here, since it's a manual override of that same
- * profile decision, not a one-off run choice like SCM mode above - see `displayPdfProps.ts`'s
- * `DisplaySheetExportSettings` for where every migrated field lives now. Plain Bootstrap
- * form controls only (no `AutofillCollapse`/`StyledDropdownTreeSelect`/`NumericField` from
- * `PDFGenerator.tsx`) so this component stays free of that file's own import graph.
+ * corner rounding, the guide colour/length/thickness/offset/crosshair controls, the page-level
+ * guillotine cut guide lines, card selection mode, page range, and the advanced per-side
+ * page-margin override all moved OUT of this step into the rail - the margin override in
+ * particular groups with the rail's own margin-profile control (Page Setup section) rather than
+ * living here, since it's a manual override of that same profile decision, not a one-off run
+ * choice like SCM mode above - see `displayPdfProps.ts`'s `DisplaySheetExportSettings` for where
+ * every migrated field lives now. Plain Bootstrap form controls only (no
+ * `AutofillCollapse`/`StyledDropdownTreeSelect`/`NumericField` from `PDFGenerator.tsx`) so this
+ * component stays free of that file's own import graph. This settings step now holds only the
+ * SCM mode switch and its own six sub-settings - the last export-run-only choice, as opposed to
+ * a property of the printed artifact itself.
  *
  * ## Grouping
  *
@@ -95,9 +98,6 @@ const SCM_VARIANT_LABELS: { [variant in ScmVariant]: string } = {
 };
 
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
-  // Matches /print's PDFGenerator.tsx's own default - a guillotine cutting a printed stack
-  // relies on these, independent of whether per-card cut lines are also on.
-  drawPageCutLines: true,
   scmMode: false,
   scmPaperSize: "letter",
   scmVariant: "default",
@@ -322,30 +322,6 @@ export function DisplayExportPDF({
                   }}
                 />
               </Form.Group>
-            </>
-          )}
-
-          {!exportSettings.scmMode && (
-            <>
-              <Form.Check
-                type="switch"
-                id="display-export-page-cut-lines"
-                className="mb-3"
-                data-testid="display-export-page-cut-lines"
-                label={
-                  exportSettings.drawPageCutLines
-                    ? "Page cut guide lines: On"
-                    : "Page cut guide lines: Off"
-                }
-                checked={exportSettings.drawPageCutLines}
-                onChange={(event) =>
-                  setField("drawPageCutLines", event.target.checked)
-                }
-              />
-              <Form.Text className="text-muted d-block mb-3">
-                Guide lines across the whole sheet for cutting a printed stack
-                with a guillotine - independent of the per-card cut lines below.
-              </Form.Text>
             </>
           )}
         </Modal.Body>

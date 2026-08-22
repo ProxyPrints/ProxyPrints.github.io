@@ -46,11 +46,11 @@ const DEFAULT_SHEET_SETTINGS = {
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
   marginOverride: undefined,
+  drawPageCutLines: true,
 };
 
 // The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS).
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
-  drawPageCutLines: true,
   scmMode: false,
   scmPaperSize: "letter",
   scmVariant: "default",
@@ -179,11 +179,11 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
     expect(props.drawCardCutLines).toBe(false);
   });
 
-  it("page cut lines default to on, matching /print's own default, and map straight through from export settings", () => {
+  it("page cut lines default to on, matching /print's own default, and map straight through from the rail's sheet settings", () => {
     expect(buildDisplayPDFProps(baseInput).drawPageCutLines).toBe(true);
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, drawPageCutLines: false },
+      sheetSettings: { ...DEFAULT_SHEET_SETTINGS, drawPageCutLines: false },
     });
     expect(props.drawPageCutLines).toBe(false);
   });

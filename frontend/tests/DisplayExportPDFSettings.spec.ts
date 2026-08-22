@@ -294,8 +294,8 @@ const countPageOneDrawOps = async (buffer: Buffer): Promise<number> => {
   return operatorList.fnArray.length;
 };
 
-test.describe("DisplayExportPDF - page cut guide lines (rescued from /print's PDFGenerator.tsx)", () => {
-  test("drawPageCutLines reaches the rendered PDF: turning the toggle off removes real draw operations, not just UI state", async ({
+test.describe("DisplayExportPDF - page cut guide lines (rail)", () => {
+  test("drawPageCutLines reaches the rendered PDF: turning the rail toggle off removes real draw operations, not just UI state", async ({
     page,
     network,
   }) => {
@@ -303,29 +303,31 @@ test.describe("DisplayExportPDF - page cut guide lines (rescued from /print's PD
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    await openPDFSettings(page);
-    const pageCutLines = page.getByTestId("display-export-page-cut-lines");
+    // Now a rail control, in the "Cut lines & snip guides" section - set before opening the
+    // dialog, since its backdrop blocks the rail behind it while open.
+    await expandRailSection(page, "cut-lines-guides");
+    const pageCutLines = page.getByTestId("display-page-cut-lines-toggle");
     // Matches /print's PDFGenerator.tsx own default.
     await expect(pageCutLines).toBeChecked();
 
+    await openPDFSettings(page);
     const onDownload = page.waitForEvent("download");
     await clickDownload(page);
     const onPath = await (await onDownload).path();
     if (!onPath) throw new Error("Download path is null");
     const onOps = await countPageOneDrawOps(readFileSync(onPath));
 
+    await pageCutLines.uncheck();
     await openPDFSettings(page);
-    await page.getByTestId("display-export-page-cut-lines").uncheck();
     const offDownload = page.waitForEvent("download");
     await clickDownload(page);
     const offPath = await (await offDownload).path();
     if (!offPath) throw new Error("Download path is null");
     const offOps = await countPageOneDrawOps(readFileSync(offPath));
 
-    // A control that renders in the settings step but never reaches PDFProps.drawPageCutLines is
-    // exactly the failure this rescue exists to fix - assert on the actual rendered content
-    // (real draw ops), not the settings-step UI state, which the two `toBeChecked` assertions
-    // above already covered.
+    // A control that renders in the rail but never reaches PDFProps.drawPageCutLines is exactly
+    // the failure this migration must avoid - assert on the actual rendered content (real draw
+    // ops), not the rail's own UI state, which the `toBeChecked` assertion above already covered.
     expect(onOps).toBeGreaterThan(offOps);
   });
 });
