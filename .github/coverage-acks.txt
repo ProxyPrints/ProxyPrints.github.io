@@ -311,3 +311,16 @@ coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF 
 # in place (fill the rail control before opening the dialog, since its backdrop blocks the rail
 # behind it while open - same constraint the DPI/JPG round above already documents).
 coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - editor export controls > opens with a safe default selection mode and a real, non-guessed total page count — renamed to "the rail defaults to a safe selection mode and shows a real, non-guessed total page count" when "Cards to include" and the page range control moved from the export dialog into the right rail's new "Export" section; same assertions (default selection mode value, real non-guessed total page count), now read directly off the rail with no dialog to open first.
+
+# Page-cut-guide-lines-to-rail round - the page cut lines toggle moved out of
+# DisplayExportPDF.tsx's own settings step into the right rail's "Cut lines & snip guides"
+# section (same "properties of the artifact, not a one-off export-run choice" reasoning as the
+# DPI/JPG/corner-rounding and card-selection/page-range rounds above it). The describe block and
+# test title were renamed off the settings-step control's testid
+# (display-export-page-cut-lines) and off the stale "(rescued from /print's PDFGenerator.tsx)"
+# framing; the test body's real-PDF assertion is byte-identical - countPageOneDrawOps still
+# parses the downloaded PDF's actual operator list and asserts onOps > offOps - now set via the
+# rail's display-page-cut-lines-toggle (behind expandRailSection(page, "cut-lines-guides")) ahead
+# of opening the export dialog, same backdrop-blocks-the-rail constraint the DPI/JPG round above
+# documents.
+coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - page cut guide lines (rescued from /print's PDFGenerator.tsx) > drawPageCutLines reaches the rendered PDF: turning the toggle off removes real draw operations, not just UI state — renamed to "drawPageCutLines reaches the rendered PDF: turning the rail toggle off removes real draw operations, not just UI state" (describe renamed to "DisplayExportPDF - page cut guide lines (rail)") when the toggle moved from the export dialog's display-export-page-cut-lines control into the right rail's display-page-cut-lines-toggle; the countPageOneDrawOps/onOps>offOps real-draw-op assertion is byte-identical, only the control's location and testid changed.
