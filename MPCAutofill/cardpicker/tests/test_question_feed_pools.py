@@ -158,6 +158,28 @@ class TestBuildPoolConfirm:
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_CONFIRM))
         assert entries == []
 
+    def test_fills_toward_the_limit_when_eligible_cards_are_a_small_fraction_of_the_query(self, db):
+        """Reproduces the production symptom directly: a candidate population dominated by
+        cards that pass the source/status filter but NOT the evidence gate. 10 blocks of 18
+        incomplete-evidence cards followed by 2 complete-evidence cards, one block per pk-space
+        window (block size == `_POOL_SAMPLE_STRATA`'s own window width for this population, so
+        windows align with blocks exactly). With `QUESTION_FEED_POOL_SIZE=10`,
+        `_pool_sample_chunk_size` caps each window's yield at 2 - against the PRE-FIX query (no
+        evidence filter), that per-window cap is consumed entirely by the lower-pk incomplete
+        cards created first in each block, so every eligible card is structurally unreachable and
+        the pool fills to 0. Against the FIX (evidence filter pushed into the query), each
+        window's own filtered content is just its 2 eligible cards, so the cap admits both and
+        the pool reaches its 10-card limit."""
+        for _ in range(10):
+            for _ in range(18):
+                make_ai_suggested_card(evidence_types_used=("border", "artist"))  # missing collector_line
+            for _ in range(2):
+                make_ai_suggested_card()
+        with override_settings(QUESTION_FEED_POOL_SIZE=10):
+            warm_pool_cache(LANE_CONFIRM)
+        entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_CONFIRM))
+        assert len(entries) == 10
+
 
 class TestBuildPoolContested:
     def test_includes_a_contested_printing_card(self, db):
