@@ -75,7 +75,10 @@ from cardpicker.models import (
     VoteSource,
     calculator_family,
 )
-from cardpicker.printing_consensus import resolve_and_persist_printing
+from cardpicker.printing_consensus import (
+    identity_groups_for_card_ids,
+    resolve_and_persist_printing,
+)
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.utils import find_stale_applied_migrations
 from cardpicker.vote_consensus import is_human_backed_source
@@ -133,6 +136,26 @@ def verify_no_machine_only_resolutions(card_ids: list[int]) -> list[int]:
     own human-backed gate should have made this structurally impossible, so if it happens here
     it means something upstream is broken, not that the purge itself did anything wrong.
 
+    THE PRINTING CHECK IS POOLED ACROSS THE IDENTITY GROUP, THE ARTIST/TAG CHECKS ARE NOT
+    -----------------------------------------------------------------------------------
+    `printing_consensus.resolve_printing` does not resolve a card in isolation: it tallies
+    `CardPrintingTag` votes across `card`'s combined identity group (issue #661 -
+    `identity_group_card_ids`, every card sharing a byte-identical image file or a
+    distance-0 artbox phash), because that group is, by that module's own ruling, ONE
+    identification target - a human confirming one member resolves every member. A gate that
+    inspected only `card`'s own `CardPrintingTag` rows was therefore asking a question the
+    resolver does not answer in those terms: it flagged every OTHER member of a group as
+    machine-only the moment a human vote landed on just one of them, even though the resolved
+    outcome those members carry is, in fact, human-backed - via a twin, exactly as
+    `resolve_printing` intends. This check now pools the same way, over the same group
+    (`identity_groups_for_card_ids`, the batch form of `identity_group_card_ids`), so it asks its
+    question at the grain the resolver actually answers it.
+
+    `resolve_and_persist_artist`/`resolve_and_persist_tag_votes` are NOT identity-group-pooled -
+    they resolve `card` alone, so the artist/tag halves below are deliberately left checking
+    `card`'s own votes only. Pooling them here would be inventing a grouping the resolver itself
+    does not perform.
+
     NOTE: this function checks Card-level resolution status only (printing_tag_status,
     artist_vote_status, tag_vote_statuses). There is no per-CanonicalCard resolution status in
     the schema to check: the one model that would have needed one, `PrintingTagVote`, was
@@ -142,10 +165,25 @@ def verify_no_machine_only_resolutions(card_ids: list[int]) -> list[int]:
     Returns the list of violating card pks (empty means clean).
     """
     violations: set[int] = set()
-    cards = Card.objects.filter(pk__in=card_ids).prefetch_related("printing_tags", "artist_votes", "tag_votes")
+    cards = list(Card.objects.filter(pk__in=card_ids).prefetch_related("artist_votes", "tag_votes"))
+
+    resolved_card_ids = [card.pk for card in cards if card.printing_tag_status == PrintingTagStatus.RESOLVED]
+    identity_groups = identity_groups_for_card_ids(resolved_card_ids)
+    group_card_ids = {member_id for group in identity_groups.values() for member_id in group}
+    printing_votes_by_card_id: dict[int, list[CardPrintingTag]] = {}
+    if group_card_ids:
+        for vote in CardPrintingTag.objects.filter(card_id__in=group_card_ids, is_no_match=False):
+            printing_votes_by_card_id.setdefault(vote.card_id, []).append(vote)
+
     for card in cards:
         if card.printing_tag_status == PrintingTagStatus.RESOLVED:
-            printing_survivors = card.printing_tags.filter(printing=card.inferred_canonical_card, is_no_match=False)
+            group = identity_groups.get(card.pk, [card.pk])
+            printing_survivors = [
+                vote
+                for member_id in group
+                for vote in printing_votes_by_card_id.get(member_id, [])
+                if vote.printing_id == card.inferred_canonical_card_id
+            ]
             if not any(is_human_backed_source(v.source) for v in printing_survivors):
                 violations.add(card.pk)
 

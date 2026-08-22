@@ -178,6 +178,50 @@ class TestVerifyNoMachineOnlyResolutions:
 
         assert verify_no_machine_only_resolutions([card.pk]) == [card.pk]
 
+    def test_a_card_resolved_via_a_human_vote_on_an_identity_group_twin_is_not_flagged(self, db):
+        """
+        issue #857: `resolve_printing` pools votes across a card's md5/phash identity group, so a
+        human vote on ONE member resolves every member via that shared tally - `card`'s own
+        `CardPrintingTag` rows can legitimately be machine-only while the resolution behind them
+        is human-backed via a twin. The gate must pool the same way `resolve_printing` does, not
+        flag the twin.
+        """
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card, twin = (
+            CardFactory(name="Forest", md5_checksum="shared-checksum"),
+            CardFactory(name="Forest", md5_checksum="shared-checksum"),
+        )
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="ocr-a")
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="ocr-b")
+        CardPrintingTagFactory(card=twin, printing=printing, source=VoteSource.USER, anonymous_id="human-1")
+        resolve_and_persist_printing(card)
+        card.refresh_from_db()
+        twin.refresh_from_db()
+        assert card.printing_tag_status == PrintingTagStatus.RESOLVED
+        assert twin.printing_tag_status == PrintingTagStatus.RESOLVED
+
+        assert verify_no_machine_only_resolutions([card.pk, twin.pk]) == []
+
+    def test_a_genuinely_machine_only_resolution_across_the_group_still_fails(self, db):
+        """The pooled check must still bite: no human vote anywhere in the identity group means
+        a real violation, not just no human vote on the flagged card itself."""
+        printing = CanonicalCardFactory(name="Forest", expansion=CanonicalExpansionFactory(code="aaa"))
+        card, twin = (
+            CardFactory(name="Forest", md5_checksum="shared-checksum-2"),
+            CardFactory(name="Forest", md5_checksum="shared-checksum-2"),
+        )
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.OCR, anonymous_id="ocr-a")
+        CardPrintingTagFactory(card=twin, printing=printing, source=VoteSource.OCR, anonymous_id="ocr-b")
+        # deliberately bypasses resolve_and_persist_printing - directly forces the DB into the
+        # state the human-backed gate is supposed to make unreachable, same as the single-card
+        # violation test above, but across the whole identity group this time.
+        for c in (card, twin):
+            c.printing_tag_status = PrintingTagStatus.RESOLVED
+            c.inferred_canonical_card = printing
+            c.save(update_fields=["printing_tag_status", "inferred_canonical_card"])
+
+        assert verify_no_machine_only_resolutions([card.pk, twin.pk]) == [card.pk, twin.pk]
+
 
 class TestPurgeMachineVotesCommand:
     def test_refuses_without_run_id(self, db):
