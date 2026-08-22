@@ -400,8 +400,19 @@ def _confirm_suggestion_item(card: Card) -> Optional[QuestionFeedItem]:
     )
 
 
-def _identify_printing_item(card: Card) -> QuestionFeedItem:
+def _identify_printing_item(card: Card) -> Optional[QuestionFeedItem]:
+    """`None` when `card` has no ranked printing candidates at all
+    (`get_ranked_printing_candidates` returns `[]`) - per docs/features/wtc-question-model.md
+    §5 rule 5 ("never ask for a claim the user has not been shown the evidence to make"), a
+    `identify_printing` question with nothing in its candidate grid asks the voter to pick a
+    printing from a set that has no options, which no answer can satisfy. Every caller must
+    treat `None` as "this card is not servable as identify_printing right now" and either try
+    the next candidate or fall through to the next tier/lane - never serve the empty grid.
+    Measured live 2026-08-22: ~10% of UNRESOLVED cards (all six Urza's Saga rows among them)
+    carry zero ranked candidates and were being served this question anyway before this guard."""
     candidates = get_ranked_printing_candidates(card, card.name)
+    if not candidates:
+        return None
     return QuestionFeedItem(
         type=TypeEnum.identifyprinting,
         card=card.serialise(),
@@ -718,6 +729,27 @@ def _max_scored_candidate(cards: Sequence[Card], score_fn: Callable[[Card], floa
     return max(cards, key=score_fn)
 
 
+def _first_answerable_printing_candidate(
+    cards: Sequence[Card], score_fn: Callable[[Card], float]
+) -> Optional[tuple[Card, QuestionFeedItem]]:
+    """The printing-tier analogue of `_max_scored_candidate` above, for the one dimension where
+    the argmax candidate can turn out unservable: `_identify_printing_item` returns `None` for a
+    card with no ranked printing candidates (see that function's own docstring), and the argmax
+    alone has no way to recover from that - it would either serve a dead question or, worse, be
+    read as "this tier has nothing" and drop the tier entirely. This tries every candidate in
+    SCORE order (`sorted(..., reverse=True)`, which - like `max` - is stable, so ties keep the
+    caller's own pre-rank order exactly as `_max_scored_candidate` does), returning the first
+    `(card, item)` pair whose item actually has candidates to show, or `None` if every candidate
+    in the window is unservable this way. `None` here means "no printing question in this
+    window", not "this tier has nothing" - the caller falls through to its next kind/lane exactly
+    as an empty `cards` sequence already would."""
+    for card in sorted(cards, key=score_fn, reverse=True):
+        item = _identify_printing_item(card)
+        if item is not None:
+            return card, item
+    return None
+
+
 def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
     """
     Every card this voter has already cast a printing vote on, WIDENED to those cards' full
@@ -983,7 +1015,7 @@ def _candidates_split_on_border(candidates: Sequence[PrintingCandidate]) -> bool
     return len(border_colors) > 1
 
 
-def _likely_resolve_item(card: Card, allow_narrowing: bool = True) -> QuestionFeedItem:
+def _likely_resolve_item(card: Card, allow_narrowing: bool = True) -> Optional[QuestionFeedItem]:
     """
     For the LIKELY-RESOLVE pool (a printing question one more agreeing human vote would
     resolve, per `is_likely_resolve_printing`): serves the MOST DISCRIMINATING question for
@@ -1012,6 +1044,17 @@ def _likely_resolve_item(card: Card, allow_narrowing: bool = True) -> QuestionFe
     reaches step 3, the printing question the pool exists to serve. See
     `_likely_resolve_narrowing_ratio`/`settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO`
     for the cap that sets this to `False` once a session's own narrowing share is high enough.
+
+    Returns `None` when none of the above can be served: `card` has no ranked printing
+    candidates (so steps 1/2 can never trigger, since both read off the same candidate list) AND
+    `_confirm_suggestion_item` also declines (no gate-clearing machine suggestion) AND
+    `_identify_printing_item` therefore also declines (empty candidate grid - see that
+    function's own docstring). `card` reaching this pool at all only requires an existing
+    `CardPrintingTag` row (`_likely_resolve_printing_card`'s own query) - not a non-empty ranked
+    candidate list, so this is reachable in principle even though `confirm_suggestion`'s own
+    `suggestedPrinting` comes from the vote directly rather than the ranked list and often still
+    succeeds here. `get_next_question_feed_item` must treat `None` as "no supply from this pool
+    for this request" and fall through to the remainder waterfall, never serve nothing.
     """
     candidates = get_ranked_printing_candidates(card, card.name)
     serialised_candidates = [candidate.serialise_as_printing_candidate() for candidate in candidates]
@@ -1078,17 +1121,30 @@ def _tier_1_confirm_suggestion(
     # tier still has a card to ask about, it just cannot ask for a printing confirmation yet.
     # Per the ratified question model (docs/features/
     # wtc-question-model.md §2: "any element unmatched -> ask the question that fills the gap"),
-    # fall through to `identify_printing` on this tier's own best (highest-variance) candidate
-    # rather than returning `None` and silently dropping it - the same confirm-or-identify
-    # fallback `_likely_resolve_item` already uses for the likely-resolve pool. An eliminated
-    # suggestion implies "this specific artwork is wrong", not "this card is unidentifiable", so
-    # the card still gets asked - as the cheaper, evidence-agnostic question, exactly like a
-    # gate-failing card. `identify_printing`'s own candidate grid is deliberately not
-    # elimination-filtered: narrowing the served SUGGESTION is this feature's scope; a voter
-    # asked "which of these is it" should still be able to pick the correct printing even after
-    # a wrong suggestion was eliminated.
-    if windowed:
-        return _identify_printing_item(windowed[0])
+    # fall through to `identify_printing` rather than returning `None` and silently dropping it -
+    # the same confirm-or-identify fallback `_likely_resolve_item` already uses for the
+    # likely-resolve pool. An eliminated suggestion implies "this specific artwork is wrong", not
+    # "this card is unidentifiable", so the card still gets asked - as the cheaper,
+    # evidence-agnostic question, exactly like a gate-failing card. `identify_printing`'s own
+    # candidate grid is deliberately not elimination-filtered: narrowing the served SUGGESTION is
+    # this feature's scope; a voter asked "which of these is it" should still be able to pick the
+    # correct printing even after a wrong suggestion was eliminated.
+    #
+    # `_identify_printing_item` can itself decline (`None`, no ranked printing candidates at all
+    # - see that function's own docstring), so this tries every windowed candidate in the same
+    # (highest-variance-first) order the confirm loop above already used, then the remaining
+    # full scan, rather than only ever trying `windowed[0]` and risking a `None` this tier could
+    # have avoided by trying the next candidate.
+    for card in windowed:
+        item = _identify_printing_item(card)
+        if item is not None:
+            return item
+    for card in cards.iterator():
+        if card.pk in windowed_pks:
+            continue
+        item = _identify_printing_item(card)
+        if item is not None:
+            return item
     return None
 
 
@@ -1129,9 +1185,10 @@ def _tier_2_contested(
         .exclude(pk__in=hidden_card_ids)
         .order_by("-date_created")[:_CANDIDATE_SCORING_WINDOW]
     )
-    printing_card = _max_scored_candidate(printing_candidates, _printing_question_score)
-    if printing_card is not None:
-        return _identify_printing_item(printing_card), "tier_2_contested_printing"
+    printing_result = _first_answerable_printing_candidate(printing_candidates, _printing_question_score)
+    if printing_result is not None:
+        _, printing_item = printing_result
+        return printing_item, "tier_2_contested_printing"
 
     artist_candidates = list(
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=contested_artist_card_ids)
@@ -1262,14 +1319,15 @@ def _tier_4_fresh(
     # resolve. The pre-rank (`-vote_count`, quick-negative, `-date_created`) remains the
     # tiebreak via `_max_scored_candidate`'s stability, so "closest to resolving" and the
     # quick-negative origin still decide whenever the scores cannot distinguish candidates.
-    printing_card = _max_scored_candidate(printing_candidates, _printing_question_score)
-    if printing_card is not None:
+    printing_result = _first_answerable_printing_candidate(printing_candidates, _printing_question_score)
+    if printing_result is not None:
+        printing_card, printing_item = printing_result
         origin_reason = (
             "tier_4_quick_negative_to_review"
             if getattr(printing_card, "origin_reason", None) in QUICK_NEGATIVE_SKIP_REASONS
             else "tier_4_fresh_printing"
         )
-        return _identify_printing_item(printing_card), origin_reason
+        return printing_item, origin_reason
 
     artist_candidates = list(
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
@@ -1400,7 +1458,16 @@ def _pool_contested_result(
         return None
     kind, card, tag_name, reason = drawn
     if kind == question_feed_pools.KIND_PRINTING:
-        return _identify_printing_item(card), reason or "tier_2_contested_printing"
+        # `question_feed_pools._build_pool_contested` already excludes a zero-candidate card
+        # from ever entering this pool (mirrors this function's own gate at warm time), so `None`
+        # here should only ever happen for a card that lost its candidates between warm and read
+        # - a defensive re-check, not the primary guard. Treated as a pool miss, same as any
+        # other drawn entry that turns out unstale-but-unservable: the caller falls through to
+        # the next lane rather than serving the empty grid this whole change exists to prevent.
+        item = _identify_printing_item(card)
+        if item is None:
+            return None
+        return item, reason or "tier_2_contested_printing"
     if kind == question_feed_pools.KIND_ARTIST:
         return _artist_item(card), reason or "tier_2_contested_artist"
     assert tag_name is not None  # guaranteed by draw_contested_entry for KIND_TAG
@@ -1426,7 +1493,12 @@ def _pool_cold_result(
     if kind == question_feed_pools.KIND_ILLUSTRATION:
         return _illustration_item(card), reason or "tier_4_fresh_illustration"
     if kind == question_feed_pools.KIND_PRINTING:
-        return _identify_printing_item(card), reason or "tier_4_fresh_printing"
+        # See `_pool_contested_result`'s identical guard for why this defensive re-check exists
+        # alongside `_build_pool_cold`'s own warm-time gate.
+        item = _identify_printing_item(card)
+        if item is None:
+            return None
+        return item, reason or "tier_4_fresh_printing"
     if kind == question_feed_pools.KIND_ARTIST:
         return _artist_item(card), reason or "tier_4_fresh_artist"
     assert tag_name is not None  # guaranteed by draw_cold_entry for KIND_TAG
@@ -1500,9 +1572,16 @@ def get_next_question_feed_item(
                 < settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO
             )
             item = _likely_resolve_item(likely_resolve_card, allow_narrowing=allow_narrowing)
-            return _log_served(
-                anonymous_id, item, QuestionFeedServedPool.LIKELY_RESOLVE, "printing_one_vote_from_resolving"
-            )
+            if item is not None:
+                return _log_served(
+                    anonymous_id, item, QuestionFeedServedPool.LIKELY_RESOLVE, "printing_one_vote_from_resolving"
+                )
+            # `_likely_resolve_item` declined (see its own docstring: no border/illustration
+            # narrowing available AND no confirm_suggestion AND no ranked printing candidates) -
+            # this card is not servable from this pool at all, but it is one card, not a lane
+            # miss, so falling through to the remainder waterfall below (rather than returning
+            # `None` for the whole request) is what keeps a single unservable likely-resolve
+            # card from silently ending the voter's session.
 
     for lane in _REMAINDER_LANE_ORDER:
         if lane == question_feed_pools.LANE_CONFIRM:
