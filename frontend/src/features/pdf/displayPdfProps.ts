@@ -41,11 +41,12 @@
  * Everything else `PDF.tsx`'s own `PDFProps` interface exposes is now a real control, sourced
  * from either `DisplaySheetExportSettings` (the rail's own sheet state - page size including its
  * `Custom` option, bleed edge, guides and their colour/length/thickness/offset geometry plus an
- * opt-in crosshair-marks toggle, image DPI/JPG quality, corner rounding, card selection mode, and
- * page range - the last seven moved here from the export step's own settings so they're editable
- * next to the live sheet they govern, see `DisplayPage.tsx`'s own "Guides", "Print quality", and
- * "Export" rail sections) or `DisplayExportSettings` (the export affordance's own settings step -
- * SCM mode and its six sub-settings, and the per-side page-margin override described below).
+ * opt-in crosshair-marks toggle, image DPI/JPG quality, corner rounding, card selection mode,
+ * page range, and an opt-in per-side page-margin override - moved here from the export step's own
+ * settings so they're editable next to the live sheet they govern, see `DisplayPage.tsx`'s own
+ * "Guides", "Print quality", and "Export" rail sections, plus the margin override grouped under
+ * the margin-profile control in "Page Setup") or `DisplayExportSettings` (the export affordance's
+ * own settings step - SCM mode and its six sub-settings).
  *
  * ## Margin-preset vs. per-side override
  *
@@ -53,13 +54,15 @@
  * live sheet and, by default, the export — unchanged, and never silently overridden. The four
  * independent per-side values a real print run sometimes needs are a genuinely finer model than
  * a 3-option preset, so they're an OPT-IN advanced override scoped to a single export run:
- * `DisplayExportSettings.marginOverride`, `undefined` by default (meaning "use the rail's current
- * profile, exactly as before this field existed"). When the export settings step's own override
- * toggle is on, `marginOverride` carries an explicit `{top,bottom,left,right}` that replaces the
- * profile's margins for that export ONLY — the live sheet, the profile data, and every other
- * export always keep reading the profile. Seeded from the current profile's own values when the
- * toggle turns on (see `DisplayExportPDF.tsx`), so turning it on never starts from a jarring
- * unrelated number.
+ * `DisplaySheetExportSettings.marginOverride`, `undefined` by default (meaning "use the rail's
+ * current profile, exactly as before this field existed"). It lives in the rail's own Page Setup
+ * section, directly under the margin-profile control it overrides (`DisplayPage.tsx`) rather than
+ * the export dialog - the four fields are a manual override of that same profile decision, not an
+ * unrelated one-off export-run choice like SCM mode. When the toggle is on, `marginOverride`
+ * carries an explicit `{top,bottom,left,right}` that replaces the profile's margins for the
+ * EXPORT only — the live sheet, the profile data, and every other export always keep reading the
+ * profile. Seeded from the current profile's own values when the toggle turns on (see
+ * `DisplayPage.tsx`), so turning it on never starts from a jarring unrelated number.
  */
 import {
   CardDocument,
@@ -132,9 +135,15 @@ export interface DisplaySheetExportSettings {
   cardSelectionMode: keyof typeof CardSelectionMode;
   pageRangeStart?: number;
   pageRangeEnd?: number;
+  /** Opt-in advanced per-side override of the margin profile above - see the module comment's
+   * "Margin-preset vs. per-side override" section. `undefined` = use the rail's current margin
+   * profile unchanged (the default). Lives here (rather than `DisplayExportSettings`) because it
+   * groups with the rail's own margin-profile control (`DisplayPage.tsx`'s Page Setup section),
+   * not the export dialog - a manual override of that same profile decision. */
+  marginOverride?: PageMarginOverride;
 }
 
-/** An explicit per-side override for `DisplayExportSettings.marginOverride` — see the module
+/** An explicit per-side override for `DisplaySheetExportSettings.marginOverride` — see the module
  * comment's "Margin-preset vs. per-side override" section. */
 export interface PageMarginOverride {
   top: number;
@@ -152,9 +161,6 @@ export interface DisplayExportSettings {
    * at all. `/print`'s `PDFGenerator.tsx` exposes this as its own "Page Cut Guide Lines" toggle;
    * this field is the editor's equivalent. */
   drawPageCutLines: boolean;
-  /** `undefined` = use the rail's current margin profile unchanged (the default). See the module
-   * comment's "Margin-preset vs. per-side override" section. */
-  marginOverride?: PageMarginOverride;
   /** Switches the whole export to `SCMPDF.tsx`'s registration-mark layout - a genuinely different
    * output format, not another flag on the standard grid. The six `scm*` fields below are only
    * read by `PDF.tsx` when this is true. */
@@ -189,7 +195,7 @@ export const buildDisplayPDFProps = (
   // profile's margins for THIS export only; the profile itself, and every other consumer of
   // `MARGIN_PROFILES`, are never touched.
   const margins =
-    exportSettings.marginOverride ??
+    sheetSettings.marginOverride ??
     MARGIN_PROFILES[input.marginProfile].margins;
   // Landscape rule — see the module comment. Same portrait-table lookup + swap DisplayPage uses
   // for its own sheet, so the exported page is exactly the size the rail shows, including its

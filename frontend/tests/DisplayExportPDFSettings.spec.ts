@@ -442,31 +442,69 @@ test.describe("DisplayExportPDF - advanced page-margin override", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    await openPDFSettings(page);
-    await expect(page.getByTestId("display-export-margin-top")).toHaveCount(0);
+    // Now a rail control, grouped with the Page Setup section's Margin profile control - no
+    // dialog to open.
+    await expect(page.getByTestId("display-margin-override-top")).toHaveCount(
+      0
+    );
 
-    await page.getByTestId("display-export-margin-override-toggle").check();
+    await page.getByTestId("display-margin-override-toggle").check();
     // rearFeed, the rail's default profile: {top: 3, bottom: 3, left: 3, right: 20}.
-    await expect(page.getByTestId("display-export-margin-top")).toHaveValue(
+    await expect(page.getByTestId("display-margin-override-top")).toHaveValue(
       "3"
     );
-    await expect(page.getByTestId("display-export-margin-bottom")).toHaveValue(
+    await expect(
+      page.getByTestId("display-margin-override-bottom")
+    ).toHaveValue("3");
+    await expect(page.getByTestId("display-margin-override-left")).toHaveValue(
       "3"
     );
-    await expect(page.getByTestId("display-export-margin-left")).toHaveValue(
-      "3"
-    );
-    await expect(page.getByTestId("display-export-margin-right")).toHaveValue(
+    await expect(page.getByTestId("display-margin-override-right")).toHaveValue(
       "20"
     );
 
-    await page.getByTestId("display-export-margin-top").fill("10");
-    await expect(page.getByTestId("display-export-margin-top")).toHaveValue(
+    await page.getByTestId("display-margin-override-top").fill("10");
+    await expect(page.getByTestId("display-margin-override-top")).toHaveValue(
       "10"
     );
 
-    await page.getByTestId("display-export-margin-override-toggle").uncheck();
-    await expect(page.getByTestId("display-export-margin-top")).toHaveCount(0);
+    await page.getByTestId("display-margin-override-toggle").uncheck();
+    await expect(page.getByTestId("display-margin-override-top")).toHaveCount(
+      0
+    );
+  });
+
+  test("an override set on the rail reaches the actual exported PDF, not just the profile's default margins", async ({
+    page,
+    network,
+  }) => {
+    network.use(...tenCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    // 10 fronts, 8 cards/page at the rail's default LETTER/rearFeed 4x2 grid -> 2 pages (same
+    // fixture the "editor export controls" describe block's own page-count tests use).
+    await importTextOnEditorLanding(page, "10x my search query");
+
+    await openPDFSettings(page);
+    const baselineDownload = page.waitForEvent("download");
+    await clickDownload(page);
+    const baselinePath = await (await baselineDownload).path();
+    if (!baselinePath) throw new Error("Download path is null");
+    expect(await readNumPages(readFileSync(baselinePath))).toBe(2);
+
+    // Rail controls - set before reopening the dialog, since its backdrop blocks the rail
+    // behind it while open. A large left/right override collapses the column count from 4 down
+    // to 1, shrinking cards per page and forcing more real pages for the same 10-card deck -
+    // proof the override reaches PDF.tsx's actual layout, not just the rail's own UI state.
+    await page.getByTestId("display-margin-override-toggle").check();
+    await page.getByTestId("display-margin-override-left").fill("100");
+    await page.getByTestId("display-margin-override-right").fill("100");
+
+    await openPDFSettings(page);
+    const overriddenDownload = page.waitForEvent("download");
+    await clickDownload(page);
+    const overriddenPath = await (await overriddenDownload).path();
+    if (!overriddenPath) throw new Error("Download path is null");
+    expect(await readNumPages(readFileSync(overriddenPath))).toBeGreaterThan(2);
   });
 });
 

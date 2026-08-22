@@ -415,9 +415,11 @@ image quality, and cut-line appearance all subsequently migrated OUT of
 selection mode/page range into a new "Export" section, image quality/corner
 rounding into "Print quality", cut-line appearance next to the Guides
 toggle) - see `DisplaySheetExportSettings` in `displayPdfProps.ts` for where
-each one lives today. Only SCM mode and its six sub-settings, the per-side
-page-margin override, and the page-level cut guide toggle remain genuine
-export-RUN choices behind the dialog. The bullets below describe this pass's
+each one lives today. **Further correction**: the per-side page-margin
+override also subsequently migrated to the rail (see "Editor export controls,
+part 2" section's own correction note below) - only SCM mode/its six
+sub-settings and the page-level cut guide toggle remain genuine export-RUN
+choices behind the dialog. The bullets below describe this pass's
 ORIGINAL shape (kept for history); treat `displayPdfProps.ts`'s own module
 comment as the current source of truth for which settings object owns which
 field.
@@ -440,10 +442,11 @@ field.
   are all known, so the rail's own "Export" section calls this against its
   own live sheet state to show "N total" and bound the range inputs against
   a real number, rather than letting a request outlive the actual page
-  count (deliberately computed against the margin PROFILE, not a live read
-  of the export dialog's own advanced margin override - that override is
-  scoped to a single dialog session and the rail has no reach into it, same
-  as the live sheet). Now a rail control, not the export dialog's.
+  count (deliberately computed against the margin PROFILE, not
+  `DisplaySheetExportSettings.marginOverride` - that override's EFFECT stays
+  scoped to the export only, same as before it moved into the rail's own
+  state, so this readout reflects the profile's own margins, same as the
+  live sheet). Now a rail control, not the export dialog's.
 - **Image quality (DPI, JPG quality)** — sliders at the same 100–1500 DPI /
   5–100% ranges `/print`'s own `CardQualitySettings` panel used, so output
   stayed comparable between the two surfaces while both existed. Now a rail
@@ -463,8 +466,9 @@ replaced was removed from the adapter's default block, not left shadowed (the sa
 first pass established). **Note, current-code correction**: corner rounding subsequently migrated
 to the rail's "Print quality" section alongside image quality (see the note above the first
 "Editor export controls" section) - it is `DisplaySheetExportSettings.roundCorners` today, not
-`DisplayExportSettings.roundCorners`. SCM mode, its six sub-settings, and the per-side margin
-override remain genuine dialog-only export-RUN choices, unchanged.
+`DisplayExportSettings.roundCorners`. **Further correction**: the per-side margin override
+subsequently migrated too (see its own bullet below) - only SCM mode and its six sub-settings
+remain genuine dialog-only export-RUN choices.
 
 - **Silhouette (SCM) cutting mode** — `DisplayExportSettings.scmMode` plus its six sub-settings
   (`scmPaperSize`, `scmVariant`, `scmRegistration`, `scmDuplex`, `scmOffsetXMM`/`scmOffsetYMM`,
@@ -487,13 +491,17 @@ override remain genuine dialog-only export-RUN choices, unchanged.
 - **Per-side page margins** — the rail's margin PROFILE (`marginProfileSlice`, three named
   presets) still drives both the live sheet and, by default, the export, unchanged. The four
   independent per-side values a real print run sometimes needs are a genuinely finer model than
-  a 3-option preset, so they're an opt-in ADVANCED OVERRIDE scoped to a single export run:
-  `DisplayExportSettings.marginOverride`, `undefined` by default. The settings step's own
-  checkbox seeds it from the current profile's own values the moment it's turned on (so the
-  numbers a user first sees are never a jarring unrelated default), and the four fields become
-  editable from there. Turning the override off restores `undefined` — back to reading the
-  profile exactly as before this field existed. The profile itself, the live sheet, and every
-  other export are never touched by an override scoped to one settings-step session.
+  a 3-option preset, so they're an opt-in ADVANCED OVERRIDE scoped to a single export run,
+  `undefined` by default. Turning the override on seeds it from the current profile's own values
+  (so the numbers a user first sees are never a jarring unrelated default), and the four fields
+  become editable from there; turning it off restores `undefined` — back to reading the profile
+  exactly as before this field existed. The profile itself, the live sheet, and every other
+  export are never touched by the override. **Further correction**: subsequently migrated to
+  `DisplaySheetExportSettings.marginOverride` (not `DisplayExportSettings.marginOverride`) and
+  the rail's own Page Setup section, grouped directly under the margin-profile control it
+  overrides rather than the export dialog - the same rail-migration reasoning the other controls
+  in this section already got, applied to a manual override of a rail-owned decision rather than
+  an unrelated one-off export-run choice like SCM mode.
 - **Custom page dimensions** — the rail's own paper-size `Form.Select` (`DisplayPage.tsx`'s Page
   Setup section) gains a `Custom` option (`PageSize.CUSTOM`, already supported by `PDFProps`/
   `getPageSizeMM` — the gap was only the rail's own option list), with two mm inputs (portrait

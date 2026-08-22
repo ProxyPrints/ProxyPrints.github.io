@@ -45,12 +45,12 @@ const DEFAULT_SHEET_SETTINGS = {
   cardSelectionMode: DEFAULT_CARD_SELECTION_MODE,
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
+  marginOverride: undefined,
 };
 
 // The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS).
 const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   drawPageCutLines: true,
-  marginOverride: undefined,
   scmMode: false,
   scmPaperSize: "letter",
   scmVariant: "default",
@@ -242,8 +242,8 @@ describe("buildDisplayPDFProps - live editor state maps through", () => {
     const props = buildDisplayPDFProps({
       ...baseInput,
       marginProfile: "borderless",
-      exportSettings: {
-        ...DEFAULT_EXPORT_SETTINGS,
+      sheetSettings: {
+        ...DEFAULT_SHEET_SETTINGS,
         marginOverride: { top: 1, bottom: 2, left: 3, right: 4 },
       },
     });
