@@ -1165,8 +1165,18 @@ for history (this doc's own established convention — see the `cardPanel.tsx` b
     — N>1 casts nothing on the printing channel, matching #526's machine-side
     rule; `question_feed._voter_answered_printing_card_ids` reads
     `CardIllustrationVote` as well as `CardPrintingTag` so an N>1 answer still
-    excludes the card from the printing tiers, issue #713); and a
-    `CardArtistVote` is derived (`source=USER`,
+    excludes the card from the printing tiers, issue #713) AND no
+    `CardPrintingTag` already exists for `(card, anonymous_id)`. The voter
+    answered a question about ARTWORK, not printing, so this write is an
+    INFERENCE rather than the voter's own assertion: it carries
+    `source=VoteSource.DEDUCTION` (machine weight — cannot resolve a printing
+    on its own under the human-backed gate) and
+    `vote_surface="illustration_vote_derived_printing"`
+    (`DERIVED_PRINTING_VOTE_SURFACE`), the printing channel's own equivalent
+    of the artist channel's "never override an existing vote" precedence
+    rule below — an existing `CardPrintingTag`, explicit or previously
+    derived, is left completely untouched rather than deleted and
+    replaced. A `CardArtistVote` is separately derived (`source=USER`,
     `vote_surface="illustration_vote_derived_artist"`) whenever the
     resolved artist's name doesn't indicate a combined credit (tests for
     `' & '` only — see the module's own census comment) and no
