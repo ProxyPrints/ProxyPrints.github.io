@@ -15,6 +15,7 @@ import {
 
 import { test } from "../playwright.setup";
 import {
+  expandRailSection,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
 } from "./test-utils";
@@ -204,7 +205,8 @@ test.describe("DisplayExportPDF - editor export controls", () => {
 
     // These now live in the rail's own "Print quality"/"Export" sections, not the export dialog -
     // set before opening it, since the dialog's backdrop blocks the rail behind it while it's
-    // open.
+    // open. "Print quality" is collapsed by default.
+    await expandRailSection(page, "print-quality");
     await page.getByTestId("display-image-dpi").fill("100");
     await page.getByTestId("display-jpg-quality").fill("5");
     await page.getByTestId("display-page-range-start").fill("1");
@@ -235,7 +237,12 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await importTextOnEditorLanding(page, "1x my search query");
 
     // These now live in the rail next to the Guides toggle they depend on, not the export
-    // dialog - no dialog to open for this check.
+    // dialog - no dialog to open for this check. "Cut lines & snip guides" is collapsed by
+    // default, so the controls aren't reachable (or present in the accessibility tree as
+    // visible) until the section is opened.
+    await expect(page.getByTestId("display-cut-line-color")).not.toBeVisible();
+    await expandRailSection(page, "cut-lines-guides");
+
     await expect(page.getByTestId("display-cut-line-color")).toBeVisible();
     const crossToggle = page.getByTestId("display-cross-cut-lines");
     await expect(crossToggle).toBeVisible();
@@ -333,6 +340,9 @@ test.describe("DisplayExportPDF - SCM cutting mode", () => {
     network.use(...tenCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
+    // "Print quality" is collapsed by default - open it before the display-image-dpi assertion
+    // below.
+    await expandRailSection(page, "print-quality");
 
     await openPDFSettings(page);
     await expect(
@@ -404,6 +414,8 @@ test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry
     await importTextOnEditorLanding(page, "1x my search query");
 
     // Rail controls now, next to the Guides toggle (on by default) - no dialog involved.
+    // "Cut lines & snip guides" is collapsed by default.
+    await expandRailSection(page, "cut-lines-guides");
     await page.getByTestId("display-cut-line-length").fill("5");
     await page.getByTestId("display-cut-line-thickness").fill("1");
     await page.getByTestId("display-cut-line-offset").fill("0.5");
@@ -423,7 +435,9 @@ test.describe("DisplayExportPDF - corner rounding and extended cut-line geometry
     await importTextOnEditorLanding(page, "1x my search query");
 
     // Now a rail control ("Print quality" section) - no dialog to open. Defaults to checked
-    // (roundCorners defaults to true - see DEFAULT_SHEET_SETTINGS).
+    // (roundCorners defaults to true - see DEFAULT_SHEET_SETTINGS). "Print quality" is
+    // collapsed by default.
+    await expandRailSection(page, "print-quality");
     const roundCorners = page.getByTestId("display-round-corners");
     await expect(roundCorners).toBeChecked();
     await roundCorners.uncheck();

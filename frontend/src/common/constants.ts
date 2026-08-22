@@ -158,6 +158,10 @@ export const PinnedSourcesKey = "pinnedSources";
 // the full storage key appends the anonymous_id, so a new anonymous identity starts with an
 // empty hidden set (the server-side `HiddenCard` rows are scoped the same way).
 export const HiddenCardIdsKey = "hiddenCardIds";
+// /display right-rail print/export settings sections (Page setup, Cut lines & snip guides,
+// Export, Print quality, View) - which of these `AutofillCollapse` sections the visitor last
+// left expanded vs collapsed, persisted per-device so a chosen layout survives a reload.
+export const RailSectionExpansionKey = "railSectionExpansion";
 
 export const Brackets: Array<number> = [
   18, 36, 55, 72, 90, 108, 126, 144, 162, 180, 198, 216, 234, 396, 504, 612,

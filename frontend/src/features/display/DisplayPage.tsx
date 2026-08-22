@@ -231,7 +231,11 @@ import { useDebounce } from "use-debounce";
 
 import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
 import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
-import { getOrCreateAnonymousId } from "@/common/cookies";
+import {
+  getLocalStorageRailSectionExpansion,
+  getOrCreateAnonymousId,
+  setLocalStorageRailSectionExpansion,
+} from "@/common/cookies";
 import { getSheetImageURLs } from "@/common/image";
 import { doesSearchQueryFilterOnPrinting } from "@/common/processing";
 import { SourceType } from "@/common/schema_types";
@@ -245,6 +249,7 @@ import {
   useAppSelector,
 } from "@/common/types";
 import { useLongPress } from "@/common/useLongPress";
+import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { RightPaddedIcon } from "@/components/icon";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
 import { CardSlotContextMenu } from "@/features/card/CardSlotContextMenu";
@@ -2386,6 +2391,26 @@ export function DisplayPage() {
     setRightRailOpen(true);
   };
 
+  // Sections a visitor tunes once and rarely revisits default collapsed; the stored map is
+  // spread over these defaults (not the reverse) so an unseen key always falls back to its own
+  // default rather than `undefined`.
+  const [railSectionExpanded, setRailSectionExpanded] = useState<
+    Record<string, boolean>
+  >(() => ({
+    "page-setup": true,
+    "cut-lines-guides": false,
+    export: true,
+    "print-quality": false,
+    view: true,
+    ...getLocalStorageRailSectionExpansion(),
+  }));
+  const toggleRailSection = (sectionId: string) =>
+    setRailSectionExpanded((previous) => {
+      const next = { ...previous, [sectionId]: !previous[sectionId] };
+      setLocalStorageRailSectionExpansion(next);
+      return next;
+    });
+
   const activeFace: Faces = frontsVisible ? Front : Back;
 
   // Landscape: PDF.tsx's own PageSize table is portrait-oriented (matches the classic PDF
@@ -3347,250 +3372,298 @@ export function DisplayPage() {
             {/* Rail restructure ruling 7 - both rails move to 8px interior padding (the 4/8
                 token scale); this was Bootstrap's stock p-3 (16px). */}
             <div className="flex-grow-1 overflow-auto p-2">
-              <div className="mb-3">
-                {/* Editor-repass R10.3 - right-rail section headings adopt the left rail's
-                    10px uppercase muted legend style (see `.rail-section-heading` under
-                    RightRailOffcanvas). */}
-                <h6 className="rail-section-heading">Page Setup</h6>
-                <Form.Select
-                  size="sm"
-                  className="mb-2"
-                  value={settings.pageSize}
-                  onChange={(event) => {
-                    const nextPageSize = event.target
-                      .value as keyof typeof PageSize;
-                    setSettings((previous) => {
-                      // Seed Custom's own width/height together, the moment it's picked, from
-                      // whatever paper size was selected before - never an undefined pair that
-                      // getPageSizeMM/the export adapter would have to fall back on.
-                      if (
-                        nextPageSize === "CUSTOM" &&
-                        previous.customPageWidthMM === undefined
-                      ) {
-                        const seed = getPageSizeMM(
-                          previous.pageSize,
-                          undefined,
-                          undefined
-                        );
-                        return {
-                          ...previous,
-                          pageSize: nextPageSize,
-                          customPageWidthMM: seed.width,
-                          customPageHeightMM: seed.height,
-                        };
-                      }
-                      return { ...previous, pageSize: nextPageSize };
-                    });
-                  }}
-                  aria-label="Paper size"
+              <div className="mb-2">
+                {/* Cut-line/guide appearance controls live in their own "Cut lines & snip
+                    guides" section below, not here. */}
+                <AutofillCollapse
+                  id="display-rail-page-setup"
+                  pad={0}
+                  headerPadding="4px 8px"
+                  // WCAG contrast fix (2026-08-22): this section's Card.Body would otherwise
+                  // inherit $theme-panel-bg (#2f3549), the shared AutofillCollapse body default -
+                  // fine for $theme-text but only 5.91:1 for the spacing control's
+                  // `outline-light` LINK toggle ($light, #abb6c2), short of the 7:1 audit floor.
+                  // Before this section existed, that control sat directly on the rail
+                  // offcanvas's own background ($offcanvas-bg-color, set to $theme-body-bg),
+                  // which clears 8.3:1 - restored here rather than widening `$light` itself,
+                  // which backs `outline-light` everywhere sitewide.
+                  bodyBackground="var(--bs-body-bg)"
+                  expanded={railSectionExpanded["page-setup"]}
+                  onClick={() => toggleRailSection("page-setup")}
+                  title={
+                    <h6
+                      className="rail-section-heading mb-0"
+                      data-testid="display-rail-section-page-setup-toggle"
+                    >
+                      Page setup
+                    </h6>
+                  }
                 >
-                  {Object.keys(PageSize).map((key) => (
-                    <option key={key} value={key}>
-                      {key === "CUSTOM"
-                        ? PageSize.CUSTOM
-                        : `${key} (landscape)`}
-                    </option>
-                  ))}
-                </Form.Select>
-
-                {settings.pageSize === "CUSTOM" && (
-                  <div className="d-flex gap-2 align-items-center mb-2">
-                    <Form.Control
-                      type="number"
+                  <div>
+                    <Form.Select
                       size="sm"
-                      min={1}
-                      step={0.1}
-                      aria-label="Custom paper width (mm, portrait)"
-                      data-testid="display-custom-page-width"
-                      value={settings.customPageWidthMM ?? ""}
+                      className="mb-2"
+                      value={settings.pageSize}
                       onChange={(event) => {
-                        const value = parseFloat(event.target.value);
-                        if (!Number.isNaN(value)) {
+                        const nextPageSize = event.target
+                          .value as keyof typeof PageSize;
+                        setSettings((previous) => {
+                          // Seed Custom's own width/height together, the moment it's picked, from
+                          // whatever paper size was selected before - never an undefined pair that
+                          // getPageSizeMM/the export adapter would have to fall back on.
+                          if (
+                            nextPageSize === "CUSTOM" &&
+                            previous.customPageWidthMM === undefined
+                          ) {
+                            const seed = getPageSizeMM(
+                              previous.pageSize,
+                              undefined,
+                              undefined
+                            );
+                            return {
+                              ...previous,
+                              pageSize: nextPageSize,
+                              customPageWidthMM: seed.width,
+                              customPageHeightMM: seed.height,
+                            };
+                          }
+                          return { ...previous, pageSize: nextPageSize };
+                        });
+                      }}
+                      aria-label="Paper size"
+                    >
+                      {Object.keys(PageSize).map((key) => (
+                        <option key={key} value={key}>
+                          {key === "CUSTOM"
+                            ? PageSize.CUSTOM
+                            : `${key} (landscape)`}
+                        </option>
+                      ))}
+                    </Form.Select>
+
+                    {settings.pageSize === "CUSTOM" && (
+                      <div className="d-flex gap-2 align-items-center mb-2">
+                        <Form.Control
+                          type="number"
+                          size="sm"
+                          min={1}
+                          step={0.1}
+                          aria-label="Custom paper width (mm, portrait)"
+                          data-testid="display-custom-page-width"
+                          value={settings.customPageWidthMM ?? ""}
+                          onChange={(event) => {
+                            const value = parseFloat(event.target.value);
+                            if (!Number.isNaN(value)) {
+                              setSettings((previous) => ({
+                                ...previous,
+                                customPageWidthMM: value,
+                              }));
+                            }
+                          }}
+                        />
+                        <span className="text-muted small">×</span>
+                        <Form.Control
+                          type="number"
+                          size="sm"
+                          min={1}
+                          step={0.1}
+                          aria-label="Custom paper height (mm, portrait)"
+                          data-testid="display-custom-page-height"
+                          value={settings.customPageHeightMM ?? ""}
+                          onChange={(event) => {
+                            const value = parseFloat(event.target.value);
+                            if (!Number.isNaN(value)) {
+                              setSettings((previous) => ({
+                                ...previous,
+                                customPageHeightMM: value,
+                              }));
+                            }
+                          }}
+                        />
+                        <span className="text-muted small">mm, portrait</span>
+                      </div>
+                    )}
+
+                    <Form.Group className="mb-2">
+                      <Form.Label className="small mb-1">
+                        Bleed edge (mm)
+                      </Form.Label>
+                      <Form.Control
+                        size="sm"
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={settings.bleedEdgeMM}
+                        onChange={(event) => {
+                          const value = parseFloat(event.target.value);
+                          if (!Number.isNaN(value)) {
+                            setSettings((previous) => ({
+                              ...previous,
+                              bleedEdgeMM: value,
+                            }));
+                          }
+                        }}
+                        aria-label="Bleed edge (mm)"
+                      />
+                    </Form.Group>
+
+                    {/* D5 (proposal-h-display-layout-spec.md) - the margin-profile control: no
+                        `max` clamp on the Bleed edge input above (removed the old `max={BleedEdgeMM}`
+                        cap - 3.048mm, below the new 3.175mm default) - a profile that can't fit the
+                        requested bleed still renders every card, just with less bleed on the crowded
+                        edge; the readout right below states exactly how much. */}
+                    <MarginProfileControl
+                      profile={marginProfile}
+                      onChange={(profile: MarginProfileKey) =>
+                        dispatch(setMarginProfile(profile))
+                      }
+                    />
+
+                    {/* Granted-vs-requested bleed readout - reads the SAME `layout` this section's
+                        own live sheet renders from (below), so it's always in sync with the current
+                        page size / margin profile / spacing / bleed-edge combination. */}
+                    <BleedGrantedReadout
+                      requestedBleedMM={settings.bleedEdgeMM}
+                      grantedBleedMM={
+                        layout.slots[0]?.bleedMM ?? {
+                          top: 0,
+                          bottom: 0,
+                          left: 0,
+                          right: 0,
+                        }
+                      }
+                    />
+
+                    {/* Advanced per-side margin override - moved from DisplayExportPDF.tsx's own
+                        settings step (this PR), grouped directly under the margin-profile control
+                        above rather than living behind the Export PDF dialog: these four fields are
+                        a manual override of that same profile decision, not an unrelated export-run
+                        choice. Scoped to the export only, same as before the move - the live sheet
+                        above always reads the profile (`margins`), never this field (see
+                        displayPdfProps.ts's "Margin-preset vs. per-side override" comment). */}
+                    <Form.Group className="mb-2">
+                      <Form.Check
+                        type="checkbox"
+                        id="display-margin-override-toggle"
+                        data-testid="display-margin-override-toggle"
+                        label="Override page margins for this export"
+                        checked={settings.marginOverride !== undefined}
+                        onChange={(event) =>
                           setSettings((previous) => ({
                             ...previous,
-                            customPageWidthMM: value,
-                          }));
+                            marginOverride: event.target.checked
+                              ? { ...MARGIN_PROFILES[marginProfile].margins }
+                              : undefined,
+                          }))
                         }
-                      }}
-                    />
-                    <span className="text-muted small">×</span>
-                    <Form.Control
-                      type="number"
-                      size="sm"
-                      min={1}
-                      step={0.1}
-                      aria-label="Custom paper height (mm, portrait)"
-                      data-testid="display-custom-page-height"
-                      value={settings.customPageHeightMM ?? ""}
-                      onChange={(event) => {
-                        const value = parseFloat(event.target.value);
-                        if (!Number.isNaN(value)) {
-                          setSettings((previous) => ({
-                            ...previous,
-                            customPageHeightMM: value,
-                          }));
-                        }
-                      }}
-                    />
-                    <span className="text-muted small">mm, portrait</span>
-                  </div>
-                )}
+                      />
+                      {settings.marginOverride && (
+                        <>
+                          <div className="d-flex gap-2 align-items-center mt-2">
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              min={0}
+                              aria-label="Top margin (mm)"
+                              data-testid="display-margin-override-top"
+                              value={settings.marginOverride.top}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value))
+                                  setMarginOverrideField("top", value);
+                              }}
+                            />
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              min={0}
+                              aria-label="Bottom margin (mm)"
+                              data-testid="display-margin-override-bottom"
+                              value={settings.marginOverride.bottom}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value))
+                                  setMarginOverrideField("bottom", value);
+                              }}
+                            />
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              min={0}
+                              aria-label="Left margin (mm)"
+                              data-testid="display-margin-override-left"
+                              value={settings.marginOverride.left}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value))
+                                  setMarginOverrideField("left", value);
+                              }}
+                            />
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              min={0}
+                              aria-label="Right margin (mm)"
+                              data-testid="display-margin-override-right"
+                              value={settings.marginOverride.right}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value))
+                                  setMarginOverrideField("right", value);
+                              }}
+                            />
+                          </div>
+                          <Form.Text className="text-muted">
+                            Top / bottom / left / right, seeded from the profile
+                            above. Overrides it for this export only - the live
+                            sheet and the profile itself are unaffected.
+                          </Form.Text>
+                        </>
+                      )}
+                    </Form.Group>
 
-                <Form.Group className="mb-2">
-                  <Form.Label className="small mb-1">
-                    Bleed edge (mm)
-                  </Form.Label>
-                  <Form.Control
-                    size="sm"
-                    type="number"
-                    min={0}
-                    step={0.1}
-                    value={settings.bleedEdgeMM}
-                    onChange={(event) => {
-                      const value = parseFloat(event.target.value);
-                      if (!Number.isNaN(value)) {
+                    {/* D19 (proposal-h-display-layout-spec.md ADDENDUM) - Horizontal (X ->
+                        spacing.col) / Vertical (Y -> spacing.row) numeric inputs + a link/unlink
+                        toggle, seeded from D18's asymmetric default and persisted per deck via the
+                        cardSpacing redux slice -> deckPayload.ts (mirrors finishSettingsSlice's own
+                        precedent - see that slice's module comment). Extracted into its own
+                        component (CardSpacingControl.tsx) for a plain unit-test target on the
+                        link/unlink behavior. */}
+                    <CardSpacingControl
+                      spacing={spacing}
+                      onChangeCol={(value) =>
+                        dispatch(setCardSpacingCol(value))
+                      }
+                      onChangeRow={(value) =>
+                        dispatch(setCardSpacingRow(value))
+                      }
+                    />
+
+                    <PageOffsetControl
+                      offsetXMM={settings.offsetXMM}
+                      offsetYMM={settings.offsetYMM}
+                      onChangeX={(value) =>
                         setSettings((previous) => ({
                           ...previous,
-                          bleedEdgeMM: value,
-                        }));
+                          offsetXMM: value,
+                        }))
                       }
-                    }}
-                    aria-label="Bleed edge (mm)"
-                  />
-                </Form.Group>
+                      onChangeY={(value) =>
+                        setSettings((previous) => ({
+                          ...previous,
+                          offsetYMM: value,
+                        }))
+                      }
+                    />
+                  </div>
+                </AutofillCollapse>
+              </div>
 
-                {/* D5 (proposal-h-display-layout-spec.md) - the margin-profile control: no
-                    `max` clamp on the Bleed edge input above (removed the old `max={BleedEdgeMM}`
-                    cap - 3.048mm, below the new 3.175mm default) - a profile that can't fit the
-                    requested bleed still renders every card, just with less bleed on the crowded
-                    edge; the readout right below states exactly how much. */}
-                <MarginProfileControl
-                  profile={marginProfile}
-                  onChange={(profile: MarginProfileKey) =>
-                    dispatch(setMarginProfile(profile))
-                  }
-                />
-
-                {/* Granted-vs-requested bleed readout - reads the SAME `layout` this section's
-                    own live sheet renders from (below), so it's always in sync with the current
-                    page size / margin profile / spacing / bleed-edge combination. */}
-                <BleedGrantedReadout
-                  requestedBleedMM={settings.bleedEdgeMM}
-                  grantedBleedMM={
-                    layout.slots[0]?.bleedMM ?? {
-                      top: 0,
-                      bottom: 0,
-                      left: 0,
-                      right: 0,
-                    }
-                  }
-                />
-
-                {/* Advanced per-side margin override - moved from DisplayExportPDF.tsx's own
-                    settings step (this PR), grouped directly under the margin-profile control
-                    above rather than living behind the Export PDF dialog: these four fields are
-                    a manual override of that same profile decision, not an unrelated export-run
-                    choice. Scoped to the export only, same as before the move - the live sheet
-                    above always reads the profile (`margins`), never this field (see
-                    displayPdfProps.ts's "Margin-preset vs. per-side override" comment). */}
-                <Form.Group className="mb-2">
-                  <Form.Check
-                    type="checkbox"
-                    id="display-margin-override-toggle"
-                    data-testid="display-margin-override-toggle"
-                    label="Override page margins for this export"
-                    checked={settings.marginOverride !== undefined}
-                    onChange={(event) =>
-                      setSettings((previous) => ({
-                        ...previous,
-                        marginOverride: event.target.checked
-                          ? { ...MARGIN_PROFILES[marginProfile].margins }
-                          : undefined,
-                      }))
-                    }
-                  />
-                  {settings.marginOverride && (
-                    <>
-                      <div className="d-flex gap-2 align-items-center mt-2">
-                        <Form.Control
-                          type="number"
-                          size="sm"
-                          step={0.1}
-                          min={0}
-                          aria-label="Top margin (mm)"
-                          data-testid="display-margin-override-top"
-                          value={settings.marginOverride.top}
-                          onChange={(event) => {
-                            const value = parseFloat(event.target.value);
-                            if (!Number.isNaN(value))
-                              setMarginOverrideField("top", value);
-                          }}
-                        />
-                        <Form.Control
-                          type="number"
-                          size="sm"
-                          step={0.1}
-                          min={0}
-                          aria-label="Bottom margin (mm)"
-                          data-testid="display-margin-override-bottom"
-                          value={settings.marginOverride.bottom}
-                          onChange={(event) => {
-                            const value = parseFloat(event.target.value);
-                            if (!Number.isNaN(value))
-                              setMarginOverrideField("bottom", value);
-                          }}
-                        />
-                        <Form.Control
-                          type="number"
-                          size="sm"
-                          step={0.1}
-                          min={0}
-                          aria-label="Left margin (mm)"
-                          data-testid="display-margin-override-left"
-                          value={settings.marginOverride.left}
-                          onChange={(event) => {
-                            const value = parseFloat(event.target.value);
-                            if (!Number.isNaN(value))
-                              setMarginOverrideField("left", value);
-                          }}
-                        />
-                        <Form.Control
-                          type="number"
-                          size="sm"
-                          step={0.1}
-                          min={0}
-                          aria-label="Right margin (mm)"
-                          data-testid="display-margin-override-right"
-                          value={settings.marginOverride.right}
-                          onChange={(event) => {
-                            const value = parseFloat(event.target.value);
-                            if (!Number.isNaN(value))
-                              setMarginOverrideField("right", value);
-                          }}
-                        />
-                      </div>
-                      <Form.Text className="text-muted">
-                        Top / bottom / left / right, seeded from the profile
-                        above. Overrides it for this export only - the live
-                        sheet and the profile itself are unaffected.
-                      </Form.Text>
-                    </>
-                  )}
-                </Form.Group>
-
-                <Form.Check
-                  type="switch"
-                  id="display-cut-lines-toggle"
-                  label="Guides"
-                  checked={settings.showCutLines}
-                  onChange={(event) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      showCutLines: event.target.checked,
-                    }))
-                  }
-                />
-
+              <div className="mb-2">
                 {/* Guide appearance - moved from DisplayExportPDF.tsx's own settings step (this
                     PR), same migration as Print quality below. Only rendered while Guides is on -
                     with no lines drawn there's nothing for these to style, matching the old
@@ -3598,131 +3671,128 @@ export function DisplayPage() {
                     off sheetSettings.showCutLines). Colour + the three geometry numbers stay on
                     one row (aria-labels carry what each field is - no separate caption line,
                     kept tight to hold the rail under its pre-trim height cap). */}
-                {settings.showCutLines && (
-                  // Closes Bootstrap's default form-check bottom margin above this block -
-                  // Tailwind/Bootstrap spacing utilities bottom out at 4px steps, which left the
-                  // rail 4-6px over its 1131px pre-trim height cap; this is the last lever short
-                  // of dropping a control.
-                  <div style={{ marginTop: -6 }}>
-                    <div className="d-flex gap-2 align-items-center mb-0">
-                      <Form.Control
-                        type="color"
-                        size="sm"
-                        aria-label="Guide colour"
-                        data-testid="display-cut-line-color"
-                        value={settings.cutLineColor}
-                        onChange={(event) =>
-                          setSettings((previous) => ({
-                            ...previous,
-                            cutLineColor: event.target.value,
-                          }))
-                        }
-                      />
-                      <Form.Control
-                        type="number"
-                        size="sm"
-                        step={0.1}
-                        min={0}
-                        aria-label="Cut line length (mm)"
-                        data-testid="display-cut-line-length"
-                        value={settings.cutLineLengthMM}
-                        onChange={(event) => {
-                          const value = parseFloat(event.target.value);
-                          if (!Number.isNaN(value)) {
-                            setSettings((previous) => ({
-                              ...previous,
-                              cutLineLengthMM: value,
-                            }));
-                          }
-                        }}
-                      />
-                      <Form.Control
-                        type="number"
-                        size="sm"
-                        step={0.1}
-                        min={0}
-                        aria-label="Cut line thickness (mm)"
-                        data-testid="display-cut-line-thickness"
-                        value={settings.cutLineThicknessMM}
-                        onChange={(event) => {
-                          const value = parseFloat(event.target.value);
-                          if (!Number.isNaN(value)) {
-                            setSettings((previous) => ({
-                              ...previous,
-                              cutLineThicknessMM: value,
-                            }));
-                          }
-                        }}
-                      />
-                      <Form.Control
-                        type="number"
-                        size="sm"
-                        step={0.1}
-                        aria-label="Cut line offset (mm)"
-                        data-testid="display-cut-line-offset"
-                        value={settings.cutLineOffsetMM}
-                        onChange={(event) => {
-                          const value = parseFloat(event.target.value);
-                          if (!Number.isNaN(value)) {
-                            setSettings((previous) => ({
-                              ...previous,
-                              cutLineOffsetMM: value,
-                            }));
-                          }
-                        }}
-                      />
-                    </div>
+                <AutofillCollapse
+                  id="display-rail-cut-lines-guides"
+                  pad={0}
+                  headerPadding="4px 8px"
+                  expanded={railSectionExpanded["cut-lines-guides"]}
+                  onClick={() => toggleRailSection("cut-lines-guides")}
+                  title={
+                    <h6
+                      className="rail-section-heading mb-0"
+                      data-testid="display-rail-section-cut-lines-guides-toggle"
+                    >
+                      Cut lines &amp; snip guides
+                    </h6>
+                  }
+                >
+                  <div>
                     <Form.Check
                       type="switch"
-                      id="display-cross-cut-lines-toggle"
-                      className="mb-0"
-                      data-testid="display-cross-cut-lines"
-                      label="Crosshair marks"
-                      checked={settings.showCrossCutLines}
+                      id="display-cut-lines-toggle"
+                      label="Guides"
+                      checked={settings.showCutLines}
                       onChange={(event) =>
                         setSettings((previous) => ({
                           ...previous,
-                          showCrossCutLines: event.target.checked,
+                          showCutLines: event.target.checked,
                         }))
                       }
                     />
+
+                    {settings.showCutLines && (
+                      <div>
+                        <div className="d-flex gap-2 align-items-center mb-0">
+                          <Form.Control
+                            type="color"
+                            size="sm"
+                            aria-label="Guide colour"
+                            data-testid="display-cut-line-color"
+                            value={settings.cutLineColor}
+                            onChange={(event) =>
+                              setSettings((previous) => ({
+                                ...previous,
+                                cutLineColor: event.target.value,
+                              }))
+                            }
+                          />
+                          <Form.Control
+                            type="number"
+                            size="sm"
+                            step={0.1}
+                            min={0}
+                            aria-label="Cut line length (mm)"
+                            data-testid="display-cut-line-length"
+                            value={settings.cutLineLengthMM}
+                            onChange={(event) => {
+                              const value = parseFloat(event.target.value);
+                              if (!Number.isNaN(value)) {
+                                setSettings((previous) => ({
+                                  ...previous,
+                                  cutLineLengthMM: value,
+                                }));
+                              }
+                            }}
+                          />
+                          <Form.Control
+                            type="number"
+                            size="sm"
+                            step={0.1}
+                            min={0}
+                            aria-label="Cut line thickness (mm)"
+                            data-testid="display-cut-line-thickness"
+                            value={settings.cutLineThicknessMM}
+                            onChange={(event) => {
+                              const value = parseFloat(event.target.value);
+                              if (!Number.isNaN(value)) {
+                                setSettings((previous) => ({
+                                  ...previous,
+                                  cutLineThicknessMM: value,
+                                }));
+                              }
+                            }}
+                          />
+                          <Form.Control
+                            type="number"
+                            size="sm"
+                            step={0.1}
+                            aria-label="Cut line offset (mm)"
+                            data-testid="display-cut-line-offset"
+                            value={settings.cutLineOffsetMM}
+                            onChange={(event) => {
+                              const value = parseFloat(event.target.value);
+                              if (!Number.isNaN(value)) {
+                                setSettings((previous) => ({
+                                  ...previous,
+                                  cutLineOffsetMM: value,
+                                }));
+                              }
+                            }}
+                          />
+                        </div>
+                        <Form.Check
+                          type="switch"
+                          id="display-cross-cut-lines-toggle"
+                          className="mb-0"
+                          data-testid="display-cross-cut-lines"
+                          label="Crosshair marks"
+                          checked={settings.showCrossCutLines}
+                          onChange={(event) =>
+                            setSettings((previous) => ({
+                              ...previous,
+                              showCrossCutLines: event.target.checked,
+                            }))
+                          }
+                        />
+                      </div>
+                    )}
                   </div>
-                )}
-
-                {/* D19 (proposal-h-display-layout-spec.md ADDENDUM) - Horizontal (X ->
-                    spacing.col) / Vertical (Y -> spacing.row) numeric inputs + a link/unlink
-                    toggle, seeded from D18's asymmetric default and persisted per deck via the
-                    cardSpacing redux slice -> deckPayload.ts (mirrors finishSettingsSlice's own
-                    precedent - see that slice's module comment). Extracted into its own
-                    component (CardSpacingControl.tsx) for a plain unit-test target on the
-                    link/unlink behavior. */}
-                <CardSpacingControl
-                  spacing={spacing}
-                  onChangeCol={(value) => dispatch(setCardSpacingCol(value))}
-                  onChangeRow={(value) => dispatch(setCardSpacingRow(value))}
-                />
-
-                <PageOffsetControl
-                  offsetXMM={settings.offsetXMM}
-                  offsetYMM={settings.offsetYMM}
-                  onChangeX={(value) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      offsetXMM: value,
-                    }))
-                  }
-                  onChangeY={(value) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      offsetYMM: value,
-                    }))
-                  }
-                />
+                </AutofillCollapse>
               </div>
 
-              <div className="mb-3">
+              <div className="mb-2">
                 {/* Moved from DisplayExportPDF.tsx's own settings step (this PR), same migration
-                    as Print quality above - which cards make it in, and which pages actually
+                    as Print quality below - which cards make it in, and which pages actually
                     render, are properties of the artifact rather than a one-off export-run
                     choice, so they're editable here next to the live sheet instead of behind the
                     Export PDF dialog. Same Form.Select/Form.Control markup and copy the export
@@ -3731,186 +3801,246 @@ export function DisplayPage() {
                     only in that dialog's local state, and totalPages below is a plain,
                     unconditional standard-grid count (computePDFPageCount's own comment: SCM
                     paginates independently and isn't covered by it). */}
-                <h6 className="rail-section-heading">Export</h6>
-                <Form.Group className="mb-2">
-                  <Form.Label className="small mb-1">
-                    Cards to include
-                  </Form.Label>
-                  <Form.Select
-                    size="sm"
-                    data-testid="display-card-selection-mode"
-                    value={settings.cardSelectionMode}
-                    onChange={(event) =>
-                      setSettings((previous) => ({
-                        ...previous,
-                        cardSelectionMode: event.target
-                          .value as keyof typeof CardSelectionMode,
-                      }))
-                    }
-                  >
-                    {Object.entries(CardSelectionMode).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </Form.Select>
-                  <Form.Text className="text-muted">
-                    {
-                      CARD_SELECTION_MODE_DESCRIPTIONS[
-                        settings.cardSelectionMode
-                      ]
-                    }
-                  </Form.Text>
-                </Form.Group>
+                <AutofillCollapse
+                  id="display-rail-export"
+                  pad={0}
+                  headerPadding="4px 8px"
+                  expanded={railSectionExpanded["export"]}
+                  onClick={() => toggleRailSection("export")}
+                  title={
+                    <h6
+                      className="rail-section-heading mb-0"
+                      data-testid="display-rail-section-export-toggle"
+                    >
+                      Export
+                    </h6>
+                  }
+                >
+                  <div>
+                    <Form.Group className="mb-2">
+                      <Form.Label className="small mb-1">
+                        Cards to include
+                      </Form.Label>
+                      <Form.Select
+                        size="sm"
+                        data-testid="display-card-selection-mode"
+                        value={settings.cardSelectionMode}
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            cardSelectionMode: event.target
+                              .value as keyof typeof CardSelectionMode,
+                          }))
+                        }
+                      >
+                        {Object.entries(CardSelectionMode).map(
+                          ([value, label]) => (
+                            <option key={value} value={value}>
+                              {label}
+                            </option>
+                          )
+                        )}
+                      </Form.Select>
+                      <Form.Text className="text-muted">
+                        {
+                          CARD_SELECTION_MODE_DESCRIPTIONS[
+                            settings.cardSelectionMode
+                          ]
+                        }
+                      </Form.Text>
+                    </Form.Group>
 
-                <Form.Group className="mb-2">
-                  <Form.Label className="small mb-1">
-                    Pages ({totalPages} total)
-                  </Form.Label>
-                  <div className="d-flex gap-2 align-items-center">
-                    <Form.Control
-                      type="number"
-                      size="sm"
-                      min={1}
-                      max={totalPages}
-                      placeholder="1"
-                      aria-label="First page to export"
-                      data-testid="display-page-range-start"
-                      value={settings.pageRangeStart ?? ""}
-                      onChange={(event) => {
-                        const value = parseInt(event.target.value, 10);
-                        setSettings((previous) => ({
-                          ...previous,
-                          pageRangeStart: Number.isNaN(value)
-                            ? undefined
-                            : value,
-                        }));
-                      }}
-                    />
-                    <span className="text-muted small">to</span>
-                    <Form.Control
-                      type="number"
-                      size="sm"
-                      min={1}
-                      max={totalPages}
-                      placeholder={`${totalPages}`}
-                      aria-label="Last page to export"
-                      data-testid="display-page-range-end"
-                      value={settings.pageRangeEnd ?? ""}
-                      onChange={(event) => {
-                        const value = parseInt(event.target.value, 10);
-                        setSettings((previous) => ({
-                          ...previous,
-                          pageRangeEnd: Number.isNaN(value) ? undefined : value,
-                        }));
-                      }}
-                    />
+                    <Form.Group className="mb-2">
+                      <Form.Label className="small mb-1">
+                        Pages ({totalPages} total)
+                      </Form.Label>
+                      <div className="d-flex gap-2 align-items-center">
+                        <Form.Control
+                          type="number"
+                          size="sm"
+                          min={1}
+                          max={totalPages}
+                          placeholder="1"
+                          aria-label="First page to export"
+                          data-testid="display-page-range-start"
+                          value={settings.pageRangeStart ?? ""}
+                          onChange={(event) => {
+                            const value = parseInt(event.target.value, 10);
+                            setSettings((previous) => ({
+                              ...previous,
+                              pageRangeStart: Number.isNaN(value)
+                                ? undefined
+                                : value,
+                            }));
+                          }}
+                        />
+                        <span className="text-muted small">to</span>
+                        <Form.Control
+                          type="number"
+                          size="sm"
+                          min={1}
+                          max={totalPages}
+                          placeholder={`${totalPages}`}
+                          aria-label="Last page to export"
+                          data-testid="display-page-range-end"
+                          value={settings.pageRangeEnd ?? ""}
+                          onChange={(event) => {
+                            const value = parseInt(event.target.value, 10);
+                            setSettings((previous) => ({
+                              ...previous,
+                              pageRangeEnd: Number.isNaN(value)
+                                ? undefined
+                                : value,
+                            }));
+                          }}
+                        />
+                      </div>
+                      <Form.Text className="text-muted">
+                        Leave blank on either end to export all pages.
+                      </Form.Text>
+                    </Form.Group>
                   </div>
-                  <Form.Text className="text-muted">
-                    Leave blank on either end to export all pages.
-                  </Form.Text>
-                </Form.Group>
+                </AutofillCollapse>
               </div>
 
-              <div className="mb-3">
+              <div className="mb-2">
                 {/* Moved from DisplayExportPDF.tsx's own settings step (this PR) - image DPI/JPG
                     quality and corner rounding govern the printed card's own appearance, not a
                     one-off export-run choice, so they're editable here next to the live sheet
                     they affect instead of behind the Export PDF dialog. Same Form.Range/Form.Check
                     markup and copy the export dialog used, so nothing degrades to a bare control
                     on the move - see displayPdfProps.ts's DisplaySheetExportSettings comment. */}
-                <h6 className="rail-section-heading">Print quality</h6>
-                <Form.Group className="mb-2">
-                  <Form.Label className="small mb-1">
-                    Card image DPI: <b>{settings.imageDPI} DPI</b>
-                  </Form.Label>
-                  <Form.Range
-                    min={100}
-                    max={1500}
-                    step={100}
-                    value={settings.imageDPI}
-                    aria-label="Card image DPI"
-                    data-testid="display-image-dpi"
-                    onChange={(event) =>
-                      setSettings((previous) => ({
-                        ...previous,
-                        imageDPI: parseInt(event.target.value, 10),
-                      }))
-                    }
-                  />
-                  <Form.Label className="small mb-1">
-                    JPG quality: <b>{settings.jpgQuality}%</b>
-                  </Form.Label>
-                  <Form.Range
-                    min={5}
-                    max={100}
-                    step={5}
-                    value={settings.jpgQuality}
-                    aria-label="JPG quality"
-                    data-testid="display-jpg-quality"
-                    onChange={(event) =>
-                      setSettings((previous) => ({
-                        ...previous,
-                        jpgQuality: parseInt(event.target.value, 10),
-                      }))
-                    }
-                  />
-                </Form.Group>
-                <Form.Check
-                  type="switch"
-                  id="display-round-corners-toggle"
-                  data-testid="display-round-corners"
-                  label={
-                    settings.roundCorners ? "Round corners" : "Square corners"
+                <AutofillCollapse
+                  id="display-rail-print-quality"
+                  pad={0}
+                  headerPadding="4px 8px"
+                  expanded={railSectionExpanded["print-quality"]}
+                  onClick={() => toggleRailSection("print-quality")}
+                  title={
+                    <h6
+                      className="rail-section-heading mb-0"
+                      data-testid="display-rail-section-print-quality-toggle"
+                    >
+                      Print quality
+                    </h6>
                   }
-                  checked={settings.roundCorners}
-                  onChange={(event) =>
-                    setSettings((previous) => ({
-                      ...previous,
-                      roundCorners: event.target.checked,
-                    }))
-                  }
-                />
+                >
+                  <div>
+                    <Form.Group className="mb-2">
+                      <Form.Label className="small mb-1">
+                        Card image DPI: <b>{settings.imageDPI} DPI</b>
+                      </Form.Label>
+                      <Form.Range
+                        min={100}
+                        max={1500}
+                        step={100}
+                        value={settings.imageDPI}
+                        aria-label="Card image DPI"
+                        data-testid="display-image-dpi"
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            imageDPI: parseInt(event.target.value, 10),
+                          }))
+                        }
+                      />
+                      <Form.Label className="small mb-1">
+                        JPG quality: <b>{settings.jpgQuality}%</b>
+                      </Form.Label>
+                      <Form.Range
+                        min={5}
+                        max={100}
+                        step={5}
+                        value={settings.jpgQuality}
+                        aria-label="JPG quality"
+                        data-testid="display-jpg-quality"
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            jpgQuality: parseInt(event.target.value, 10),
+                          }))
+                        }
+                      />
+                    </Form.Group>
+                    <Form.Check
+                      type="switch"
+                      id="display-round-corners-toggle"
+                      data-testid="display-round-corners"
+                      label={
+                        settings.roundCorners
+                          ? "Round corners"
+                          : "Square corners"
+                      }
+                      checked={settings.roundCorners}
+                      onChange={(event) =>
+                        setSettings((previous) => ({
+                          ...previous,
+                          roundCorners: event.target.checked,
+                        }))
+                      }
+                    />
+                  </div>
+                </AutofillCollapse>
               </div>
 
-              <div className="mb-3">
+              <div className="mb-2">
                 {/* Editor-repass R10.2 - the View control is a Fronts/Backs ToggleButtonGroup
                     now, the same segmented idiom as Add/Browse (was a label-flipping
                     "Showing: Fronts/Backs" button under an <h6>). R10.3: the heading is the
                     shared 10px uppercase muted legend style. */}
-                <h6 className="rail-section-heading">View</h6>
-                <ToggleButtonGroup
-                  type="radio"
-                  name="display-view-faces"
-                  value={frontsVisible ? "fronts" : "backs"}
-                  onChange={(value) =>
-                    dispatch(
-                      value === "fronts" ? switchToFront() : switchToBack()
-                    )
+                <AutofillCollapse
+                  id="display-rail-view"
+                  pad={0}
+                  headerPadding="4px 8px"
+                  // Same contrast fix as the Page setup section above - the Fronts/Backs
+                  // `outline-light` toggle pair is the same $light-on-$theme-panel-bg failure.
+                  bodyBackground="var(--bs-body-bg)"
+                  expanded={railSectionExpanded["view"]}
+                  onClick={() => toggleRailSection("view")}
+                  title={
+                    <h6
+                      className="rail-section-heading mb-0"
+                      data-testid="display-rail-section-view-toggle"
+                    >
+                      View
+                    </h6>
                   }
-                  className="w-100"
                 >
-                  <ToggleButton
-                    id="display-view-faces-fronts"
-                    value="fronts"
-                    variant="outline-light"
-                    size="sm"
-                    active={frontsVisible}
-                    data-testid="display-view-toggle-fronts"
-                  >
-                    Fronts
-                  </ToggleButton>
-                  <ToggleButton
-                    id="display-view-faces-backs"
-                    value="backs"
-                    variant="outline-light"
-                    size="sm"
-                    active={!frontsVisible}
-                    data-testid="display-view-toggle-backs"
-                  >
-                    Backs
-                  </ToggleButton>
-                </ToggleButtonGroup>
+                  <div>
+                    <ToggleButtonGroup
+                      type="radio"
+                      name="display-view-faces"
+                      value={frontsVisible ? "fronts" : "backs"}
+                      onChange={(value) =>
+                        dispatch(
+                          value === "fronts" ? switchToFront() : switchToBack()
+                        )
+                      }
+                      className="w-100"
+                    >
+                      <ToggleButton
+                        id="display-view-faces-fronts"
+                        value="fronts"
+                        variant="outline-light"
+                        size="sm"
+                        active={frontsVisible}
+                        data-testid="display-view-toggle-fronts"
+                      >
+                        Fronts
+                      </ToggleButton>
+                      <ToggleButton
+                        id="display-view-faces-backs"
+                        value="backs"
+                        variant="outline-light"
+                        size="sm"
+                        active={!frontsVisible}
+                        data-testid="display-view-toggle-backs"
+                      >
+                        Backs
+                      </ToggleButton>
+                    </ToggleButtonGroup>
+                  </div>
+                </AutofillCollapse>
               </div>
 
               <div className="mb-3">

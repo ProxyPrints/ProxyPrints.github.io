@@ -5,15 +5,18 @@ import {
   MaximumDPI,
   MaximumSize,
   MinimumDPI,
+  RailSectionExpansionKey,
   SearchSettingsKey,
 } from "@/common/constants";
 import {
   getLocalStorageHiddenCardIds,
   getLocalStorageManualOverrides,
+  getLocalStorageRailSectionExpansion,
   getLocalStorageSearchSettings,
   getOrCreateAnonymousId,
   setLocalStorageHiddenCardIds,
   setLocalStorageManualOverrides,
+  setLocalStorageRailSectionExpansion,
 } from "@/common/cookies";
 import { defaultSettings, sourceDocuments } from "@/common/test-constants";
 
@@ -23,6 +26,7 @@ beforeEach(() => {
   window.localStorage.removeItem(ManualOverridesKey);
   window.localStorage.removeItem(`${HiddenCardIdsKey}:anon-1`);
   window.localStorage.removeItem(`${HiddenCardIdsKey}:anon-2`);
+  window.localStorage.removeItem(RailSectionExpansionKey);
 });
 afterEach(() => {
   window.localStorage.removeItem(SearchSettingsKey);
@@ -30,6 +34,7 @@ afterEach(() => {
   window.localStorage.removeItem(ManualOverridesKey);
   window.localStorage.removeItem(`${HiddenCardIdsKey}:anon-1`);
   window.localStorage.removeItem(`${HiddenCardIdsKey}:anon-2`);
+  window.localStorage.removeItem(RailSectionExpansionKey);
 });
 
 //# region tests
@@ -264,6 +269,56 @@ test("setLocalStorageManualOverrides persists the map for getLocalStorageManualO
 
   expect(getLocalStorageManualOverrides()).toStrictEqual({
     "card-1": "force-bleed",
+  });
+});
+
+//# endregion
+
+//# region /display right-rail settings-section collapse state
+
+test("getLocalStorageRailSectionExpansion returns an empty object when nothing is stored", () => {
+  expect(getLocalStorageRailSectionExpansion()).toStrictEqual({});
+});
+
+test("getLocalStorageRailSectionExpansion returns an empty object for malformed JSON", () => {
+  window.localStorage.setItem(RailSectionExpansionKey, "not valid json{");
+
+  expect(getLocalStorageRailSectionExpansion()).toStrictEqual({});
+});
+
+test("getLocalStorageRailSectionExpansion returns an empty object for a value that isn't an object", () => {
+  window.localStorage.setItem(
+    RailSectionExpansionKey,
+    JSON.stringify(["a", "b"])
+  );
+
+  expect(getLocalStorageRailSectionExpansion()).toStrictEqual({});
+});
+
+test("getLocalStorageRailSectionExpansion returns an empty object when a value isn't a boolean", () => {
+  window.localStorage.setItem(
+    RailSectionExpansionKey,
+    JSON.stringify({ "page-setup": "yes" })
+  );
+
+  expect(getLocalStorageRailSectionExpansion()).toStrictEqual({});
+});
+
+test("getLocalStorageRailSectionExpansion round-trips a valid stored map", () => {
+  const expansion = { "page-setup": false, export: true };
+  window.localStorage.setItem(
+    RailSectionExpansionKey,
+    JSON.stringify(expansion)
+  );
+
+  expect(getLocalStorageRailSectionExpansion()).toStrictEqual(expansion);
+});
+
+test("setLocalStorageRailSectionExpansion persists the map for getLocalStorageRailSectionExpansion to read back", () => {
+  setLocalStorageRailSectionExpansion({ "cut-lines-guides": true });
+
+  expect(getLocalStorageRailSectionExpansion()).toStrictEqual({
+    "cut-lines-guides": true,
   });
 });
 

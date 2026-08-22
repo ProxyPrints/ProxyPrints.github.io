@@ -12,6 +12,7 @@ import {
   HiddenCardIdsKey,
   ManualOverridesKey,
   PinnedSourcesKey,
+  RailSectionExpansionKey,
   SearchSettingsKey,
 } from "@/common/constants";
 import { Convert } from "@/common/schema_types";
@@ -223,6 +224,43 @@ export function getLocalStoragePinnedSourcePks(): number[] {
 
 export function setLocalStoragePinnedSourcePks(pks: number[]): void {
   localStorage.setItem(PinnedSourcesKey, JSON.stringify(pks));
+}
+
+//# endregion
+
+//# region /display right-rail settings-section collapse state
+
+/**
+ * Which /display right-rail print/export settings sections are expanded vs collapsed
+ * (same validated-JSON-with-fallback shape as `getLocalStoragePinnedSourcePks` above).
+ * Returns an empty object - callers layer this over their own defaults - when nothing is
+ * stored, or the stored value doesn't look like a `Record<string, boolean>`.
+ */
+export function getLocalStorageRailSectionExpansion(): Record<string, boolean> {
+  const serialised = localStorage.getItem(RailSectionExpansionKey);
+  if (serialised == null) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(serialised);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      Object.values(parsed).every((value) => typeof value === "boolean")
+    ) {
+      return parsed as Record<string, boolean>;
+    }
+    return {};
+  } catch (e) {
+    return {};
+  }
+}
+
+export function setLocalStorageRailSectionExpansion(
+  expansion: Record<string, boolean>
+): void {
+  localStorage.setItem(RailSectionExpansionKey, JSON.stringify(expansion));
 }
 
 //# endregion
