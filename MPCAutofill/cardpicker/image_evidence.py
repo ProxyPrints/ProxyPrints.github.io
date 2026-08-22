@@ -1529,7 +1529,22 @@ def compute_card_evidence(
     # stand-in. Shares symbol_region's own "ambiguous" skip-reason vocabulary for both an
     # unclassifiable frame and a degenerate crop box (see module docstring for why one string
     # covers both here).
-    if _stale("artbox_phash"):
+    #
+    # STRUCTURAL DEPENDENCY ON THE OCR GROUP (2026-08-22): this extractor's own version string
+    # (ARTBOX_PHASH_EXTRACTOR_VERSION) has never had to change - its crop/hash logic is untouched
+    # - but its INPUT is the OCR group's output, so a change that only affects the OCR group (e.g.
+    # an OCR-engine swap) silently changes what this extractor computes with nothing recording
+    # that it happened. `4ca2368f` bumped `collector_line_ocr`/`artist_ocr`/`collector_line_tsv`
+    # for exactly that reason and missed this one, because the dependency is indirect. Rather than
+    # relying on a human to remember to bump `ARTBOX_PHASH_EXTRACTOR_VERSION` in lockstep with the
+    # OCR group every time (the discipline that already failed once), `_ocr_group_is_stale` is
+    # ORed in directly: whenever the incremental per-extractor pipeline decides the OCR group
+    # needs recomputing, this extractor is swept along with it and reads the OCR group's FRESH
+    # output above rather than carrying forward a value computed against stale OCR facts. A no-op
+    # today (no manifest version has changed), and a no-op for full runs (`_stale` is already
+    # unconditionally `True` there) - this only changes behaviour for a future incremental run
+    # after a future OCR-affecting change.
+    if _stale("artbox_phash") or _ocr_group_is_stale:
         if image is None:
             skip_reasons["artbox_phash"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
         else:
@@ -1722,6 +1737,45 @@ def current_evidence_queryset(card: Card) -> "QuerySet[ImageEvidence]":
     return qs
 
 
+def content_phash_bleed_regime_is_current(evidence: Optional[ImageEvidence]) -> bool:
+    """
+    True iff `evidence`'s stored `geometry_bleed` version tag matches the `classify_bleed_edge`
+    regime CURRENTLY in effect (`GEOMETRY_BLEED_EXTRACTOR_VERSION`) - the structural provenance
+    signal for `Card.content_phash` (2026-08-22).
+
+    WHY THIS IS content_phash's PROVENANCE, NOT A NEW STORED FIELD: `content_phash`'s own crop
+    remap (`local_phash.compute_card_art_hash`, called from `local_phash.
+    compute_content_phash_for_card`) picks its crop box from `local_fallback.classify_bleed_edge`'s
+    verdict - the IDENTICAL PROTECTED CORE calculator `geometry_bleed` above already calls
+    (`classify_bleed_edge(image)`, a few hundred lines up in `compute_card_evidence`) to produce
+    `bleed_class`, already versioned under `GEOMETRY_BLEED_EXTRACTOR_VERSION`. `content_phash`
+    lives on `Card` as a bare `BigIntegerField` with no adjacent JSON structure to carry a version
+    tag of its own, and inventing one would mean a second, independently-driftable version
+    namespace for a dependency that's already tracked - exactly the manual-bump failure mode this
+    PR exists to close (see `ARTBOX_PHASH_EXTRACTOR_VERSION`'s own history). Reusing the existing
+    `geometry_bleed` entry instead means a future `classify_bleed_edge` change - already required
+    (`check_extractor_manifest_sync.py`'s own tether) to bump `GEOMETRY_BLEED_EXTRACTOR_VERSION` -
+    makes this function start returning `False` for every row it touches with zero extra
+    discipline, rather than relying on a human to remember `content_phash` is a second, indirect
+    dependent the same way `4ca2368f` forgot `artbox_phash` was.
+
+    `evidence=None` (no CURRENT `ImageEvidence` row for this card at all - i.e.
+    `current_evidence_queryset(card)` is empty, `geometry_bleed` has never run against this card's
+    live `content_phash`) returns `False`: an unconfirmed regime is not a verified-current one,
+    the same "absent means stale" convention `compute_card_evidence`'s own `_stale()` uses for
+    every other extractor key.
+
+    DETECTION ONLY (module docstring, "we index, we do not store images" premise aside - this is
+    about staleness bookkeeping, not image storage): a `False` return here is a signal for a
+    FUTURE reconciliation/backfill pass to consider, never a directive to recompute or invalidate
+    `Card.content_phash` itself from within this function - see this PR's own body for why (0/299
+    measured drift; mass recompute is explicitly out of scope).
+    """
+    if evidence is None:
+        return False
+    return evidence.extractor_versions.get("geometry_bleed") == GEOMETRY_BLEED_EXTRACTOR_VERSION
+
+
 def persist_evidence(result: ExtractionResult, run_id: Optional[str] = None) -> Optional[ImageEvidence]:
     """
     The thin, separate DB-write step (see module docstring for why this is split from
@@ -1840,6 +1894,7 @@ __all__ = [
     "fetch_and_compute_card_evidence_for_tests",
     "compute_card_evidence",
     "current_evidence_queryset",
+    "content_phash_bleed_regime_is_current",
     "persist_evidence",
     "ReconciliationReport",
     "build_reconciliation_report",

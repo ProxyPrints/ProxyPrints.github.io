@@ -104,6 +104,7 @@ from cardpicker.image_evidence import (
     ExtractionResult,
     build_reconciliation_report,
     compute_card_evidence,
+    content_phash_bleed_regime_is_current,
     fetch_and_compute_card_evidence_for_tests,
     persist_evidence,
 )
@@ -2628,6 +2629,67 @@ class TestCurrentEvidenceQueryset:
         assert list(module.current_evidence_queryset(card)) == []
 
 
+class TestContentPhashBleedRegimeIsCurrent:
+    """content_phash_bleed_regime_is_current (2026-08-22): `Card.content_phash`'s own crop-remap
+    depends on `local_fallback.classify_bleed_edge` - the IDENTICAL calculator `geometry_bleed`
+    already versions under `GEOMETRY_BLEED_EXTRACTOR_VERSION` - so this reads that existing
+    `extractor_versions["geometry_bleed"]` entry directly rather than a new stored field. See the
+    function's own docstring for the full structural argument."""
+
+    def test_current_regime_is_not_flagged(self, db):
+        """A row whose geometry_bleed entry matches the live version tag exactly - the ordinary
+        case for every row a current Stage C pass just wrote - must NOT be falsely flagged."""
+        card = CardFactory(content_phash=999)
+        evidence = ImageEvidenceFactory(
+            card=card, content_hash=999, extractor_versions={"geometry_bleed": GEOMETRY_BLEED_EXTRACTOR_VERSION}
+        )
+
+        assert content_phash_bleed_regime_is_current(evidence) is True
+
+    def test_stale_regime_is_detected(self, db):
+        """A row stamped under an OLDER geometry_bleed version (the same shape a future
+        classify_bleed_edge-affecting change, correctly bumping GEOMETRY_BLEED_EXTRACTOR_VERSION
+        per check_extractor_manifest_sync.py's own tether, would leave behind on every
+        not-yet-reprocessed row) is a detectable mismatch."""
+        card = CardFactory(content_phash=999)
+        evidence = ImageEvidenceFactory(
+            card=card, content_hash=999, extractor_versions={"geometry_bleed": "geometry-bleed-v0"}
+        )
+
+        assert content_phash_bleed_regime_is_current(evidence) is False
+
+    def test_missing_geometry_bleed_key_is_detected(self, db):
+        """A row that has never had geometry_bleed run at all (e.g. every extractor before this
+        one dropped due to a fetch failure) carries no entry - absence is treated the same as a
+        stale mismatch, not silently treated as current."""
+        card = CardFactory(content_phash=999)
+        evidence = ImageEvidenceFactory(card=card, content_hash=999, extractor_versions={})
+
+        assert content_phash_bleed_regime_is_current(evidence) is False
+
+    def test_no_current_evidence_row_is_detected(self, db):
+        """No CURRENT ImageEvidence row at all for this card (current_evidence_queryset empty) -
+        an unconfirmed regime is not a verified-current one."""
+        assert content_phash_bleed_regime_is_current(None) is False
+
+    def test_real_compute_card_evidence_pass_stamps_the_current_regime(self, db, monkeypatch):
+        """End-to-end: a real compute_card_evidence pass (geometry_bleed non-stale) against a
+        persisted row is read back as current - proves the detection wires up against the real
+        extractor, not just a hand-built extractor_versions dict."""
+        card = CardFactory(content_phash=999)
+        _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
+        _stub_ocr(monkeypatch)
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch, result=_a_pinline_inset_result())
+
+        result = compute_card_evidence(card.pk, card.content_phash, _BLEED_IMAGE, fetch_latency_ms=1.0)
+        evidence = persist_evidence(result)
+
+        assert content_phash_bleed_regime_is_current(evidence) is True
+
+
 class TestBuildReconciliationReport:
     def test_all_voted(self, db):
         cards = [CardFactory(content_phash=i) for i in range(1, 4)]
@@ -2845,6 +2907,43 @@ class TestPerExtractorReextraction:
         )
 
         assert result.fields["collector_line_collector_number"] == "200"
+
+    def test_ocr_group_staleness_forces_artbox_phash_recompute(self, db, monkeypatch):
+        """artbox_phash reads the OCR group's own collector_line_collector_number/
+        illus_anchor_fired as classify_frame_style's inputs, but its own extractor version
+        (ARTBOX_PHASH_EXTRACTOR_VERSION) never changed - only artist_ocr is marked stale here,
+        the same shape as the real regression (4ca2368f bumped the OCR group for an engine swap
+        and missed this indirect dependent). artbox_phash must still recompute against the fresh
+        OCR facts rather than carrying forward a frame class read under the old ones."""
+        card = CardFactory(content_phash=12345)
+        self._stub_everything(
+            monkeypatch,
+            border_color="black",
+            art_edge="framed",
+            collector_raw_text="158/287 R MOM EN",  # digit-bearing -> "modern"
+            symbol_phash=111,
+            blur=42.0,
+        )
+        stored = self._compute(card, _BLEED_IMAGE)
+        assert stored.fields["artbox_frame_class"] == "modern"
+
+        _stub_ocr(monkeypatch, "Illus. John Avon")  # no digit, "Illus." anchor -> "old"
+        result = self._compute(
+            card,
+            _BLEED_IMAGE,
+            stale_extractor_keys=frozenset({"artist_ocr"}),
+            stored_evidence_fields=stored.fields,
+            stored_extractor_versions=stored.extractor_versions,
+        )
+
+        assert result.fields["artbox_frame_class"] == "old"
+        # `_compute_region_phash` is stubbed to a fixed value regardless of crop box (see
+        # `_stub_symbol_region`), so the phash INT can't distinguish recompute from carry-forward
+        # here - `artbox_crop_px` can: ARTBOX_OLD_CROP_BOX != ARTBOX_MODERN_CROP_BOX, so a genuine
+        # recompute against the fresh "old" frame_class must select a different crop box than the
+        # stored "modern" pass did. A carried-forward value would still read "modern"'s box.
+        assert result.fields["artbox_crop_px"] != stored.fields["artbox_crop_px"]
+        assert result.extractor_versions["artbox_phash"] == ARTBOX_PHASH_EXTRACTOR_VERSION
 
     def test_whole_card_carry_forward_recomputes_nothing(self, db, monkeypatch):
         card = CardFactory(content_phash=12345)
