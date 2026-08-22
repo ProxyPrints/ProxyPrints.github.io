@@ -52,6 +52,33 @@ def _thin_border_card_image(border_rgb: tuple = (0, 0, 0), art_rgb: tuple = (120
     return img
 
 
+def _card_image_with_border_band(
+    inset_frac: float = 0.08,
+    border_width_frac: float = 0.04,
+    background_rgb: tuple = (240, 240, 240),
+    border_rgb: tuple = (0, 0, 0),
+    art_rgb: tuple = (120, 80, 200),
+) -> "Image.Image":
+    """Three nested rectangles - background, then a `border_rgb` band `border_width_frac` of each
+    dimension wide starting at `inset_frac`, then `art_rgb` - so the scan crosses TWO sustained
+    colour transitions per edge: background->border at `inset_frac` (the first transition), then
+    border->art at `inset_frac + border_width_frac` (the second)."""
+    img = Image.new("RGB", (_IMAGE_WIDTH, _IMAGE_HEIGHT), background_rgb)
+    draw = ImageDraw.Draw(img)
+    left = round(_IMAGE_WIDTH * inset_frac)
+    top = round(_IMAGE_HEIGHT * inset_frac)
+    right = round(_IMAGE_WIDTH * (1 - inset_frac))
+    bottom = round(_IMAGE_HEIGHT * (1 - inset_frac))
+    draw.rectangle([left, top, right, bottom], fill=border_rgb)
+    inner_frac = inset_frac + border_width_frac
+    inner_left = round(_IMAGE_WIDTH * inner_frac)
+    inner_top = round(_IMAGE_HEIGHT * inner_frac)
+    inner_right = round(_IMAGE_WIDTH * (1 - inner_frac))
+    inner_bottom = round(_IMAGE_HEIGHT * (1 - inner_frac))
+    draw.rectangle([inner_left, inner_top, inner_right, inner_bottom], fill=art_rgb)
+    return img
+
+
 class TestMeasurePinlineInset:
     def test_wide_inset_image_measures_within_tolerance_on_all_four_edges(self):
         inset_frac = 0.08
@@ -78,7 +105,52 @@ class TestMeasurePinlineInset:
         for edge in (result.top, result.bottom, result.left, result.right):
             assert edge.inset_frac is not None
             assert edge.call == CALL_MEASURED
+            # Only one band on this fixture (border straight to art) - there is nothing past the
+            # first transition to find, so the second scan must report a genuine non-read, not a
+            # guess.
+            assert edge.second_inset_frac is None
+            assert edge.second_call == CALL_NO_TRANSITION
         assert result.verdict == VERDICT_MEASURED
+
+    def test_two_band_image_measures_second_transition_as_border_width(self):
+        inset_frac = 0.08
+        border_width_frac = 0.04
+        img = _card_image_with_border_band(inset_frac=inset_frac, border_width_frac=border_width_frac)
+
+        result = measure_pinline_inset(img)
+
+        assert result is not None
+        expected_second_frac = inset_frac + border_width_frac
+        for edge in (result.top, result.bottom, result.left, result.right):
+            assert edge.call == CALL_MEASURED
+            assert abs(edge.inset_frac - inset_frac) < 0.02
+            assert edge.second_call == CALL_MEASURED
+            assert edge.second_inset_frac is not None
+            assert abs(edge.second_inset_frac - expected_second_frac) < 0.02
+        assert result.verdict == VERDICT_MEASURED
+
+    def test_high_contrast_interruption_in_border_band_causes_abstention_not_a_guess(self):
+        # A stripe of a wildly different colour partway through the border band (simulating a
+        # text stroke crossing it) breaks that band's own uniformity - the SAME uniformity gate
+        # the first transition uses, reused rather than a bespoke text detector. The real
+        # border/art boundary further inward still triggers a sustained colour departure, but its
+        # zone now spans the stripe, so the gate correctly abstains instead of reporting a
+        # second-transition distance it cannot vouch for: exactly the "distinguishable from a
+        # text-stop, or explicitly abstain" property this measurement needs on the bottom edge.
+        inset_frac = 0.08
+        border_width_frac = 0.06
+        img = _card_image_with_border_band(inset_frac=inset_frac, border_width_frac=border_width_frac)
+        draw = ImageDraw.Draw(img)
+        stripe_y = round(_IMAGE_HEIGHT * (inset_frac + border_width_frac / 2))
+        draw.rectangle([0, stripe_y, _IMAGE_WIDTH, stripe_y + 1], fill=(255, 255, 0))
+
+        result = measure_pinline_inset(img)
+
+        assert result is not None
+        assert result.top.call == CALL_MEASURED
+        assert abs(result.top.inset_frac - inset_frac) < 0.02
+        assert result.top.second_call == CALL_NO_TRANSITION
+        assert result.top.second_inset_frac is None
 
     def test_measured_call_does_not_depend_on_inset_magnitude(self):
         # A mid-sized inset used to fall in a "confidence gap" between two magnitude thresholds
@@ -111,6 +183,10 @@ class TestMeasurePinlineInset:
         for edge in (result.top, result.bottom, result.left, result.right):
             assert edge.inset_frac is None
             assert edge.call == CALL_INDETERMINATE_BLACK
+            # No first transition, so no second scan was ever attempted - the second call
+            # propagates the same indeterminate reason rather than inventing a distinct one.
+            assert edge.second_inset_frac is None
+            assert edge.second_call == CALL_INDETERMINATE_BLACK
         assert result.verdict == VERDICT_INDETERMINATE
 
     def test_uniformity_gate_rejects_a_borderless_cards_own_artwork(self):
@@ -129,6 +205,8 @@ class TestMeasurePinlineInset:
         assert result is not None
         for edge in (result.top, result.bottom, result.left, result.right):
             assert edge.call != CALL_MEASURED
+            assert edge.second_call != CALL_MEASURED
+            assert edge.second_inset_frac is None
         assert result.verdict != VERDICT_MEASURED
 
     def test_degenerate_zero_size_image_abstains_rather_than_raises(self):
@@ -146,4 +224,6 @@ class TestMeasurePinlineInset:
         for edge in (result.top, result.bottom, result.left, result.right):
             assert edge.inset_frac is None
             assert edge.call == CALL_NO_TRANSITION
+            assert edge.second_inset_frac is None
+            assert edge.second_call == CALL_NO_TRANSITION
         assert result.verdict == VERDICT_AMBIGUOUS

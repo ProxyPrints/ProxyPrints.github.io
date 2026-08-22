@@ -63,6 +63,46 @@ TWO GUARDS ARE LOAD-BEARING:
    represents "not measured" as a null `inset_frac` (see `EdgeReading`) so a null read can never
    be mistaken for a measured zero.
 
+THE SECOND TRANSITION. The scan above stops at the first sustained colour departure and reports
+one number. Whether that number is trim-to-pinline inset (the module's own validated reading) or
+something else has been argued at length elsewhere and is not re-litigated here - what this
+module can do without taking a side in that argument is keep scanning PAST the first transition
+for a second one, and report both distances rather than collapsing them into a single number.
+`EdgeReading.second_inset_frac`/`second_call` hold that second reading, same units and same
+per-line-median-then-call shape as the first (`inset_frac`/`call` above) - a fraction of the same
+perpendicular dimension, measured from the image's own edge (not from the first transition), so
+the two fields are directly comparable and a caller can derive either "distance from edge to
+second transition" or "distance between the two transitions" (`second_inset_frac - inset_frac`)
+without this module deciding which one means "padding" and which means "border width".
+
+The second scan reuses `_scan_line`'s own machinery unchanged (`SUSTAIN_RUN_LENGTH`,
+`COLOR_DISTANCE_THRESHOLD`, and the SAME uniformity gate applied to the zone between the two
+transitions rather than between the edge and the first) - see `_scan_second_transition`'s own
+docstring. Two consequences of reusing rather than re-tuning, both exercised in this module's own
+test suite: a text stroke narrower than `SUSTAIN_RUN_LENGTH` pixels can never fill a
+sustained-departure window on its own, so it cannot register as a transition candidate at all -
+but if it sits inside the zone leading up to the REAL boundary further in, it still breaks that
+zone's own uniformity, and the gate abstains (`CALL_NO_TRANSITION`) rather than confidently
+reporting a reading it cannot vouch for. A stroke wide enough to fill the window on its own is NOT
+specially detected; it is indistinguishable from a genuine transition to a pure colour scan, and
+this module does not attempt to solve that (text detection is out of scope here, same as
+everywhere else in this file). This is exactly the failure mode `local_bleed_calculator`'s own
+calibration table already names and works around for the FIRST transition on one specific class -
+its `("black", "2015")` bottom entry abstains because "the 2015 frame's collector-info text line
+reads as a pinline overrun on some cards but not others." A `second_call == CALL_MEASURED` reading
+on an edge/class known to carry collector-line text at this search depth deserves the same
+scepticism a consumer already has to apply to that documented case, not blind trust - this module
+reports the raw measurement and its own call, and leaves the "is this actually the border's far
+edge, or did it stop on text" judgment to whichever future calculator chooses to consume this
+field (deferred, same as every other interpretation question this module raises without
+answering).
+
+When the first transition itself is never found for an edge (`call` is `CALL_INDETERMINATE_BLACK`
+or `CALL_NO_TRANSITION`), no second scan is attempted for that edge at all - `second_inset_frac`
+is `None` and `second_call` is set to the SAME value as `call`. There is nothing about "second"
+that edge's own first-transition failure doesn't already explain, so this avoids inventing a
+fourth call value whose only meaning would be "see the first call instead."
+
 PER-EDGE CALL (from the MEDIAN of that edge's `N_SAMPLE_LINES` readings) describes MEASUREMENT
 QUALITY, not the size of the reading:
   - `CALL_MEASURED`: at least one sample line found a qualifying transition - the median
@@ -126,10 +166,19 @@ class EdgeReading:
     per-line readings, as a fraction of the perpendicular dimension - `None` when no line found a
     transition at all (`call` says why: black-on-black abstention vs. a genuine non-black
     non-read). A null fraction can therefore never be mistaken for a measured zero - see this
-    module's own docstring for why that distinction is load-bearing."""
+    module's own docstring for why that distinction is load-bearing.
+
+    `second_inset_frac`/`second_call` are the SAME shape, one scan further in - see module
+    docstring's "THE SECOND TRANSITION" section. `second_inset_frac` is a fraction of the same
+    perpendicular dimension, measured from the image's own edge (not from the first transition).
+    When `inset_frac` is `None`, no second scan is attempted and `second_call` is set to the same
+    value as `call` - there is nothing about "second" a failed first transition doesn't already
+    explain."""
 
     inset_frac: Optional[float]
     call: str
+    second_inset_frac: Optional[float] = None
+    second_call: str = ""
 
 
 @dataclass(frozen=True)
@@ -162,6 +211,36 @@ def _scan_line(line: "np.ndarray[Any, np.dtype[np.float32]]", cap_px: int) -> Op
     return None
 
 
+def _scan_second_transition(
+    line: "np.ndarray[Any, np.dtype[np.float32]]", first_index: int, cap_px: int
+) -> Optional[int]:
+    """Continues the same scan past an already-found first transition (`first_index`) for a
+    second sustained colour departure. Reference colour is the mean of `SMOOTH_WINDOW` pixels
+    immediately inward of `first_index` (the band's own colour, not the image edge's), and the
+    uniformity gate checks the zone BETWEEN the two transitions (`line[first_index:i]`) rather
+    than between the edge and the first - otherwise identical to `_scan_line`: same
+    `SUSTAIN_RUN_LENGTH`, same `COLOR_DISTANCE_THRESHOLD`, same `UNIFORMITY_STD_THRESHOLD`, bounded
+    by the SAME `cap_px` the first transition used, so total scan depth from the image's own edge
+    never grows past `SEARCH_CAP_FRACTION` regardless of how many transitions are found. Returns
+    None if there isn't room to smooth a reference before the cap, or no qualifying departure is
+    found within it - see module docstring's "THE SECOND TRANSITION" section for what this can and
+    cannot distinguish (a text stroke narrower than `SUSTAIN_RUN_LENGTH` cannot register as a
+    candidate at all; a wider one is not specially detected)."""
+    band_smooth_end = first_index + SMOOTH_WINDOW
+    if band_smooth_end >= cap_px or len(line) <= band_smooth_end + SUSTAIN_RUN_LENGTH:
+        return None
+    reference = line[first_index:band_smooth_end].mean(axis=0)
+    for i in range(band_smooth_end, min(cap_px, len(line) - SUSTAIN_RUN_LENGTH)):
+        window = line[i : i + SUSTAIN_RUN_LENGTH]
+        distance = np.linalg.norm(window - reference, axis=1)
+        if not (distance > COLOR_DISTANCE_THRESHOLD).all():
+            continue
+        zone = line[first_index:i]
+        zone_std = float(zone.std(axis=0).max()) if len(zone) > 1 else 0.0
+        return i if zone_std < UNIFORMITY_STD_THRESHOLD else None
+    return None
+
+
 def _scan_edge(pixels: "np.ndarray[Any, np.dtype[np.uint8]]", side: str) -> EdgeReading:
     """`pixels`: the full (H, W, 3) uint8 array. Walks N_SAMPLE_LINES lines inward from `side`,
     each starting at that edge's own boundary, sampled between LINE_FRACTION_LO and
@@ -178,6 +257,7 @@ def _scan_edge(pixels: "np.ndarray[Any, np.dtype[np.uint8]]", side: str) -> Edge
     positions = [int(edge_length * f) for f in np.linspace(LINE_FRACTION_LO, LINE_FRACTION_HI, N_SAMPLE_LINES)]
     edge_colors = []
     inset_fracs: list[Optional[float]] = []
+    second_fracs: list[Optional[float]] = []
     for position in positions:
         if side == "top":
             line = pixels[:, position, :].astype(np.float32)
@@ -190,6 +270,11 @@ def _scan_edge(pixels: "np.ndarray[Any, np.dtype[np.uint8]]", side: str) -> Edge
         edge_colors.append(line[0:SMOOTH_WINDOW].mean(axis=0))
         transition_index = _scan_line(line, cap_px)
         inset_fracs.append(transition_index / walk_dim if transition_index is not None else None)
+        if transition_index is not None:
+            second_index = _scan_second_transition(line, transition_index, cap_px)
+            second_fracs.append(second_index / walk_dim if second_index is not None else None)
+        else:
+            second_fracs.append(None)
 
     mean_edge_color = np.mean(edge_colors, axis=0)
     is_black = bool(float(mean_edge_color.max()) < BLACK_EDGE_MAX_BRIGHTNESS)
@@ -201,7 +286,23 @@ def _scan_edge(pixels: "np.ndarray[Any, np.dtype[np.uint8]]", side: str) -> Edge
     else:
         call = CALL_MEASURED
 
-    return EdgeReading(inset_frac=median_inset_frac, call=call)
+    if median_inset_frac is None:
+        # No first transition, so no second scan was ever attempted for this edge - propagate the
+        # SAME call rather than inventing a distinct "second unknown" state (module docstring's
+        # "THE SECOND TRANSITION" section).
+        median_second_frac: Optional[float] = None
+        second_call = call
+    else:
+        measured_second = [v for v in second_fracs if v is not None]
+        median_second_frac = float(np.median(measured_second)) if measured_second else None
+        second_call = CALL_MEASURED if median_second_frac is not None else CALL_NO_TRANSITION
+
+    return EdgeReading(
+        inset_frac=median_inset_frac,
+        call=call,
+        second_inset_frac=median_second_frac,
+        second_call=second_call,
+    )
 
 
 def measure_pinline_inset(image: "Image.Image") -> Optional[PinlineInsetResult]:

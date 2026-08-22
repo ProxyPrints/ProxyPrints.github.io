@@ -345,7 +345,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "symbol_region": "symbol-region-v1",
     "legal_line": "legal-line-v2",
     "quality_signals": "quality-signals-v1",
-    "pinline_inset": "pinline-inset-v1",
+    "pinline_inset": "pinline-inset-v2",
 }
 
 

@@ -2778,17 +2778,18 @@ class ImageEvidence(models.Model):
     region, stored the same signed-64-bit-int way.     Null when not yet computed (fetch failure, an
     unclassifiable frame, or a degenerate crop box - see `image_evidence.py`'s module docstring).
 
-    pinline_inset (Stage C pinline-inset measurement, MEASURE-AND-PERSIST-ONLY - no consumer of
-    any kind is built or wired in this PR): four per-edge inset-fraction measurements
-    (`pinline_inset_frac_*`), four per-edge calls (`pinline_inset_call_*`, `local_pinline_
-    inset.CALL_*`), and one whole-image verdict (`pinline_inset_verdict`, `local_pinline_
-    inset.VERDICT_*`) - see `local_pinline_inset.py`'s own module docstring for what the number
-    means, its two guards (the uniformity gate against measuring a borderless card's own artwork,
-    and the black-on-black abstention that keeps an unreadable edge from ever reading as a
-    measured zero), and what it deliberately does not do. Every `*_frac` field is a fraction of
-    the relevant dimension, not a pixel count - `width`/`height` already on this row make pixels
-    trivially derivable, while a fraction stays valid even if a later extraction pass fetches the
-    same upload at a different resolution.
+    pinline_inset (Stage C pinline-inset measurement, MEASURE-AND-PERSIST-ONLY): four per-edge
+    inset-fraction measurements (`pinline_inset_frac_*`), four per-edge calls
+    (`pinline_inset_call_*`, `local_pinline_inset.CALL_*`), one whole-image verdict
+    (`pinline_inset_verdict`, `local_pinline_inset.VERDICT_*`), and the same shape again one scan
+    further in (`pinline_inset_second_frac_*`/`pinline_inset_second_call_*`, the second sustained
+    colour transition past the first) - see `local_pinline_inset.py`'s own module docstring for
+    what each number means, its guards (the uniformity gate against measuring a borderless card's
+    own artwork, and the black-on-black abstention that keeps an unreadable edge from ever reading
+    as a measured zero), and what it deliberately does not do. Every `*_frac` field is a fraction
+    of the relevant dimension, not a pixel count - `width`/`height` already on this row make
+    pixels trivially derivable, while a fraction stays valid even if a later extraction pass
+    fetches the same upload at a different resolution.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="image_evidence")
@@ -2952,6 +2953,21 @@ class ImageEvidence(models.Model):
     # local_pinline_inset.VERDICT_* - measured/ambiguous/indeterminate. Blank-string-as-sentinel
     # for "not yet computed", same convention as the per-edge calls above.
     pinline_inset_verdict = models.CharField(max_length=16, blank=True, default="")
+
+    # pinline_inset_second_* - the SECOND sustained colour transition past pinline_inset_frac_*'s
+    # own first one, same units (fraction of the perpendicular dimension, measured from the
+    # image's own edge) and same null-vs-blank convention. See local_pinline_inset.py's own
+    # module docstring, "THE SECOND TRANSITION" section, for what this measures, why it is stored
+    # alongside rather than replacing the first-transition fields, and its known limitation
+    # against collector-line text on some bottom edges.
+    pinline_inset_second_frac_top = models.FloatField(null=True, blank=True)
+    pinline_inset_second_frac_bottom = models.FloatField(null=True, blank=True)
+    pinline_inset_second_frac_left = models.FloatField(null=True, blank=True)
+    pinline_inset_second_frac_right = models.FloatField(null=True, blank=True)
+    pinline_inset_second_call_top = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_second_call_bottom = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_second_call_left = models.CharField(max_length=24, blank=True, default="")
+    pinline_inset_second_call_right = models.CharField(max_length=24, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

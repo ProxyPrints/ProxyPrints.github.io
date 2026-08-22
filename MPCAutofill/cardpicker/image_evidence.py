@@ -340,10 +340,12 @@ LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v2"
 # engine-independent by construction, same reasoning as symbol_region above.
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
 ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v1"
-# NOT bumped: pinline_inset (local_pinline_inset.measure_pinline_inset) is a pure colour-
-# distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
-# quality_signals above.
-PINLINE_INSET_EXTRACTOR_VERSION = "pinline-inset-v1"
+# v1 -> v2 (dispute-resolution PR: record both colour transitions per edge, not just the first -
+# see local_pinline_inset.py's own "THE SECOND TRANSITION" docstring section): adds the
+# pinline_inset_second_frac_*/pinline_inset_second_call_* fields, which a v1 row has never
+# computed. Bumping forces re-extraction rather than leaving those eight fields permanently null
+# on every already-extracted row. Still engine-independent (no OCR) - not bumped for that reason.
+PINLINE_INSET_EXTRACTOR_VERSION = "pinline-inset-v2"
 
 # PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction): which `ImageEvidence`
 # columns each extractor OWNS - the set `compute_card_evidence`'s carry-forward path copies from a
@@ -396,6 +398,14 @@ EXTRACTOR_OWNED_FIELDS: dict[str, tuple[str, ...]] = {
         "pinline_inset_call_left",
         "pinline_inset_call_right",
         "pinline_inset_verdict",
+        "pinline_inset_second_frac_top",
+        "pinline_inset_second_frac_bottom",
+        "pinline_inset_second_frac_left",
+        "pinline_inset_second_frac_right",
+        "pinline_inset_second_call_top",
+        "pinline_inset_second_call_bottom",
+        "pinline_inset_second_call_left",
+        "pinline_inset_second_call_right",
     ),
 }
 
@@ -1658,6 +1668,14 @@ def compute_card_evidence(
                     fields["pinline_inset_call_left"] = pinline_inset.left.call
                     fields["pinline_inset_call_right"] = pinline_inset.right.call
                     fields["pinline_inset_verdict"] = pinline_inset.verdict
+                    fields["pinline_inset_second_frac_top"] = pinline_inset.top.second_inset_frac
+                    fields["pinline_inset_second_frac_bottom"] = pinline_inset.bottom.second_inset_frac
+                    fields["pinline_inset_second_frac_left"] = pinline_inset.left.second_inset_frac
+                    fields["pinline_inset_second_frac_right"] = pinline_inset.right.second_inset_frac
+                    fields["pinline_inset_second_call_top"] = pinline_inset.top.second_call
+                    fields["pinline_inset_second_call_bottom"] = pinline_inset.bottom.second_call
+                    fields["pinline_inset_second_call_left"] = pinline_inset.left.second_call
+                    fields["pinline_inset_second_call_right"] = pinline_inset.right.second_call
         extractor_versions["pinline_inset"] = PINLINE_INSET_EXTRACTOR_VERSION
 
     if profile is not None:
