@@ -71,6 +71,17 @@ jobs:
         with:
           shard_index: ${{ matrix.shardIndex }}
           shard_total: ${{ matrix.shardTotal }}
+  test-build-and-jest:
+    name: Frontend build & Jest tests
+    runs-on: ubuntu-latest
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/test-frontend
+        with:
+          run_build_and_jest: "true"
+          run_playwright: "false"
   merge-frontend-test-reports:
     name: Merge Playwright reports
     # !cancelled() (not success()) so this still runs - and reports what
@@ -113,7 +124,7 @@ jobs:
     # the identical check on the same push. Removed rather than scoped;
     # the standalone workflow's own status check on the commit still
     # covers formatting, this job no longer waits on it.
-    needs: [test-frontend]
+    needs: [test-frontend, test-build-and-jest]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

@@ -14,6 +14,17 @@ inputs:
     description: Total number of shards
     required: false
     default: "1"
+  run_build_and_jest:
+    description: >-
+      Run `npm run build` and the Jest suite. These carry far more work
+      than a single Playwright shard, so callers run them once, in their
+      own job, rather than folding them into a shard.
+    required: false
+    default: "false"
+  run_playwright:
+    description: Run this shard's slice of the Playwright suite.
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -29,27 +40,28 @@ runs:
       shell: bash
     - name: Compile frontend
       # Playwright's webServer (playwright.config.ts) runs `npm run dev`, not a static-export
-      # serve of this build's output - no shard's Playwright run consumes frontend/out. This
-      # build only exists as a build-succeeds check, so - same as Jest below - it only needs
-      # to run once, on shard 1, not once per shard.
-      if: ${{ inputs.shard_index == '1' }}
+      # serve of this build's output - no Playwright run consumes frontend/out. This build
+      # only exists as a build-succeeds check, so - same as Jest below - the caller runs it
+      # once, via run_build_and_jest, not once per Playwright shard.
+      if: ${{ inputs.run_build_and_jest == 'true' }}
       working-directory: frontend
       run: npm run build
       shell: bash
     - name: Run Jest tests
-      if: ${{ inputs.shard_index == '1' }}
+      if: ${{ inputs.run_build_and_jest == 'true' }}
       working-directory: frontend
       run: |
         npm run test
       shell: bash
     - name: Run Playwright tests
+      if: ${{ inputs.run_playwright == 'true' }}
       run: |
         npx playwright test --shard=${{ inputs.shard_index }}/${{ inputs.shard_total }}
       working-directory: frontend
       shell: bash
     - name: Upload blob report
       uses: actions/upload-artifact@v7
-      if: ${{ !cancelled() }}
+      if: ${{ inputs.run_playwright == 'true' && !cancelled() }}
       with:
         name: blob-report-${{ inputs.shard_index }}
         path: frontend/blob-report/
