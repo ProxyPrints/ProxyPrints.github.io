@@ -1,5 +1,5 @@
 """
-Tests for cardpicker.management.commands.retract_derived_illustration_printing_tags - see that
+Tests for cardpicker.management.commands.reclassify_derived_illustration_printing_tags - see that
 module's own docstring for the pre-#900 bug and the identification method under test here.
 
 Pre-#900 derived rows are constructed directly via `CardPrintingTag.objects.create(...)` /
@@ -17,7 +17,7 @@ from cardpicker.illustration_vote import (
     DERIVED_ARTIST_VOTE_SURFACE,
     DERIVED_PRINTING_VOTE_SURFACE,
 )
-from cardpicker.management.commands.retract_derived_illustration_printing_tags import (
+from cardpicker.management.commands.reclassify_derived_illustration_printing_tags import (
     SIBLING_CORRELATION_WINDOW,
     annotate_would_leave_resolved,
     find_derived_printing_tags,
@@ -76,7 +76,7 @@ class TestFindDerivedPrintingTags:
 
     def test_does_not_select_deduction_sourced_rows(self, db):
         # the #900-fixed shape - a real DEDUCTION vote paired with a DERIVED_ARTIST_VOTE_SURFACE
-        # sibling - must never be selected: this command retracts the MISLABELLED (source=USER)
+        # sibling - must never be selected: this command re-sources the MISLABELLED (source=USER)
         # rows only, never the correctly-cast ones #900 already produces.
         card = CardFactory(name="Brainstorm")
         CardPrintingTagFactory(card=card, anonymous_id="voter-1", source=VoteSource.DEDUCTION)
@@ -95,12 +95,12 @@ class TestFindDerivedPrintingTags:
         assert result.derived == []
         assert result.skipped_ambiguous_ids == []
 
-    def test_later_genuine_resubmission_outside_the_correlation_window_is_skipped_not_retracted(self, db):
+    def test_later_genuine_resubmission_outside_the_correlation_window_is_skipped_not_re_sourced(self, db):
         """A voter derived-voted, then LATER (via the separate, always-explicit printing-tag
         endpoint) submitted a genuine explicit answer for the same (card, anonymous_id) - that
         endpoint's own delete-then-create leaves a source=USER row sharing the pair with the
         original, unrelated CardArtistVote sibling, but created long after it. Must be reported
-        as ambiguous, never retracted - see this command's own module docstring."""
+        as ambiguous, never re-sourced - see this command's own module docstring."""
         card = CardFactory(name="Brainstorm")
         tag, vote = _cast_derived_pair(card, "voter-1")
         # simulate the ORIGINAL derived tag being overwritten by a later genuine explicit
@@ -114,7 +114,7 @@ class TestFindDerivedPrintingTags:
         assert result.derived == []
         assert result.skipped_ambiguous_ids == [tag.pk]
 
-    def test_pair_just_inside_the_window_is_still_retracted(self, db):
+    def test_pair_just_inside_the_window_is_still_re_sourced(self, db):
         card = CardFactory(name="Brainstorm")
         tag, vote = _cast_derived_pair(card, "voter-1")
         nudged_sibling_at = tag.created_at - (SIBLING_CORRELATION_WINDOW - timedelta(seconds=1))
@@ -125,7 +125,7 @@ class TestFindDerivedPrintingTags:
         assert {row.tag_id for row in result.derived} == {tag.pk}
         assert result.skipped_ambiguous_ids == []
 
-    def test_pair_just_outside_the_window_is_skipped_not_retracted(self, db):
+    def test_pair_just_outside_the_window_is_skipped_not_re_sourced(self, db):
         card = CardFactory(name="Brainstorm")
         tag, vote = _cast_derived_pair(card, "voter-1")
         nudged_sibling_at = tag.created_at - (SIBLING_CORRELATION_WINDOW + timedelta(seconds=1))
@@ -136,7 +136,7 @@ class TestFindDerivedPrintingTags:
         assert result.derived == []
         assert result.skipped_ambiguous_ids == [tag.pk]
 
-    def test_pair_at_a_production_observed_latency_is_retracted(self, db):
+    def test_pair_at_a_production_observed_latency_is_re_sourced(self, db):
         """Pins the widened window against a concrete delay on the order of the slowest
         same-transaction gaps actually seen for this population (~17s) - would have been
         wrongly skipped under the pre-widening 5s window this command shipped with."""
@@ -150,14 +150,14 @@ class TestFindDerivedPrintingTags:
         assert {row.tag_id for row in result.derived} == {tag.pk}
         assert result.skipped_ambiguous_ids == []
 
-    def test_is_no_match_escape_vote_within_the_window_is_not_retracted(self, db):
+    def test_is_no_match_escape_vote_within_the_window_is_not_re_sourced(self, db):
         """Pre-#713 (question_feed._voter_answered_printing_card_ids's own docstring), an
         illustration vote that derived ONLY the artist channel (N>1 matching printings - no
         CardPrintingTag written by that same transaction) did not exclude the card from re-serve,
         so the SAME card was served again immediately; production evidence there was an
         is_no_match escape vote within seconds of the artist-vote sibling. That is a genuine
         explicit answer, not a derivation - the derivation can never write is_no_match=True (the
-        model's own printing/is_no_match XOR constraint) - so it must never be retracted, even
+        model's own printing/is_no_match XOR constraint) - so it must never be re-sourced, even
         though it shares (card, anonymous_id) with the sibling and lands inside the correlation
         window."""
         card = CardFactory(name="Brainstorm")
@@ -233,7 +233,7 @@ class TestCommand:
         card = CardFactory(name="Brainstorm")
         derived_tag, _ = _cast_derived_pair(card, "voter-1")
 
-        call_command("retract_derived_illustration_printing_tags")
+        call_command("reclassify_derived_illustration_printing_tags")
 
         derived_tag.refresh_from_db()
         assert derived_tag.source == VoteSource.USER
@@ -254,7 +254,7 @@ class TestCommand:
         )
 
         before_count = CardPrintingTag.objects.count()
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         assert CardPrintingTag.objects.count() == before_count
         derived_tag.refresh_from_db()
@@ -274,7 +274,7 @@ class TestCommand:
         card = CardFactory(name="Brainstorm")
         derived_tag, sibling_vote = _cast_derived_pair(card, "voter-1")
 
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         sibling_vote.refresh_from_db()
         assert sibling_vote.source == VoteSource.USER
@@ -286,7 +286,7 @@ class TestCommand:
         card = CardFactory(name="Forest")
         explicit_tag = CardPrintingTagFactory(card=card, anonymous_id="voter-1", source=VoteSource.USER)
 
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         explicit_tag.refresh_from_db()
         assert explicit_tag.source == VoteSource.USER
@@ -299,7 +299,7 @@ class TestCommand:
         stale_sibling_at = timezone.now() - (SIBLING_CORRELATION_WINDOW + timedelta(days=3))
         CardArtistVote.objects.filter(pk=vote.pk).update(created_at=stale_sibling_at)
 
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         tag.refresh_from_db()
         assert tag.source == VoteSource.USER
@@ -319,7 +319,7 @@ class TestCommand:
             vote_surface="question-feed",
         )
 
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         escape_vote.refresh_from_db()
         assert escape_vote.source == VoteSource.USER
