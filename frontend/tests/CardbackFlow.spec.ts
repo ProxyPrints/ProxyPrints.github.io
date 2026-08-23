@@ -16,6 +16,7 @@ import {
 
 import { test } from "../playwright.setup";
 import {
+  completePdfExportToDisk,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
 } from "./test-utils";
@@ -68,20 +69,16 @@ test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", 
 
     // OWNER AMENDMENT 1 - dismiss (the header's own ✕) is NOT a cancel; it behaves exactly like
     // "Use current & continue" and the export attempt proceeds.
-    const [download] = await Promise.all([
-      page.waitForEvent("download", { timeout: 30_000 }),
-      gate.getByLabel("Close").click(),
-    ]);
+    await gate.getByLabel("Close").click();
+    const download = await completePdfExportToDisk(page);
     expect(download.suggestedFilename()).toBe("cards.pdf");
 
     // CB1: at most once per session, so a second export attempt (same tab/session, no reload -
     // the suppression key is keyed on project identity, not project CONTENT, so the still-live
     // project is still covered by it) shows no gate at all.
-    const [secondDownload] = await Promise.all([
-      page.waitForEvent("download", { timeout: 30_000 }),
-      clickExportPDFDownload(),
-    ]);
+    await clickExportPDFDownload();
     await expect(page.getByTestId("pre-print-cardback-gate")).toHaveCount(0);
+    const secondDownload = await completePdfExportToDisk(page);
     expect(secondDownload.suggestedFilename()).toBe("cards.pdf");
   });
 
@@ -104,12 +101,10 @@ test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", 
     // modal mount is gone); a pick proceeds with the export (OWNER AMENDMENT 1 still applies).
     const gateStrip = gate.getByTestId("cardback-gate-strip");
     await expect(gateStrip).toBeVisible();
-    const [download] = await Promise.all([
-      page.waitForEvent("download", { timeout: 30_000 }),
-      gateStrip.getByAltText(cardDocument2.name).click(),
-    ]);
-    expect(download.suggestedFilename()).toBe("cards.pdf");
+    await gateStrip.getByAltText(cardDocument2.name).click();
     await expect(gate).toHaveCount(0);
+    const download = await completePdfExportToDisk(page);
+    expect(download.suggestedFilename()).toBe("cards.pdf");
   });
 });
 

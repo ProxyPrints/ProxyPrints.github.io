@@ -15,6 +15,7 @@ import {
 
 import { test } from "../playwright.setup";
 import {
+  completePdfExportToDisk,
   expandRailSection,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
@@ -84,6 +85,7 @@ const clickDownload = async (page: import("@playwright/test").Page) => {
     .getByTestId("cardback-gate-use-current")
     .click({ timeout: 3_000 })
     .catch(() => {});
+  return completePdfExportToDisk(page);
 };
 
 const readNumPages = async (buffer: Buffer): Promise<number> => {
@@ -92,7 +94,7 @@ const readNumPages = async (buffer: Buffer): Promise<number> => {
 };
 
 test.describe("DisplayExportPDF - Save PDF to Google Drive (rescued from /print's PDFGenerator.tsx)", () => {
-  test("the Drive button is absent when Drive isn't configured (this suite's own env), matching PDFGenerator.tsx's own isGoogleDriveAppConfigured() gate", async ({
+  test("the Save to Google Drive action is absent when Drive isn't configured (this suite's own env), matching the old isGoogleDriveAppConfigured() gate", async ({
     page,
     network,
   }) => {
@@ -101,11 +103,20 @@ test.describe("DisplayExportPDF - Save PDF to Google Drive (rescued from /print'
     await importTextOnEditorLanding(page, "1x my search query");
 
     await openExportMenu(page);
+    await page.getByTestId("display-export-pdf-button").click();
+    await page
+      .getByTestId("pre-print-cardback-gate")
+      .getByTestId("cardback-gate-use-current")
+      .click({ timeout: 3_000 })
+      .catch(() => {});
+
+    // Absent rather than broken - Save to disk is still the sole, working destination.
     await expect(
-      page.getByTestId("display-export-pdf-drive-button")
+      page.getByTestId("display-export-pdf-save-disk-button")
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      page.getByTestId("display-export-pdf-save-drive-button")
     ).toHaveCount(0);
-    // Absent rather than broken - the PDF item is still the sole, working action.
-    await expect(page.getByTestId("display-export-pdf-button")).toBeVisible();
   });
 });
 
@@ -138,17 +149,15 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     // Rail control now, in the same "Export" section.
     await page.getByTestId("display-page-range-start").fill("1");
     await page.getByTestId("display-page-range-end").fill("1");
-    const download1 = page.waitForEvent("download");
-    await clickDownload(page);
-    const path1 = await (await download1).path();
+    const download1 = await clickDownload(page);
+    const path1 = await download1.path();
     if (!path1) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(path1))).toBe(1);
 
     await page.getByTestId("display-page-range-start").fill("");
     await page.getByTestId("display-page-range-end").fill("");
-    const download2 = page.waitForEvent("download");
-    await clickDownload(page);
-    const path2 = await (await download2).path();
+    const download2 = await clickDownload(page);
+    const path2 = await download2.path();
     if (!path2) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(path2))).toBe(2);
   });
@@ -163,9 +172,8 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     // + Backs" (the default) has 10 real fronts across 2 pages. A real, opposite-end difference.
     await importTextOnEditorLanding(page, "10x my search query");
 
-    const defaultDownload = page.waitForEvent("download");
-    await clickDownload(page);
-    const defaultPath = await (await defaultDownload).path();
+    const defaultDownload = await clickDownload(page);
+    const defaultPath = await defaultDownload.path();
     if (!defaultPath) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(defaultPath))).toBe(2);
 
@@ -173,9 +181,8 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await page
       .getByTestId("display-card-selection-mode")
       .selectOption("backsOnly");
-    const backsOnlyDownload = page.waitForEvent("download");
-    await clickDownload(page);
-    const backsOnlyPath = await (await backsOnlyDownload).path();
+    const backsOnlyDownload = await clickDownload(page);
+    const backsOnlyPath = await backsOnlyDownload.path();
     if (!backsOnlyPath) throw new Error("Download path is null");
     // PDF.tsx's own fallback for zero paginated pages ([[]]) - a single essentially-empty page,
     // not the 2 real pages the fronts produced.
@@ -208,9 +215,8 @@ test.describe("DisplayExportPDF - editor export controls", () => {
         IMAGE_WORKER_URL_PATTERN.test(request.url()) &&
         request.url().includes("/full/")
     );
-    const downloadPromise = page.waitForEvent("download");
     await clickDownload(page);
-    const [request] = await Promise.all([requestPromise, downloadPromise]);
+    const request = await requestPromise;
 
     const requestUrl = new URL(request.url());
     expect(requestUrl.searchParams.get("dpi")).toBe("100");
@@ -298,16 +304,14 @@ test.describe("DisplayExportPDF - page cut guide lines (rail)", () => {
     // Matches /print's PDFGenerator.tsx own default.
     await expect(pageCutLines).toBeChecked();
 
-    const onDownload = page.waitForEvent("download");
-    await clickDownload(page);
-    const onPath = await (await onDownload).path();
+    const onDownload = await clickDownload(page);
+    const onPath = await onDownload.path();
     if (!onPath) throw new Error("Download path is null");
     const onOps = await countPageOneDrawOps(readFileSync(onPath));
 
     await pageCutLines.uncheck();
-    const offDownload = page.waitForEvent("download");
-    await clickDownload(page);
-    const offPath = await (await offDownload).path();
+    const offDownload = await clickDownload(page);
+    const offPath = await offDownload.path();
     if (!offPath) throw new Error("Download path is null");
     const offOps = await countPageOneDrawOps(readFileSync(offPath));
 
@@ -366,17 +370,15 @@ test.describe("DisplayExportPDF - SCM cutting mode (rail)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "10x my search query");
 
-    const standardDownload = page.waitForEvent("download");
-    await clickDownload(page);
-    const standardPath = await (await standardDownload).path();
+    const standardDownload = await clickDownload(page);
+    const standardPath = await standardDownload.path();
     if (!standardPath) throw new Error("Download path is null");
     const standardPages = await readNumPages(readFileSync(standardPath));
 
     // Rail control.
     await page.getByTestId("display-scm-mode-switch").check();
-    const scmDownload = page.waitForEvent("download");
-    await clickDownload(page);
-    const scmPath = await (await scmDownload).path();
+    const scmDownload = await clickDownload(page);
+    const scmPath = await scmDownload.path();
     if (!scmPath) throw new Error("Download path is null");
     const scmPages = await readNumPages(readFileSync(scmPath));
 
@@ -482,9 +484,8 @@ test.describe("DisplayExportPDF - advanced page-margin override", () => {
     // fixture the "editor export controls" describe block's own page-count tests use).
     await importTextOnEditorLanding(page, "10x my search query");
 
-    const baselineDownload = page.waitForEvent("download");
-    await clickDownload(page);
-    const baselinePath = await (await baselineDownload).path();
+    const baselineDownload = await clickDownload(page);
+    const baselinePath = await baselineDownload.path();
     if (!baselinePath) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(baselinePath))).toBe(2);
 
@@ -495,9 +496,8 @@ test.describe("DisplayExportPDF - advanced page-margin override", () => {
     await page.getByTestId("display-margin-override-left").fill("100");
     await page.getByTestId("display-margin-override-right").fill("100");
 
-    const overriddenDownload = page.waitForEvent("download");
-    await clickDownload(page);
-    const overriddenPath = await (await overriddenDownload).path();
+    const overriddenDownload = await clickDownload(page);
+    const overriddenPath = await overriddenDownload.path();
     if (!overriddenPath) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(overriddenPath))).toBeGreaterThan(2);
   });
@@ -518,9 +518,8 @@ test.describe("DisplayExportPDF - Custom page size (rail)", () => {
     await page.getByTestId("display-page-range-start").fill("1");
     await page.getByTestId("display-page-range-end").fill("1");
 
-    const download = page.waitForEvent("download");
-    await clickDownload(page);
-    const downloadPath = await (await download).path();
+    const download = await clickDownload(page);
+    const downloadPath = await download.path();
     if (!downloadPath) throw new Error("Download path is null");
 
     const doc = await getDocument({

@@ -79,9 +79,10 @@ export function wasMostRecentCardsPdfDownloadSuccessful(
   return mostRecent.status === "success";
 }
 
-/** `useDownloadPDF`'s returned function ultimately resolves `void` (its own `useDoFileDownload`
- * wrapper swallows the inner success boolean to drive the download-manager UI instead - see
- * `download.ts`), so callers that need to know whether THIS click's download actually succeeded
+/** `useDoFileDownload`'s returned function (DisplayExportPDF.tsx calls it directly for both Save
+ * to disk and Save to Drive) ultimately resolves `void` - it swallows the inner success boolean
+ * to drive the download-manager UI instead (see `download.ts`) - so callers that need to know
+ * whether THIS click's download actually succeeded
  * read it back out of the same `fileDownloads` redux slice the download manager itself already
  * populates, rather than threading a new return value through a hook five unrelated download
  * flows (XML/image/decklist/desktop-tool exports) also share. `store.getState()` outside a hook

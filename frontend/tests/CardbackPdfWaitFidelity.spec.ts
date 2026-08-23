@@ -12,10 +12,11 @@ import {
 
 import { test } from "../playwright.setup";
 import {
-  clickExportPDFDownload,
+  completePdfExportToDisk,
   ensureDisplayRightRailOpen,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDisplayExportMenu,
 } from "./test-utils";
 
 /**
@@ -76,7 +77,8 @@ for (const viewport of [
       await loadPageWithDefaultBackend(page);
       await importTextOnEditorLanding(page, "my search query");
 
-      await clickExportPDFDownload(page);
+      await openDisplayExportMenu(page);
+      await page.getByTestId("display-export-pdf-button").click();
       const gate = page.getByTestId("pre-print-cardback-gate");
       await expect(gate).toBeVisible();
       // :hover is coordinate-based - the real cursor is still resting wherever the PDF dropdown
@@ -109,10 +111,8 @@ for (const viewport of [
         "rgb(255, 158, 100)"
       );
 
-      const [download] = await Promise.all([
-        page.waitForEvent("download", { timeout: 30_000 }),
-        gate.getByTestId("cardback-gate-use-current").click(),
-      ]);
+      await gate.getByTestId("cardback-gate-use-current").click();
+      const download = await completePdfExportToDisk(page);
       expect(download.suggestedFilename()).toBe("cards.pdf");
 
       // --- E.2, both entries: reopen the editor and drive the toolbar apply prompt. ---

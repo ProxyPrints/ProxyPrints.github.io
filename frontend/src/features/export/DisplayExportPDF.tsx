@@ -7,35 +7,36 @@
  * already looking at makes redundant.
  *
  * Props come from `displayPdfProps.ts`'s `useDisplayPDFProps` - the one adapter from this page's
- * live sheet settings to the `PDFProps` shape `PDF.tsx` already consumes. The actual download and
- * Google Drive save are `pdfDownload.tsx`'s `useDownloadPDF`/`useSaveToDrivePDF`, the exact same
- * hooks `/print`'s `PDFGenerator.tsx` uses for its own Download/Save-to-Drive buttons (the Drive
- * button is gated behind the same `isGoogleDriveAppConfigured()` check that file uses). Nothing
- * about the render pipeline is forked; only the source of its props and the trigger UI differ.
- * Both buttons run through `runExportGate` (`usePrePrintSaveGate.startPrintFlow`, threaded down
- * from `DisplayPage.tsx` via `FinishFooter`/`DisplayExportMenu`) before the actual export starts -
- * the draft-flush, cardback-reminder, and save-before-export gate that used to run only ahead of
- * a `/print` navigation.
+ * live sheet settings to the `PDFProps` shape `PDF.tsx` already consumes.
  *
- * Every export-time setting this component once held in its own settings dialog - Silhouette/SCM
- * cutting mode, image DPI/JPG quality, corner rounding, the guide colour/length/thickness/offset/
- * crosshair controls, the page-level guillotine cut guide lines, card selection mode, page range,
- * and the advanced per-side page-margin override - has migrated OUT into the right rail, where
- * each one is editable next to the live sheet it governs - see `displayPdfProps.ts`'s
- * `DisplaySheetExportSettings` for where every migrated field lives now. With nothing left to
- * configure, the dialog itself is gone: PDF/Save-to-Drive are two direct dropdown actions that go
- * straight from click to the generating-progress/failure modals below, the same way the sibling
- * XML/Card Images/Decklist items work.
+ * Generation and destination are two independent steps (`pdfDownload.tsx`'s own module comment):
+ * clicking "PDF" only renders - it decides nothing about where the file goes. Once the render
+ * settles, this component's own progress/ready modal offers "Save to disk" and, when Google
+ * Drive is configured, "Save to Google Drive" on the SAME blob; picking either one never
+ * re-renders. Both buttons still run through `runExportGate` (`usePrePrintSaveGate.startPrintFlow`,
+ * threaded down from `DisplayPage.tsx` via `FinishFooter`/`DisplayExportMenu`) before generation
+ * starts - the draft-flush, cardback-reminder, and save-before-export gate that used to run only
+ * ahead of a `/print` navigation.
+ *
+ * Dismissing the progress/ready modal (its own header close button, distinct from the disabled
+ * backdrop/Escape dismissal below) never cancels the render - it moves the whole thing into
+ * `PdfExportQueuePanel`, a small bottom-right corner surface the user can reopen, save from, or
+ * cancel outright. The panel's OWN close button is the real removal action (cancel while
+ * rendering, discard while ready) - see its own module comment for why the two X buttons mean
+ * different things at different levels.
  */
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import Button from "react-bootstrap/Button";
 import Dropdown from "react-bootstrap/Dropdown";
 import Modal from "react-bootstrap/Modal";
 import { createPortal } from "react-dom";
 
 import { useAppDispatch, useAppSelector } from "@/common/types";
-import { RightPaddedIcon } from "@/components/icon";
+import { Icon, RightPaddedIcon } from "@/components/icon";
 import { Spinner } from "@/components/Spinner";
 import { useClientSearchContext } from "@/features/clientSearch/clientSearchContext";
+import { useDoFileDownload } from "@/features/download/download";
+import { PdfExportQueuePanel } from "@/features/export/PdfExportQueuePanel";
 import { PostExportContributionPrompt } from "@/features/export/PostExportContributionPrompt";
 import { wasLatestCardsPdfDownloadSuccessful } from "@/features/export/postExportContributionPrompt";
 import { usePostExportContributionPrompt } from "@/features/export/usePostExportContributionPrompt";
@@ -47,12 +48,14 @@ import {
 import {
   ConfirmDespiteFailures,
   ImageFailureConfirmModal,
-  useDownloadPDF,
-  useSaveToDrivePDF,
+  renderCardsPdf,
+  saveCardsPdfToDisk,
+  saveCardsPdfToDrive,
 } from "@/features/pdf/pdfDownload";
 import { ImageFetchFailure } from "@/features/pdf/pdfImage";
 import {
   derivePDFWaitPhase,
+  PDFImageFetchProgress,
   PDFProgressBox,
   PDFWaitGameEmbed,
 } from "@/features/pdf/PDFWaitPanel";
@@ -63,10 +66,15 @@ export interface DisplayExportPDFProps {
   sheetSettings: DisplaySheetExportSettings;
   /** `usePrePrintSaveGate.startPrintFlow` - runs the draft-flush/cardback-reminder/save-before-
    * export gate sequence, then calls the proceed callback given to it. Wraps this component's own
-   * Download/Save-to-Drive buttons so that sequence still runs on every export, now that the
-   * Finish footer no longer routes anywhere to reach it (see FinishFooter.tsx's own comment). */
+   * PDF generation button so that sequence still runs on every export, now that the Finish
+   * footer no longer routes anywhere to reach it (see FinishFooter.tsx's own comment). */
   runExportGate: (proceed: () => void) => void;
 }
+
+type Phase =
+  | { kind: "idle" }
+  | { kind: "rendering"; imageFetchProgress: PDFImageFetchProgress | null }
+  | { kind: "ready"; blob: Blob };
 
 export function DisplayExportPDF({
   sheetSettings,
@@ -76,15 +84,24 @@ export function DisplayExportPDF({
   const isProjectEmpty = useAppSelector(selectIsProjectEmpty);
   const backendURL = useAppSelector(selectRemoteBackendURL);
   const { clientSearchService } = useClientSearchContext();
+  const driveConfigured = isGoogleDriveAppConfigured();
 
   const pdfProps = useDisplayPDFProps(sheetSettings);
 
-  const [isDownloading, setIsDownloading] = useState<boolean>(false);
-  const [isSavingToDrive, setIsSavingToDrive] = useState<boolean>(false);
-  const [imageFetchProgress, setImageFetchProgress] = useState<{
-    completed: number;
-    total: number;
-  } | null>(null);
+  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  // Minimized to the corner queue panel rather than showing the blocking modal - see the module
+  // comment for the two-levels-of-dismissal split. Never implies cancellation on its own.
+  const [backgrounded, setBackgrounded] = useState(false);
+  // Only true while there's an in-flight worker call left to actually cancel - see
+  // renderCardsPdf's own onRenderSettled comment.
+  const [canCancel, setCanCancel] = useState(false);
+  const cancelRef = useRef<(() => void) | null>(null);
+
+  const [isSavingToDisk, setIsSavingToDisk] = useState(false);
+  const [isSavingToDrive, setIsSavingToDrive] = useState(false);
+  const doSaveToDisk = useDoFileDownload();
+  const doSaveToDrive = useDoFileDownload();
+
   const [pendingFailureConfirm, setPendingFailureConfirm] = useState<{
     failures: Array<ImageFetchFailure>;
     resolve: (value: boolean) => void;
@@ -92,92 +109,180 @@ export function DisplayExportPDF({
   const confirmDespiteFailures: ConfirmDespiteFailures = (failures) =>
     new Promise((resolve) => setPendingFailureConfirm({ failures, resolve }));
 
-  const generating = isDownloading || isSavingToDrive;
-  const waitPhase = derivePDFWaitPhase(generating, imageFetchProgress);
   const contributionPrompt = usePostExportContributionPrompt();
 
-  const downloadPDF = useDownloadPDF(
-    pdfProps,
-    clientSearchService,
-    dispatch,
-    setIsDownloading,
-    backendURL,
-    setImageFetchProgress,
-    confirmDespiteFailures
+  const waitPhase = derivePDFWaitPhase(
+    phase.kind === "rendering",
+    phase.kind === "rendering" ? phase.imageFetchProgress : null
   );
 
-  // Reuses the exact same shared hook /print's PDFGenerator.tsx uses for its own "Save PDF to
-  // Google Drive" button - no forked upload logic, see pdfDownload.tsx's own module comment.
-  const saveToDrive = useSaveToDrivePDF(
-    pdfProps,
-    clientSearchService,
-    dispatch,
-    setIsSavingToDrive,
-    backendURL,
-    setImageFetchProgress,
-    confirmDespiteFailures
+  const startGeneration = () => {
+    setPhase({ kind: "rendering", imageFetchProgress: null });
+    setCanCancel(true);
+    const { outcome, cancel } = renderCardsPdf(
+      pdfProps,
+      clientSearchService,
+      dispatch,
+      backendURL,
+      (imageFetchProgress) =>
+        setPhase((prev) =>
+          prev.kind === "rendering" ? { ...prev, imageFetchProgress } : prev
+        ),
+      confirmDespiteFailures,
+      () => setCanCancel(false)
+    );
+    cancelRef.current = cancel;
+    outcome.then((result) => {
+      cancelRef.current = null;
+      if (result.status === "ready") {
+        setPhase({ kind: "ready", blob: result.blob });
+      } else {
+        setPhase({ kind: "idle" });
+        setBackgrounded(false);
+      }
+    });
+  };
+
+  const closeAndReset = () => {
+    setPhase({ kind: "idle" });
+    setBackgrounded(false);
+  };
+
+  // The queue panel's own close button - a real removal, not a minimize. Cancels the in-flight
+  // worker call if there's one left to cancel; otherwise (nothing running, or the failure-
+  // confirm modal already owns the decision) it's a plain discard.
+  const discardOrCancel = () => {
+    if (phase.kind === "rendering") {
+      if (canCancel) {
+        cancelRef.current?.();
+      }
+      return;
+    }
+    closeAndReset();
+  };
+
+  const handleSaveToDisk = () => {
+    if (phase.kind !== "ready") {
+      return;
+    }
+    const { blob } = phase;
+    setIsSavingToDisk(true);
+    doSaveToDisk("pdf", "cards.pdf", () =>
+      saveCardsPdfToDisk(blob, clientSearchService)
+    )
+      .then(() => {
+        if (wasLatestCardsPdfDownloadSuccessful()) {
+          contributionPrompt.notifyExportSucceeded();
+        }
+      })
+      .finally(() => {
+        setIsSavingToDisk(false);
+        closeAndReset();
+      });
+  };
+
+  const handleSaveToDrive = () => {
+    if (phase.kind !== "ready") {
+      return;
+    }
+    const { blob } = phase;
+    setIsSavingToDrive(true);
+    doSaveToDrive("pdf", "cards.pdf", () => saveCardsPdfToDrive(blob))
+      .then(() => {
+        if (wasLatestCardsPdfDownloadSuccessful()) {
+          contributionPrompt.notifyExportSucceeded();
+        }
+      })
+      .finally(() => {
+        setIsSavingToDrive(false);
+        closeAndReset();
+      });
+  };
+
+  const readyBlobActions = (
+    <div className="d-grid gap-2 mt-3">
+      <Button
+        variant="primary"
+        disabled={isSavingToDisk || isSavingToDrive}
+        onClick={handleSaveToDisk}
+        data-testid="display-export-pdf-save-disk-button"
+      >
+        {isSavingToDisk ? <Spinner size={1} /> : "Save to disk"}
+      </Button>
+      {driveConfigured && (
+        <Button
+          variant="outline-primary"
+          disabled={isSavingToDisk || isSavingToDrive}
+          onClick={handleSaveToDrive}
+          data-testid="display-export-pdf-save-drive-button"
+        >
+          {isSavingToDrive ? <Spinner size={1} /> : "Save to Google Drive"}
+        </Button>
+      )}
+    </div>
   );
 
   return (
     <>
       <Dropdown.Item
-        disabled={isProjectEmpty || isDownloading || isSavingToDrive}
+        disabled={isProjectEmpty || phase.kind !== "idle"}
         data-testid="display-export-pdf-button"
         onClick={() => {
-          runExportGate(() => {
-            downloadPDF().then(() => {
-              if (wasLatestCardsPdfDownloadSuccessful()) {
-                contributionPrompt.notifyExportSucceeded();
-              }
-            });
-          });
+          runExportGate(() => startGeneration());
         }}
       >
         <RightPaddedIcon bootstrapIconName="file-pdf" />
-        {isDownloading ? <Spinner size={1} /> : "PDF"}
+        {phase.kind === "rendering" ? <Spinner size={1} /> : "PDF"}
       </Dropdown.Item>
-      {isGoogleDriveAppConfigured() && (
-        <Dropdown.Item
-          disabled={isProjectEmpty || isDownloading || isSavingToDrive}
-          data-testid="display-export-pdf-drive-button"
-          onClick={() => {
-            runExportGate(() => {
-              saveToDrive().then((succeeded) => {
-                if (succeeded === true) {
-                  contributionPrompt.notifyExportSucceeded();
-                }
-              });
-            });
-          }}
-        >
-          <RightPaddedIcon bootstrapIconName="cloud-upload" />
-          {isSavingToDrive ? <Spinner size={1} /> : "Save PDF to Google Drive"}
-        </Dropdown.Item>
-      )}
-      {/* Blocks interaction (static backdrop, no keyboard/close dismiss) for the render's actual
-          duration - the same click-again impulse issue #811 describes has nowhere to land while
-          this is up. Shown purely off `generating`, so it clears itself the instant the render
-          settles (success, cancellation, or error) with no separate "done" state to dismiss. */}
+      {/* Blocks interaction (static backdrop, no keyboard/close dismiss) - the click-again
+          impulse issue #811 describes has nowhere to land while this is up. Its own header close
+          button is the one way out, and it always minimizes to PdfExportQueuePanel rather than
+          cancelling or discarding anything - see the module comment. */}
       <Modal
-        show={generating}
+        show={phase.kind !== "idle" && !backgrounded}
         backdrop="static"
         keyboard={false}
         onHide={() => undefined}
         data-testid="display-export-pdf-progress-modal"
       >
         <Modal.Header>
-          <Modal.Title>Generating your PDF</Modal.Title>
+          <Modal.Title>
+            {phase.kind === "ready"
+              ? "Your PDF is ready"
+              : "Generating your PDF"}
+          </Modal.Title>
+          <Button
+            variant="link"
+            className="p-0 ms-auto text-muted"
+            aria-label="Continue in background"
+            onClick={() => setBackgrounded(true)}
+            data-testid="display-export-pdf-minimize-button"
+          >
+            <Icon bootstrapIconName="dash-square" />
+          </Button>
         </Modal.Header>
         <Modal.Body>
-          <PDFProgressBox
-            phase={waitPhase}
-            imageFetchProgress={imageFetchProgress}
-          />
-          {(waitPhase === "fetching" || waitPhase === "assembling") && (
-            <PDFWaitGameEmbed
-              phase={waitPhase}
-              imageFetchProgress={imageFetchProgress}
-            />
+          {phase.kind === "rendering" && (
+            <>
+              <PDFProgressBox
+                phase={waitPhase}
+                imageFetchProgress={phase.imageFetchProgress}
+              />
+              {(waitPhase === "fetching" || waitPhase === "assembling") && (
+                <PDFWaitGameEmbed
+                  phase={waitPhase}
+                  imageFetchProgress={phase.imageFetchProgress}
+                />
+              )}
+            </>
+          )}
+          {phase.kind === "ready" && (
+            <>
+              <p className="mb-0">
+                Choose where to save <code>cards.pdf</code>.
+              </p>
+              {readyBlobActions}
+            </>
           )}
         </Modal.Body>
       </Modal>
@@ -199,7 +304,9 @@ export function DisplayExportPDF({
           .tsx's own FloatFiltersPortalRoot comment documents for a sibling case. Bottom-LEFT
           (`start`), matching Toasts.tsx's own sitewide `position="bottom-start"` convention -
           the editor's own Export controls live in the right rail, so a bottom-right placement
-          would sit on top of them for the rest of the session (the prompt has no auto-hide). */}
+          would sit on top of them for the rest of the session (the prompt has no auto-hide) -
+          and PdfExportQueuePanel below deliberately claims that bottom-right corner instead, so
+          the two never collide. */}
       {contributionPrompt.visible &&
         typeof document !== "undefined" &&
         createPortal(
@@ -211,6 +318,37 @@ export function DisplayExportPDF({
             <PostExportContributionPrompt
               show={contributionPrompt.visible}
               onDismiss={contributionPrompt.dismiss}
+            />
+          </div>,
+          document.body
+        )}
+      {backgrounded &&
+        phase.kind !== "idle" &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="position-fixed bottom-0 end-0 p-3"
+            style={{ zIndex: 1080 }}
+            data-testid="pdf-export-queue-container"
+          >
+            <PdfExportQueuePanel
+              state={
+                phase.kind === "rendering"
+                  ? {
+                      kind: "rendering",
+                      imageFetchProgress: phase.imageFetchProgress,
+                    }
+                  : { kind: "ready" }
+              }
+              canCancel={phase.kind === "rendering" && canCancel}
+              driveConfigured={driveConfigured}
+              isSavingToDisk={isSavingToDisk}
+              isSavingToDrive={isSavingToDrive}
+              onExpand={() => setBackgrounded(false)}
+              onCancel={() => cancelRef.current?.()}
+              onDiscard={discardOrCancel}
+              onSaveToDisk={handleSaveToDisk}
+              onSaveToDrive={handleSaveToDrive}
             />
           </div>,
           document.body

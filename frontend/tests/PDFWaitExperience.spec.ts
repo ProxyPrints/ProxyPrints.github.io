@@ -97,30 +97,40 @@ test.describe("PDF-generation wait experience (issue #811)", () => {
     const progressModal = page.getByTestId("display-export-pdf-progress-modal");
     await expect(progressModal).not.toBeVisible();
 
+    await clickDownload(page);
+
+    // Appears promptly - well before the ~3s artificial image delay resolves, not after.
+    await expect(progressModal).toBeVisible({ timeout: 2_000 });
+    const progressBox = progressModal.getByTestId("pdf-progress");
+    await expect(progressBox).toContainText("Fetching images", {
+      timeout: 1_000,
+    });
+
+    // react-bootstrap's ProgressBar puts role="progressbar"/aria-valuenow on the INNER bar
+    // element, not the outer data-testid'd wrapper.
+    const bar = progressBox.getByRole("progressbar");
+    await expect(bar).toHaveAttribute("aria-valuenow", /\d+/);
+    const valueNow = await bar.getAttribute("aria-valuenow");
+    // The determinate bar never claims a false 100% mid-fetch.
+    expect(Number(valueNow)).toBeLessThanOrEqual(99);
+
+    // Rendering settles into the ready state (destination chosen after generation, not before -
+    // DisplayExportPDF.tsx's own module comment) - picking a destination is what actually
+    // produces the browser download.
+    const saveToDiskButton = progressModal.getByTestId(
+      "display-export-pdf-save-disk-button"
+    );
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       (async () => {
-        await clickDownload(page);
-
-        // Appears promptly - well before the ~3s artificial image delay resolves, not after.
-        await expect(progressModal).toBeVisible({ timeout: 2_000 });
-        const progressBox = progressModal.getByTestId("pdf-progress");
-        await expect(progressBox).toContainText("Fetching images", {
-          timeout: 1_000,
-        });
-
-        // react-bootstrap's ProgressBar puts role="progressbar"/aria-valuenow on the INNER bar
-        // element, not the outer data-testid'd wrapper.
-        const bar = progressBox.getByRole("progressbar");
-        await expect(bar).toHaveAttribute("aria-valuenow", /\d+/);
-        const valueNow = await bar.getAttribute("aria-valuenow");
-        // The determinate bar never claims a false 100% mid-fetch.
-        expect(Number(valueNow)).toBeLessThanOrEqual(99);
+        await saveToDiskButton.waitFor({ state: "visible", timeout: 30_000 });
+        await saveToDiskButton.click();
       })(),
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");
 
-    // Reaches completion and clears - no lingering "done" state to dismiss.
+    // Reaches completion and clears once a destination is chosen - no lingering state once the
+    // user has actually saved it somewhere.
     await expect(progressModal).not.toBeVisible();
   });
 
@@ -151,28 +161,34 @@ test.describe("PDF-generation wait experience (issue #811)", () => {
     await expect(page.getByTestId("pdf-wait-game")).toHaveCount(0);
     await expect(page.getByTestId("question-feed")).toHaveCount(0);
 
+    await clickDownload(page);
+
+    const embed = page.getByTestId("pdf-wait-game");
+    await expect(embed).toBeVisible({ timeout: 2_000 });
+    // The real, unforked QuestionFeed.
+    await expect(embed.getByTestId("question-feed")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(embed.getByTestId("pdf-wait-game-ribbon")).toBeVisible();
+    await expect(embed.getByTestId("pdf-wait-game-ribbon")).toContainText(
+      "Building your PDF"
+    );
+
+    // Torn down on finish - the render settling into the ready state unmounts the game (and
+    // QuestionFeed with it) entirely, before any destination is even chosen.
+    await expect(page.getByTestId("pdf-wait-game")).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await expect(page.getByTestId("question-feed")).toHaveCount(0);
+
+    const saveToDiskButton = page.getByTestId(
+      "display-export-pdf-save-disk-button"
+    );
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      (async () => {
-        await clickDownload(page);
-
-        const embed = page.getByTestId("pdf-wait-game");
-        await expect(embed).toBeVisible({ timeout: 2_000 });
-        // The real, unforked QuestionFeed.
-        await expect(embed.getByTestId("question-feed")).toBeVisible({
-          timeout: 15_000,
-        });
-        await expect(embed.getByTestId("pdf-wait-game-ribbon")).toBeVisible();
-        await expect(embed.getByTestId("pdf-wait-game-ribbon")).toContainText(
-          "Building your PDF"
-        );
-      })(),
+      saveToDiskButton.click(),
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");
-
-    // Torn down on finish - the game (and QuestionFeed with it) unmounts entirely.
-    await expect(page.getByTestId("pdf-wait-game")).toHaveCount(0);
-    await expect(page.getByTestId("question-feed")).toHaveCount(0);
   });
 
   test("an image that fails to fetch surfaces a confirmation instead of silently stalling the bar", async ({
@@ -235,9 +251,16 @@ test.describe("PDF-generation wait experience (issue #811)", () => {
       page.getByTestId("post-export-contribution-prompt")
     ).toHaveCount(0);
 
+    await clickDownload(page);
+    const saveToDiskButton = page.getByTestId(
+      "display-export-pdf-save-disk-button"
+    );
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      clickDownload(page),
+      (async () => {
+        await saveToDiskButton.waitFor({ state: "visible", timeout: 30_000 });
+        await saveToDiskButton.click();
+      })(),
     ]);
     expect(download.suggestedFilename()).toBe("cards.pdf");
 
@@ -247,5 +270,134 @@ test.describe("PDF-generation wait experience (issue #811)", () => {
     await expect(
       page.getByTestId("post-export-contribution-prompt-link")
     ).toHaveAttribute("href", "/whatsthat");
+  });
+});
+
+// Waiting-surface actions round - PdfExportQueuePanel.tsx, the bottom-right corner surface a
+// dismissed progress/ready modal minimizes into (DisplayExportPDF.tsx's own module comment).
+// Reuses this file's own delayed image-worker fixture so the render stays in flight long enough
+// to interact with mid-generation.
+test.describe("PDF export queue panel (waiting-surface actions)", () => {
+  test("dismissing the progress modal continues generation in the background, and the queue panel lets you retrieve the finished PDF", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsOneResult,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      imageBucketFailure,
+      delayedImageWorkerSuccess,
+      questionFeedConfirmSuggestionSingleton,
+      ...defaultHandlers
+    );
+
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
+    await openDisplayExportMenu(page);
+    await clickDownload(page);
+
+    const progressModal = page.getByTestId("display-export-pdf-progress-modal");
+    await expect(progressModal).toBeVisible({ timeout: 2_000 });
+
+    await page.getByTestId("display-export-pdf-minimize-button").click();
+    await expect(progressModal).not.toBeVisible();
+
+    const queuePanel = page.getByTestId("pdf-export-queue-panel");
+    await expect(queuePanel).toBeVisible();
+    await expect(queuePanel).toContainText("Generating PDF");
+    await expect(page.getByTestId("pdf-export-queue-progress")).toBeVisible();
+
+    // The render keeps running, unaffected by the dismissal - settles into "ready" on its own.
+    await expect(queuePanel).toContainText("PDF ready", { timeout: 30_000 });
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByTestId("pdf-export-queue-save-disk").click(),
+    ]);
+    expect(download.suggestedFilename()).toBe("cards.pdf");
+    await expect(page.getByTestId("pdf-export-queue-container")).toHaveCount(0);
+  });
+
+  test("cancelling from the queue panel stops the render and leaves no stuck entry", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsOneResult,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      imageBucketFailure,
+      delayedImageWorkerSuccess,
+      questionFeedConfirmSuggestionSingleton,
+      ...defaultHandlers
+    );
+
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
+    await openDisplayExportMenu(page);
+    await clickDownload(page);
+
+    const progressModal = page.getByTestId("display-export-pdf-progress-modal");
+    await expect(progressModal).toBeVisible({ timeout: 2_000 });
+    await page.getByTestId("display-export-pdf-minimize-button").click();
+
+    const cancelButton = page.getByTestId("pdf-export-queue-cancel");
+    await expect(cancelButton).toBeVisible();
+
+    let downloadFired = false;
+    page.on("download", () => {
+      downloadFired = true;
+    });
+    await cancelButton.click();
+
+    await expect(page.getByTestId("pdf-export-queue-container")).toHaveCount(0);
+
+    // No stuck entry: a fresh export attempt starts clean, proving the dropdown re-enabled and
+    // the worker (terminated + reinitialised by the cancel itself) is ready for a new render.
+    await page.getByTestId("display-export-menu-toggle").click();
+    await expect(page.getByTestId("display-export-pdf-button")).toBeEnabled();
+    await page.getByTestId("display-export-pdf-button").click();
+    await expect(progressModal).toBeVisible({ timeout: 2_000 });
+
+    // Give the already-cancelled render every chance to have fired a download before declaring
+    // it never will - the worker it was running on no longer exists to finish it.
+    await page.waitForTimeout(3_500);
+    expect(downloadFired).toBe(false);
+  });
+
+  test("the ready panel can be dismissed without picking a destination, and does not block a subsequent export", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsOneResult,
+      sourceDocumentsOneResult,
+      searchResultsOneResult,
+      imageBucketSuccess,
+      questionFeedConfirmSuggestionSingleton,
+      ...defaultHandlers
+    );
+
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "my search query");
+    await openDisplayExportMenu(page);
+    await clickDownload(page);
+
+    const progressModal = page.getByTestId("display-export-pdf-progress-modal");
+    await progressModal
+      .getByTestId("display-export-pdf-save-disk-button")
+      .waitFor({ state: "visible", timeout: 30_000 });
+
+    await page.getByTestId("display-export-pdf-minimize-button").click();
+    await expect(progressModal).not.toBeVisible();
+
+    const queuePanel = page.getByTestId("pdf-export-queue-panel");
+    await expect(queuePanel).toContainText("PDF ready");
+    await page.getByTestId("pdf-export-queue-discard").click();
+    await expect(page.getByTestId("pdf-export-queue-container")).toHaveCount(0);
+
+    // Discarding a finished, unsaved render doesn't leave the export button stuck either.
+    await page.getByTestId("display-export-menu-toggle").click();
+    await expect(page.getByTestId("display-export-pdf-button")).toBeEnabled();
   });
 });

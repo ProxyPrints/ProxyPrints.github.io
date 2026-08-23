@@ -268,6 +268,22 @@ export const openDisplayExportMenu = async (page: Page) => {
 export const clickExportPDFDownload = async (page: Page) => {
   await openDisplayExportMenu(page);
   await page.getByTestId("display-export-pdf-button").click();
+  return completePdfExportToDisk(page);
+};
+
+// Generation and destination are two separate steps now (DisplayExportPDF.tsx's own module
+// comment) - clicking "PDF" only renders; this is the second half every caller needs once
+// rendering settles, choosing "Save to disk" and waiting for the resulting browser download.
+export const completePdfExportToDisk = async (page: Page) => {
+  const saveToDiskButton = page.getByTestId(
+    "display-export-pdf-save-disk-button"
+  );
+  await saveToDiskButton.waitFor({ state: "visible", timeout: 30_000 });
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    saveToDiskButton.click(),
+  ]);
+  return download;
 };
 
 export async function expectCardSlotToExist(page: Page, slot: number) {

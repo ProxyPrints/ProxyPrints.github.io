@@ -17,6 +17,7 @@ import {
 
 import { test } from "../playwright.setup";
 import {
+  completePdfExportToDisk,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
 } from "./test-utils";
@@ -84,20 +85,17 @@ test.describe("/display Finish footer (issue #275)", () => {
 
     await openExportMenu(page);
 
-    const [download] = await Promise.all([
-      page.waitForEvent("download", { timeout: 30_000 }),
-      (async () => {
-        await footer.getByTestId("display-export-pdf-button").click();
+    await footer.getByTestId("display-export-pdf-button").click();
 
-        // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still "riding
-        // the untouched default" cardback, so the reminder gate fires before the (absent, for an
-        // anonymous session) save gate / the export itself. "Use current & continue" is the
-        // equivalent of this test's own old "no save gate, straight through" assertion.
-        const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-        await expect(cardbackGate).toBeVisible();
-        await cardbackGate.getByTestId("cardback-gate-use-current").click();
-      })(),
-    ]);
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still "riding
+    // the untouched default" cardback, so the reminder gate fires before the (absent, for an
+    // anonymous session) save gate / the export itself. "Use current & continue" is the
+    // equivalent of this test's own old "no save gate, straight through" assertion.
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    await expect(cardbackGate).toBeVisible();
+    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+
+    const download = await completePdfExportToDisk(page);
     expect(download.suggestedFilename()).toBe("cards.pdf");
   });
 
@@ -147,36 +145,31 @@ test.describe("/display Finish footer (issue #275)", () => {
 
     const footer = await openExportMenu(page);
 
-    const [download] = await Promise.all([
-      page.waitForEvent("download", { timeout: 30_000 }),
-      (async () => {
-        await footer.getByTestId("display-export-pdf-button").click();
+    await footer.getByTestId("display-export-pdf-button").click();
 
-        // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
-        // save gate (a deck-completeness decision precedes the persistence one).
-        const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-        await expect(cardbackGate).toBeVisible();
-        await cardbackGate.getByTestId("cardback-gate-use-current").click();
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
+    // save gate (a deck-completeness decision precedes the persistence one).
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    await expect(cardbackGate).toBeVisible();
+    await cardbackGate.getByTestId("cardback-gate-use-current").click();
 
-        const gate = page.getByTestId("pre-print-save-gate-modal");
-        await expect(gate).toBeVisible();
-        await gate.getByTestId("pre-print-save-gate-save").click();
+    const gate = page.getByTestId("pre-print-save-gate-modal");
+    await expect(gate).toBeVisible();
+    await gate.getByTestId("pre-print-save-gate-save").click();
 
-        // Crypto session starts locked this "session" (a fresh page load) - Save routes through
-        // Unlock first, exactly like the toolbar's own Save button would.
-        await page.getByLabel("unlock-passphrase").fill(PASSPHRASE);
-        await page.getByRole("button", { name: "Unlock" }).click();
+    // Crypto session starts locked this "session" (a fresh page load) - Save routes through
+    // Unlock first, exactly like the toolbar's own Save button would.
+    await page.getByLabel("unlock-passphrase").fill(PASSPHRASE);
+    await page.getByRole("button", { name: "Unlock" }).click();
 
-        const saveModal = page.getByTestId("save-deck-modal");
-        await expect(saveModal).toBeVisible();
-        await page.getByLabel("save-deck-name").fill("My Print Test Deck");
-        await saveModal
-          .getByRole("button", { name: "Save", exact: true })
-          .click();
-      })(),
-    ]);
+    const saveModal = page.getByTestId("save-deck-modal");
+    await expect(saveModal).toBeVisible();
+    await page.getByLabel("save-deck-name").fill("My Print Test Deck");
+    await saveModal.getByRole("button", { name: "Save", exact: true }).click();
+
     // Persistence resolves -> THEN the export itself runs - D9(3)c, "saving gates PDF; PDF never
     // gates saving" the other way around.
+    const download = await completePdfExportToDisk(page);
     expect(download.suggestedFilename()).toBe("cards.pdf");
     expect(saveDeckRequests).toHaveLength(1);
   });
@@ -201,22 +194,19 @@ test.describe("/display Finish footer (issue #275)", () => {
 
     const footer = await openExportMenu(page);
 
-    const [download] = await Promise.all([
-      page.waitForEvent("download", { timeout: 30_000 }),
-      (async () => {
-        await footer.getByTestId("display-export-pdf-button").click();
+    await footer.getByTestId("display-export-pdf-button").click();
 
-        // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
-        // save gate (a deck-completeness decision precedes the persistence one).
-        const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-        await expect(cardbackGate).toBeVisible();
-        await cardbackGate.getByTestId("cardback-gate-use-current").click();
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
+    // save gate (a deck-completeness decision precedes the persistence one).
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    await expect(cardbackGate).toBeVisible();
+    await cardbackGate.getByTestId("cardback-gate-use-current").click();
 
-        const gate = page.getByTestId("pre-print-save-gate-modal");
-        await expect(gate).toBeVisible();
-        await gate.getByTestId("pre-print-save-gate-skip").click();
-      })(),
-    ]);
+    const gate = page.getByTestId("pre-print-save-gate-modal");
+    await expect(gate).toBeVisible();
+    await gate.getByTestId("pre-print-save-gate-skip").click();
+
+    const download = await completePdfExportToDisk(page);
     expect(download.suggestedFilename()).toBe("cards.pdf");
     expect(saveDeckCalls).toBe(0);
   });
