@@ -21,9 +21,9 @@ export const BleedEdgeMM = Math.round(0.12 * 25.4 * 1000) / 1000;
 // correct, citable value and this constant was already set to it.
 export const CornerRadiusMM = 2.5;
 
-// Red is the standard print-industry convention for a cut/bleed guide, and 0.25mm renders as a
-// hairline at true print scale. Shared by DisplaySheetSettings' own default and PagePreview's
-// prop defaults so the exported PDF and the /display screen preview start out identical.
+// 0.25mm renders as a hairline at true print scale. Shared by DisplaySheetSettings' own default
+// and PagePreview's prop defaults so the exported PDF and the /display screen preview start out
+// identical.
 export const DEFAULT_CUT_LINE_COLOR = "#8ae234";
 export const DEFAULT_CUT_LINE_LENGTH_MM = 3;
 export const DEFAULT_CUT_LINE_THICKNESS_MM = 0.25;
