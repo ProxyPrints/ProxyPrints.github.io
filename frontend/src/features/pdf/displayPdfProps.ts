@@ -38,15 +38,16 @@
  *   download path uses (`fullResolutionPDFProps`). DPI and JPG quality themselves are real
  *   controls (`DisplaySheetExportSettings.imageDPI`/`jpgQuality`), not defaulted here.
  *
- * Everything else `PDF.tsx`'s own `PDFProps` interface exposes is now a real control, sourced
- * from either `DisplaySheetExportSettings` (the rail's own sheet state - page size including its
- * `Custom` option, bleed edge, guides and their colour/length/thickness/offset geometry plus an
- * opt-in crosshair-marks toggle, image DPI/JPG quality, corner rounding, card selection mode,
- * page range, and an opt-in per-side page-margin override - moved here from the export step's own
- * settings so they're editable next to the live sheet they govern, see `DisplayPage.tsx`'s own
- * "Guides", "Print quality", and "Export" rail sections, plus the margin override grouped under
- * the margin-profile control in "Page Setup") or `DisplayExportSettings` (the export affordance's
- * own settings step - SCM mode and its six sub-settings).
+ * Everything `PDF.tsx`'s own `PDFProps` interface exposes is now a real control sourced from
+ * `DisplaySheetExportSettings` (the rail's own sheet state - page size including its `Custom`
+ * option, bleed edge, guides and their colour/length/thickness/offset geometry plus an opt-in
+ * crosshair-marks toggle, image DPI/JPG quality, corner rounding, card selection mode, page
+ * range, an opt-in per-side page-margin override, and SCM cutting mode with its own sub-settings -
+ * moved here from the export step's own settings so they're editable next to the live sheet they
+ * govern, see `DisplayPage.tsx`'s own "Guides", "Print quality", and "Export" rail sections, plus
+ * the margin override grouped under the margin-profile control in "Page Setup"). The export
+ * affordance's own settings step (`DisplayExportPDF.tsx`) no longer carries any settings of its
+ * own - every field it once held has migrated to the rail.
  *
  * ## Margin-preset vs. per-side override
  *
@@ -149,6 +150,21 @@ export interface DisplaySheetExportSettings {
    * exposes this as its own "Page Cut Guide Lines" toggle; this field is the editor's
    * equivalent. */
   drawPageCutLines: boolean;
+  /** Switches the whole export to `SCMPDF.tsx`'s registration-mark layout - a genuinely different
+   * output format, not another flag on the standard grid. The six `scm*` fields below are only
+   * read by `PDF.tsx` when this is true. Moved here from the export step's own
+   * `DisplayExportSettings` - it lives in the rail's "Export" section (`DisplayPage.tsx`) since
+   * it governs what artifact is produced, the same territory that section's card-selection-mode
+   * and page-range controls already cover, rather than a genuinely unrelated one-off dialog
+   * choice. */
+  scmMode: boolean;
+  scmPaperSize: ScmPaperSize;
+  scmVariant: ScmVariant;
+  scmRegistration: ScmRegistration;
+  scmDuplex: boolean;
+  scmOffsetXMM: number;
+  scmOffsetYMM: number;
+  scmOffsetAngleDeg: number;
 }
 
 /** An explicit per-side override for `DisplaySheetExportSettings.marginOverride` — see the module
@@ -160,28 +176,10 @@ export interface PageMarginOverride {
   right: number;
 }
 
-/** The export affordance's own settings (`DisplayExportPDF.tsx`) - export-time choices with no
- * relationship to the sheet's own layout, so they live separately from
- * `DisplaySheetExportSettings` above. */
-export interface DisplayExportSettings {
-  /** Switches the whole export to `SCMPDF.tsx`'s registration-mark layout - a genuinely different
-   * output format, not another flag on the standard grid. The six `scm*` fields below are only
-   * read by `PDF.tsx` when this is true. */
-  scmMode: boolean;
-  scmPaperSize: ScmPaperSize;
-  scmVariant: ScmVariant;
-  scmRegistration: ScmRegistration;
-  scmDuplex: boolean;
-  scmOffsetXMM: number;
-  scmOffsetYMM: number;
-  scmOffsetAngleDeg: number;
-}
-
 /** Everything `buildDisplayPDFProps` reads — every source the adapter maps, named explicitly so
  * the pure function is trivially testable without a Redux store. */
 export interface DisplayPDFPropsInput {
   sheetSettings: DisplaySheetExportSettings;
-  exportSettings: DisplayExportSettings;
   marginProfile: MarginProfileKey;
   cardSpacing: { row: number; col: number };
   projectMembers: Array<SlotProjectMembers>;
@@ -193,7 +191,7 @@ export interface DisplayPDFPropsInput {
 export const buildDisplayPDFProps = (
   input: DisplayPDFPropsInput
 ): Omit<PDFProps, "fileHandles"> => {
-  const { sheetSettings, exportSettings } = input;
+  const { sheetSettings } = input;
   // Margin-preset vs. per-side override - see the module comment. The override replaces the
   // profile's margins for THIS export only; the profile itself, and every other consumer of
   // `MARGIN_PROFILES`, are never touched.
@@ -239,25 +237,23 @@ export const buildDisplayPDFProps = (
     imageDPI: sheetSettings.imageDPI,
     jpgQuality: sheetSettings.jpgQuality,
     bleedOverrides: input.manualOverrides,
-    scmMode: exportSettings.scmMode,
-    scmPaperSize: exportSettings.scmPaperSize,
-    scmVariant: exportSettings.scmVariant,
-    scmRegistration: exportSettings.scmRegistration,
-    scmDuplex: exportSettings.scmDuplex,
-    scmOffsetXMM: exportSettings.scmOffsetXMM,
-    scmOffsetYMM: exportSettings.scmOffsetYMM,
-    scmOffsetAngleDeg: exportSettings.scmOffsetAngleDeg,
+    scmMode: sheetSettings.scmMode,
+    scmPaperSize: sheetSettings.scmPaperSize,
+    scmVariant: sheetSettings.scmVariant,
+    scmRegistration: sheetSettings.scmRegistration,
+    scmDuplex: sheetSettings.scmDuplex,
+    scmOffsetXMM: sheetSettings.scmOffsetXMM,
+    scmOffsetYMM: sheetSettings.scmOffsetYMM,
+    scmOffsetAngleDeg: sheetSettings.scmOffsetAngleDeg,
   };
 };
 
 /** Live-state binding of `buildDisplayPDFProps`: reads the margin-profile / card-spacing /
  * project slices and the card-document map from Redux, leaving only `DisplayPage`'s own local
- * sheet settings and the export affordance's own local export settings to the caller (both are
- * component-local state, not store state — see `DisplayPage.tsx`'s own "known gap" note on why
- * sheet settings never were persisted; export settings follow the same precedent). */
+ * sheet settings to the caller (component-local state, not store state — see `DisplayPage.tsx`'s
+ * own "known gap" note on why sheet settings never were persisted). */
 export const useDisplayPDFProps = (
-  sheetSettings: DisplaySheetExportSettings,
-  exportSettings: DisplayExportSettings
+  sheetSettings: DisplaySheetExportSettings
 ): Omit<PDFProps, "fileHandles"> => {
   const marginProfile = useAppSelector(selectMarginProfile).profile;
   const cardSpacing = useAppSelector(selectCardSpacing);
@@ -267,7 +263,6 @@ export const useDisplayPDFProps = (
   const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
   return buildDisplayPDFProps({
     sheetSettings,
-    exportSettings,
     marginProfile,
     cardSpacing,
     projectMembers,

@@ -321,6 +321,11 @@ import {
   isBleedNormalizationEligible,
   PageSize,
 } from "@/features/pdf/PDF";
+import {
+  ScmPaperLabels,
+  ScmPaperSize,
+  ScmVariant,
+} from "@/features/pdf/scm/scmLayout";
 import { SavedDeckPanel } from "@/features/savedDecks/SavedDeckPanel";
 import { SearchSettings } from "@/features/searchSettings/SearchSettings";
 import { APICastImplicitVote, APIRetractImplicitVote } from "@/store/api";
@@ -413,6 +418,18 @@ interface DisplaySheetSettings {
   // moved from DisplayExportPDF.tsx's own settings step (this PR), into the "Cut lines & snip
   // guides" rail section it groups with rather than the Export PDF dialog.
   drawPageCutLines: boolean;
+  // Silhouette (SCM) cutting mode and its sub-settings - moved from DisplayExportPDF.tsx's own
+  // settings step (this PR) into the "Export" rail section: it governs what artifact is
+  // produced, the same territory that section's card-selection-mode and page-range controls
+  // already cover, not a genuinely unrelated one-off dialog choice.
+  scmMode: boolean;
+  scmPaperSize: ScmPaperSize;
+  scmVariant: ScmVariant;
+  scmRegistration: 3 | 4;
+  scmDuplex: boolean;
+  scmOffsetXMM: number;
+  scmOffsetYMM: number;
+  scmOffsetAngleDeg: number;
 }
 
 // Proposal H D1/D4/D6 (docs/proposals/proposal-h-display-layout-spec.md, amended by issue #286's
@@ -449,6 +466,15 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   marginOverride: undefined,
   // Matches the old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS value this migrated from.
   drawPageCutLines: true,
+  // Matches the old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS values this migrated from.
+  scmMode: false,
+  scmPaperSize: "letter",
+  scmVariant: "default",
+  scmRegistration: 3,
+  scmDuplex: true,
+  scmOffsetXMM: 0,
+  scmOffsetYMM: 0,
+  scmOffsetAngleDeg: 0,
 };
 
 // The mode names alone mislead ("Distinct Backs" sounds like it emits backs, and for a
@@ -464,6 +490,12 @@ const CARD_SELECTION_MODE_DESCRIPTIONS: {
     "Every front, plus only backs that differ from the project's shared cardback. Omits the shared cardback entirely - a deck where every card uses it exports no backs at all.",
   frontsOnly: "Fronts only, no back pages.",
   backsOnly: "Backs only, no front pages.",
+};
+
+// Moved here from DisplayExportPDF.tsx's own settings step alongside the SCM mode switch itself.
+const SCM_VARIANT_LABELS: { [variant in ScmVariant]: string } = {
+  default: "Normal",
+  borderless: "Borderless",
 };
 
 // Upper bound, in real CSS px, on every sheet's rendered width - was PagePreview's own fixed
@@ -3928,6 +3960,194 @@ export function DisplayPage() {
                         Leave blank on either end to export all pages.
                       </Form.Text>
                     </Form.Group>
+
+                    {/* SCM mode reads as a MODE SWITCH, not another checkbox: it replaces the
+                        standard parametric grid with SCMPDF.tsx's registration-mark layout
+                        entirely (PDF.tsx's PDF component returns early into <SCMPDF> and never
+                        touches card selection, cut-line geometry, corner rounding, or page
+                        margins for that render), so its sub-settings only appear once the switch
+                        is on - same conditional-reveal pattern DisplayExportPDF.tsx used before
+                        this migration. Image quality (Print quality section, above) is read by
+                        SCMCard exactly like the standard grid's own card image, so no separate
+                        control is needed here for it. */}
+                    <div className="border rounded p-2 mb-2 bg-body-secondary">
+                      <Form.Check
+                        type="switch"
+                        id="display-scm-mode-switch"
+                        data-testid="display-scm-mode-switch"
+                        label={<strong>Silhouette (SCM) cutting mode</strong>}
+                        checked={settings.scmMode}
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            scmMode: event.target.checked,
+                          }))
+                        }
+                      />
+                      <Form.Text className="text-muted">
+                        Exports a Silhouette Studio-compatible registration-mark
+                        layout instead of the standard grid - a different file
+                        format, not a style option.
+                      </Form.Text>
+                    </div>
+
+                    {settings.scmMode && (
+                      <>
+                        <Form.Group className="mb-2">
+                          <Form.Label className="small mb-1">
+                            Paper size
+                          </Form.Label>
+                          <Form.Select
+                            size="sm"
+                            data-testid="display-scm-paper-size"
+                            value={settings.scmPaperSize}
+                            onChange={(event) =>
+                              setSettings((previous) => ({
+                                ...previous,
+                                scmPaperSize: event.target
+                                  .value as ScmPaperSize,
+                              }))
+                            }
+                          >
+                            {Object.entries(ScmPaperLabels).map(
+                              ([value, label]) => (
+                                <option key={value} value={value}>
+                                  {label}
+                                </option>
+                              )
+                            )}
+                          </Form.Select>
+                        </Form.Group>
+
+                        <Form.Group className="mb-2">
+                          <Form.Label className="small mb-1">
+                            Template variant
+                          </Form.Label>
+                          <Form.Select
+                            size="sm"
+                            data-testid="display-scm-variant"
+                            value={settings.scmVariant}
+                            onChange={(event) =>
+                              setSettings((previous) => ({
+                                ...previous,
+                                scmVariant: event.target.value as ScmVariant,
+                              }))
+                            }
+                          >
+                            {Object.entries(SCM_VARIANT_LABELS).map(
+                              ([value, label]) => (
+                                <option key={value} value={value}>
+                                  {label}
+                                </option>
+                              )
+                            )}
+                          </Form.Select>
+                        </Form.Group>
+
+                        <Form.Group className="mb-2">
+                          <Form.Label className="small mb-1">
+                            Registration marks
+                          </Form.Label>
+                          <Form.Select
+                            size="sm"
+                            data-testid="display-scm-registration"
+                            value={settings.scmRegistration}
+                            onChange={(event) =>
+                              setSettings((previous) => ({
+                                ...previous,
+                                scmRegistration: parseInt(
+                                  event.target.value,
+                                  10
+                                ) as 3 | 4,
+                              }))
+                            }
+                          >
+                            <option value={3}>3-corner (default)</option>
+                            <option value={4}>4-corner (Cameo 5 Alpha)</option>
+                          </Form.Select>
+                        </Form.Group>
+
+                        <Form.Check
+                          type="switch"
+                          id="display-scm-duplex"
+                          className="mb-2"
+                          data-testid="display-scm-duplex"
+                          label={settings.scmDuplex ? "Duplex" : "Fronts only"}
+                          checked={settings.scmDuplex}
+                          onChange={(event) =>
+                            setSettings((previous) => ({
+                              ...previous,
+                              scmDuplex: event.target.checked,
+                            }))
+                          }
+                        />
+
+                        <Form.Group className="mb-2">
+                          <Form.Label className="small mb-1">
+                            Back-alignment offset (mm)
+                          </Form.Label>
+                          <div className="d-flex gap-2 align-items-center">
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              aria-label="Back-alignment offset X (mm)"
+                              data-testid="display-scm-offset-x"
+                              value={settings.scmOffsetXMM}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value))
+                                  setSettings((previous) => ({
+                                    ...previous,
+                                    scmOffsetXMM: value,
+                                  }));
+                              }}
+                            />
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              aria-label="Back-alignment offset Y (mm)"
+                              data-testid="display-scm-offset-y"
+                              value={settings.scmOffsetYMM}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value))
+                                  setSettings((previous) => ({
+                                    ...previous,
+                                    scmOffsetYMM: value,
+                                  }));
+                              }}
+                            />
+                          </div>
+                          <Form.Text className="text-muted">
+                            Corrects duplex printer misalignment on the back
+                            page - X then Y.
+                          </Form.Text>
+                        </Form.Group>
+
+                        <Form.Group className="mb-2">
+                          <Form.Label className="small mb-1">
+                            Offset angle (degrees)
+                          </Form.Label>
+                          <Form.Control
+                            type="number"
+                            size="sm"
+                            step={0.1}
+                            data-testid="display-scm-offset-angle"
+                            value={settings.scmOffsetAngleDeg}
+                            onChange={(event) => {
+                              const value = parseFloat(event.target.value);
+                              if (!Number.isNaN(value))
+                                setSettings((previous) => ({
+                                  ...previous,
+                                  scmOffsetAngleDeg: value,
+                                }));
+                            }}
+                          />
+                        </Form.Group>
+                      </>
+                    )}
                   </div>
                 </AutofillCollapse>
               </div>

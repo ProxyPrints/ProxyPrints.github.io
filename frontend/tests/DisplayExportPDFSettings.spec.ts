@@ -334,45 +334,44 @@ test.describe("DisplayExportPDF - page cut guide lines (rail)", () => {
 
 const mmToPt = (mm: number) => (mm / 25.4) * 72;
 
-test.describe("DisplayExportPDF - SCM cutting mode", () => {
-  test("the mode switch swaps the settings step body between the standard controls and SCM's own sub-settings", async ({
+test.describe("DisplayExportPDF - SCM cutting mode (rail)", () => {
+  test("the mode switch reveals SCM's own sub-settings in the rail's Export section, independent of the dialog", async ({
     page,
     network,
   }) => {
     network.use(...tenCardHandlers);
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
-    // "Print quality" is collapsed by default - open it before the display-image-dpi assertion
-    // below.
-    await expandRailSection(page, "print-quality");
 
-    await openPDFSettings(page);
-    await expect(
-      page.getByTestId("display-export-scm-paper-size")
-    ).not.toBeVisible();
+    // Now rail controls, in the "Export" section (expanded by default) - no dialog to open for
+    // this check.
+    await expect(page.getByTestId("display-scm-paper-size")).not.toBeVisible();
 
-    await page.getByTestId("display-export-scm-mode-switch").check();
+    await page.getByTestId("display-scm-mode-switch").check();
 
-    await expect(
-      page.getByTestId("display-export-scm-paper-size")
-    ).toBeVisible();
-    await expect(page.getByTestId("display-export-scm-variant")).toBeVisible();
-    await expect(
-      page.getByTestId("display-export-scm-registration")
-    ).toBeVisible();
-    await expect(page.getByTestId("display-export-scm-duplex")).toBeVisible();
-    await expect(page.getByTestId("display-export-scm-offset-x")).toBeVisible();
-    await expect(page.getByTestId("display-export-scm-offset-y")).toBeVisible();
-    await expect(
-      page.getByTestId("display-export-scm-offset-angle")
-    ).toBeVisible();
-    // Image quality, card selection mode, and page range now live in the rail, not this dialog -
-    // stay visible and unaffected by which panel (standard/SCM) the dialog is showing. SCMCard
-    // reads image quality exactly like the standard grid's own card image does; card selection
-    // mode and page range are simply outside the dialog's own SCM/standard split entirely.
-    await expect(page.getByTestId("display-image-dpi")).toBeVisible();
+    await expect(page.getByTestId("display-scm-paper-size")).toBeVisible();
+    await expect(page.getByTestId("display-scm-variant")).toBeVisible();
+    await expect(page.getByTestId("display-scm-registration")).toBeVisible();
+    await expect(page.getByTestId("display-scm-duplex")).toBeVisible();
+    await expect(page.getByTestId("display-scm-offset-x")).toBeVisible();
+    await expect(page.getByTestId("display-scm-offset-y")).toBeVisible();
+    await expect(page.getByTestId("display-scm-offset-angle")).toBeVisible();
+    // Card selection mode and page range sit in the same "Export" section, unaffected by the
+    // SCM switch next to them.
     await expect(page.getByTestId("display-card-selection-mode")).toBeVisible();
     await expect(page.getByTestId("display-page-range-start")).toBeVisible();
+
+    // Image quality (its own "Print quality" section, collapsed by default) is read by SCMCard
+    // exactly like the standard grid's own card image, so no separate control exists for it.
+    await expandRailSection(page, "print-quality");
+    await expect(page.getByTestId("display-image-dpi")).toBeVisible();
+
+    // The export dialog itself carries no settings of its own anymore - it opens straight to
+    // the download/Save-to-Drive actions.
+    await openPDFSettings(page);
+    await expect(
+      page.getByTestId("display-export-pdf-download-button")
+    ).toBeVisible();
   });
 
   test("an SCM export is a structurally different document from the standard export", async ({
@@ -390,8 +389,10 @@ test.describe("DisplayExportPDF - SCM cutting mode", () => {
     if (!standardPath) throw new Error("Download path is null");
     const standardPages = await readNumPages(readFileSync(standardPath));
 
+    // Rail control now - set before reopening the dialog, since its backdrop blocks the rail
+    // behind it while open.
+    await page.getByTestId("display-scm-mode-switch").check();
     await openPDFSettings(page);
-    await page.getByTestId("display-export-scm-mode-switch").check();
     const scmDownload = page.waitForEvent("download");
     await clickDownload(page);
     const scmPath = await (await scmDownload).path();

@@ -324,3 +324,21 @@ coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF 
 # of opening the export dialog, same backdrop-blocks-the-rail constraint the DPI/JPG round above
 # documents.
 coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - page cut guide lines (rescued from /print's PDFGenerator.tsx) > drawPageCutLines reaches the rendered PDF: turning the toggle off removes real draw operations, not just UI state — renamed to "drawPageCutLines reaches the rendered PDF: turning the rail toggle off removes real draw operations, not just UI state" (describe renamed to "DisplayExportPDF - page cut guide lines (rail)") when the toggle moved from the export dialog's display-export-page-cut-lines control into the right rail's display-page-cut-lines-toggle; the countPageOneDrawOps/onOps>offOps real-draw-op assertion is byte-identical, only the control's location and testid changed.
+
+# SCM-mode-to-rail round - the Silhouette (SCM) cutting mode switch and its seven sub-settings
+# (paper size, template variant, registration marks, duplex, back-alignment X/Y offset, offset
+# angle) moved out of DisplayExportPDF.tsx's own settings step - the last one left - into the
+# right rail's "Export" section: SCM mode governs what artifact is produced, the same territory
+# that section's card-selection-mode and page-range controls already cover, not a genuinely
+# unrelated one-off dialog choice. The describe block and its first test were renamed off the
+# dialog-scoped "settings step body" framing and the display-export-scm-* testids
+# (display-export-scm-mode-switch, -paper-size, -variant, -registration, -duplex, -offset-x,
+# -offset-y, -offset-angle) onto their rail equivalents (display-scm-mode-switch, -paper-size,
+# -variant, -registration, -duplex, -offset-x, -offset-y, -offset-angle); the test now additionally
+# opens the dialog and asserts it shows the download button with no settings of its own, since
+# none of this UI is dialog-scoped anymore. The second test ("an SCM export is a structurally
+# different document
+# from the standard export") kept its title - only its body's testid and control-ordering changed
+# (the mode switch is set on the rail before the dialog opens, same backdrop-blocks-the-rail
+# constraint every prior round in this file documents) - so it needs no ack here.
+coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - SCM cutting mode > the mode switch swaps the settings step body between the standard controls and SCM's own sub-settings — renamed to "the mode switch reveals SCM's own sub-settings in the rail's Export section, independent of the dialog" (describe renamed to "DisplayExportPDF - SCM cutting mode (rail)") when the SCM switch and its sub-settings moved from the export dialog into the right rail's "Export" section; same reveal/hide assertions on every sub-setting, now via the display-scm-* rail testids, plus a new assertion that the opened dialog shows only the download button, with no settings step of its own left.

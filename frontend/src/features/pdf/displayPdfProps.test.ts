@@ -2,7 +2,6 @@ import { CardType } from "@/common/schema_types";
 import { ManualOverride } from "@/features/pdf/bleedNormalize";
 import {
   buildDisplayPDFProps,
-  DisplayExportSettings,
   DisplayPDFPropsInput,
 } from "@/features/pdf/displayPdfProps";
 import { computeLayout } from "@/features/pdf/layout";
@@ -47,14 +46,12 @@ const DEFAULT_SHEET_SETTINGS = {
   pageRangeEnd: undefined,
   marginOverride: undefined,
   drawPageCutLines: true,
-};
-
-// The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS).
-const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
+  // The export settings step's own defaults (DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS)
+  // before SCM mode migrated into DisplaySheetExportSettings alongside everything else.
   scmMode: false,
-  scmPaperSize: "letter",
-  scmVariant: "default",
-  scmRegistration: 3,
+  scmPaperSize: "letter" as const,
+  scmVariant: "default" as const,
+  scmRegistration: 3 as const,
   scmDuplex: true,
   scmOffsetXMM: 0,
   scmOffsetYMM: 0,
@@ -66,7 +63,6 @@ const NO_OVERRIDES: { [identifier: string]: ManualOverride } = {};
 
 const baseInput: DisplayPDFPropsInput = {
   sheetSettings: DEFAULT_SHEET_SETTINGS,
-  exportSettings: DEFAULT_EXPORT_SETTINGS,
   marginProfile: "rearFeed",
   cardSpacing: { row: 14.5, col: 0 },
   projectMembers: [],
@@ -376,11 +372,11 @@ describe("buildDisplayPDFProps - SCM mode maps straight through", () => {
     expect(props.scmOffsetAngleDeg).toBe(0);
   });
 
-  it("every SCM sub-setting maps straight through from export settings when scmMode is on", () => {
+  it("every SCM sub-setting maps straight through from the rail's sheet settings when scmMode is on", () => {
     const props = buildDisplayPDFProps({
       ...baseInput,
-      exportSettings: {
-        ...DEFAULT_EXPORT_SETTINGS,
+      sheetSettings: {
+        ...DEFAULT_SHEET_SETTINGS,
         scmMode: true,
         scmPaperSize: "a4",
         scmVariant: "borderless",
