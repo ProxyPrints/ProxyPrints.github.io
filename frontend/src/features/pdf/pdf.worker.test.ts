@@ -18,10 +18,13 @@ jest.mock("@react-pdf/renderer", () => ({
 
 const mockComputePDFRenderWindow = jest.fn();
 const mockCreatePDFElement = jest.fn();
+const mockComputeExportedCardIdentifiers = jest.fn();
 jest.mock("./PDF", () => ({
   computePDFRenderWindow: (props: PDFProps) =>
     mockComputePDFRenderWindow(props),
   createPDFElement: (props: PDFProps) => mockCreatePDFElement(props),
+  computeExportedCardIdentifiers: (props: PDFProps) =>
+    mockComputeExportedCardIdentifiers(props),
 }));
 
 const mockAppendBatch = jest.fn();
@@ -135,6 +138,7 @@ describe("renderPDF - page batching bounds worker memory", () => {
     jest.clearAllMocks();
     mockComputePDFRenderWindow.mockReturnValue({ startPage: 1, totalPages: 1 });
     mockCreatePDFElement.mockImplementation((props: PDFProps) => props);
+    mockComputeExportedCardIdentifiers.mockReturnValue(["a", "b"]);
     mockPdf.mockImplementation(() => ({
       toBlob: jest
         .fn()
@@ -224,6 +228,7 @@ describe("renderPDF - page batching bounds worker memory", () => {
     jest.clearAllMocks();
     mockComputePDFRenderWindow.mockReturnValue({ startPage: 1, totalPages: 1 });
     mockCreatePDFElement.mockImplementation((props: PDFProps) => props);
+    mockComputeExportedCardIdentifiers.mockReturnValue(["a", "b"]);
     mockPdf.mockImplementation(() => ({
       toBlob: jest
         .fn()
@@ -277,7 +282,8 @@ describe("renderPDF - page batching bounds worker memory", () => {
 
     const result = await renderPDF(makePDFProps());
 
-    // 2 batches x 2 progress ticks = 4; total = 2 identifiers in cardDocumentsByIdentifier.
+    // 2 batches x 2 progress ticks = 4; total = 2 identifiers, from the mocked
+    // computeExportedCardIdentifiers (not from cardDocumentsByIdentifier's own key count).
     expect(progress.mock.calls).toEqual([
       [1, 2],
       [2, 2],
@@ -289,6 +295,56 @@ describe("renderPDF - page batching bounds worker memory", () => {
       { identifier: "card-a", label: "front" },
       { identifier: "card-a", label: "front" },
     ]);
+  });
+
+  it("scopes the image-progress total to computeExportedCardIdentifiers's result, not the full project's cardDocumentsByIdentifier - regression for a page-restricted export reporting a project-wide denominator", async () => {
+    const progress = jest.fn();
+    exposedApi?.onImageProgress(progress);
+    mockComputePDFRenderWindow.mockReturnValue({ startPage: 2, totalPages: 2 });
+    // The full project has 4 identifiers, but the page-range-restricted slice only renders 1.
+    mockComputeExportedCardIdentifiers.mockReturnValue(["only-this-one"]);
+    mockCreatePDFElement.mockImplementation((props: PDFProps) => {
+      props.reportImageProgress?.();
+      return props;
+    });
+
+    await renderPDF(
+      makePDFProps({
+        pageRangeStart: 2,
+        pageRangeEnd: 2,
+        cardDocumentsByIdentifier: {
+          a: undefined,
+          b: undefined,
+          c: undefined,
+          d: undefined,
+        },
+      })
+    );
+
+    expect(mockComputeExportedCardIdentifiers).toHaveBeenCalledWith(
+      expect.objectContaining({ pageRangeStart: 2, pageRangeEnd: 2 })
+    );
+    expect(progress).toHaveBeenCalledWith(1, 1);
+  });
+
+  it("falls back to the full project count for SCM exports, since computeExportedCardIdentifiers excludes SCM mode by design", async () => {
+    const progress = jest.fn();
+    exposedApi?.onImageProgress(progress);
+    mockComputePDFRenderWindow.mockReturnValue({ startPage: 1, totalPages: 1 });
+    mockCreatePDFElement.mockImplementation((props: PDFProps) => {
+      props.reportImageProgress?.();
+      return props;
+    });
+
+    await renderPDF(
+      makePDFProps({
+        scmMode: true,
+        cardDocumentsByIdentifier: { a: undefined, b: undefined, c: undefined },
+      })
+    );
+
+    expect(mockComputeExportedCardIdentifiers).not.toHaveBeenCalled();
+    expect(progress).toHaveBeenCalledWith(1, 3);
   });
 
   it("revokes tracked object URLs after EVERY batch, including when a batch render fails", async () => {
