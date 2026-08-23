@@ -1,9 +1,8 @@
 """
 Re-sources the `CardPrintingTag` rows mislabelled `source=VoteSource.USER` by the pre-#900
-`illustration_vote.cast_illustration_vote` bug to `source=VoteSource.DEDUCTION` (the command's
-name predates this fix and still says "retract" - see this module's "RE-SOURCE, DO NOT DELETE"
-section below for why the rows are rewritten in place, never dropped). That endpoint derives a
-`CardPrintingTag`
+`illustration_vote.cast_illustration_vote` bug to `source=VoteSource.DEDUCTION` - see this
+module's "RE-SOURCE, DO NOT DELETE" section below for why the rows are rewritten in place, never
+dropped. That endpoint derives a `CardPrintingTag`
 whenever a tapped artwork resolves 1:1 to a live candidate printing - the voter only answered a
 question about ARTWORK, never printing - but before #900 it cast that derivation at
 `source=VoteSource.USER` with the caller's own `vote_surface`: full human weight, able to satisfy
@@ -142,9 +141,9 @@ class DerivedPrintingTagRow:
 class IdentificationResult:
     derived: list[DerivedPrintingTagRow] = field(default_factory=list)
     # tag pks sharing a (card_id, anonymous_id) pair with a DERIVED_ARTIST_VOTE_SURFACE sibling,
-    # but whose created_at falls outside SIBLING_CORRELATION_WINDOW of it - not retracted, listed
-    # separately for human review (module docstring's "WHY (card_id, anonymous_id) ALONE IS NOT
-    # ENOUGH" section).
+    # but whose created_at falls outside SIBLING_CORRELATION_WINDOW of it - not re-sourced,
+    # listed separately for human review (module docstring's "WHY (card_id, anonymous_id) ALONE
+    # IS NOT ENOUGH" section).
     skipped_ambiguous_ids: list[int] = field(default_factory=list)
 
 
@@ -237,7 +236,7 @@ class Command(BaseCommand):
         "USER-sourced, is_no_match=False CardPrintingTag sharing (card, anonymous_id) with a "
         "CardArtistVote at illustration_vote.DERIVED_ARTIST_VOTE_SURFACE, created within "
         f"{SIBLING_CORRELATION_WINDOW.total_seconds():.0f}s of it (same cast_illustration_vote "
-        "transaction). Despite the command name, this does NOT delete the identified rows: it "
+        "transaction). This does NOT delete the identified rows: it "
         "rewrites source=DEDUCTION and vote_surface=DERIVED_PRINTING_VOTE_SURFACE in place, "
         "deliberately reversible, preserving user/anonymous_id. Performs NO consensus recompute: "
         "run consensus_recompute for the affected cards AFTERWARDS for any of them to actually "
@@ -264,7 +263,7 @@ class Command(BaseCommand):
         affected_card_ids = sorted({row.card_id for row in result.derived})
         would_leave_resolved_card_ids = sorted({row.card_id for row in result.derived if row.card_would_leave_resolved})
 
-        self.stdout.write(f"[{mode}] retract_derived_illustration_printing_tags")
+        self.stdout.write(f"[{mode}] reclassify_derived_illustration_printing_tags")
         self.stdout.write(
             f"  sibling correlation window: {SIBLING_CORRELATION_WINDOW.total_seconds():.0f}s "
             "(rows sharing (card, anonymous_id) with a derived-artist-vote sibling are re-sourced "

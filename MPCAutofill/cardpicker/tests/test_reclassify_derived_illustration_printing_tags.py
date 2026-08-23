@@ -1,5 +1,5 @@
 """
-Tests for cardpicker.management.commands.retract_derived_illustration_printing_tags - see that
+Tests for cardpicker.management.commands.reclassify_derived_illustration_printing_tags - see that
 module's own docstring for the pre-#900 bug and the identification method under test here.
 
 Pre-#900 derived rows are constructed directly via `CardPrintingTag.objects.create(...)` /
@@ -17,7 +17,7 @@ from cardpicker.illustration_vote import (
     DERIVED_ARTIST_VOTE_SURFACE,
     DERIVED_PRINTING_VOTE_SURFACE,
 )
-from cardpicker.management.commands.retract_derived_illustration_printing_tags import (
+from cardpicker.management.commands.reclassify_derived_illustration_printing_tags import (
     SIBLING_CORRELATION_WINDOW,
     annotate_would_leave_resolved,
     find_derived_printing_tags,
@@ -233,7 +233,7 @@ class TestCommand:
         card = CardFactory(name="Brainstorm")
         derived_tag, _ = _cast_derived_pair(card, "voter-1")
 
-        call_command("retract_derived_illustration_printing_tags")
+        call_command("reclassify_derived_illustration_printing_tags")
 
         derived_tag.refresh_from_db()
         assert derived_tag.source == VoteSource.USER
@@ -254,7 +254,7 @@ class TestCommand:
         )
 
         before_count = CardPrintingTag.objects.count()
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         assert CardPrintingTag.objects.count() == before_count
         derived_tag.refresh_from_db()
@@ -274,7 +274,7 @@ class TestCommand:
         card = CardFactory(name="Brainstorm")
         derived_tag, sibling_vote = _cast_derived_pair(card, "voter-1")
 
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         sibling_vote.refresh_from_db()
         assert sibling_vote.source == VoteSource.USER
@@ -286,7 +286,7 @@ class TestCommand:
         card = CardFactory(name="Forest")
         explicit_tag = CardPrintingTagFactory(card=card, anonymous_id="voter-1", source=VoteSource.USER)
 
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         explicit_tag.refresh_from_db()
         assert explicit_tag.source == VoteSource.USER
@@ -299,7 +299,7 @@ class TestCommand:
         stale_sibling_at = timezone.now() - (SIBLING_CORRELATION_WINDOW + timedelta(days=3))
         CardArtistVote.objects.filter(pk=vote.pk).update(created_at=stale_sibling_at)
 
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         tag.refresh_from_db()
         assert tag.source == VoteSource.USER
@@ -319,7 +319,7 @@ class TestCommand:
             vote_surface="question-feed",
         )
 
-        call_command("retract_derived_illustration_printing_tags", "--write")
+        call_command("reclassify_derived_illustration_printing_tags", "--write")
 
         escape_vote.refresh_from_db()
         assert escape_vote.source == VoteSource.USER
