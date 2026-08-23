@@ -251,9 +251,10 @@ export const openSelectVersionSection = async (page: Page) => {
 
 // Editor export rescue (docs/features/pdf-generator.md) - replaces the old navigateToPrintPDFTab
 // helper (drove the removed Finish-footer "Print / Export" button + /print navigation). PDF
-// export now runs in place via the Export dropdown -> PDF -> this settings modal -> Download,
-// same path CardbackFlow.spec.ts's own local copy already drives.
-export const openPDFExportSettingsModal = async (page: Page) => {
+// export now runs in place via the Export dropdown, whose "PDF" item is a direct download action
+// with no settings step of its own - same path CardbackFlow.spec.ts's own local copy already
+// drives.
+export const openDisplayExportMenu = async (page: Page) => {
   // The Export dropdown lives inside the right rail's Finish footer - below `xl` that's the
   // same gated Offcanvas ensureDisplayRightRailOpen's own callers already guard for.
   const rail = page.getByTestId("display-print-settings-rail");
@@ -262,15 +263,11 @@ export const openPDFExportSettingsModal = async (page: Page) => {
     await expect(rail).toBeVisible();
   }
   await page.getByTestId("display-export-menu-toggle").click();
-  await page.getByTestId("display-export-pdf-button").click();
-  const settingsModal = page.getByTestId("display-export-pdf-settings-modal");
-  await expect(settingsModal).toBeVisible();
-  return settingsModal;
 };
 
-export const openPDFExportSettingsAndClickDownload = async (page: Page) => {
-  const settingsModal = await openPDFExportSettingsModal(page);
-  await settingsModal.getByTestId("display-export-pdf-download-button").click();
+export const clickExportPDFDownload = async (page: Page) => {
+  await openDisplayExportMenu(page);
+  await page.getByTestId("display-export-pdf-button").click();
 };
 
 export async function expectCardSlotToExist(page: Page, slot: number) {

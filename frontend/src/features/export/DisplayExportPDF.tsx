@@ -17,19 +17,17 @@
  * the draft-flush, cardback-reminder, and save-before-export gate that used to run only ahead of
  * a `/print` navigation.
  *
- * Every export-time setting this dialog once held - Silhouette/SCM cutting mode, image DPI/JPG
- * quality, corner rounding, the guide colour/length/thickness/offset/crosshair controls, the
- * page-level guillotine cut guide lines, card selection mode, page range, and the advanced
- * per-side page-margin override - has migrated OUT of this settings step into the right rail,
- * where each one is editable next to the live sheet it governs rather than behind the Export PDF
- * dialog - see `displayPdfProps.ts`'s `DisplaySheetExportSettings` for where every migrated field
- * lives now. This settings step is now just the download/Save-to-Drive trigger and its associated
- * progress/failure modals; it holds no settings of its own. Plain Bootstrap form controls only
- * (no `AutofillCollapse`/`StyledDropdownTreeSelect`/`NumericField` from `PDFGenerator.tsx`) so
- * this component stays free of that file's own import graph.
+ * Every export-time setting this component once held in its own settings dialog - Silhouette/SCM
+ * cutting mode, image DPI/JPG quality, corner rounding, the guide colour/length/thickness/offset/
+ * crosshair controls, the page-level guillotine cut guide lines, card selection mode, page range,
+ * and the advanced per-side page-margin override - has migrated OUT into the right rail, where
+ * each one is editable next to the live sheet it governs - see `displayPdfProps.ts`'s
+ * `DisplaySheetExportSettings` for where every migrated field lives now. With nothing left to
+ * configure, the dialog itself is gone: PDF/Save-to-Drive are two direct dropdown actions that go
+ * straight from click to the generating-progress/failure modals below, the same way the sibling
+ * XML/Card Images/Decklist items work.
  */
 import React, { useState } from "react";
-import Button from "react-bootstrap/Button";
 import Dropdown from "react-bootstrap/Dropdown";
 import Modal from "react-bootstrap/Modal";
 import { createPortal } from "react-dom";
@@ -79,8 +77,6 @@ export function DisplayExportPDF({
   const backendURL = useAppSelector(selectRemoteBackendURL);
   const { clientSearchService } = useClientSearchContext();
 
-  const [showSettings, setShowSettings] = useState<boolean>(false);
-
   const pdfProps = useDisplayPDFProps(sheetSettings);
 
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
@@ -125,70 +121,39 @@ export function DisplayExportPDF({
   return (
     <>
       <Dropdown.Item
-        disabled={isProjectEmpty || isDownloading}
+        disabled={isProjectEmpty || isDownloading || isSavingToDrive}
         data-testid="display-export-pdf-button"
-        onClick={() => setShowSettings(true)}
+        onClick={() => {
+          runExportGate(() => {
+            downloadPDF().then(() => {
+              if (wasLatestCardsPdfDownloadSuccessful()) {
+                contributionPrompt.notifyExportSucceeded();
+              }
+            });
+          });
+        }}
       >
         <RightPaddedIcon bootstrapIconName="file-pdf" />
         {isDownloading ? <Spinner size={1} /> : "PDF"}
       </Dropdown.Item>
-      <Modal
-        show={showSettings}
-        onHide={() => setShowSettings(false)}
-        data-testid="display-export-pdf-settings-modal"
-      >
-        <Modal.Header closeButton>
-          <Modal.Title>Export PDF</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          Ready to export - every setting for this PDF lives in the right rail.
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowSettings(false)}>
-            Cancel
-          </Button>
-          {isGoogleDriveAppConfigured() && (
-            <Button
-              variant="outline-primary"
-              disabled={isDownloading || isSavingToDrive}
-              data-testid="display-export-pdf-drive-button"
-              onClick={() => {
-                setShowSettings(false);
-                runExportGate(() => {
-                  saveToDrive().then((succeeded) => {
-                    if (succeeded === true) {
-                      contributionPrompt.notifyExportSucceeded();
-                    }
-                  });
-                });
-              }}
-            >
-              {isSavingToDrive ? (
-                <Spinner size={1} />
-              ) : (
-                "Save PDF to Google Drive"
-              )}
-            </Button>
-          )}
-          <Button
-            variant="primary"
-            disabled={isDownloading || isSavingToDrive}
-            data-testid="display-export-pdf-download-button"
-            onClick={() => {
-              setShowSettings(false);
-              runExportGate(() => {
-                downloadPDF().then(() => {
-                  if (wasLatestCardsPdfDownloadSuccessful()) {
-                    contributionPrompt.notifyExportSucceeded();
-                  }
-                });
+      {isGoogleDriveAppConfigured() && (
+        <Dropdown.Item
+          disabled={isProjectEmpty || isDownloading || isSavingToDrive}
+          data-testid="display-export-pdf-drive-button"
+          onClick={() => {
+            runExportGate(() => {
+              saveToDrive().then((succeeded) => {
+                if (succeeded === true) {
+                  contributionPrompt.notifyExportSucceeded();
+                }
               });
-            }}
-          >
-            {isDownloading ? <Spinner size={1} /> : "Download PDF"}
-          </Button>
-        </Modal.Footer>
-      </Modal>
+            });
+          }}
+        >
+          <RightPaddedIcon bootstrapIconName="cloud-upload" />
+          {isSavingToDrive ? <Spinner size={1} /> : "Save PDF to Google Drive"}
+        </Dropdown.Item>
+      )}
       {/* Blocks interaction (static backdrop, no keyboard/close dismiss) for the render's actual
           duration - the same click-again impulse issue #811 describes has nowhere to land while
           this is up. Shown purely off `generating`, so it clears itself the instant the render

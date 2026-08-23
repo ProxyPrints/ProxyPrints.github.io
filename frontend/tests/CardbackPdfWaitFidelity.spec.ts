@@ -12,10 +12,10 @@ import {
 
 import { test } from "../playwright.setup";
 import {
+  clickExportPDFDownload,
   ensureDisplayRightRailOpen,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
-  openPDFExportSettingsAndClickDownload,
 } from "./test-utils";
 
 /**
@@ -76,15 +76,15 @@ for (const viewport of [
       await loadPageWithDefaultBackend(page);
       await importTextOnEditorLanding(page, "my search query");
 
-      await openPDFExportSettingsAndClickDownload(page);
+      await clickExportPDFDownload(page);
       const gate = page.getByTestId("pre-print-cardback-gate");
       await expect(gate).toBeVisible();
-      // :hover is coordinate-based - the real cursor is still resting wherever the settings
-      // modal's Download button was clicked, and at the 390px viewport this gate's own footer
-      // renders its "Choose a cardback" button at that same screen position, so it reads as
-      // already-hovered (a lighter tint-mix, not $primary) unless the cursor is moved away first.
-      // Same gotcha, same fix as ContrastAudit.spec.ts's own "resting" reads and
-      // DisplayLeftRailFidelity.spec.ts's post-`.hover()` reset.
+      // :hover is coordinate-based - the real cursor is still resting wherever the PDF dropdown
+      // item was clicked, and at the 390px viewport this gate's own footer renders its "Choose a
+      // cardback" button at that same screen position, so it reads as already-hovered (a lighter
+      // tint-mix, not $primary) unless the cursor is moved away first. Same gotcha, same fix as
+      // ContrastAudit.spec.ts's own "resting" reads and DisplayLeftRailFidelity.spec.ts's
+      // post-`.hover()` reset.
       await page.mouse.move(0, 0);
 
       // E.1 `.mdialog` (real react-bootstrap Modal) - the spec's own table cites the stock

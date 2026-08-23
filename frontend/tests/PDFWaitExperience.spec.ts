@@ -16,7 +16,7 @@ import { test } from "../playwright.setup";
 import {
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
-  openPDFExportSettingsModal,
+  openDisplayExportMenu,
 } from "./test-utils";
 
 // Issue #811 - the editor's own wait experience for DisplayExportPDF.tsx's Download/Save-to-Drive
@@ -63,11 +63,11 @@ const imageBucketSuccess = http.get(
     })
 );
 
-// Clicking Download shows the cardback reminder gate on the first export attempt each test (a
+// Clicking PDF shows the cardback reminder gate on the first export attempt each test (a
 // fresh project still riding the untouched default cardback) - CB1 suppresses it for the rest of
 // that session. Same pattern DisplayExportPDFSettings.spec.ts's own clickDownload helper uses.
 const clickDownload = async (page: import("@playwright/test").Page) => {
-  await page.getByTestId("display-export-pdf-download-button").click();
+  await page.getByTestId("display-export-pdf-button").click();
   await page
     .getByTestId("pre-print-cardback-gate")
     .getByTestId("cardback-gate-use-current")
@@ -92,7 +92,7 @@ test.describe("PDF-generation wait experience (issue #811)", () => {
 
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
-    await openPDFExportSettingsModal(page);
+    await openDisplayExportMenu(page);
 
     const progressModal = page.getByTestId("display-export-pdf-progress-modal");
     await expect(progressModal).not.toBeVisible();
@@ -141,14 +141,13 @@ test.describe("PDF-generation wait experience (issue #811)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
 
-    // Never mounted before generation starts - not even the settings modal has opened yet.
+    // Never mounted before generation starts - not even the Export dropdown has opened yet.
     await expect(page.getByTestId("pdf-wait-game")).toHaveCount(0);
     await expect(page.getByTestId("question-feed")).toHaveCount(0);
 
-    await openPDFExportSettingsModal(page);
-    // Opening the settings step itself never mounts the game either - only actual generation
-    // does (PDFWaitPanel.tsx's own module comment: "only imported once a caller actually mounts
-    // it").
+    await openDisplayExportMenu(page);
+    // Opening the dropdown itself never mounts the game either - only actual generation does
+    // (PDFWaitPanel.tsx's own module comment: "only imported once a caller actually mounts it").
     await expect(page.getByTestId("pdf-wait-game")).toHaveCount(0);
     await expect(page.getByTestId("question-feed")).toHaveCount(0);
 
@@ -198,7 +197,7 @@ test.describe("PDF-generation wait experience (issue #811)", () => {
 
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
-    await openPDFExportSettingsModal(page);
+    await openDisplayExportMenu(page);
     await clickDownload(page);
 
     const confirmModal = page.getByTestId("image-failure-confirm-modal");
@@ -230,7 +229,7 @@ test.describe("PDF-generation wait experience (issue #811)", () => {
 
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
-    await openPDFExportSettingsModal(page);
+    await openDisplayExportMenu(page);
 
     await expect(
       page.getByTestId("post-export-contribution-prompt")
