@@ -1131,6 +1131,32 @@ const sliceToPageRange = (
   return pages.slice(startIndex, endIndex);
 };
 
+// The distinct card identifiers this export's page-range-sliced output actually renders - the
+// same set PDFCardImage will call getPDFImageURL for. A caller that needs to fetch something
+// ONCE PER CARD ahead of / alongside the render itself (pdfDownload.tsx's bleed-prior
+// resolution, which hits the backend once per identifier) should scope to this list rather than
+// every project member, or a page-range-restricted export still pays for the whole project.
+// SCM mode paginates independently (SCMPDF.tsx) and never reads bleedPriors - nothing to scope.
+// Takes the same PDFPaginationInput subset computePDFPages does (plus the range/SCM fields it
+// doesn't) rather than full PDFProps, since callers resolving this ahead of the render (e.g.
+// pdfDownload.tsx) don't have fileHandles populated yet.
+export const computeExportedCardIdentifiers = (
+  props: PDFPaginationInput &
+    Pick<PDFProps, "scmMode" | "pageRangeStart" | "pageRangeEnd">
+): Array<string> => {
+  if (props.scmMode) {
+    return [];
+  }
+  const pages = sliceToPageRange(
+    computePDFPages(props),
+    props.pageRangeStart,
+    props.pageRangeEnd
+  );
+  return Array.from(
+    new Set(pages.flat().map((cardDocument) => cardDocument.identifier))
+  );
+};
+
 // The exact SCMPDFProps the SCM branch of PDF() renders with - factored out so the page count
 // (computePDFRenderPageCount below) plans against the same props set, not a re-derived copy.
 const scmPropsFromPDFProps = (props: PDFProps): SCMPDFProps => ({

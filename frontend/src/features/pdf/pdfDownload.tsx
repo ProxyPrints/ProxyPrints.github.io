@@ -19,7 +19,7 @@ import { downloadFile, useDoFileDownload } from "@/features/download/download";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
 import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
-import { PDFProps } from "@/features/pdf/PDF";
+import { computeExportedCardIdentifiers, PDFProps } from "@/features/pdf/PDF";
 import {
   dedupeFailuresByIdentifier,
   ImageFetchFailure,
@@ -46,7 +46,7 @@ export type ConfirmDespiteFailures = (
   failures: Array<ImageFetchFailure>
 ) => Promise<boolean>;
 
-const downloadPDF = async (
+export const downloadPDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
@@ -75,7 +75,7 @@ const downloadPDF = async (
     backendURL != null
       ? await resolveBleedPriors(
           backendURL,
-          Object.keys(props.cardDocumentsByIdentifier)
+          computeExportedCardIdentifiers(props)
         )
       : undefined;
   // Registered before the render call, not after - see pdfRenderService.onImageProgress's own
@@ -144,7 +144,7 @@ export const useDownloadPDF = (
       });
 };
 
-const saveToDrivePDF = async (
+export const saveToDrivePDF = async (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
@@ -170,7 +170,7 @@ const saveToDrivePDF = async (
     backendURL != null
       ? await resolveBleedPriors(
           backendURL,
-          Object.keys(props.cardDocumentsByIdentifier)
+          computeExportedCardIdentifiers(props)
         )
       : undefined;
   pdfRenderService.onImageProgress((completed, total) =>
