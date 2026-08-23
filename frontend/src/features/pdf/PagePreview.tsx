@@ -25,19 +25,25 @@
  *     orange loading sweep or a muted "no art" mark + directed-help link, additively alongside
  *     the existing name/query-text label (item 1, owner's hands-on review) - never replacing it,
  *     so a slot's own accessible name/query text stays exactly as findable as before.
- *   - E19 (lime rounded corner-only cut guides): the screen-side guide render swaps the full
- *     dashed-rectangle trim line for four small corner L-brackets at true scale, matching the
+ *   - E19 (rounded corner-only cut guides): the screen-side guide render swaps the full
+ *     dashed-rectangle bleed line for four small corner L-brackets at true scale, matching the
  *     mockup's redline. PDFGenerator's own fast preview keeps today's full-rectangle
- *     approximation - this is a screen-only restyle of the /display sheet, not a new shared
- *     default. See PagePreview's own PDF-parity note further down for why the ACTUAL exported
- *     PDF's guide style is out of this task's scope, not silently left inconsistent.
+ *     approximation. Both variants take their color/length/thickness/offset from the caller's
+ *     own cut-line settings (cutLineColor etc.) rather than a fixed constant, so the screen
+ *     preview and the exported PDF always draw the same guide.
  */
 
 import { keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
 import React, { useEffect, useMemo, useState } from "react";
 
-import { CardHeightMM, CardWidthMM } from "@/common/constants";
+import {
+  CardHeightMM,
+  CardWidthMM,
+  DEFAULT_CUT_LINE_COLOR,
+  DEFAULT_CUT_LINE_LENGTH_MM,
+  DEFAULT_CUT_LINE_THICKNESS_MM,
+} from "@/common/constants";
 import { useLongPress } from "@/common/useLongPress";
 import {
   computeLayout,
@@ -53,7 +59,6 @@ const SCREEN_SLOT_BG = "var(--theme-band-bg)";
 // component's screenPresentation page-border rule above) so the two never read as the same line.
 const SCREEN_SLOT_PINLINE = "rgba(143, 160, 176, 0.4)";
 const SCREEN_MUTED_TEXT = "var(--theme-muted)";
-const LIME_GUIDE_COLOR = "#8ae234";
 
 // E18 - the indeterminate loading sweep. `prefers-reduced-motion` gets a static bar at a fixed
 // position instead of an animated one, matching E11's own reduced-motion rule elsewhere in this
@@ -195,37 +200,58 @@ const CustomCardbackDot = styled.span`
   pointer-events: none;
 `;
 
-// E19 - the lime, rounded, corner-only cut guide: a small L-bracket (two legs) at each of a
-// card's four trim corners, replacing the full dashed-rectangle trim line the screenPresentation
-// sheet used to draw. Dimensions match the mockup's own rendered interpretation ("0.6mm stroke +
-// ~3mm legs" - see the design spec's own flagged-for-visual-approval note): real mm units, so the
-// legs/stroke scale at true sheet scale automatically via this component's one outer
-// `transform: scale()`, no cqw container-query trick needed (unlike the static mockup, this is a
-// live React tree already inside that transform).
-const CUT_GUIDE_LEG_MM = 3;
-const CUT_GUIDE_STROKE_MM = 0.6;
-
+// E19 - the rounded, corner-only cut guide: a small L-bracket (two legs) at each of a card's
+// four bleed corners, replacing the full dashed-rectangle bleed line the screenPresentation sheet
+// used to draw. Real mm units, so the legs/stroke scale at true sheet scale automatically via
+// this component's one outer transform: scale(), no cqw container-query trick needed. Color and
+// dimensions come from the caller's own cut-line settings, not a fixed constant - see
+// PagePreviewProps.
 const CutCornerLeg = styled.div<{
   axis: "horizontal" | "vertical";
   corner: "tl" | "tr" | "bl" | "br";
+  color: string;
+  legMM: number;
+  strokeMM: number;
 }>`
   position: absolute;
-  background: ${LIME_GUIDE_COLOR};
-  border-radius: ${CUT_GUIDE_STROKE_MM / 2}mm;
+  background: ${(props) => props.color};
+  border-radius: ${(props) => props.strokeMM / 2}mm;
   width: ${(props) =>
-    props.axis === "horizontal" ? CUT_GUIDE_LEG_MM : CUT_GUIDE_STROKE_MM}mm;
+    props.axis === "horizontal" ? props.legMM : props.strokeMM}mm;
   height: ${(props) =>
-    props.axis === "horizontal" ? CUT_GUIDE_STROKE_MM : CUT_GUIDE_LEG_MM}mm;
+    props.axis === "horizontal" ? props.strokeMM : props.legMM}mm;
   ${(props) =>
     props.corner === "tl" || props.corner === "bl" ? "left: 0;" : "right: 0;"}
   ${(props) =>
     props.corner === "tl" || props.corner === "tr" ? "top: 0;" : "bottom: 0;"}
 `;
 
-const CutCornerMark = ({ corner }: { corner: "tl" | "tr" | "bl" | "br" }) => (
+const CutCornerMark = ({
+  corner,
+  color,
+  legMM,
+  strokeMM,
+}: {
+  corner: "tl" | "tr" | "bl" | "br";
+  color: string;
+  legMM: number;
+  strokeMM: number;
+}) => (
   <>
-    <CutCornerLeg axis="horizontal" corner={corner} />
-    <CutCornerLeg axis="vertical" corner={corner} />
+    <CutCornerLeg
+      axis="horizontal"
+      corner={corner}
+      color={color}
+      legMM={legMM}
+      strokeMM={strokeMM}
+    />
+    <CutCornerLeg
+      axis="vertical"
+      corner={corner}
+      color={color}
+      legMM={legMM}
+      strokeMM={strokeMM}
+    />
   </>
 );
 
@@ -307,11 +333,19 @@ export interface PagePreviewProps {
   /** One entry per slot on this page, in the same row-major order computeLayout() returns.
    * Fewer entries than grid capacity is fine - remaining slots render empty. */
   slots: Array<PagePreviewSlotContent>;
-  /** Renders a dashed trim-line rectangle inside each slot's bleed box, matching the PDF
-   * generator's own drawCardCutLines toggle - a visual approximation (not exact
-   * CutLineCorner geometry, which stays PDF-only), for at-a-glance placement checking, not
-   * print-accurate cut-line rendering. */
+  /** Renders a guide on the true bleed edge of each slot, matching the PDF generator's own
+   * drawCardCutLines toggle - a visual approximation (not exact CutLineCorner geometry, which
+   * stays PDF-only), for at-a-glance placement checking, not print-accurate cut-line rendering. */
   showCutLines: boolean;
+  /** Cut-line appearance (DisplaySheetSettings' own cutLineColor/cutLineLengthMM/
+   * cutLineThicknessMM/cutLineOffsetMM) - the same fields PDF.tsx's PDFCardCutLines reads, so the
+   * guide drawn here matches the exported PDF's guide rather than a fixed constant. Each falls
+   * back to the shared DEFAULT_CUT_LINE_* constant when omitted, matching DisplaySheetSettings'
+   * own defaults. */
+  cutLineColor?: string;
+  cutLineLengthMM?: number;
+  cutLineThicknessMM?: number;
+  cutLineOffsetMM?: number;
   /** Width, in real CSS px, of the preview panel this scales down to fit. */
   maxWidthPx: number;
   /** Proposal H (docs/proposals/proposal-h-unified-display-page.md): when provided, each slot
@@ -365,6 +399,10 @@ export function PagePreview({
   spacing,
   slots,
   showCutLines,
+  cutLineColor = DEFAULT_CUT_LINE_COLOR,
+  cutLineLengthMM = DEFAULT_CUT_LINE_LENGTH_MM,
+  cutLineThicknessMM = DEFAULT_CUT_LINE_THICKNESS_MM,
+  cutLineOffsetMM = 0,
   maxWidthPx,
   onSlotClick,
   selectedSlotIndex,
@@ -442,8 +480,11 @@ export function PagePreview({
             yMM={slot.yMM + offsetYMM}
             slotWidthMM={slot.widthMM}
             slotHeightMM={slot.heightMM}
-            bleedMM={slot.bleedMM}
             showCutLines={showCutLines}
+            cutLineColor={cutLineColor}
+            cutLineLengthMM={cutLineLengthMM}
+            cutLineThicknessMM={cutLineThicknessMM}
+            cutLineOffsetMM={cutLineOffsetMM}
             screenPresentation={screenPresentation}
             isSelected={onSlotClick != null && selectedSlotIndex === index}
             onSlotClick={onSlotClick}
@@ -463,14 +504,11 @@ interface PagePreviewSlotElProps {
   yMM: number;
   slotWidthMM: number;
   slotHeightMM: number;
-  /** #301 - the per-edge bleed `computeLayout` actually granted this slot (never more than the
-   * caller's configured `bleedEdgeMM`, and potentially less on a crowded axis - see
-   * layout.ts's `fitAxisWithBleed`). The cut line (the TRUE card edge - see this component's
-   * own module comment) sits at `bleedMM.left`/`bleedMM.top` from the slot's own top-left, not
-   * at a flat `bleedEdgeMM` offset, so it stays correct even when this slot is cropped below
-   * the configured target - this is the "preview mirrors export" contract in practice. */
-  bleedMM: LayoutEdgeBleed;
   showCutLines: boolean;
+  cutLineColor: string;
+  cutLineLengthMM: number;
+  cutLineThicknessMM: number;
+  cutLineOffsetMM: number;
   screenPresentation: boolean;
   isSelected: boolean;
   onSlotClick?: (index: number) => void;
@@ -492,8 +530,11 @@ function PagePreviewSlotEl({
   yMM,
   slotWidthMM,
   slotHeightMM,
-  bleedMM,
   showCutLines,
+  cutLineColor,
+  cutLineLengthMM,
+  cutLineThicknessMM,
+  cutLineOffsetMM,
   screenPresentation,
   isSelected,
   onSlotClick,
@@ -701,33 +742,57 @@ function PagePreviewSlotEl({
         </div>
       )}
       {showCutLines &&
+        // Anchored on the slot's own outer edge (this element's own box IS the bleed box - see
+        // computeLayout()'s slot.widthMM/heightMM) rather than the trim edge inside it, matching
+        // PDF.tsx's PDFCardCutLines: offset 0 sits exactly on the bleed boundary, a positive
+        // offset grows the guide outward past it.
         (screenPresentation ? (
           <div
             data-testid="page-preview-cut-line"
             style={{
               position: "absolute",
-              left: bleedMM.left + "mm",
-              top: bleedMM.top + "mm",
-              width: CardWidthMM + "mm",
-              height: CardHeightMM + "mm",
+              left: -cutLineOffsetMM + "mm",
+              top: -cutLineOffsetMM + "mm",
+              width: slotWidthMM + 2 * cutLineOffsetMM + "mm",
+              height: slotHeightMM + 2 * cutLineOffsetMM + "mm",
               pointerEvents: "none",
             }}
           >
-            <CutCornerMark corner="tl" />
-            <CutCornerMark corner="tr" />
-            <CutCornerMark corner="bl" />
-            <CutCornerMark corner="br" />
+            <CutCornerMark
+              corner="tl"
+              color={cutLineColor}
+              legMM={cutLineLengthMM}
+              strokeMM={cutLineThicknessMM}
+            />
+            <CutCornerMark
+              corner="tr"
+              color={cutLineColor}
+              legMM={cutLineLengthMM}
+              strokeMM={cutLineThicknessMM}
+            />
+            <CutCornerMark
+              corner="bl"
+              color={cutLineColor}
+              legMM={cutLineLengthMM}
+              strokeMM={cutLineThicknessMM}
+            />
+            <CutCornerMark
+              corner="br"
+              color={cutLineColor}
+              legMM={cutLineLengthMM}
+              strokeMM={cutLineThicknessMM}
+            />
           </div>
         ) : (
           <div
             data-testid="page-preview-cut-line"
             style={{
               position: "absolute",
-              left: bleedMM.left + "mm",
-              top: bleedMM.top + "mm",
-              width: CardWidthMM + "mm",
-              height: CardHeightMM + "mm",
-              outline: "0.25mm dashed rgba(220, 30, 30, 0.75)",
+              left: -cutLineOffsetMM + "mm",
+              top: -cutLineOffsetMM + "mm",
+              width: slotWidthMM + 2 * cutLineOffsetMM + "mm",
+              height: slotHeightMM + 2 * cutLineOffsetMM + "mm",
+              outline: `${cutLineThicknessMM}mm dashed ${cutLineColor}`,
               pointerEvents: "none",
             }}
           />

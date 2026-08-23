@@ -230,7 +230,15 @@ import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
 import { useDebounce } from "use-debounce";
 
 import { isRecoveryReloadInFlight } from "@/common/chunkErrorRecovery";
-import { Back, CardHeightMM, CardWidthMM, Front } from "@/common/constants";
+import {
+  Back,
+  CardHeightMM,
+  CardWidthMM,
+  DEFAULT_CUT_LINE_COLOR,
+  DEFAULT_CUT_LINE_LENGTH_MM,
+  DEFAULT_CUT_LINE_THICKNESS_MM,
+  Front,
+} from "@/common/constants";
 import {
   getLocalStorageRailSectionExpansion,
   getOrCreateAnonymousId,
@@ -444,12 +452,10 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   pageSize: "LETTER",
   bleedEdgeMM: STANDARD_BLEED_MARGIN_MM,
   showCutLines: true,
-  // Matches the old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS values this migrated from,
-  // unchanged - the lime colour matches PagePreview.tsx's own E19 screen-side guide colour.
-  cutLineColor: "#8ae234",
+  cutLineColor: DEFAULT_CUT_LINE_COLOR,
   showCrossCutLines: false,
-  cutLineLengthMM: 3,
-  cutLineThicknessMM: 0.6,
+  cutLineLengthMM: DEFAULT_CUT_LINE_LENGTH_MM,
+  cutLineThicknessMM: DEFAULT_CUT_LINE_THICKNESS_MM,
   cutLineOffsetMM: 0,
   offsetXMM: 0,
   offsetYMM: 0,
@@ -3297,6 +3303,10 @@ export function DisplayPage() {
                       offsetYMM={settings.offsetYMM}
                       slots={sheet.slots}
                       showCutLines={settings.showCutLines}
+                      cutLineColor={settings.cutLineColor}
+                      cutLineLengthMM={settings.cutLineLengthMM}
+                      cutLineThicknessMM={settings.cutLineThicknessMM}
+                      cutLineOffsetMM={settings.cutLineOffsetMM}
                       maxWidthPx={sheetRenderWidthPx}
                       // R7/D17 - screen-only presentation (no white fill/box-shadow, a hairline
                       // pinline instead); the exported PDF (exportPdfProps above) never reads
@@ -3706,9 +3716,9 @@ export function DisplayPage() {
                     PR), same migration as Print quality below. Only rendered while Guides is on -
                     with no lines drawn there's nothing for these to style, matching the old
                     export dialog's own gating (DisplayExportPDF.tsx used to key this same block
-                    off sheetSettings.showCutLines). Colour + the three geometry numbers stay on
-                    one row (aria-labels carry what each field is - no separate caption line,
-                    kept tight to hold the rail under its pre-trim height cap). */}
+                    off sheetSettings.showCutLines). Each field carries the same short
+                    Form.Label/aria-label pairing PageOffsetControl.tsx's own row uses, plus one
+                    text-muted help line below the row - same pattern, not a new one. */}
                 <AutofillCollapse
                   id="display-rail-cut-lines-guides"
                   pad={0}
@@ -3740,73 +3750,98 @@ export function DisplayPage() {
 
                     {settings.showCutLines && (
                       <div>
-                        <div className="d-flex gap-2 align-items-center mb-0">
-                          <Form.Control
-                            type="color"
-                            size="sm"
-                            aria-label="Guide colour"
-                            data-testid="display-cut-line-color"
-                            value={settings.cutLineColor}
-                            onChange={(event) =>
-                              setSettings((previous) => ({
-                                ...previous,
-                                cutLineColor: event.target.value,
-                              }))
-                            }
-                          />
-                          <Form.Control
-                            type="number"
-                            size="sm"
-                            step={0.1}
-                            min={0}
-                            aria-label="Cut line length (mm)"
-                            data-testid="display-cut-line-length"
-                            value={settings.cutLineLengthMM}
-                            onChange={(event) => {
-                              const value = parseFloat(event.target.value);
-                              if (!Number.isNaN(value)) {
+                        <div className="d-flex gap-2 align-items-end mb-1">
+                          <Form.Group>
+                            <Form.Label className="small mb-1">
+                              Colour
+                            </Form.Label>
+                            <Form.Control
+                              type="color"
+                              size="sm"
+                              aria-label="Guide colour"
+                              data-testid="display-cut-line-color"
+                              value={settings.cutLineColor}
+                              onChange={(event) =>
                                 setSettings((previous) => ({
                                   ...previous,
-                                  cutLineLengthMM: value,
-                                }));
+                                  cutLineColor: event.target.value,
+                                }))
                               }
-                            }}
-                          />
-                          <Form.Control
-                            type="number"
-                            size="sm"
-                            step={0.1}
-                            min={0}
-                            aria-label="Cut line thickness (mm)"
-                            data-testid="display-cut-line-thickness"
-                            value={settings.cutLineThicknessMM}
-                            onChange={(event) => {
-                              const value = parseFloat(event.target.value);
-                              if (!Number.isNaN(value)) {
-                                setSettings((previous) => ({
-                                  ...previous,
-                                  cutLineThicknessMM: value,
-                                }));
-                              }
-                            }}
-                          />
-                          <Form.Control
-                            type="number"
-                            size="sm"
-                            step={0.1}
-                            aria-label="Cut line offset (mm)"
-                            data-testid="display-cut-line-offset"
-                            value={settings.cutLineOffsetMM}
-                            onChange={(event) => {
-                              const value = parseFloat(event.target.value);
-                              if (!Number.isNaN(value)) {
-                                setSettings((previous) => ({
-                                  ...previous,
-                                  cutLineOffsetMM: value,
-                                }));
-                              }
-                            }}
-                          />
+                            />
+                          </Form.Group>
+                          <Form.Group className="flex-fill">
+                            <Form.Label className="small mb-1">
+                              Mark length (mm)
+                            </Form.Label>
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              min={0}
+                              aria-label="Cut line mark length (mm)"
+                              data-testid="display-cut-line-length"
+                              value={settings.cutLineLengthMM}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value)) {
+                                  setSettings((previous) => ({
+                                    ...previous,
+                                    cutLineLengthMM: value,
+                                  }));
+                                }
+                              }}
+                            />
+                          </Form.Group>
+                          <Form.Group className="flex-fill">
+                            <Form.Label className="small mb-1">
+                              Thickness (mm)
+                            </Form.Label>
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              min={0}
+                              aria-label="Cut line thickness (mm)"
+                              data-testid="display-cut-line-thickness"
+                              value={settings.cutLineThicknessMM}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value)) {
+                                  setSettings((previous) => ({
+                                    ...previous,
+                                    cutLineThicknessMM: value,
+                                  }));
+                                }
+                              }}
+                            />
+                          </Form.Group>
+                          <Form.Group className="flex-fill">
+                            <Form.Label className="small mb-1">
+                              Offset (mm)
+                            </Form.Label>
+                            <Form.Control
+                              type="number"
+                              size="sm"
+                              step={0.1}
+                              aria-label="Cut line offset (mm)"
+                              data-testid="display-cut-line-offset"
+                              value={settings.cutLineOffsetMM}
+                              onChange={(event) => {
+                                const value = parseFloat(event.target.value);
+                                if (!Number.isNaN(value)) {
+                                  setSettings((previous) => ({
+                                    ...previous,
+                                    cutLineOffsetMM: value,
+                                  }));
+                                }
+                              }}
+                            />
+                          </Form.Group>
+                        </div>
+                        <div className="text-muted small mb-2">
+                          Marks the true bleed edge, just outside the printed
+                          card. Offset pushes the mark further out (negative
+                          pulls it back in).
                         </div>
                         <Form.Check
                           type="switch"
