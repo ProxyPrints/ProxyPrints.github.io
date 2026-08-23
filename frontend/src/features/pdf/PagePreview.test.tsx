@@ -159,6 +159,90 @@ describe("PagePreview", () => {
     expect(cutLines.length).toBeGreaterThan(0);
   });
 
+  it("sits on the true bleed edge, outside the printed card face - not the trim edge inside it", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={true}
+        maxWidthPx={400}
+      />
+    );
+    const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
+    // A regression back to the trim-edge anchor would put this at left/top "3mm" (bleedMM.left)
+    // and a CardWidthMM/CardHeightMM box instead of the full card-plus-bleed slot.
+    expect(cutLine.style.left).toBe("0mm");
+    expect(cutLine.style.top).toBe("0mm");
+    expect(cutLine.style.width).toBe(`${CardWidthMM + 2 * 3}mm`);
+    expect(cutLine.style.height).toBe(`${CardHeightMM + 2 * 3}mm`);
+  });
+
+  it("defaults to the shared lime/thin cut-line appearance when no cutLine* props are given", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={true}
+        maxWidthPx={400}
+      />
+    );
+    const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
+    expect(cutLine.style.outline).toBe("0.25mm dashed #8ae234");
+  });
+
+  it("honors custom cutLineColor/cutLineThicknessMM/cutLineOffsetMM props", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={true}
+        cutLineColor="#00ff00"
+        cutLineThicknessMM={1}
+        cutLineOffsetMM={2}
+        maxWidthPx={400}
+      />
+    );
+    const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
+    expect(cutLine.style.outline).toBe("1mm dashed #00ff00");
+    expect(cutLine.style.left).toBe("-2mm");
+    expect(cutLine.style.top).toBe("-2mm");
+    expect(cutLine.style.width).toBe(`${CardWidthMM + 2 * 3 + 2 * 2}mm`);
+    expect(cutLine.style.height).toBe(`${CardHeightMM + 2 * 3 + 2 * 2}mm`);
+  });
+
+  it("anchors the screenPresentation guide on the same true bleed edge as the non-screen variant", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={true}
+        screenPresentation
+        maxWidthPx={400}
+      />
+    );
+    const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
+    expect(cutLine.style.left).toBe("0mm");
+    expect(cutLine.style.top).toBe("0mm");
+    expect(cutLine.style.width).toBe(`${CardWidthMM + 2 * 3}mm`);
+    expect(cutLine.style.height).toBe(`${CardHeightMM + 2 * 3}mm`);
+  });
+
   it("scales the outer wrapper to exactly maxWidthPx regardless of page size", () => {
     render(
       <PagePreview

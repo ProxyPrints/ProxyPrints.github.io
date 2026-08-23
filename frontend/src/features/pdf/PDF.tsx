@@ -146,7 +146,7 @@ export interface PDFProps {
   roundCorners: boolean;
   drawCardCutLines: boolean;
   drawPageCutLines: boolean;
-  // Optional crosshair corner marks alongside the default dashed trim outline `drawCardCutLines`
+  // Optional crosshair corner marks alongside the default dashed bleed outline `drawCardCutLines`
   // already draws - default off (most users just need the outline; the marks are for anyone who
   // specifically wants a traditional corner-mark guide too). Independent of drawCardCutLines'
   // own on/off state in principle, but only rendered when it's on (nothing to add marks to
@@ -239,7 +239,7 @@ interface CutLineCornerProps {
   verticalDownLengthOverrideMM?: number;
 }
 
-// Gap between dashes on the trim outline (PDFCardCutLines' Svg/Rect strokeDasharray) - the dash
+// Gap between dashes on the bleed outline (PDFCardCutLines' Svg/Rect strokeDasharray) - the dash
 // length itself is the user-adjustable cutLineLengthMM, so only the fixed gap lives here.
 const CUT_LINE_DASH_GAP_MM = 1;
 
@@ -249,7 +249,7 @@ const mmToPt = (mm: number): number => (mm / 25.4) * 72;
 
 // One arm of a CutLineCorner mark (the optional crosshair guide) - "positive" extends right/down
 // from the corner's own anchor point, "negative" extends left/up. Always a single solid bar; the
-// dashed guide is the trim outline (PDFCardCutLines' Svg/Rect), not these marks.
+// dashed guide is the bleed outline (PDFCardCutLines' Svg/Rect), not these marks.
 const CutLineBar = ({
   axis,
   direction,
@@ -284,10 +284,10 @@ const CutLineBar = ({
   return <View style={style} />;
 };
 
-// The optional crosshair corner-mark guide (PDFProps.showCrossCutLines) - always anchored at the
-// true trim edge (bleedMM.<edge> from the slot's own boundary, same #301 per-axis-cropped-bleed
-// reasoning the dashed outline below uses). This is the only placement CutLineCorner ever needed
-// even before the cut-guide redesign (PageCutLines, further down, already hardcoded it).
+// The optional crosshair corner-mark guide (PDFProps.showCrossCutLines) - anchored at the slot's
+// own outer edge (the true bleed boundary), the same anchor PDFCardCutLines' dashed outline
+// below uses. This is the only placement CutLineCorner ever needed even before the cut-guide
+// redesign (PageCutLines, further down, already hardcoded it).
 const CutLineCorner = ({
   position,
   lengthMM,
@@ -298,12 +298,6 @@ const CutLineCorner = ({
 }: CutLineCornerProps) => {
   const ctx = usePDFContext();
   const { cutLineThicknessMM, cutLineColor, cutLineOffsetMM } = ctx;
-  // #301 - the cut line marks the TRUE card edge, which is `bleedMM.<edge>` in from this slot's
-  // own boundary, not a flat `bleedEdgeMM` - left/right (the column axis) and top/bottom (the
-  // row axis) can legitimately differ (one axis full bleed, the other cropped - see layout.ts's
-  // fitAxisWithBleed), so this needs two separate offsets, not the one `totalOffset` the pre-
-  // #301 uniform-bleed version used.
-  const bleedMM = contextAvailableBleedMM(ctx);
 
   const positionLookup: {
     [location in CutLineCornerPosition]: {
@@ -327,9 +321,10 @@ const CutLineCorner = ({
   };
 
   const inside = positionLookup[position];
-  const horizontalOffset =
-    bleedMM[inside.horizontalCssProperty] - cutLineOffsetMM;
-  const verticalOffset = bleedMM[inside.verticalCssProperty] - cutLineOffsetMM;
+  // Offset 0 sits exactly on the slot's own outer edge (the true bleed boundary, the same box
+  // PDFCardCutLines' outline traces below); a positive offset grows the mark outward past it.
+  const horizontalOffset = -cutLineOffsetMM;
+  const verticalOffset = -cutLineOffsetMM;
 
   return (
     <View
@@ -616,7 +611,7 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
 
 // Renders cut lines for a single card slot, absolutely positioned within the overlay layer to
 // match the card at (colIndex, rowIndex) in the grid. The default guide is a dashed rounded-rect
-// outline traced directly on the trim boundary (an Svg/Rect, not a corner mark - native SVG
+// outline traced directly on the bleed boundary (an Svg/Rect, not a corner mark - native SVG
 // stroke-dashing continues the pattern seamlessly around the rounded corners, which the old
 // segment-by-segment CutLineBar approach couldn't do for a full perimeter); the crosshair corner
 // marks (CutLineCorner, same component PageCutLines uses for the sheet-wide guillotine lines) are
@@ -649,17 +644,20 @@ const PDFCardCutLines = ({
   const left = colIndex * (cardSlotWidth + cardSpacingColMM);
   const top = rowIndex * (cardSlotHeight + cardSpacingRowMM);
 
-  // The outline's own path grows outward from the true trim rect (CardWidthMM x CardHeightMM at
-  // bleedMM.left/top) by cutLineOffsetMM on every side - offset 0 (the default) puts the path
-  // exactly on the trim boundary, so the stroke straddles it (half into the visible card face,
-  // half into the bleed), which is what "sits on the trim boundary" means for a drawn line. The
-  // Svg viewport is padded by half the stroke width beyond that so the stroke's own outer edge
-  // never sits exactly on (and risks being clipped at) the viewport bound.
-  const outlineWidthMM = CardWidthMM + 2 * cutLineOffsetMM;
-  const outlineHeightMM = CardHeightMM + 2 * cutLineOffsetMM;
+  // The outline's own path grows outward from the slot's own bleed box (cardSlotWidth x
+  // cardSlotHeight, at the slot's own origin) by cutLineOffsetMM on every side - offset 0 (the
+  // default) puts the path exactly on the true bleed edge, entirely outside the printed card
+  // face, which is what "sits on the bleed boundary" means for a drawn line. The Svg viewport is
+  // padded by half the stroke width beyond that so the stroke's own outer edge never sits
+  // exactly on (and risks being clipped at) the viewport bound.
+  const outlineWidthMM = cardSlotWidth + 2 * cutLineOffsetMM;
+  const outlineHeightMM = cardSlotHeight + 2 * cutLineOffsetMM;
   const strokePadMM = cutLineThicknessMM / 2;
-  const svgLeftMM = bleedMM.left - cutLineOffsetMM - strokePadMM;
-  const svgTopMM = bleedMM.top - cutLineOffsetMM - strokePadMM;
+  const svgLeftMM = -cutLineOffsetMM - strokePadMM;
+  const svgTopMM = -cutLineOffsetMM - strokePadMM;
+  // Kept at the card's own die-cut radius rather than grown by the bleed depth - matching that
+  // would need the same edge-dependent growth PDFCardImage's own cornerRadiusMM() applies, which
+  // is a change to what roundCorners means, not to this guide's position or color.
   const radiusMM = roundCorners ? CornerRadiusMM : 0;
   // Rasterized proof (fix/print-cut-guides verification pass): Svg's own width/height props
   // (unlike a View's mm-string styles, which DO get react-pdf's box-model unit conversion) are

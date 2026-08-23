@@ -1,6 +1,13 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import {
+  CardHeightMM,
+  CardWidthMM,
+  DEFAULT_CUT_LINE_COLOR,
+  DEFAULT_CUT_LINE_LENGTH_MM,
+  DEFAULT_CUT_LINE_THICKNESS_MM,
+} from "@/common/constants";
 import { CardType } from "@/common/schema_types";
 import { CardDocument } from "@/common/types";
 import {
@@ -8,6 +15,8 @@ import {
   DisplayPDFPropsInput,
   DisplaySheetExportSettings,
 } from "@/features/pdf/displayPdfProps";
+import { computeLayout } from "@/features/pdf/layout";
+import { getPageSizeMM } from "@/features/pdf/pageSize";
 import {
   computeExportedCardIdentifiers,
   computePDFRenderPageCount,
@@ -23,8 +32,11 @@ import {
 // then lets the tests count how many <pdf-page> elements PDF/SCMPDF actually produce and demand
 // that count equal computePDFRenderPageCount. Same module-scope mock idea as the displayPdfProps
 // and pagination tests, but structural rather than null so rendering works. Svg/Rect (the dashed
-// trim-outline cut guide) need the same pass-through treatment as View/Image - without a mock,
-// PDF.tsx's import of them from the real module would be undefined here.
+// bleed-outline cut guide) need the same pass-through treatment as View/Image - without a mock,
+// PDF.tsx's import of them from the real module would be undefined here. View/Svg also carry
+// their `style` prop through as a `data-style` JSON attribute, and Rect carries every prop
+// through as `data-props` JSON, so the cut-guide geometry tests below can read back exactly what
+// PDFCardCutLines computed rather than only counting rendered tags.
 jest.mock("@react-pdf/renderer", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   return {
@@ -32,11 +44,38 @@ jest.mock("@react-pdf/renderer", () => {
       React.createElement("pdf-document", null, children),
     Page: ({ children }: { children?: React.ReactNode }) =>
       React.createElement("pdf-page", null, children),
-    View: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement("pdf-view", null, children),
-    Svg: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement("pdf-svg", null, children),
-    Rect: () => null,
+    View: ({
+      children,
+      style,
+    }: {
+      children?: React.ReactNode;
+      style?: unknown;
+    }) =>
+      React.createElement(
+        "pdf-view",
+        { "data-style": JSON.stringify(style ?? null) },
+        children
+      ),
+    Svg: ({
+      children,
+      style,
+      width,
+      height,
+    }: {
+      children?: React.ReactNode;
+      style?: unknown;
+      width?: number;
+      height?: number;
+    }) =>
+      React.createElement(
+        "pdf-svg",
+        { "data-style": JSON.stringify(style ?? null), width, height },
+        children
+      ),
+    Rect: (props: Record<string, unknown>) =>
+      React.createElement("pdf-rect", {
+        "data-props": JSON.stringify(props),
+      }),
     Image: () => null,
     StyleSheet: { create: (styles: unknown) => styles },
   };
@@ -48,10 +87,10 @@ const DEFAULT_SHEET_SETTINGS = {
   pageSize: "LETTER" as const,
   bleedEdgeMM: 3.175,
   showCutLines: true,
-  cutLineColor: "#8ae234",
+  cutLineColor: DEFAULT_CUT_LINE_COLOR,
   showCrossCutLines: false,
-  cutLineLengthMM: 3,
-  cutLineThicknessMM: 0.6,
+  cutLineLengthMM: DEFAULT_CUT_LINE_LENGTH_MM,
+  cutLineThicknessMM: DEFAULT_CUT_LINE_THICKNESS_MM,
   cutLineOffsetMM: 0,
   offsetXMM: 0,
   offsetYMM: 0,
@@ -268,5 +307,142 @@ describe("createPDFElement - the per-batch element pdf() consumes", () => {
     expect(element.props).toStrictEqual(
       expect.objectContaining({ pageRangeStart: undefined })
     );
+  });
+});
+
+describe("PDFCardCutLines geometry - the bleed-edge guide", () => {
+  const ptToMm = (pt: number) => (pt / 72) * 25.4;
+
+  // The first <pdf-svg>/<pdf-rect> pair in render order is always the (colIndex 0, rowIndex 0)
+  // card slot's own cut-line guide - Svg is only ever rendered from PDFCardCutLines in this
+  // codebase, one per slot, in grid order.
+  const firstCutLineGuide = (props: PDFProps) => {
+    const html = renderToStaticMarkup(createPDFElement(props));
+    const svgStyleJson = /<pdf-svg data-style="([^"]*)"/.exec(html)?.[1];
+    const rectPropsJson = /<pdf-rect data-props="([^"]*)"/.exec(html)?.[1];
+    if (svgStyleJson == null || rectPropsJson == null) {
+      throw new Error("no cut-line guide found in the rendered markup");
+    }
+    const svgStyle = JSON.parse(svgStyleJson.replace(/&quot;/g, '"')) as {
+      left: string;
+      top: string;
+    };
+    const rectProps = JSON.parse(rectPropsJson.replace(/&quot;/g, '"')) as {
+      x: number;
+      width: number;
+      height: number;
+      rx: number;
+      ry: number;
+      stroke: string;
+      strokeWidth: number;
+    };
+    return { svgStyle, rectProps };
+  };
+
+  // Independently re-derives the same per-edge bleed grant PDF.tsx's own contextAvailableBleedMM
+  // reads (computeLayout's slot 0), so the assertions below check against the real granted
+  // bleed rather than assuming the full requested bleedEdgeMM survived uncropped.
+  const grantedBleedMM = (props: PDFProps) => {
+    const size = getPageSizeMM(
+      props.pageSize,
+      props.pageWidth,
+      props.pageHeight
+    );
+    const layout = computeLayout(
+      size.width,
+      size.height,
+      CardWidthMM,
+      CardHeightMM,
+      props.bleedEdgeMM,
+      {
+        top: props.pageMarginTopMM,
+        bottom: props.pageMarginBottomMM,
+        left: props.pageMarginLeftMM,
+        right: props.pageMarginRightMM,
+      },
+      { row: props.cardSpacingRowMM, col: props.cardSpacingColMM }
+    );
+    return layout.slots[0].bleedMM;
+  };
+
+  it("tracks the configured bleed edge, not a fixed constant: width follows the real per-edge grant at two different bleed values", () => {
+    // rearFeed's own fit math caps the granted bleed well below the MPC-standard 3.175mm request
+    // (BleedGrantedReadout.tsx's whole reason for existing) - 0.2mm/0.4mm stay under that cap on
+    // both requests, so the two actually resolve to two different grants rather than both
+    // clamping to the same ceiling.
+    const smallBleedProps = buildFullPDFProps(
+      withSheetSettings(baseInput, { bleedEdgeMM: 0.2 })
+    );
+    const largeBleedProps = buildFullPDFProps(
+      withSheetSettings(baseInput, { bleedEdgeMM: 0.4 })
+    );
+
+    for (const props of [smallBleedProps, largeBleedProps]) {
+      const bleedMM = grantedBleedMM(props);
+      const expectedWidthMM = CardWidthMM + bleedMM.left + bleedMM.right;
+      const expectedHeightMM = CardHeightMM + bleedMM.top + bleedMM.bottom;
+      const { rectProps } = firstCutLineGuide(props);
+      expect(ptToMm(rectProps.width)).toBeCloseTo(expectedWidthMM, 3);
+      expect(ptToMm(rectProps.height)).toBeCloseTo(expectedHeightMM, 3);
+    }
+
+    // The two bleed values must actually produce two different guide sizes - otherwise the
+    // above could pass by coincidence (e.g. both silently clamped to the same value).
+    const { rectProps: small } = firstCutLineGuide(smallBleedProps);
+    const { rectProps: large } = firstCutLineGuide(largeBleedProps);
+    expect(ptToMm(large.width)).toBeGreaterThan(ptToMm(small.width));
+  });
+
+  it("sits outside the printed card face, on the true bleed edge - not straddling the trim line", () => {
+    const props = buildFullPDFProps(baseInput);
+    const bleedMM = grantedBleedMM(props);
+    expect(bleedMM.left).toBeGreaterThan(0); // otherwise this fixture can't distinguish the two anchors
+
+    const { svgStyle, rectProps } = firstCutLineGuide(props);
+    const strokePadMM = props.cutLineThicknessMM / 2;
+
+    // Anchored at the slot's own outer edge (offset 0 minus half the stroke), never at
+    // `bleedMM.left`/`bleedMM.top` - a regression back to the trim-edge anchor would put this at
+    // a positive ~bleedMM.left mm instead.
+    expect(svgStyle.left).toBe(`${-strokePadMM}mm`);
+    expect(svgStyle.top).toBe(`${-strokePadMM}mm`);
+    // The outline spans the full card-plus-bleed box, strictly larger than the bare card.
+    expect(ptToMm(rectProps.width)).toBeGreaterThan(CardWidthMM);
+    expect(ptToMm(rectProps.height)).toBeGreaterThan(CardHeightMM);
+  });
+
+  it("a positive offset grows the guide further outward, past the bleed edge", () => {
+    const props = buildFullPDFProps(
+      withSheetSettings(baseInput, { cutLineOffsetMM: 2 })
+    );
+    const strokePadMM = props.cutLineThicknessMM / 2;
+    const { svgStyle } = firstCutLineGuide(props);
+    expect(svgStyle.left).toBe(`${-2 - strokePadMM}mm`);
+    expect(svgStyle.top).toBe(`${-2 - strokePadMM}mm`);
+  });
+
+  it("defaults to a thin lime hairline, not the old thick 0.6mm stroke", () => {
+    expect(DEFAULT_CUT_LINE_COLOR).toBe("#8ae234");
+    expect(DEFAULT_CUT_LINE_THICKNESS_MM).toBe(0.25);
+
+    const props = buildFullPDFProps(baseInput);
+    const { rectProps } = firstCutLineGuide(props);
+    expect(rectProps.stroke).toBe(DEFAULT_CUT_LINE_COLOR);
+    expect(ptToMm(rectProps.strokeWidth)).toBeCloseTo(
+      DEFAULT_CUT_LINE_THICKNESS_MM,
+      3
+    );
+  });
+
+  it("roundCorners toggles the guide's own corner radius, square by default", () => {
+    const square = firstCutLineGuide(buildFullPDFProps(baseInput));
+    expect(square.rectProps.rx).toBe(0);
+    expect(square.rectProps.ry).toBe(0);
+
+    const rounded = firstCutLineGuide(
+      buildFullPDFProps(withSheetSettings(baseInput, { roundCorners: true }))
+    );
+    expect(rounded.rectProps.rx).toBeGreaterThan(0);
+    expect(rounded.rectProps.ry).toBeGreaterThan(0);
   });
 });
