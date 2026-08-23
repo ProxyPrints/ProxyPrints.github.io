@@ -1,13 +1,17 @@
 """
-Retracts the `CardPrintingTag` rows mislabelled `source=VoteSource.USER` by the pre-#900
-`illustration_vote.cast_illustration_vote` bug. That endpoint derives a `CardPrintingTag`
+Re-sources the `CardPrintingTag` rows mislabelled `source=VoteSource.USER` by the pre-#900
+`illustration_vote.cast_illustration_vote` bug to `source=VoteSource.DEDUCTION` (the command's
+name predates this fix and still says "retract" - see this module's "RE-SOURCE, DO NOT DELETE"
+section below for why the rows are rewritten in place, never dropped). That endpoint derives a
+`CardPrintingTag`
 whenever a tapped artwork resolves 1:1 to a live candidate printing - the voter only answered a
 question about ARTWORK, never printing - but before #900 it cast that derivation at
 `source=VoteSource.USER` with the caller's own `vote_surface`: full human weight, able to satisfy
 `vote_consensus.resolve_weighted_consensus`'s human-backed gate alone, and indistinguishable in
 the database from a genuine printing-confirmation answer. #900 fixed the caster going forward
 (`source=VoteSource.DEDUCTION`, its own `illustration_vote.DERIVED_PRINTING_VOTE_SURFACE`) and
-explicitly left existing rows alone - retracting those rows is this command's entire job.
+explicitly left existing rows alone - re-sourcing those rows to DEDUCTION is this command's
+entire job.
 
 IDENTIFICATION - THERE IS NO STORED MARKER (none existed before #900, and the pre-#900 row's own
 `vote_surface` is whatever the caller's illustration-vote submission carried, not a distinct
@@ -34,7 +38,7 @@ Guarded against here by additionally requiring the `CardPrintingTag.created_at` 
 two back-to-back `.create()` calls inside ONE `transaction.atomic()` block with no external I/O
 between them, so a genuine same-click pair is always sub-second apart, while an unrelated later
 resubmission is realistically minutes/days apart. A pair sharing `(card_id, anonymous_id)` but
-OUTSIDE the window is not retracted - it is reported separately as skipped/ambiguous (see
+OUTSIDE the window is not re-sourced - it is reported separately as skipped/ambiguous (see
 `IdentificationResult.skipped_ambiguous_ids`) rather than guessed at either way.
 
 A SECOND, WITHIN-WINDOW FALSE POSITIVE THE CORRELATION WINDOW ALONE CANNOT CATCH, AND WHY
@@ -55,24 +59,33 @@ and `printing` are XOR by the model's own `cardprintingtag_printing_xor_no_match
 so a derived row can never carry `is_no_match=True` - making this filter strictly narrowing: it can
 only ever exclude rows the derivation could not have produced, never a genuine derived one.
 
-RETRACT, DO NOT REWRITE. The identified rows are deleted outright, never re-sourced to
-`VoteSource.DEDUCTION` - re-sourcing would leave any resolution the row was solely propping up
-standing on a gate (`vote_consensus.resolve_weighted_consensus`'s `has_human_backed` check) it no
-longer legitimately passes, which is worse than either leaving the row alone or deleting it.
+RE-SOURCE, DO NOT DELETE. The identification is strong but not airtight - see PR discussion for
+the two remaining gaps (the shipped frontend's client-level, not structural, guarantee that a
+voter cannot answer a printing question twice for the same card; and the data-side test that
+would have settled it outright cannot run today, since the candidate population has drifted).
+Deleting the identified rows is irreversible; re-sourcing them to `VoteSource.DEDUCTION` (with
+`vote_surface=illustration_vote.DERIVED_PRINTING_VOTE_SURFACE`, matching exactly what #900 itself
+now writes for a genuine derivation) achieves the same correction on the consensus gate below
+while keeping every row on record, auditable, and restorable if the identification is later shown
+wrong. `user`/`anonymous_id` are left untouched by the rewrite, so provenance of who triggered the
+original click stays recorded, exactly as #900 already does for new derivations.
 
-NO CONSENSUS RECOMPUTE HAPPENS HERE. This command only deletes (or, in a dry run, reports what it
-would delete) - it never calls `printing_consensus.resolve_and_persist_printing` or any other
-`_and_persist_*` function. `consensus_recompute` is a separate, separately-authorised command and
-MUST be run afterwards for any affected card to actually leave `PrintingTagStatus.RESOLVED`; until
-that happens, a retracted card's persisted `printing_tag_status` stays stale (still RESOLVED) even
-though the vote that earned it is gone. The dry run reports, per affected card currently RESOLVED,
-whether every one of its OTHER printing votes (i.e. excluding the rows this command would delete)
-is machine-sourced - if so, that card's resolution would not survive a subsequent
-`consensus_recompute`, since `resolve_weighted_consensus` requires `has_human_backed` regardless
-of any remaining machine vote's weight or share (`vote_consensus.py`).
+NO CONSENSUS RECOMPUTE HAPPENS HERE. This command only re-sources rows in place (or, in a dry run,
+reports what it would re-source) - it never calls `printing_consensus.resolve_and_persist_printing`
+or any other `_and_persist_*` function. `consensus_recompute` is a separate, separately-authorised
+command and MUST be run afterwards for any affected card to actually leave
+`PrintingTagStatus.RESOLVED`; until that happens, an affected card's persisted
+`printing_tag_status` stays stale (still RESOLVED) even though the vote that earned it no longer
+carries human weight. The dry run reports, per affected card currently RESOLVED, whether every one
+of its OTHER printing votes (i.e. excluding the rows this command would re-source) is
+machine-sourced - if so, that card's resolution would not survive a subsequent
+`consensus_recompute`: `VoteSource.DEDUCTION` is itself machine-derived
+(`vote_consensus._MACHINE_DERIVED_SOURCES`), so a re-sourced row can no longer satisfy
+`resolve_weighted_consensus`'s `has_human_backed` gate either, regardless of any remaining machine
+vote's weight or share (`vote_consensus.py`).
 
 DRY-RUN BY DEFAULT (matches `retract_artbox_phash_exemplars`/`retract_stage_d_by_run_id`'s own
-convention) - `--write` is required to actually delete anything.
+convention) - `--write` is required to actually re-source anything.
 """
 
 from dataclasses import dataclass, field
@@ -81,7 +94,10 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
-from cardpicker.illustration_vote import DERIVED_ARTIST_VOTE_SURFACE
+from cardpicker.illustration_vote import (
+    DERIVED_ARTIST_VOTE_SURFACE,
+    DERIVED_PRINTING_VOTE_SURFACE,
+)
 from cardpicker.models import (
     Card,
     CardArtistVote,
@@ -92,11 +108,20 @@ from cardpicker.models import (
 from cardpicker.vote_consensus import is_human_backed_source
 
 # See this module's own docstring's "WHY (card_id, anonymous_id) ALONE IS NOT ENOUGH" section -
-# a genuine same-transaction pair is always sub-second apart; 5 seconds is a generous margin over
-# that (covering the one DB call - `resolve_and_persist_illustration` - that runs between the two
-# `.create()` calls) while staying far below the minutes/days gap a later, unrelated resubmission
-# would show.
-SIBLING_CORRELATION_WINDOW = timedelta(seconds=5)
+# a genuine same-transaction pair is always written by two back-to-back `.create()` calls inside
+# one `transaction.atomic()` block, with a single DB call (`resolve_and_persist_illustration`)
+# between them and no external I/O. Per that same docstring's "WHY THE CORRELATION WINDOW THIS
+# ADDS" reasoning plus `question_feed._voter_answered_printing_card_ids`'s unconditional
+# CardIllustrationVote exclusion (issue #713/#738, live since 2026-08-06), a voter can never be
+# re-served a genuine printing question for this card - or its identity group - once they've cast
+# an illustration vote on it, so this window's only remaining job is separating same-transaction
+# latency from an unrelated LATER resubmission, and those two populations sit at wholly different
+# scales: one transaction's round trip vs. the minutes-to-days gap a real resubmission requires
+# (the later endpoint is a separate HTTP request the voter has to consciously make). 60 seconds
+# gives generous headroom to absorb request queueing, lock contention, or a GC pause stretching
+# that single DB call well past its typical sub-second cost under load, while staying roughly two
+# orders of magnitude below the minimum gap a genuine resubmission would show.
+SIBLING_CORRELATION_WINDOW = timedelta(seconds=60)
 
 
 @dataclass
@@ -107,7 +132,9 @@ class DerivedPrintingTagRow:
     # Only meaningful once populated by `annotate_would_leave_resolved` below - True when this
     # row's card is currently PrintingTagStatus.RESOLVED and every one of its OTHER printing
     # votes (excluding every row identified in this same run) is machine-sourced, i.e. the
-    # resolution would not survive a subsequent consensus_recompute once this row is gone.
+    # resolution would not survive a subsequent consensus_recompute once this row is re-sourced
+    # to VoteSource.DEDUCTION (itself machine-derived, so it can no longer supply the
+    # has_human_backed gate either).
     card_would_leave_resolved: bool = False
 
 
@@ -205,15 +232,17 @@ def annotate_would_leave_resolved(result: IdentificationResult) -> None:
 
 class Command(BaseCommand):
     help = (
-        "Retracts CardPrintingTag rows mislabelled source=USER by the pre-#900 "
-        "illustration-vote printing-derivation bug - identified as a USER-sourced, "
-        "is_no_match=False CardPrintingTag sharing (card, anonymous_id) with a CardArtistVote at "
-        "illustration_vote.DERIVED_ARTIST_VOTE_SURFACE, created within "
+        "Re-sources CardPrintingTag rows mislabelled source=USER by the pre-#900 "
+        "illustration-vote printing-derivation bug to source=DEDUCTION - identified as a "
+        "USER-sourced, is_no_match=False CardPrintingTag sharing (card, anonymous_id) with a "
+        "CardArtistVote at illustration_vote.DERIVED_ARTIST_VOTE_SURFACE, created within "
         f"{SIBLING_CORRELATION_WINDOW.total_seconds():.0f}s of it (same cast_illustration_vote "
-        "transaction). Deletes the identified rows outright - does NOT re-source them to "
-        "DEDUCTION. Performs NO consensus recompute: run consensus_recompute for the affected "
-        "cards AFTERWARDS for any of them to actually leave a stale RESOLVED status. Dry-run by "
-        "default - --write required to actually delete anything."
+        "transaction). Despite the command name, this does NOT delete the identified rows: it "
+        "rewrites source=DEDUCTION and vote_surface=DERIVED_PRINTING_VOTE_SURFACE in place, "
+        "deliberately reversible, preserving user/anonymous_id. Performs NO consensus recompute: "
+        "run consensus_recompute for the affected cards AFTERWARDS for any of them to actually "
+        "leave a stale RESOLVED status, since DEDUCTION cannot satisfy the has_human_backed gate "
+        "either. Dry-run by default - --write required to actually re-source anything."
     )
 
     def add_arguments(self, parser: Any) -> None:
@@ -221,8 +250,8 @@ class Command(BaseCommand):
             "--write",
             action="store_true",
             default=False,
-            help="Actually delete the identified rows. Default is dry-run: report every "
-            "counter below without deleting anything.",
+            help="Actually re-source the identified rows to DEDUCTION. Default is dry-run: "
+            "report every counter below without writing anything.",
         )
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
@@ -237,6 +266,11 @@ class Command(BaseCommand):
 
         self.stdout.write(f"[{mode}] retract_derived_illustration_printing_tags")
         self.stdout.write(
+            f"  sibling correlation window: {SIBLING_CORRELATION_WINDOW.total_seconds():.0f}s "
+            "(rows sharing (card, anonymous_id) with a derived-artist-vote sibling are re-sourced "
+            "to DEDUCTION if created within this window of it, else reported as skipped/ambiguous below)"
+        )
+        self.stdout.write(
             f"Identified {len(result.derived)} derived CardPrintingTag row(s) across "
             f"{len(affected_card_ids)} distinct card(s)."
         )
@@ -245,8 +279,8 @@ class Command(BaseCommand):
         )
         self.stdout.write(
             f"  {len(would_leave_resolved_card_ids)} of those card(s) are currently RESOLVED and would not "
-            "survive a subsequent consensus_recompute once retracted (no other human-backed printing vote "
-            f"remains) - run consensus_recompute for these afterwards. card pks: "
+            "survive a subsequent consensus_recompute once re-sourced to DEDUCTION (no other human-backed "
+            f"printing vote remains) - run consensus_recompute for these afterwards. card pks: "
             f"{would_leave_resolved_card_ids[:50]}"
             + (" (truncated)" if len(would_leave_resolved_card_ids) > 50 else "")
         )
@@ -260,8 +294,14 @@ class Command(BaseCommand):
             )
 
         if not write:
-            self.stdout.write("Dry run - nothing deleted.")
+            self.stdout.write("Dry run - nothing written.")
             return
 
-        deleted_count, _ = CardPrintingTag.objects.filter(pk__in=[row.tag_id for row in result.derived]).delete()
-        self.stdout.write(f"Deleted {deleted_count} row(s). Run consensus_recompute for the affected cards next.")
+        updated_count = CardPrintingTag.objects.filter(pk__in=[row.tag_id for row in result.derived]).update(
+            source=VoteSource.DEDUCTION,
+            vote_surface=DERIVED_PRINTING_VOTE_SURFACE,
+        )
+        self.stdout.write(
+            f"Re-sourced {updated_count} row(s) to source=DEDUCTION, "
+            f"vote_surface={DERIVED_PRINTING_VOTE_SURFACE}. Run consensus_recompute for the affected cards next."
+        )
