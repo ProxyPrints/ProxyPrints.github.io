@@ -1,0 +1,10 @@
+{
+  "title": "Submit Question Abstention Response",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "recorded": { "type": "boolean" }
+  },
+  "required": ["recorded"],
+  "additionalProperties": false
+}

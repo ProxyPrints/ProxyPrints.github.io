@@ -1,0 +1,15 @@
+{
+  "title": "Cast Implicit Vote Request",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "identifier": { "type": "string" },
+    "anonymousId": { "type": "string" },
+    "tagNames": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["identifier", "anonymousId", "tagNames"],
+  "additionalProperties": false
+}

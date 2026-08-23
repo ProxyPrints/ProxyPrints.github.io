@@ -47,6 +47,11 @@ def from_list(f: Callable[[Any], T], x: Any) -> List[T]:
     return [f(y) for y in x]
 
 
+def from_float(x: Any) -> float:
+    assert isinstance(x, (float, int)) and not isinstance(x, bool)
+    return float(x)
+
+
 def from_dict(f: Callable[[Any], T], x: Any) -> Dict[str, T]:
     assert isinstance(x, dict)
     return {k: f(v) for (k, v) in x.items()}
@@ -60,11 +65,6 @@ def to_enum(c: Type[EnumT], x: Any) -> EnumT:
 def to_class(c: Type[T], x: Any) -> dict:
     assert isinstance(x, c)
     return cast(Any, x).to_dict()
-
-
-def from_float(x: Any) -> float:
-    assert isinstance(x, (float, int)) and not isinstance(x, bool)
-    return float(x)
 
 
 def to_float(x: Any) -> float:
@@ -92,9 +92,9 @@ class PrintingCandidate(BaseModel):
     isShowcase: bool
     mediumThumbnailUrl: str
     smallThumbnailUrl: str
-    releasedAt: Optional[str] = None
-    illustrationId: Optional[str] = None
     artCropUrl: Optional[str] = None
+    illustrationId: Optional[str] = None
+    releasedAt: Optional[str] = None
 
     @staticmethod
     def from_dict(obj: Any) -> "PrintingCandidate":
@@ -114,9 +114,9 @@ class PrintingCandidate(BaseModel):
         isShowcase = from_bool(obj.get("isShowcase"))
         mediumThumbnailUrl = from_str(obj.get("mediumThumbnailUrl"))
         smallThumbnailUrl = from_str(obj.get("smallThumbnailUrl"))
-        releasedAt = from_union([from_none, from_str], obj.get("releasedAt"))
-        illustrationId = from_union([from_none, from_str], obj.get("illustrationId"))
         artCropUrl = from_union([from_none, from_str], obj.get("artCropUrl"))
+        illustrationId = from_union([from_none, from_str], obj.get("illustrationId"))
+        releasedAt = from_union([from_none, from_str], obj.get("releasedAt"))
         return PrintingCandidate(
             artist,
             borderColor,
@@ -133,9 +133,9 @@ class PrintingCandidate(BaseModel):
             isShowcase,
             mediumThumbnailUrl,
             smallThumbnailUrl,
-            releasedAt,
-            illustrationId,
             artCropUrl,
+            illustrationId,
+            releasedAt,
         )
 
     def to_dict(self) -> dict:
@@ -155,12 +155,12 @@ class PrintingCandidate(BaseModel):
         result["isShowcase"] = from_bool(self.isShowcase)
         result["mediumThumbnailUrl"] = from_str(self.mediumThumbnailUrl)
         result["smallThumbnailUrl"] = from_str(self.smallThumbnailUrl)
-        if self.releasedAt is not None:
-            result["releasedAt"] = from_union([from_none, from_str], self.releasedAt)
-        if self.illustrationId is not None:
-            result["illustrationId"] = from_union([from_none, from_str], self.illustrationId)
         if self.artCropUrl is not None:
             result["artCropUrl"] = from_union([from_none, from_str], self.artCropUrl)
+        if self.illustrationId is not None:
+            result["illustrationId"] = from_union([from_none, from_str], self.illustrationId)
+        if self.releasedAt is not None:
+            result["releasedAt"] = from_union([from_none, from_str], self.releasedAt)
         return result
 
 
@@ -305,10 +305,10 @@ class Card(BaseModel):
     layout: Optional[str] = None
     """Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme"), read
     from whichever printing backs canonicalCard (CanonicalPrintingMetadata.layout) - same
-    canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses for
-    canonicalCard itself. null whenever canonicalCard is null, or the resolved printing has no
-    metadata row, or that row's layout hasn't been populated. Lets a consumer ask "does this card
-    have a back face" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in
+    canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses
+    for canonicalCard itself. null whenever canonicalCard is null, or the resolved printing
+    has no metadata row, or that row's layout hasn't been populated. Lets a consumer ask
+    "does this card have a back face" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in
     printing_metadata_import.py) directly from a card it already has, rather than
     cross-referencing a separately-fetched name list.
     """
@@ -322,6 +322,17 @@ class Card(BaseModel):
     'resolved', or the serializing endpoint didn't request this field (see
     cardpicker/models.py Card.serialise's include_suggested_printing kwarg - opt-in per
     endpoint to keep this a zero-cost no-op everywhere it isn't needed).
+    """
+    suggestedCanonicalCardConfidence: Optional[float] = None
+    """SEAM, not yet populated server-side (owner decision, D14 numeric-confidence round,
+    2026-07-23 - see docs/features/display-left-rail.md's "D14 numeric confidence" section
+    for the full flag-to-backend note). Expected shape once a calibrated score lands: an
+    integer 0-100 percentage, present only alongside a non-null suggestedCanonicalCard (never
+    sent for an already-resolved card, same opt-in-per-endpoint pattern as
+    suggestedCanonicalCard/suggestedFilterTagNames above). Until the backend sends this
+    field, every real API response omits it and it reads as undefined - ConfidenceElement.tsx
+    degrades to its existing qualitative "Suggested" pill in that case, never a crash or a
+    fabricated number.
     """
     suggestedFilterTagNames: Optional[List[str]] = None
     """Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter
@@ -368,11 +379,14 @@ class Card(BaseModel):
         canonicalArtistIsFromVoteOnly = from_union([from_bool, from_none], obj.get("canonicalArtistIsFromVoteOnly"))
         canonicalArtistSource = from_union([from_none, from_str], obj.get("canonicalArtistSource"))
         canonicalCard = from_union([from_none, CanonicalCardClass.from_dict], obj.get("canonicalCard"))
-        layout = from_union([from_str, from_none], obj.get("layout"))
+        layout = from_union([from_none, from_str], obj.get("layout"))
         sourceExternalLink = from_union([from_str, from_none], obj.get("sourceExternalLink"))
         sourceType = from_union([SourceType, from_none], obj.get("sourceType"))
         suggestedCanonicalCard = from_union(
             [from_none, CanonicalCardClass.from_dict], obj.get("suggestedCanonicalCard")
+        )
+        suggestedCanonicalCardConfidence = from_union(
+            [from_none, from_float], obj.get("suggestedCanonicalCardConfidence")
         )
         suggestedFilterTagNames = from_union(
             [from_none, lambda x: from_list(from_str, x)], obj.get("suggestedFilterTagNames")
@@ -408,6 +422,7 @@ class Card(BaseModel):
             sourceExternalLink,
             sourceType,
             suggestedCanonicalCard,
+            suggestedCanonicalCardConfidence,
             suggestedFilterTagNames,
             tagVoteStatuses,
         )
@@ -448,7 +463,7 @@ class Card(BaseModel):
                 [from_none, lambda x: to_class(CanonicalCardClass, x)], self.canonicalCard
             )
         if self.layout is not None:
-            result["layout"] = from_union([from_str, from_none], self.layout)
+            result["layout"] = from_union([from_none, from_str], self.layout)
         if self.sourceExternalLink is not None:
             result["sourceExternalLink"] = from_union([from_str, from_none], self.sourceExternalLink)
         if self.sourceType is not None:
@@ -456,6 +471,10 @@ class Card(BaseModel):
         if self.suggestedCanonicalCard is not None:
             result["suggestedCanonicalCard"] = from_union(
                 [from_none, lambda x: to_class(CanonicalCardClass, x)], self.suggestedCanonicalCard
+            )
+        if self.suggestedCanonicalCardConfidence is not None:
+            result["suggestedCanonicalCardConfidence"] = from_union(
+                [from_none, to_float], self.suggestedCanonicalCardConfidence
             )
         if self.suggestedFilterTagNames is not None:
             result["suggestedFilterTagNames"] = from_union(
@@ -730,6 +749,57 @@ class ArtistConsensusResponse(BaseModel):
         return result
 
 
+class Link(BaseModel):
+    type: str
+    """One of the fixed allowlist field names, in fixed priority order: website, artstation,
+    inprnt, mountainmage, omalink, instagram (instagram is a deliberate last-resort
+    exception, not a commerce field - see docs/features/artist-support-links.md).
+    """
+    url: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "Link":
+        assert isinstance(obj, dict)
+        type = from_str(obj.get("type"))
+        url = from_str(obj.get("url"))
+        return Link(type, url)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["type"] = from_str(self.type)
+        result["url"] = from_str(self.url)
+        return result
+
+
+class ArtistExternalLinksResponse(BaseModel):
+    found: bool
+    hasSignatureService: bool
+    """Surfaced as a boolean flag only, never as a link - see MTGAC integration docs."""
+
+    links: List[Link]
+    location: Optional[str] = None
+    pageUrl: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ArtistExternalLinksResponse":
+        assert isinstance(obj, dict)
+        found = from_bool(obj.get("found"))
+        hasSignatureService = from_bool(obj.get("hasSignatureService"))
+        links = from_list(Link.from_dict, obj.get("links"))
+        location = from_union([from_none, from_str], obj.get("location"))
+        pageUrl = from_union([from_none, from_str], obj.get("pageUrl"))
+        return ArtistExternalLinksResponse(found, hasSignatureService, links, location, pageUrl)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["found"] = from_bool(self.found)
+        result["hasSignatureService"] = from_bool(self.hasSignatureService)
+        result["links"] = from_list(lambda x: to_class(Link, x), self.links)
+        result["location"] = from_union([from_none, from_str], self.location)
+        result["pageUrl"] = from_union([from_none, from_str], self.pageUrl)
+        return result
+
+
 class FilterSettings(BaseModel):
     borderlessOnly: bool
     """Opt-in filter. When true, excludes cards whose community-resolved printing
@@ -907,6 +977,437 @@ class CardsResponse(BaseModel):
         return result
 
 
+class CastImplicitVoteRequest(BaseModel):
+    anonymousId: str
+    identifier: str
+    tagNames: List[str]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CastImplicitVoteRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        tagNames = from_list(from_str, obj.get("tagNames"))
+        return CastImplicitVoteRequest(anonymousId, identifier, tagNames)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["tagNames"] = from_list(from_str, self.tagNames)
+        return result
+
+
+class SourceContribution(BaseModel):
+    avgdpi: str
+    description: str
+    name: str
+    qtyCardbacks: str
+    qtyCards: str
+    qtyTokens: str
+    size: str
+    sourceType: SourceType
+    externalLink: Optional[str] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SourceContribution":
+        assert isinstance(obj, dict)
+        avgdpi = from_str(obj.get("avgdpi"))
+        description = from_str(obj.get("description"))
+        name = from_str(obj.get("name"))
+        qtyCardbacks = from_str(obj.get("qtyCardbacks"))
+        qtyCards = from_str(obj.get("qtyCards"))
+        qtyTokens = from_str(obj.get("qtyTokens"))
+        size = from_str(obj.get("size"))
+        sourceType = SourceType(obj.get("sourceType"))
+        externalLink = from_union([from_str, from_none], obj.get("externalLink"))
+        return SourceContribution(
+            avgdpi, description, name, qtyCardbacks, qtyCards, qtyTokens, size, sourceType, externalLink
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["avgdpi"] = from_str(self.avgdpi)
+        result["description"] = from_str(self.description)
+        result["name"] = from_str(self.name)
+        result["qtyCardbacks"] = from_str(self.qtyCardbacks)
+        result["qtyCards"] = from_str(self.qtyCards)
+        result["qtyTokens"] = from_str(self.qtyTokens)
+        result["size"] = from_str(self.size)
+        result["sourceType"] = to_enum(SourceType, self.sourceType)
+        if self.externalLink is not None:
+            result["externalLink"] = from_union([from_str, from_none], self.externalLink)
+        return result
+
+
+class CatalogComposition(BaseModel):
+    """Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved
+    onto this cache instead of GET 2/contributions/'s live query.
+    """
+
+    cardCountByType: Dict[str, int]
+    sources: List[SourceContribution]
+    totalDatabaseSize: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CatalogComposition":
+        assert isinstance(obj, dict)
+        cardCountByType = from_dict(from_int, obj.get("cardCountByType"))
+        sources = from_list(SourceContribution.from_dict, obj.get("sources"))
+        totalDatabaseSize = from_int(obj.get("totalDatabaseSize"))
+        return CatalogComposition(cardCountByType, sources, totalDatabaseSize)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["cardCountByType"] = from_dict(from_int, self.cardCountByType)
+        result["sources"] = from_list(lambda x: to_class(SourceContribution, x), self.sources)
+        result["totalDatabaseSize"] = from_int(self.totalDatabaseSize)
+        return result
+
+
+class Series(BaseModel):
+    bySurface: Dict[str, int]
+    """vote_surface value -> human confirmation count for this week."""
+
+    weekStart: str
+    """ISO date (Monday) this bucket starts on."""
+
+    @staticmethod
+    def from_dict(obj: Any) -> "Series":
+        assert isinstance(obj, dict)
+        bySurface = from_dict(from_int, obj.get("bySurface"))
+        weekStart = from_str(obj.get("weekStart"))
+        return Series(bySurface, weekStart)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["bySurface"] = from_dict(from_int, self.bySurface)
+        result["weekStart"] = from_str(self.weekStart)
+        return result
+
+
+class ContributionsOverTime(BaseModel):
+    """Proposal F chart 2 - human confirmations bucketed by week, split by vote_surface, across
+    CardPrintingTag/CardArtistVote/CardTagVote. Human-only by construction (vote_surface plus
+    a HUMAN_SOURCES source filter - see catalog_stats.py's own docstring for why both are
+    needed).
+    """
+
+    bucketDays: int
+    series: List[Series]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ContributionsOverTime":
+        assert isinstance(obj, dict)
+        bucketDays = from_int(obj.get("bucketDays"))
+        series = from_list(Series.from_dict, obj.get("series"))
+        return ContributionsOverTime(bucketDays, series)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["bucketDays"] = from_int(self.bucketDays)
+        result["series"] = from_list(lambda x: to_class(Series, x), self.series)
+        return result
+
+
+class HumanVotes(BaseModel):
+    artist: int
+    printingTag: int
+    tag: int
+    total: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "HumanVotes":
+        assert isinstance(obj, dict)
+        artist = from_int(obj.get("artist"))
+        printingTag = from_int(obj.get("printingTag"))
+        tag = from_int(obj.get("tag"))
+        total = from_int(obj.get("total"))
+        return HumanVotes(artist, printingTag, tag, total)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["artist"] = from_int(self.artist)
+        result["printingTag"] = from_int(self.printingTag)
+        result["tag"] = from_int(self.tag)
+        result["total"] = from_int(self.total)
+        return result
+
+
+class Md5Groups(BaseModel):
+    cardsInMultiCardGroups: int
+    groupsWithMultipleCards: int
+    largestGroupSize: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "Md5Groups":
+        assert isinstance(obj, dict)
+        cardsInMultiCardGroups = from_int(obj.get("cardsInMultiCardGroups"))
+        groupsWithMultipleCards = from_int(obj.get("groupsWithMultipleCards"))
+        largestGroupSize = from_int(obj.get("largestGroupSize"))
+        return Md5Groups(cardsInMultiCardGroups, groupsWithMultipleCards, largestGroupSize)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["cardsInMultiCardGroups"] = from_int(self.cardsInMultiCardGroups)
+        result["groupsWithMultipleCards"] = from_int(self.groupsWithMultipleCards)
+        result["largestGroupSize"] = from_int(self.largestGroupSize)
+        return result
+
+
+class Participation(BaseModel):
+    """The call-to-action panel. Emits raw counts only, deliberately no 'percent complete' field
+    - see compute_participation's own docstring.
+    """
+
+    confirmable: int
+    contested: int
+    distinctCardsRoutedToReview: int
+    """Distinct card_id in CardScanLog filtered to the slow-path agent (SLOW_PATH_ANONYMOUS_ID)
+    and skip_reason=SLOW_PATH_TO_REVIEW_REASON - same filter review_clusters.py's
+    _review_queue_card_ids() uses. A distinct-card count, not a row count: CardScanLog is an
+    append-only audit trail, so a card can carry more than one row for the same (card,
+    anonymous_id) pair. Only ever grows (nothing clears the routing marker when a card later
+    gets a human vote) - a denominator, not a progress measure on its own.
+    """
+    distinctCardsRoutedToReviewWithHumanVotes: int
+    """The intersection of distinctCardsRoutedToReview and distinctCardsWithHumanVotes: cards
+    that are both routed to review AND carry a human vote. This, not
+    distinctCardsWithHumanVotes over distinctCardsRoutedToReview, is the pair that forms a
+    valid progress ratio - distinctCardsWithHumanVotes is not a subset of
+    distinctCardsRoutedToReview (a person can vote on a card the machine never routed), so
+    dividing them directly is not coherent.
+    """
+    distinctCardsWithHumanVotes: int
+    """Distinct card_id across CardPrintingTag/CardArtistVote/CardTagVote filtered to
+    HUMAN_SOURCES, unioned across the three tables so a card voted on in two tables counts
+    once. CARD-denominated (unlike humanVotes, which counts votes) so the page's
+    participation ratio can be cards-over-cards.
+    """
+    distinctHumanVoters: int
+    fresh: int
+    humanVotes: HumanVotes
+    md5Groups: Md5Groups
+    total: int
+
+    @staticmethod
+    def from_dict(obj: Any) -> "Participation":
+        assert isinstance(obj, dict)
+        confirmable = from_int(obj.get("confirmable"))
+        contested = from_int(obj.get("contested"))
+        distinctCardsRoutedToReview = from_int(obj.get("distinctCardsRoutedToReview"))
+        distinctCardsRoutedToReviewWithHumanVotes = from_int(obj.get("distinctCardsRoutedToReviewWithHumanVotes"))
+        distinctCardsWithHumanVotes = from_int(obj.get("distinctCardsWithHumanVotes"))
+        distinctHumanVoters = from_int(obj.get("distinctHumanVoters"))
+        fresh = from_int(obj.get("fresh"))
+        humanVotes = HumanVotes.from_dict(obj.get("humanVotes"))
+        md5Groups = Md5Groups.from_dict(obj.get("md5Groups"))
+        total = from_int(obj.get("total"))
+        return Participation(
+            confirmable,
+            contested,
+            distinctCardsRoutedToReview,
+            distinctCardsRoutedToReviewWithHumanVotes,
+            distinctCardsWithHumanVotes,
+            distinctHumanVoters,
+            fresh,
+            humanVotes,
+            md5Groups,
+            total,
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["confirmable"] = from_int(self.confirmable)
+        result["contested"] = from_int(self.contested)
+        result["distinctCardsRoutedToReview"] = from_int(self.distinctCardsRoutedToReview)
+        result["distinctCardsRoutedToReviewWithHumanVotes"] = from_int(self.distinctCardsRoutedToReviewWithHumanVotes)
+        result["distinctCardsWithHumanVotes"] = from_int(self.distinctCardsWithHumanVotes)
+        result["distinctHumanVoters"] = from_int(self.distinctHumanVoters)
+        result["fresh"] = from_int(self.fresh)
+        result["humanVotes"] = to_class(HumanVotes, self.humanVotes)
+        result["md5Groups"] = to_class(Md5Groups, self.md5Groups)
+        result["total"] = from_int(self.total)
+        return result
+
+
+class PilotRunHistoryEntry(BaseModel):
+    command: str
+    runId: str
+    startedAt: str
+    status: str
+    durationSeconds: Optional[float] = None
+    finishedAt: Optional[str] = None
+    votesWritten: Optional[int] = None
+
+    @staticmethod
+    def from_dict(obj: Any) -> "PilotRunHistoryEntry":
+        assert isinstance(obj, dict)
+        command = from_str(obj.get("command"))
+        runId = from_str(obj.get("runId"))
+        startedAt = from_str(obj.get("startedAt"))
+        status = from_str(obj.get("status"))
+        durationSeconds = from_union([from_none, from_float], obj.get("durationSeconds"))
+        finishedAt = from_union([from_none, from_str], obj.get("finishedAt"))
+        votesWritten = from_union([from_none, from_int], obj.get("votesWritten"))
+        return PilotRunHistoryEntry(command, runId, startedAt, status, durationSeconds, finishedAt, votesWritten)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["command"] = from_str(self.command)
+        result["runId"] = from_str(self.runId)
+        result["startedAt"] = from_str(self.startedAt)
+        result["status"] = from_str(self.status)
+        result["durationSeconds"] = from_union([from_none, to_float], self.durationSeconds)
+        result["finishedAt"] = from_union([from_none, from_str], self.finishedAt)
+        result["votesWritten"] = from_union([from_none, from_int], self.votesWritten)
+        return result
+
+
+class RunHistory(BaseModel):
+    """Proposal F chart 6 - the most recent PilotRunLedger rows. See catalog_stats.py's
+    compute_run_history docstring for the stage_d_*_already_voted caveat (deliberately never
+    surfaced here) and why votes_written is safe to surface as-is (but null for
+    stage_e_streaming_dispatch rows specifically).
+    """
+
+    recent: List[PilotRunHistoryEntry]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "RunHistory":
+        assert isinstance(obj, dict)
+        recent = from_list(PilotRunHistoryEntry.from_dict, obj.get("recent"))
+        return RunHistory(recent)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["recent"] = from_list(lambda x: to_class(PilotRunHistoryEntry, x), self.recent)
+        return result
+
+
+class ByReason(BaseModel):
+    count: int
+    reason: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "ByReason":
+        assert isinstance(obj, dict)
+        count = from_int(obj.get("count"))
+        reason = from_str(obj.get("reason"))
+        return ByReason(count, reason)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["count"] = from_int(self.count)
+        result["reason"] = from_str(self.reason)
+        return result
+
+
+class SkipReasonEngineCount(BaseModel):
+    count: int
+    engine: str
+    reason: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SkipReasonEngineCount":
+        assert isinstance(obj, dict)
+        count = from_int(obj.get("count"))
+        engine = from_str(obj.get("engine"))
+        reason = from_str(obj.get("reason"))
+        return SkipReasonEngineCount(count, engine, reason)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["count"] = from_int(self.count)
+        result["engine"] = from_str(self.engine)
+        result["reason"] = from_str(self.reason)
+        return result
+
+
+class SkipBreakdown(BaseModel):
+    """Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine
+    (anonymous_id).
+    """
+
+    byReason: List[ByReason]
+    byReasonAndEngine: List[SkipReasonEngineCount]
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SkipBreakdown":
+        assert isinstance(obj, dict)
+        byReason = from_list(ByReason.from_dict, obj.get("byReason"))
+        byReasonAndEngine = from_list(SkipReasonEngineCount.from_dict, obj.get("byReasonAndEngine"))
+        return SkipBreakdown(byReason, byReasonAndEngine)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["byReason"] = from_list(lambda x: to_class(ByReason, x), self.byReason)
+        result["byReasonAndEngine"] = from_list(lambda x: to_class(SkipReasonEngineCount, x), self.byReasonAndEngine)
+        return result
+
+
+class CatalogStatsResponse(BaseModel):
+    """1/catalogStats/ - Proposal F's cache-only public stats aggregate
+    (docs/proposals/proposal-f-public-stats-page.md;
+    MPCAutofill/cardpicker/catalog_stats.py's own module docstring). Cache-only on the read
+    path: a cache miss returns every field at its zero/empty value, never a 500. Ships five
+    of Proposal F's seven charts this pass - resolutionProgress (chart 1) and hashCoverage
+    (chart 5) are deliberately deferred, see that module's own docstring.
+    """
+
+    catalogComposition: CatalogComposition
+    """Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved
+    onto this cache instead of GET 2/contributions/'s live query.
+    """
+    contributionsOverTime: ContributionsOverTime
+    """Proposal F chart 2 - human confirmations bucketed by week, split by vote_surface, across
+    CardPrintingTag/CardArtistVote/CardTagVote. Human-only by construction (vote_surface plus
+    a HUMAN_SOURCES source filter - see catalog_stats.py's own docstring for why both are
+    needed).
+    """
+    participation: Participation
+    """The call-to-action panel. Emits raw counts only, deliberately no 'percent complete' field
+    - see compute_participation's own docstring.
+    """
+    runHistory: RunHistory
+    """Proposal F chart 6 - the most recent PilotRunLedger rows. See catalog_stats.py's
+    compute_run_history docstring for the stage_d_*_already_voted caveat (deliberately never
+    surfaced here) and why votes_written is safe to surface as-is (but null for
+    stage_e_streaming_dispatch rows specifically).
+    """
+    skipBreakdown: SkipBreakdown
+    """Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine
+    (anonymous_id).
+    """
+    generatedAt: Optional[str] = None
+    """ISO-8601 timestamp of the warm run that produced this blob, or null on a cache miss
+    (never warmed, or the shared cache backend isn't configured yet).
+    """
+
+    @staticmethod
+    def from_dict(obj: Any) -> "CatalogStatsResponse":
+        assert isinstance(obj, dict)
+        catalogComposition = CatalogComposition.from_dict(obj.get("catalogComposition"))
+        contributionsOverTime = ContributionsOverTime.from_dict(obj.get("contributionsOverTime"))
+        participation = Participation.from_dict(obj.get("participation"))
+        runHistory = RunHistory.from_dict(obj.get("runHistory"))
+        skipBreakdown = SkipBreakdown.from_dict(obj.get("skipBreakdown"))
+        generatedAt = from_union([from_none, from_str], obj.get("generatedAt"))
+        return CatalogStatsResponse(
+            catalogComposition, contributionsOverTime, participation, runHistory, skipBreakdown, generatedAt
+        )
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["catalogComposition"] = to_class(CatalogComposition, self.catalogComposition)
+        result["contributionsOverTime"] = to_class(ContributionsOverTime, self.contributionsOverTime)
+        result["participation"] = to_class(Participation, self.participation)
+        result["runHistory"] = to_class(RunHistory, self.runHistory)
+        result["skipBreakdown"] = to_class(SkipBreakdown, self.skipBreakdown)
+        result["generatedAt"] = from_union([from_none, from_str], self.generatedAt)
+        return result
+
+
 class ConfirmReviewClusterRequest(BaseModel):
     clusterId: str
     memberIdentifiers: List[str]
@@ -955,48 +1456,6 @@ class ConfirmReviewClusterResponse(BaseModel):
         result["clusterId"] = from_str(self.clusterId)
         result["confirmedIdentifiers"] = from_list(from_str, self.confirmedIdentifiers)
         result["votesCast"] = from_int(self.votesCast)
-        return result
-
-
-class SourceContribution(BaseModel):
-    avgdpi: str
-    description: str
-    name: str
-    qtyCardbacks: str
-    qtyCards: str
-    qtyTokens: str
-    size: str
-    sourceType: SourceType
-    externalLink: Optional[str] = None
-
-    @staticmethod
-    def from_dict(obj: Any) -> "SourceContribution":
-        assert isinstance(obj, dict)
-        avgdpi = from_str(obj.get("avgdpi"))
-        description = from_str(obj.get("description"))
-        name = from_str(obj.get("name"))
-        qtyCardbacks = from_str(obj.get("qtyCardbacks"))
-        qtyCards = from_str(obj.get("qtyCards"))
-        qtyTokens = from_str(obj.get("qtyTokens"))
-        size = from_str(obj.get("size"))
-        sourceType = SourceType(obj.get("sourceType"))
-        externalLink = from_union([from_str, from_none], obj.get("externalLink"))
-        return SourceContribution(
-            avgdpi, description, name, qtyCardbacks, qtyCards, qtyTokens, size, sourceType, externalLink
-        )
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["avgdpi"] = from_str(self.avgdpi)
-        result["description"] = from_str(self.description)
-        result["name"] = from_str(self.name)
-        result["qtyCardbacks"] = from_str(self.qtyCardbacks)
-        result["qtyCards"] = from_str(self.qtyCards)
-        result["qtyTokens"] = from_str(self.qtyTokens)
-        result["size"] = from_str(self.size)
-        result["sourceType"] = to_enum(SourceType, self.sourceType)
-        if self.externalLink is not None:
-            result["externalLink"] = from_union([from_str, from_none], self.externalLink)
         return result
 
 
@@ -2242,6 +2701,27 @@ class ResetSavedDecksResponse(BaseModel):
         return result
 
 
+class RetractImplicitVoteRequest(BaseModel):
+    anonymousId: str
+    identifier: str
+    tagName: str
+
+    @staticmethod
+    def from_dict(obj: Any) -> "RetractImplicitVoteRequest":
+        assert isinstance(obj, dict)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        tagName = from_str(obj.get("tagName"))
+        return RetractImplicitVoteRequest(anonymousId, identifier, tagName)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["tagName"] = from_str(self.tagName)
+        return result
+
+
 class ReviewClusterDetailRequest(BaseModel):
     clusterId: str
 
@@ -2740,43 +3220,47 @@ class SubmitArtistWriteInVoteResponse(BaseModel):
         return result
 
 
-class SubmitPrintingTagRequest(BaseModel):
+class SubmitIllustrationRejectionRequest(BaseModel):
     anonymousId: str
     identifier: str
-    isNoMatch: bool
-    printingIdentifier: Optional[str] = None
+    illustrationId: str
     voteSurface: Optional[str] = None
 
     @staticmethod
-    def from_dict(obj: Any) -> "SubmitPrintingTagRequest":
+    def from_dict(obj: Any) -> "SubmitIllustrationRejectionRequest":
         assert isinstance(obj, dict)
         anonymousId = from_str(obj.get("anonymousId"))
         identifier = from_str(obj.get("identifier"))
-        isNoMatch = from_bool(obj.get("isNoMatch"))
-        printingIdentifier = from_union([from_none, from_str], obj.get("printingIdentifier"))
+        illustrationId = from_str(obj.get("illustrationId"))
         voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
-        return SubmitPrintingTagRequest(anonymousId, identifier, isNoMatch, printingIdentifier, voteSurface)
+        return SubmitIllustrationRejectionRequest(anonymousId, identifier, illustrationId, voteSurface)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["anonymousId"] = from_str(self.anonymousId)
         result["identifier"] = from_str(self.identifier)
-        result["isNoMatch"] = from_bool(self.isNoMatch)
-        if self.printingIdentifier is not None:
-            result["printingIdentifier"] = from_union([from_none, from_str], self.printingIdentifier)
+        result["illustrationId"] = from_str(self.illustrationId)
         if self.voteSurface is not None:
             result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
         return result
 
 
-class SubmitIllustrationVoteRequest(BaseModel):
-    """
-    2/submitIllustrationVote/ - issue #503 (WTC phase C2) / #524. One `illustrationId`
-    (Scryfall artwork identity) OR `isUnknown=True`, never a list of printings - narrowing
-    from artwork to printing/artist is done server-side, at write time, against live data
-    (see cardpicker.illustration_vote.cast_illustration_vote).
-    """
+class SubmitIllustrationRejectionResponse(BaseModel):
+    illustrationId: str
 
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitIllustrationRejectionResponse":
+        assert isinstance(obj, dict)
+        illustrationId = from_str(obj.get("illustrationId"))
+        return SubmitIllustrationRejectionResponse(illustrationId)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["illustrationId"] = from_str(self.illustrationId)
+        return result
+
+
+class SubmitIllustrationVoteRequest(BaseModel):
     anonymousId: str
     identifier: str
     isUnknown: bool
@@ -2806,15 +3290,6 @@ class SubmitIllustrationVoteRequest(BaseModel):
 
 
 class SubmitIllustrationVoteResponse(BaseModel):
-    """
-    Response to 2/submitIllustrationVote/ - reports which of the (up to three) writes this
-    invocation actually made, plus the resolved printing when the printing channel fired.
-    `artistAbstainReason` is populated (non-null) whenever the artist channel did NOT write:
-    "combined_credit" (issue #503's ' & ' census), "existing_explicit_vote" (the precedence
-    rule - never populated together with artistVoteCast=True), or "no_printing_found" (the
-    illustration didn't narrow to any live candidate printing for this card).
-    """
-
     artistVoteCast: bool
     isUnknown: bool
     printingVoteCast: bool
@@ -2851,57 +3326,72 @@ class SubmitIllustrationVoteResponse(BaseModel):
         return result
 
 
-class SubmitIllustrationRejectionRequest(BaseModel):
-    """
-    2/submitIllustrationRejection/ - the "Not this art" follow-up to
-    2/submitIllustrationVote/. Always names the artwork being rejected (`illustrationId` is
-    required, unlike that endpoint's optional/XOR-with-isUnknown field) - there is no "unknown"
-    analogue for a rejection, see `CardIllustrationRejection`'s own model docstring.
-    """
-
+class SubmitPrintingTagRequest(BaseModel):
     anonymousId: str
     identifier: str
-    illustrationId: str
+    isNoMatch: bool
+    printingIdentifier: Optional[str] = None
     voteSurface: Optional[str] = None
 
     @staticmethod
-    def from_dict(obj: Any) -> "SubmitIllustrationRejectionRequest":
+    def from_dict(obj: Any) -> "SubmitPrintingTagRequest":
         assert isinstance(obj, dict)
         anonymousId = from_str(obj.get("anonymousId"))
         identifier = from_str(obj.get("identifier"))
-        illustrationId = from_str(obj.get("illustrationId"))
+        isNoMatch = from_bool(obj.get("isNoMatch"))
+        printingIdentifier = from_union([from_none, from_str], obj.get("printingIdentifier"))
         voteSurface = from_union([from_none, from_str], obj.get("voteSurface"))
-        return SubmitIllustrationRejectionRequest(anonymousId, identifier, illustrationId, voteSurface)
+        return SubmitPrintingTagRequest(anonymousId, identifier, isNoMatch, printingIdentifier, voteSurface)
 
     def to_dict(self) -> dict:
         result: dict = {}
         result["anonymousId"] = from_str(self.anonymousId)
         result["identifier"] = from_str(self.identifier)
-        result["illustrationId"] = from_str(self.illustrationId)
+        result["isNoMatch"] = from_bool(self.isNoMatch)
+        if self.printingIdentifier is not None:
+            result["printingIdentifier"] = from_union([from_none, from_str], self.printingIdentifier)
         if self.voteSurface is not None:
             result["voteSurface"] = from_union([from_none, from_str], self.voteSurface)
         return result
 
 
-class SubmitIllustrationRejectionResponse(BaseModel):
-    """
-    Response to 2/submitIllustrationRejection/. Deliberately narrower than
-    `SubmitIllustrationVoteResponse` - a rejection never writes a printing or artist channel (see
-    `illustration_vote.cast_illustration_rejection`'s own docstring), so there is nothing there
-    to report.
-    """
-
-    illustrationId: str
+class SubmitQuestionAbstentionRequest(BaseModel):
+    anonymousId: str
+    identifier: str
+    questionType: str
+    reason: Optional[str] = None
 
     @staticmethod
-    def from_dict(obj: Any) -> "SubmitIllustrationRejectionResponse":
+    def from_dict(obj: Any) -> "SubmitQuestionAbstentionRequest":
         assert isinstance(obj, dict)
-        illustrationId = from_str(obj.get("illustrationId"))
-        return SubmitIllustrationRejectionResponse(illustrationId)
+        anonymousId = from_str(obj.get("anonymousId"))
+        identifier = from_str(obj.get("identifier"))
+        questionType = from_str(obj.get("questionType"))
+        reason = from_union([from_str, from_none], obj.get("reason"))
+        return SubmitQuestionAbstentionRequest(anonymousId, identifier, questionType, reason)
 
     def to_dict(self) -> dict:
         result: dict = {}
-        result["illustrationId"] = from_str(self.illustrationId)
+        result["anonymousId"] = from_str(self.anonymousId)
+        result["identifier"] = from_str(self.identifier)
+        result["questionType"] = from_str(self.questionType)
+        if self.reason is not None:
+            result["reason"] = from_union([from_str, from_none], self.reason)
+        return result
+
+
+class SubmitQuestionAbstentionResponse(BaseModel):
+    recorded: bool
+
+    @staticmethod
+    def from_dict(obj: Any) -> "SubmitQuestionAbstentionResponse":
+        assert isinstance(obj, dict)
+        recorded = from_bool(obj.get("recorded"))
+        return SubmitQuestionAbstentionResponse(recorded)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["recorded"] = from_bool(self.recorded)
         return result
 
 
@@ -2945,532 +3435,6 @@ class TagConsensusRequest(BaseModel):
     def to_dict(self) -> dict:
         result: dict = {}
         result["identifier"] = from_str(self.identifier)
-        return result
-
-
-class CastImplicitVoteRequest(BaseModel):
-    """
-    2/castImplicitVote/ - the active /editor filter chip tag list at the moment a candidate card
-    was picked (docs/features/printing-tags.md's implicit-vote section). `tagNames` may be
-    empty (a pick with no filters active casts no implicit votes and is a harmless no-op).
-    """
-
-    anonymousId: str
-    identifier: str
-    tagNames: List[str]
-
-    @staticmethod
-    def from_dict(obj: Any) -> "CastImplicitVoteRequest":
-        assert isinstance(obj, dict)
-        anonymousId = from_str(obj.get("anonymousId"))
-        identifier = from_str(obj.get("identifier"))
-        tagNames = from_list(from_str, obj.get("tagNames"))
-        return CastImplicitVoteRequest(anonymousId, identifier, tagNames)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["anonymousId"] = from_str(self.anonymousId)
-        result["identifier"] = from_str(self.identifier)
-        result["tagNames"] = from_list(from_str, self.tagNames)
-        return result
-
-
-class RetractImplicitVoteRequest(BaseModel):
-    """2/retractImplicitVote/ - a single filter chip deselected for a previously-picked card."""
-
-    anonymousId: str
-    identifier: str
-    tagName: str
-
-    @staticmethod
-    def from_dict(obj: Any) -> "RetractImplicitVoteRequest":
-        assert isinstance(obj, dict)
-        anonymousId = from_str(obj.get("anonymousId"))
-        identifier = from_str(obj.get("identifier"))
-        tagName = from_str(obj.get("tagName"))
-        return RetractImplicitVoteRequest(anonymousId, identifier, tagName)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["anonymousId"] = from_str(self.anonymousId)
-        result["identifier"] = from_str(self.identifier)
-        result["tagName"] = from_str(self.tagName)
-        return result
-
-
-class ArtistExternalLink(BaseModel):
-    """
-    One external link for an artist (MTG Artist Connection integration - see
-    cardpicker.artist_external_links's module docstring). `type` is one of the fixed allowlist
-    field names, in fixed priority order (website/artstation/inprnt/mountainmage/omalink/
-    instagram - instagram is a deliberate last-resort exception, not a commerce field, see that
-    module's own docstring) - the parent response's `links` list is never re-sorted per-artist.
-    """
-
-    type: str
-    url: str
-
-    @staticmethod
-    def from_dict(obj: Any) -> "ArtistExternalLink":
-        assert isinstance(obj, dict)
-        type_ = from_str(obj.get("type"))
-        url = from_str(obj.get("url"))
-        return ArtistExternalLink(type_, url)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["type"] = from_str(self.type)
-        result["url"] = from_str(self.url)
-        return result
-
-
-class SubmitQuestionAbstentionRequest(BaseModel):
-    """
-    2/submitQuestionAbstention/ (issue #712) - hand-maintained, same provenance as
-    CastImplicitVoteRequest/RetractImplicitVoteRequest above (no JSON schema source exists for
-    request types in this repo - typed by hand against the real Python pydantic model, not
-    quicktype-generated).
-    """
-
-    anonymousId: str
-    identifier: str
-    questionType: str
-    reason: Optional[str] = None
-
-    @staticmethod
-    def from_dict(obj: Any) -> "SubmitQuestionAbstentionRequest":
-        assert isinstance(obj, dict)
-        anonymousId = from_str(obj.get("anonymousId"))
-        identifier = from_str(obj.get("identifier"))
-        questionType = from_str(obj.get("questionType"))
-        reason = from_union([from_none, from_str], obj.get("reason"))
-        return SubmitQuestionAbstentionRequest(anonymousId, identifier, questionType, reason)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["anonymousId"] = from_str(self.anonymousId)
-        result["identifier"] = from_str(self.identifier)
-        result["questionType"] = from_str(self.questionType)
-        result["reason"] = from_union([from_none, from_str], self.reason)
-        return result
-
-
-class SubmitQuestionAbstentionResponse(BaseModel):
-    """Mirrors SubmitQuestionAbstentionRequest above - a single-purpose ack, no vote tally to
-    return since an abstention isn't a vote and never participates in consensus."""
-
-    recorded: bool
-
-    @staticmethod
-    def from_dict(obj: Any) -> "SubmitQuestionAbstentionResponse":
-        assert isinstance(obj, dict)
-        recorded = from_bool(obj.get("recorded"))
-        return SubmitQuestionAbstentionResponse(recorded)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["recorded"] = from_bool(self.recorded)
-        return result
-
-
-class ArtistExternalLinksResponse(BaseModel):
-    """
-    2/artistExternalLinks/ - hand-maintained, NOT quicktype-generated, same provenance/reasoning
-    as CastImplicitVoteRequest/RetractImplicitVoteRequest below: `npm run build` in schemas/ is
-    destructive to those two hand-added types (issue #332), so this addition was hand-integrated
-    to match the generated style instead of triggering a regeneration. A JSON schema source DOES
-    exist for this one (schemas/schemas/endpoints/ArtistExternalLinksResponse.json, for
-    documentation and any future safe regeneration) but was not run through quicktype here.
-    """
-
-    found: bool
-    pageUrl: Optional[str] = None
-    location: Optional[str] = None
-    links: List[ArtistExternalLink]
-    hasSignatureService: bool
-
-    @staticmethod
-    def from_dict(obj: Any) -> "ArtistExternalLinksResponse":
-        assert isinstance(obj, dict)
-        found = from_bool(obj.get("found"))
-        pageUrl = from_union([from_none, from_str], obj.get("pageUrl"))
-        location = from_union([from_none, from_str], obj.get("location"))
-        links = from_list(ArtistExternalLink.from_dict, obj.get("links"))
-        hasSignatureService = from_bool(obj.get("hasSignatureService"))
-        return ArtistExternalLinksResponse(found, pageUrl, location, links, hasSignatureService)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["found"] = from_bool(self.found)
-        result["pageUrl"] = from_union([from_none, from_str], self.pageUrl)
-        result["location"] = from_union([from_none, from_str], self.location)
-        result["links"] = from_list(lambda x: to_class(ArtistExternalLink, x), self.links)
-        result["hasSignatureService"] = from_bool(self.hasSignatureService)
-        return result
-
-
-class ContributionsOverTimeWeek(BaseModel):
-    """
-    One week's bucket of cardpicker.catalog_stats.compute_contributions_over_time - hand-
-    maintained, same provenance as ArtistExternalLinksResponse above (issue #332: `npm run build`
-    in schemas/ is destructive to the hand-added Cast/RetractImplicitVoteRequest types, so this
-    addition was hand-integrated instead of triggering a regeneration). A JSON schema source DOES
-    exist (schemas/schemas/endpoints/CatalogStatsResponse.json) for documentation/future safe
-    regeneration.
-    """
-
-    weekStart: str
-    bySurface: Dict[str, int]
-
-    @staticmethod
-    def from_dict(obj: Any) -> "ContributionsOverTimeWeek":
-        assert isinstance(obj, dict)
-        weekStart = from_str(obj.get("weekStart"))
-        bySurface = from_dict(from_int, obj.get("bySurface"))
-        return ContributionsOverTimeWeek(weekStart=weekStart, bySurface=bySurface)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["weekStart"] = from_str(self.weekStart)
-        result["bySurface"] = from_dict(from_int, self.bySurface)
-        return result
-
-
-class ContributionsOverTime(BaseModel):
-    """Proposal F chart 2 - see cardpicker.catalog_stats.compute_contributions_over_time's own
-    docstring for the human-only-by-two-filters guarantee this shape carries."""
-
-    bucketDays: int
-    series: List[ContributionsOverTimeWeek]
-
-    @staticmethod
-    def from_dict(obj: Any) -> "ContributionsOverTime":
-        assert isinstance(obj, dict)
-        bucketDays = from_int(obj.get("bucketDays"))
-        series = from_list(ContributionsOverTimeWeek.from_dict, obj.get("series"))
-        return ContributionsOverTime(bucketDays=bucketDays, series=series)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["bucketDays"] = from_int(self.bucketDays)
-        result["series"] = from_list(lambda x: to_class(ContributionsOverTimeWeek, x), self.series)
-        return result
-
-
-class SkipReasonCount(BaseModel):
-    reason: str
-    count: int
-
-    @staticmethod
-    def from_dict(obj: Any) -> "SkipReasonCount":
-        assert isinstance(obj, dict)
-        reason = from_str(obj.get("reason"))
-        count = from_int(obj.get("count"))
-        return SkipReasonCount(reason=reason, count=count)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["reason"] = from_str(self.reason)
-        result["count"] = from_int(self.count)
-        return result
-
-
-class SkipReasonEngineCount(BaseModel):
-    reason: str
-    engine: str
-    count: int
-
-    @staticmethod
-    def from_dict(obj: Any) -> "SkipReasonEngineCount":
-        assert isinstance(obj, dict)
-        reason = from_str(obj.get("reason"))
-        engine = from_str(obj.get("engine"))
-        count = from_int(obj.get("count"))
-        return SkipReasonEngineCount(reason=reason, engine=engine, count=count)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["reason"] = from_str(self.reason)
-        result["engine"] = from_str(self.engine)
-        result["count"] = from_int(self.count)
-        return result
-
-
-class SkipBreakdown(BaseModel):
-    """Proposal F chart 4 - see cardpicker.catalog_stats.compute_skip_breakdown's own docstring."""
-
-    byReason: List[SkipReasonCount]
-    byReasonAndEngine: List[SkipReasonEngineCount]
-
-    @staticmethod
-    def from_dict(obj: Any) -> "SkipBreakdown":
-        assert isinstance(obj, dict)
-        byReason = from_list(SkipReasonCount.from_dict, obj.get("byReason"))
-        byReasonAndEngine = from_list(SkipReasonEngineCount.from_dict, obj.get("byReasonAndEngine"))
-        return SkipBreakdown(byReason=byReason, byReasonAndEngine=byReasonAndEngine)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["byReason"] = from_list(lambda x: to_class(SkipReasonCount, x), self.byReason)
-        result["byReasonAndEngine"] = from_list(lambda x: to_class(SkipReasonEngineCount, x), self.byReasonAndEngine)
-        return result
-
-
-class PilotRunHistoryEntry(BaseModel):
-    """
-    One cardpicker.models.PilotRunLedger row as surfaced by cardpicker.catalog_stats.
-    compute_run_history - see that function's own docstring for the stage_d_*_already_voted
-    caveat (deliberately never surfaced here, at any level) and why votesWritten is safe to
-    surface as-is (but null for command="stage_e_streaming_dispatch" rows specifically).
-    """
-
-    runId: str
-    command: str
-    status: str
-    startedAt: str
-    finishedAt: Optional[str] = None
-    durationSeconds: Optional[float] = None
-    votesWritten: Optional[int] = None
-
-    @staticmethod
-    def from_dict(obj: Any) -> "PilotRunHistoryEntry":
-        assert isinstance(obj, dict)
-        runId = from_str(obj.get("runId"))
-        command = from_str(obj.get("command"))
-        status = from_str(obj.get("status"))
-        startedAt = from_str(obj.get("startedAt"))
-        finishedAt = from_union([from_none, from_str], obj.get("finishedAt"))
-        durationSeconds = from_union([from_none, from_float], obj.get("durationSeconds"))
-        votesWritten = from_union([from_none, from_int], obj.get("votesWritten"))
-        return PilotRunHistoryEntry(
-            runId=runId,
-            command=command,
-            status=status,
-            startedAt=startedAt,
-            finishedAt=finishedAt,
-            durationSeconds=durationSeconds,
-            votesWritten=votesWritten,
-        )
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["runId"] = from_str(self.runId)
-        result["command"] = from_str(self.command)
-        result["status"] = from_str(self.status)
-        result["startedAt"] = from_str(self.startedAt)
-        result["finishedAt"] = from_union([from_none, from_str], self.finishedAt)
-        result["durationSeconds"] = from_union([from_none, from_float], self.durationSeconds)
-        result["votesWritten"] = from_union([from_none, from_int], self.votesWritten)
-        return result
-
-
-class RunHistory(BaseModel):
-    """Proposal F chart 6 - see cardpicker.catalog_stats.compute_run_history's own docstring."""
-
-    recent: List[PilotRunHistoryEntry]
-
-    @staticmethod
-    def from_dict(obj: Any) -> "RunHistory":
-        assert isinstance(obj, dict)
-        recent = from_list(PilotRunHistoryEntry.from_dict, obj.get("recent"))
-        return RunHistory(recent=recent)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["recent"] = from_list(lambda x: to_class(PilotRunHistoryEntry, x), self.recent)
-        return result
-
-
-class CatalogComposition(BaseModel):
-    """Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, see
-    cardpicker.catalog_stats.compute_catalog_composition's own docstring. `sources` reuses the
-    existing generated `SourceContribution` type rather than a new one."""
-
-    sources: List[SourceContribution]
-    cardCountByType: Dict[str, int]
-    totalDatabaseSize: int
-
-    @staticmethod
-    def from_dict(obj: Any) -> "CatalogComposition":
-        assert isinstance(obj, dict)
-        sources = from_list(SourceContribution.from_dict, obj.get("sources"))
-        cardCountByType = from_dict(from_int, obj.get("cardCountByType"))
-        totalDatabaseSize = from_int(obj.get("totalDatabaseSize"))
-        return CatalogComposition(sources=sources, cardCountByType=cardCountByType, totalDatabaseSize=totalDatabaseSize)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["sources"] = from_list(lambda x: to_class(SourceContribution, x), self.sources)
-        result["cardCountByType"] = from_dict(from_int, self.cardCountByType)
-        result["totalDatabaseSize"] = from_int(self.totalDatabaseSize)
-        return result
-
-
-class HumanVoteCounts(BaseModel):
-    printingTag: int
-    artist: int
-    tag: int
-    total: int
-
-    @staticmethod
-    def from_dict(obj: Any) -> "HumanVoteCounts":
-        assert isinstance(obj, dict)
-        printingTag = from_int(obj.get("printingTag"))
-        artist = from_int(obj.get("artist"))
-        tag = from_int(obj.get("tag"))
-        total = from_int(obj.get("total"))
-        return HumanVoteCounts(printingTag=printingTag, artist=artist, tag=tag, total=total)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["printingTag"] = from_int(self.printingTag)
-        result["artist"] = from_int(self.artist)
-        result["tag"] = from_int(self.tag)
-        result["total"] = from_int(self.total)
-        return result
-
-
-class Md5GroupStats(BaseModel):
-    groupsWithMultipleCards: int
-    cardsInMultiCardGroups: int
-    largestGroupSize: int
-
-    @staticmethod
-    def from_dict(obj: Any) -> "Md5GroupStats":
-        assert isinstance(obj, dict)
-        groupsWithMultipleCards = from_int(obj.get("groupsWithMultipleCards"))
-        cardsInMultiCardGroups = from_int(obj.get("cardsInMultiCardGroups"))
-        largestGroupSize = from_int(obj.get("largestGroupSize"))
-        return Md5GroupStats(
-            groupsWithMultipleCards=groupsWithMultipleCards,
-            cardsInMultiCardGroups=cardsInMultiCardGroups,
-            largestGroupSize=largestGroupSize,
-        )
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["groupsWithMultipleCards"] = from_int(self.groupsWithMultipleCards)
-        result["cardsInMultiCardGroups"] = from_int(self.cardsInMultiCardGroups)
-        result["largestGroupSize"] = from_int(self.largestGroupSize)
-        return result
-
-
-class Participation(BaseModel):
-    """
-    The call-to-action panel - see cardpicker.catalog_stats.compute_participation's own docstring
-    for why this deliberately carries no "percent complete" field: emit counts, let the page
-    decide the framing.
-
-    `distinctCardsWithHumanVotes`/`distinctCardsRoutedToReview`/
-    `distinctCardsRoutedToReviewWithHumanVotes` are CARD-denominated counts (issue #233
-    follow-up, 2026-07-29), additive to the fields above - see `compute_participation`'s own
-    docstring for the exact filters each uses, why `distinctCardsRoutedToReview` must be a
-    distinct-card count rather than a row count, and why the intersection
-    (`distinctCardsRoutedToReviewWithHumanVotes`), not the first two counts directly, is the pair
-    that forms a valid progress ratio.
-    """
-
-    total: int
-    confirmable: int
-    contested: int
-    fresh: int
-    humanVotes: HumanVoteCounts
-    distinctHumanVoters: int
-    distinctCardsWithHumanVotes: int
-    distinctCardsRoutedToReview: int
-    distinctCardsRoutedToReviewWithHumanVotes: int
-    md5Groups: Md5GroupStats
-
-    @staticmethod
-    def from_dict(obj: Any) -> "Participation":
-        assert isinstance(obj, dict)
-        total = from_int(obj.get("total"))
-        confirmable = from_int(obj.get("confirmable"))
-        contested = from_int(obj.get("contested"))
-        fresh = from_int(obj.get("fresh"))
-        humanVotes = HumanVoteCounts.from_dict(obj.get("humanVotes"))
-        distinctHumanVoters = from_int(obj.get("distinctHumanVoters"))
-        distinctCardsWithHumanVotes = from_int(obj.get("distinctCardsWithHumanVotes"))
-        distinctCardsRoutedToReview = from_int(obj.get("distinctCardsRoutedToReview"))
-        distinctCardsRoutedToReviewWithHumanVotes = from_int(obj.get("distinctCardsRoutedToReviewWithHumanVotes"))
-        md5Groups = Md5GroupStats.from_dict(obj.get("md5Groups"))
-        return Participation(
-            total=total,
-            confirmable=confirmable,
-            contested=contested,
-            fresh=fresh,
-            humanVotes=humanVotes,
-            distinctHumanVoters=distinctHumanVoters,
-            distinctCardsWithHumanVotes=distinctCardsWithHumanVotes,
-            distinctCardsRoutedToReview=distinctCardsRoutedToReview,
-            distinctCardsRoutedToReviewWithHumanVotes=distinctCardsRoutedToReviewWithHumanVotes,
-            md5Groups=md5Groups,
-        )
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["total"] = from_int(self.total)
-        result["confirmable"] = from_int(self.confirmable)
-        result["contested"] = from_int(self.contested)
-        result["fresh"] = from_int(self.fresh)
-        result["humanVotes"] = to_class(HumanVoteCounts, self.humanVotes)
-        result["distinctHumanVoters"] = from_int(self.distinctHumanVoters)
-        result["distinctCardsWithHumanVotes"] = from_int(self.distinctCardsWithHumanVotes)
-        result["distinctCardsRoutedToReview"] = from_int(self.distinctCardsRoutedToReview)
-        result["distinctCardsRoutedToReviewWithHumanVotes"] = from_int(self.distinctCardsRoutedToReviewWithHumanVotes)
-        result["md5Groups"] = to_class(Md5GroupStats, self.md5Groups)
-        return result
-
-
-class CatalogStatsResponse(BaseModel):
-    """
-    1/catalogStats/ - hand-maintained, NOT quicktype-generated, same provenance/reasoning as
-    CastImplicitVoteRequest/RetractImplicitVoteRequest/ArtistExternalLinksResponse above: `npm run
-    build` in schemas/ is destructive to the two hand-added request types (issue #332), so this
-    addition was hand-integrated to match the generated style instead of triggering a
-    regeneration. A JSON schema source DOES exist
-    (schemas/schemas/endpoints/CatalogStatsResponse.json, for documentation and any future safe
-    regeneration) but was not run through quicktype here.
-
-    Cache-only on the read path (cardpicker.catalog_stats.get_cached_catalog_stats) - a cache miss
-    returns every field at its zero/empty value (generatedAt=None), never a 500. See that module's
-    own docstring for the full compute/warm/cache-only-read architecture, and for why charts 1
-    (resolutionProgress) and 5 (hashCoverage) are deliberately absent from this shape this pass.
-    """
-
-    generatedAt: Optional[str] = None
-    contributionsOverTime: ContributionsOverTime
-    skipBreakdown: SkipBreakdown
-    runHistory: RunHistory
-    catalogComposition: CatalogComposition
-    participation: Participation
-
-    @staticmethod
-    def from_dict(obj: Any) -> "CatalogStatsResponse":
-        assert isinstance(obj, dict)
-        generatedAt = from_union([from_none, from_str], obj.get("generatedAt"))
-        contributionsOverTime = ContributionsOverTime.from_dict(obj.get("contributionsOverTime"))
-        skipBreakdown = SkipBreakdown.from_dict(obj.get("skipBreakdown"))
-        runHistory = RunHistory.from_dict(obj.get("runHistory"))
-        catalogComposition = CatalogComposition.from_dict(obj.get("catalogComposition"))
-        participation = Participation.from_dict(obj.get("participation"))
-        return CatalogStatsResponse(
-            generatedAt=generatedAt,
-            contributionsOverTime=contributionsOverTime,
-            skipBreakdown=skipBreakdown,
-            runHistory=runHistory,
-            catalogComposition=catalogComposition,
-            participation=participation,
-        )
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["generatedAt"] = from_union([from_none, from_str], self.generatedAt)
-        result["contributionsOverTime"] = to_class(ContributionsOverTime, self.contributionsOverTime)
-        result["skipBreakdown"] = to_class(SkipBreakdown, self.skipBreakdown)
-        result["runHistory"] = to_class(RunHistory, self.runHistory)
-        result["catalogComposition"] = to_class(CatalogComposition, self.catalogComposition)
-        result["participation"] = to_class(Participation, self.participation)
         return result
 
 
@@ -3707,28 +3671,12 @@ class WhoamiResponse(BaseModel):
         return result
 
 
-def ArtistAutocompleteRequestfromdict(s: Any) -> ArtistAutocompleteRequest:
-    return ArtistAutocompleteRequest.from_dict(s)
-
-
-def ArtistAutocompleteRequesttodict(x: ArtistAutocompleteRequest) -> Any:
-    return to_class(ArtistAutocompleteRequest, x)
-
-
 def ArtistAutocompleteResultfromdict(s: Any) -> ArtistAutocompleteResult:
     return ArtistAutocompleteResult.from_dict(s)
 
 
 def ArtistAutocompleteResulttodict(x: ArtistAutocompleteResult) -> Any:
     return to_class(ArtistAutocompleteResult, x)
-
-
-def ArtistAutocompleteResponsefromdict(s: Any) -> ArtistAutocompleteResponse:
-    return ArtistAutocompleteResponse.from_dict(s)
-
-
-def ArtistAutocompleteResponsetodict(x: ArtistAutocompleteResponse) -> Any:
-    return to_class(ArtistAutocompleteResponse, x)
 
 
 def ArtistVoteTallyEntryfromdict(s: Any) -> ArtistVoteTallyEntry:
@@ -3835,6 +3783,14 @@ def NewCardsFirstPagetodict(x: NewCardsFirstPage) -> Any:
     return to_class(NewCardsFirstPage, x)
 
 
+def PilotRunHistoryEntryfromdict(s: Any) -> PilotRunHistoryEntry:
+    return PilotRunHistoryEntry.from_dict(s)
+
+
+def PilotRunHistoryEntrytodict(x: PilotRunHistoryEntry) -> Any:
+    return to_class(PilotRunHistoryEntry, x)
+
+
 def PrintingCandidatefromdict(s: Any) -> PrintingCandidate:
     return PrintingCandidate.from_dict(s)
 
@@ -3929,6 +3885,14 @@ def SearchTypeSettingsfromdict(s: Any) -> SearchTypeSettings:
 
 def SearchTypeSettingstodict(x: SearchTypeSettings) -> Any:
     return to_class(SearchTypeSettings, x)
+
+
+def SkipReasonEngineCountfromdict(s: Any) -> SkipReasonEngineCount:
+    return SkipReasonEngineCount.from_dict(s)
+
+
+def SkipReasonEngineCounttodict(x: SkipReasonEngineCount) -> Any:
+    return to_class(SkipReasonEngineCount, x)
 
 
 def SortByfromdict(s: Any) -> SortBy:
@@ -4043,6 +4007,22 @@ def VoteTallyEntrytodict(x: VoteTallyEntry) -> Any:
     return to_class(VoteTallyEntry, x)
 
 
+def ArtistAutocompleteRequestfromdict(s: Any) -> ArtistAutocompleteRequest:
+    return ArtistAutocompleteRequest.from_dict(s)
+
+
+def ArtistAutocompleteRequesttodict(x: ArtistAutocompleteRequest) -> Any:
+    return to_class(ArtistAutocompleteRequest, x)
+
+
+def ArtistAutocompleteResponsefromdict(s: Any) -> ArtistAutocompleteResponse:
+    return ArtistAutocompleteResponse.from_dict(s)
+
+
+def ArtistAutocompleteResponsetodict(x: ArtistAutocompleteResponse) -> Any:
+    return to_class(ArtistAutocompleteResponse, x)
+
+
 def ArtistCandidatesRequestfromdict(s: Any) -> ArtistCandidatesRequest:
     return ArtistCandidatesRequest.from_dict(s)
 
@@ -4075,6 +4055,14 @@ def ArtistConsensusResponsetodict(x: ArtistConsensusResponse) -> Any:
     return to_class(ArtistConsensusResponse, x)
 
 
+def ArtistExternalLinksResponsefromdict(s: Any) -> ArtistExternalLinksResponse:
+    return ArtistExternalLinksResponse.from_dict(s)
+
+
+def ArtistExternalLinksResponsetodict(x: ArtistExternalLinksResponse) -> Any:
+    return to_class(ArtistExternalLinksResponse, x)
+
+
 def CardbacksRequestfromdict(s: Any) -> CardbacksRequest:
     return CardbacksRequest.from_dict(s)
 
@@ -4105,6 +4093,22 @@ def CardsResponsefromdict(s: Any) -> CardsResponse:
 
 def CardsResponsetodict(x: CardsResponse) -> Any:
     return to_class(CardsResponse, x)
+
+
+def CastImplicitVoteRequestfromdict(s: Any) -> CastImplicitVoteRequest:
+    return CastImplicitVoteRequest.from_dict(s)
+
+
+def CastImplicitVoteRequesttodict(x: CastImplicitVoteRequest) -> Any:
+    return to_class(CastImplicitVoteRequest, x)
+
+
+def CatalogStatsResponsefromdict(s: Any) -> CatalogStatsResponse:
+    return CatalogStatsResponse.from_dict(s)
+
+
+def CatalogStatsResponsetodict(x: CatalogStatsResponse) -> Any:
+    return to_class(CatalogStatsResponse, x)
 
 
 def ConfirmReviewClusterRequestfromdict(s: Any) -> ConfirmReviewClusterRequest:
@@ -4499,6 +4503,14 @@ def ResetSavedDecksResponsetodict(x: ResetSavedDecksResponse) -> Any:
     return to_class(ResetSavedDecksResponse, x)
 
 
+def RetractImplicitVoteRequestfromdict(s: Any) -> RetractImplicitVoteRequest:
+    return RetractImplicitVoteRequest.from_dict(s)
+
+
+def RetractImplicitVoteRequesttodict(x: RetractImplicitVoteRequest) -> Any:
+    return to_class(RetractImplicitVoteRequest, x)
+
+
 def ReviewClusterDetailRequestfromdict(s: Any) -> ReviewClusterDetailRequest:
     return ReviewClusterDetailRequest.from_dict(s)
 
@@ -4643,12 +4655,60 @@ def SubmitArtistWriteInVoteResponsetodict(x: SubmitArtistWriteInVoteResponse) ->
     return to_class(SubmitArtistWriteInVoteResponse, x)
 
 
+def SubmitIllustrationRejectionRequestfromdict(s: Any) -> SubmitIllustrationRejectionRequest:
+    return SubmitIllustrationRejectionRequest.from_dict(s)
+
+
+def SubmitIllustrationRejectionRequesttodict(x: SubmitIllustrationRejectionRequest) -> Any:
+    return to_class(SubmitIllustrationRejectionRequest, x)
+
+
+def SubmitIllustrationRejectionResponsefromdict(s: Any) -> SubmitIllustrationRejectionResponse:
+    return SubmitIllustrationRejectionResponse.from_dict(s)
+
+
+def SubmitIllustrationRejectionResponsetodict(x: SubmitIllustrationRejectionResponse) -> Any:
+    return to_class(SubmitIllustrationRejectionResponse, x)
+
+
+def SubmitIllustrationVoteRequestfromdict(s: Any) -> SubmitIllustrationVoteRequest:
+    return SubmitIllustrationVoteRequest.from_dict(s)
+
+
+def SubmitIllustrationVoteRequesttodict(x: SubmitIllustrationVoteRequest) -> Any:
+    return to_class(SubmitIllustrationVoteRequest, x)
+
+
+def SubmitIllustrationVoteResponsefromdict(s: Any) -> SubmitIllustrationVoteResponse:
+    return SubmitIllustrationVoteResponse.from_dict(s)
+
+
+def SubmitIllustrationVoteResponsetodict(x: SubmitIllustrationVoteResponse) -> Any:
+    return to_class(SubmitIllustrationVoteResponse, x)
+
+
 def SubmitPrintingTagRequestfromdict(s: Any) -> SubmitPrintingTagRequest:
     return SubmitPrintingTagRequest.from_dict(s)
 
 
 def SubmitPrintingTagRequesttodict(x: SubmitPrintingTagRequest) -> Any:
     return to_class(SubmitPrintingTagRequest, x)
+
+
+def SubmitQuestionAbstentionRequestfromdict(s: Any) -> SubmitQuestionAbstentionRequest:
+    return SubmitQuestionAbstentionRequest.from_dict(s)
+
+
+def SubmitQuestionAbstentionRequesttodict(x: SubmitQuestionAbstentionRequest) -> Any:
+    return to_class(SubmitQuestionAbstentionRequest, x)
+
+
+def SubmitQuestionAbstentionResponsefromdict(s: Any) -> SubmitQuestionAbstentionResponse:
+    return SubmitQuestionAbstentionResponse.from_dict(s)
+
+
+def SubmitQuestionAbstentionResponsetodict(x: SubmitQuestionAbstentionResponse) -> Any:
+    return to_class(SubmitQuestionAbstentionResponse, x)
 
 
 def SubmitTagVoteRequestfromdict(s: Any) -> SubmitTagVoteRequest:

@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistAutocompleteResult, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistAutocompleteRequest, ArtistAutocompleteResponse, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitArtistWriteInVoteRequest, SubmitArtistWriteInVoteResponse, SubmitPrintingTagRequest, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistAutocompleteResult, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PilotRunHistoryEntry, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SkipReasonEngineCount, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistAutocompleteRequest, ArtistAutocompleteResponse, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, ArtistExternalLinksResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, CastImplicitVoteRequest, CatalogStatsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, RetractImplicitVoteRequest, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitArtistWriteInVoteRequest, SubmitArtistWriteInVoteResponse, SubmitIllustrationRejectionRequest, SubmitIllustrationRejectionResponse, SubmitIllustrationVoteRequest, SubmitIllustrationVoteResponse, SubmitPrintingTagRequest, SubmitQuestionAbstentionRequest, SubmitQuestionAbstentionResponse, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistAutocompleteResult = Convert.toArtistAutocompleteResult(json);
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
@@ -18,6 +18,7 @@
 //   const moderationDriveItem = Convert.toModerationDriveItem(json);
 //   const moderationQueueItem = Convert.toModerationQueueItem(json);
 //   const newCardsFirstPage = Convert.toNewCardsFirstPage(json);
+//   const pilotRunHistoryEntry = Convert.toPilotRunHistoryEntry(json);
 //   const printingCandidate = Convert.toPrintingCandidate(json);
 //   const printingTagStatus = Convert.toPrintingTagStatus(json);
 //   const questionFeedCounts = Convert.toQuestionFeedCounts(json);
@@ -30,6 +31,7 @@
 //   const searchQuery = Convert.toSearchQuery(json);
 //   const searchSettings = Convert.toSearchSettings(json);
 //   const searchTypeSettings = Convert.toSearchTypeSettings(json);
+//   const skipReasonEngineCount = Convert.toSkipReasonEngineCount(json);
 //   const sortBy = Convert.toSortBy(json);
 //   const source = Convert.toSource(json);
 //   const sourceContribution = Convert.toSourceContribution(json);
@@ -50,10 +52,13 @@
 //   const artistCandidatesResponse = Convert.toArtistCandidatesResponse(json);
 //   const artistConsensusRequest = Convert.toArtistConsensusRequest(json);
 //   const artistConsensusResponse = Convert.toArtistConsensusResponse(json);
+//   const artistExternalLinksResponse = Convert.toArtistExternalLinksResponse(json);
 //   const cardbacksRequest = Convert.toCardbacksRequest(json);
 //   const cardbacksResponse = Convert.toCardbacksResponse(json);
 //   const cardsRequest = Convert.toCardsRequest(json);
 //   const cardsResponse = Convert.toCardsResponse(json);
+//   const castImplicitVoteRequest = Convert.toCastImplicitVoteRequest(json);
+//   const catalogStatsResponse = Convert.toCatalogStatsResponse(json);
 //   const confirmReviewClusterRequest = Convert.toConfirmReviewClusterRequest(json);
 //   const confirmReviewClusterResponse = Convert.toConfirmReviewClusterResponse(json);
 //   const contributionsResponse = Convert.toContributionsResponse(json);
@@ -103,6 +108,7 @@
 //   const reportCardResponse = Convert.toReportCardResponse(json);
 //   const resetSavedDecksRequest = Convert.toResetSavedDecksRequest(json);
 //   const resetSavedDecksResponse = Convert.toResetSavedDecksResponse(json);
+//   const retractImplicitVoteRequest = Convert.toRetractImplicitVoteRequest(json);
 //   const reviewClusterDetailRequest = Convert.toReviewClusterDetailRequest(json);
 //   const reviewClusterDetailResponse = Convert.toReviewClusterDetailResponse(json);
 //   const reviewClusterListRequest = Convert.toReviewClusterListRequest(json);
@@ -121,7 +127,13 @@
 //   const submitArtistVoteRequest = Convert.toSubmitArtistVoteRequest(json);
 //   const submitArtistWriteInVoteRequest = Convert.toSubmitArtistWriteInVoteRequest(json);
 //   const submitArtistWriteInVoteResponse = Convert.toSubmitArtistWriteInVoteResponse(json);
+//   const submitIllustrationRejectionRequest = Convert.toSubmitIllustrationRejectionRequest(json);
+//   const submitIllustrationRejectionResponse = Convert.toSubmitIllustrationRejectionResponse(json);
+//   const submitIllustrationVoteRequest = Convert.toSubmitIllustrationVoteRequest(json);
+//   const submitIllustrationVoteResponse = Convert.toSubmitIllustrationVoteResponse(json);
 //   const submitPrintingTagRequest = Convert.toSubmitPrintingTagRequest(json);
+//   const submitQuestionAbstentionRequest = Convert.toSubmitQuestionAbstentionRequest(json);
+//   const submitQuestionAbstentionResponse = Convert.toSubmitQuestionAbstentionResponse(json);
 //   const submitTagVoteRequest = Convert.toSubmitTagVoteRequest(json);
 //   const tagConsensusRequest = Convert.toTagConsensusRequest(json);
 //   const tagConsensusResponse = Convert.toTagConsensusResponse(json);
@@ -206,10 +218,10 @@ export interface Card {
   /**
    * Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme"), read
    * from whichever printing backs canonicalCard (CanonicalPrintingMetadata.layout) - same
-   * canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses for
-   * canonicalCard itself. null whenever canonicalCard is null, or the resolved printing has no
-   * metadata row, or that row's layout hasn't been populated. Lets a consumer ask "does this card
-   * have a back face" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in
+   * canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses
+   * for canonicalCard itself. null whenever canonicalCard is null, or the resolved printing
+   * has no metadata row, or that row's layout hasn't been populated. Lets a consumer ask
+   * "does this card have a back face" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in
    * printing_metadata_import.py) directly from a card it already has, rather than
    * cross-referencing a separately-fetched name list.
    */
@@ -245,12 +257,12 @@ export interface Card {
   suggestedCanonicalCard?: CanonicalCard | null;
   /**
    * SEAM, not yet populated server-side (owner decision, D14 numeric-confidence round,
-   * 2026-07-23 - see docs/features/display-left-rail.md's "D14 numeric confidence" section for
-   * the full flag-to-backend note). Expected shape once a calibrated score lands: an integer
-   * 0-100 percentage, present only alongside a non-null `suggestedCanonicalCard` (never sent
-   * for an already-`resolved` card, same opt-in-per-endpoint pattern as
-   * `suggestedCanonicalCard`/`suggestedFilterTagNames` above). Until the backend sends this
-   * field, every real API response omits it and it reads as `undefined` - `ConfidenceElement.tsx`
+   * 2026-07-23 - see docs/features/display-left-rail.md's "D14 numeric confidence" section
+   * for the full flag-to-backend note). Expected shape once a calibrated score lands: an
+   * integer 0-100 percentage, present only alongside a non-null suggestedCanonicalCard (never
+   * sent for an already-resolved card, same opt-in-per-endpoint pattern as
+   * suggestedCanonicalCard/suggestedFilterTagNames above). Until the backend sends this
+   * field, every real API response omits it and it reads as undefined - ConfidenceElement.tsx
    * degrades to its existing qualitative "Suggested" pill in that case, never a crash or a
    * fabricated number.
    */
@@ -382,6 +394,27 @@ export interface ArtistVoteTallyEntry {
   isUnknown: boolean;
 }
 
+export interface ArtistExternalLinksResponse {
+  found: boolean;
+  /**
+   * Surfaced as a boolean flag only, never as a link - see MTGAC integration docs.
+   */
+  hasSignatureService: boolean;
+  links: Link[];
+  location: null | string;
+  pageUrl: null | string;
+}
+
+export interface Link {
+  /**
+   * One of the fixed allowlist field names, in fixed priority order: website, artstation,
+   * inprnt, mountainmage, omalink, instagram (instagram is a deliberate last-resort
+   * exception, not a commerce field - see docs/features/artist-support-links.md).
+   */
+  type: string;
+  url: string;
+}
+
 export interface CardbacksRequest {
   searchSettings: SearchSettings;
 }
@@ -461,6 +494,193 @@ export interface CardsResponse {
   results: { [key: string]: Card };
 }
 
+export interface CastImplicitVoteRequest {
+  anonymousId: string;
+  identifier: string;
+  tagNames: string[];
+}
+
+/**
+ * 1/catalogStats/ - Proposal F's cache-only public stats aggregate
+ * (docs/proposals/proposal-f-public-stats-page.md;
+ * MPCAutofill/cardpicker/catalog_stats.py's own module docstring). Cache-only on the read
+ * path: a cache miss returns every field at its zero/empty value, never a 500. Ships five
+ * of Proposal F's seven charts this pass - resolutionProgress (chart 1) and hashCoverage
+ * (chart 5) are deliberately deferred, see that module's own docstring.
+ */
+export interface CatalogStatsResponse {
+  /**
+   * Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved
+   * onto this cache instead of GET 2/contributions/'s live query.
+   */
+  catalogComposition: CatalogComposition;
+  /**
+   * Proposal F chart 2 - human confirmations bucketed by week, split by vote_surface, across
+   * CardPrintingTag/CardArtistVote/CardTagVote. Human-only by construction (vote_surface plus
+   * a HUMAN_SOURCES source filter - see catalog_stats.py's own docstring for why both are
+   * needed).
+   */
+  contributionsOverTime: ContributionsOverTime;
+  /**
+   * ISO-8601 timestamp of the warm run that produced this blob, or null on a cache miss
+   * (never warmed, or the shared cache backend isn't configured yet).
+   */
+  generatedAt: null | string;
+  /**
+   * The call-to-action panel. Emits raw counts only, deliberately no 'percent complete' field
+   * - see compute_participation's own docstring.
+   */
+  participation: Participation;
+  /**
+   * Proposal F chart 6 - the most recent PilotRunLedger rows. See catalog_stats.py's
+   * compute_run_history docstring for the stage_d_*_already_voted caveat (deliberately never
+   * surfaced here) and why votes_written is safe to surface as-is (but null for
+   * stage_e_streaming_dispatch rows specifically).
+   */
+  runHistory: RunHistory;
+  /**
+   * Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine
+   * (anonymous_id).
+   */
+  skipBreakdown: SkipBreakdown;
+}
+
+/**
+ * Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved
+ * onto this cache instead of GET 2/contributions/'s live query.
+ */
+export interface CatalogComposition {
+  cardCountByType: { [key: string]: number };
+  sources: SourceContribution[];
+  totalDatabaseSize: number;
+}
+
+export interface SourceContribution {
+  avgdpi: string;
+  description: string;
+  externalLink?: string;
+  name: string;
+  qtyCardbacks: string;
+  qtyCards: string;
+  qtyTokens: string;
+  size: string;
+  sourceType: SourceType;
+}
+
+/**
+ * Proposal F chart 2 - human confirmations bucketed by week, split by vote_surface, across
+ * CardPrintingTag/CardArtistVote/CardTagVote. Human-only by construction (vote_surface plus
+ * a HUMAN_SOURCES source filter - see catalog_stats.py's own docstring for why both are
+ * needed).
+ */
+export interface ContributionsOverTime {
+  bucketDays: number;
+  series: Series[];
+}
+
+export interface Series {
+  /**
+   * vote_surface value -> human confirmation count for this week.
+   */
+  bySurface: { [key: string]: number };
+  /**
+   * ISO date (Monday) this bucket starts on.
+   */
+  weekStart: string;
+}
+
+/**
+ * The call-to-action panel. Emits raw counts only, deliberately no 'percent complete' field
+ * - see compute_participation's own docstring.
+ */
+export interface Participation {
+  confirmable: number;
+  contested: number;
+  /**
+   * Distinct card_id in CardScanLog filtered to the slow-path agent (SLOW_PATH_ANONYMOUS_ID)
+   * and skip_reason=SLOW_PATH_TO_REVIEW_REASON - same filter review_clusters.py's
+   * _review_queue_card_ids() uses. A distinct-card count, not a row count: CardScanLog is an
+   * append-only audit trail, so a card can carry more than one row for the same (card,
+   * anonymous_id) pair. Only ever grows (nothing clears the routing marker when a card later
+   * gets a human vote) - a denominator, not a progress measure on its own.
+   */
+  distinctCardsRoutedToReview: number;
+  /**
+   * The intersection of distinctCardsRoutedToReview and distinctCardsWithHumanVotes: cards
+   * that are both routed to review AND carry a human vote. This, not
+   * distinctCardsWithHumanVotes over distinctCardsRoutedToReview, is the pair that forms a
+   * valid progress ratio - distinctCardsWithHumanVotes is not a subset of
+   * distinctCardsRoutedToReview (a person can vote on a card the machine never routed), so
+   * dividing them directly is not coherent.
+   */
+  distinctCardsRoutedToReviewWithHumanVotes: number;
+  /**
+   * Distinct card_id across CardPrintingTag/CardArtistVote/CardTagVote filtered to
+   * HUMAN_SOURCES, unioned across the three tables so a card voted on in two tables counts
+   * once. CARD-denominated (unlike humanVotes, which counts votes) so the page's
+   * participation ratio can be cards-over-cards.
+   */
+  distinctCardsWithHumanVotes: number;
+  distinctHumanVoters: number;
+  fresh: number;
+  humanVotes: HumanVotes;
+  md5Groups: Md5Groups;
+  total: number;
+}
+
+export interface HumanVotes {
+  artist: number;
+  printingTag: number;
+  tag: number;
+  total: number;
+}
+
+export interface Md5Groups {
+  cardsInMultiCardGroups: number;
+  groupsWithMultipleCards: number;
+  largestGroupSize: number;
+}
+
+/**
+ * Proposal F chart 6 - the most recent PilotRunLedger rows. See catalog_stats.py's
+ * compute_run_history docstring for the stage_d_*_already_voted caveat (deliberately never
+ * surfaced here) and why votes_written is safe to surface as-is (but null for
+ * stage_e_streaming_dispatch rows specifically).
+ */
+export interface RunHistory {
+  recent: PilotRunHistoryEntry[];
+}
+
+export interface PilotRunHistoryEntry {
+  command: string;
+  durationSeconds: number | null;
+  finishedAt: null | string;
+  runId: string;
+  startedAt: string;
+  status: string;
+  votesWritten: number | null;
+}
+
+/**
+ * Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine
+ * (anonymous_id).
+ */
+export interface SkipBreakdown {
+  byReason: ByReason[];
+  byReasonAndEngine: SkipReasonEngineCount[];
+}
+
+export interface ByReason {
+  count: number;
+  reason: string;
+}
+
+export interface SkipReasonEngineCount {
+  count: number;
+  engine: string;
+  reason: string;
+}
+
 export interface ConfirmReviewClusterRequest {
   clusterId: string;
   /**
@@ -491,18 +711,6 @@ export interface ContributionsResponse {
   cardCountByType: { [key: string]: number };
   sources: SourceContribution[];
   totalDatabaseSize: number;
-}
-
-export interface SourceContribution {
-  avgdpi: string;
-  description: string;
-  externalLink?: string;
-  name: string;
-  qtyCardbacks: string;
-  qtyCards: string;
-  qtyTokens: string;
-  size: string;
-  sourceType: SourceType;
 }
 
 export interface CreateDeckShareRequest {
@@ -873,6 +1081,12 @@ export interface ResetSavedDecksResponse {
   deletedDeckCount: number;
 }
 
+export interface RetractImplicitVoteRequest {
+  anonymousId: string;
+  identifier: string;
+  tagName: string;
+}
+
 export interface ReviewClusterDetailRequest {
   clusterId: string;
 }
@@ -1041,28 +1255,17 @@ export interface SubmitArtistWriteInVoteResponse {
   voteTally: ArtistVoteTallyEntry[];
 }
 
-export interface SubmitPrintingTagRequest {
+export interface SubmitIllustrationRejectionRequest {
   anonymousId: string;
   identifier: string;
-  isNoMatch: boolean;
-  printingIdentifier?: null | string;
+  illustrationId: string;
   voteSurface?: null | string;
 }
 
-export interface SubmitTagVoteRequest {
-  anonymousId: string;
-  identifier: string;
-  polarity: number;
-  tagName: string;
-  voteSurface?: null | string;
+export interface SubmitIllustrationRejectionResponse {
+  illustrationId: string;
 }
 
-/**
- * 2/submitIllustrationVote/ - issue #503 (WTC phase C2) / #524. Mirrors
- * MPCAutofill/cardpicker/schema_types.py's SubmitIllustrationVoteRequest. Send ONE
- * illustrationId (Scryfall artwork identity) OR isUnknown=true, never a list of printings -
- * the server derives the printing/artist writes at write time, against live data.
- */
 export interface SubmitIllustrationVoteRequest {
   anonymousId: string;
   identifier: string;
@@ -1071,11 +1274,6 @@ export interface SubmitIllustrationVoteRequest {
   voteSurface?: null | string;
 }
 
-/**
- * Response to 2/submitIllustrationVote/ - reports which of the (up to three) writes this
- * invocation actually made. artistAbstainReason is non-null whenever the artist channel did
- * NOT write ("combined_credit" | "existing_explicit_vote" | "no_printing_found").
- */
 export interface SubmitIllustrationVoteResponse {
   artistAbstainReason?: null | string;
   artistVoteCast: boolean;
@@ -1085,220 +1283,31 @@ export interface SubmitIllustrationVoteResponse {
   resolvedPrinting?: PrintingCandidate;
 }
 
-/**
- * 2/submitIllustrationRejection/ ("Not this art") - mirrors
- * MPCAutofill/cardpicker/schema_types.py's SubmitIllustrationRejectionRequest. Always names the
- * rejected artwork - no isUnknown counterpart, see CardIllustrationRejection's own model
- * docstring for why a rejection has no "unknown" claim to make.
- */
-export interface SubmitIllustrationRejectionRequest {
+export interface SubmitPrintingTagRequest {
   anonymousId: string;
   identifier: string;
-  illustrationId: string;
+  isNoMatch: boolean;
+  printingIdentifier?: null | string;
   voteSurface?: null | string;
 }
 
-/** Response to 2/submitIllustrationRejection/ - mirrors SubmitIllustrationRejectionResponse. */
-export interface SubmitIllustrationRejectionResponse {
-  illustrationId: string;
-}
-
-/**
- * 2/castImplicitVote/ - hand-maintained, mirroring MPCAutofill/cardpicker/schema_types.py's
- * CastImplicitVoteRequest (PR #325's implicit-vote backend contract; the frontend request-type
- * propagation it deferred - see that PR's own "Deviations" section). No JSON schema source
- * exists for request types in this repo (same precedent as SubmitTagVoteRequest above) - this is
- * typed by hand against the real Python pydantic model, not quicktype-generated.
- */
-export interface CastImplicitVoteRequest {
-  anonymousId: string;
-  identifier: string;
-  tagNames: string[];
-}
-
-/** 2/retractImplicitVote/ - mirrors RetractImplicitVoteRequest (same provenance as above). */
-export interface RetractImplicitVoteRequest {
-  anonymousId: string;
-  identifier: string;
-  tagName: string;
-}
-
-/**
- * 2/submitQuestionAbstention/ (issue #712) - hand-maintained, mirroring
- * MPCAutofill/cardpicker/schema_types.py's SubmitQuestionAbstentionRequest (same provenance as
- * CastImplicitVoteRequest above - no JSON schema source exists for request types in this repo).
- */
 export interface SubmitQuestionAbstentionRequest {
   anonymousId: string;
   identifier: string;
   questionType: string;
+  reason?: string;
 }
 
-/** 2/submitQuestionAbstention/ response - mirrors SubmitQuestionAbstentionResponse. */
 export interface SubmitQuestionAbstentionResponse {
   recorded: boolean;
 }
 
-/**
- * One external link for an artist (MTG Artist Connection integration - see
- * MPCAutofill/cardpicker/artist_external_links.py's module docstring). `type` is one of the
- * fixed allowlist field names, in fixed priority order (website/artstation/inprnt/mountainmage/
- * omalink/instagram - instagram is a deliberate last-resort exception, not a commerce field, see
- * that module's own docstring) - the parent response's `links` array is never re-sorted
- * per-artist.
- */
-export interface ArtistExternalLink {
-  type: string;
-  url: string;
-}
-
-/**
- * 2/artistExternalLinks/ - hand-maintained, mirroring MPCAutofill/cardpicker/schema_types.py's
- * ArtistExternalLinksResponse (same provenance as CastImplicitVoteRequest above: a JSON schema
- * source exists at schemas/schemas/endpoints/ArtistExternalLinksResponse.json, but `npm run
- * build` was not re-run for this addition since it is destructive to the two hand-added request
- * types already in this file - issue #332 - so this is typed by hand against the real Python
- * pydantic model instead). Cache-only, cannot enumerate MTGAC's directory - see the backend
- * view's own docstring. M2 (frontend consumption) is not built yet; this type has no `Convert`
- * wiring below, added by whichever session builds that consumer.
- */
-export interface ArtistExternalLinksResponse {
-  found: boolean;
-  pageUrl?: null | string;
-  location?: null | string;
-  links: ArtistExternalLink[];
-  hasSignatureService: boolean;
-}
-
-/**
- * One week's bucket of Proposal F chart 2 (MPCAutofill/cardpicker/catalog_stats.py's
- * compute_contributions_over_time) - human confirmations that week, keyed by vote_surface.
- */
-export interface ContributionsOverTimeWeek {
-  weekStart: string;
-  bySurface: { [key: string]: number };
-}
-
-export interface ContributionsOverTime {
-  bucketDays: number;
-  series: ContributionsOverTimeWeek[];
-}
-
-export interface SkipReasonCount {
-  reason: string;
-  count: number;
-}
-
-export interface SkipReasonEngineCount {
-  reason: string;
-  engine: string;
-  count: number;
-}
-
-/** Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine. */
-export interface SkipBreakdown {
-  byReason: SkipReasonCount[];
-  byReasonAndEngine: SkipReasonEngineCount[];
-}
-
-/**
- * One PilotRunLedger row (Proposal F chart 6). `votesWritten` is null for
- * command="stage_e_streaming_dispatch" rows specifically (a separate, unrelated observability
- * gap - see MPCAutofill/cardpicker/catalog_stats.py's compute_run_history docstring) - never
- * treat null here as "zero votes written".
- */
-export interface PilotRunHistoryEntry {
-  runId: string;
-  command: string;
-  status: string;
-  startedAt: string;
-  finishedAt: null | string;
-  durationSeconds: null | number;
-  votesWritten: null | number;
-}
-
-export interface RunHistory {
-  recent: PilotRunHistoryEntry[];
-}
-
-/**
- * Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved onto
- * this cache instead of GET 2/contributions/'s live query. `sources` reuses the existing
- * SourceContribution shape (see ContributionsResponse above).
- */
-export interface CatalogComposition {
-  sources: SourceContribution[];
-  cardCountByType: { [key: string]: number };
-  totalDatabaseSize: number;
-}
-
-export interface HumanVoteCounts {
-  printingTag: number;
-  artist: number;
-  tag: number;
-  total: number;
-}
-
-export interface Md5GroupStats {
-  groupsWithMultipleCards: number;
-  cardsInMultiCardGroups: number;
-  largestGroupSize: number;
-}
-
-/**
- * The call-to-action panel - deliberately carries no "percent complete" field (owner ruling, see
- * MPCAutofill/cardpicker/catalog_stats.py's compute_participation docstring): raw counts only,
- * the page decides the framing.
- */
-export interface Participation {
-  total: number;
-  confirmable: number;
-  contested: number;
-  fresh: number;
-  humanVotes: HumanVoteCounts;
-  distinctHumanVoters: number;
-  // CARD-denominated (not vote-denominated, unlike humanVotes) - distinct card_id across
-  // CardPrintingTag/CardArtistVote/CardTagVote filtered to HUMAN_SOURCES, unioned across the
-  // three tables so a card voted on in two tables counts once.
-  distinctCardsWithHumanVotes: number;
-  // Distinct card_id in CardScanLog routed to review (slow-path agent, skip_reason=
-  // SLOW_PATH_TO_REVIEW_REASON) - a distinct-card count, not a row count, since CardScanLog is
-  // an append-only audit trail and can carry more than one row per (card, anonymous_id) pair.
-  // Only ever grows (nothing clears the marker when a card later gets a human vote) - a
-  // denominator, not a progress measure on its own; see distinctCardsRoutedToReviewWithHumanVotes.
-  distinctCardsRoutedToReview: number;
-  // The intersection of distinctCardsRoutedToReview and distinctCardsWithHumanVotes: cards both
-  // routed to review AND carrying a human vote. THIS, not distinctCardsWithHumanVotes over
-  // distinctCardsRoutedToReview, is the pair that forms a valid progress ratio -
-  // distinctCardsWithHumanVotes is not a subset of distinctCardsRoutedToReview (a person can
-  // vote on a card the machine never routed), so dividing them directly is not coherent.
-  distinctCardsRoutedToReviewWithHumanVotes: number;
-  md5Groups: Md5GroupStats;
-}
-
-/**
- * 1/catalogStats/ - hand-maintained, mirroring MPCAutofill/cardpicker/schema_types.py's
- * CatalogStatsResponse (same provenance as ArtistExternalLinksResponse above: a JSON schema
- * source exists at schemas/schemas/endpoints/CatalogStatsResponse.json, but `npm run build` was
- * not re-run for this addition since it is destructive to the two hand-added request types
- * already in this file - issue #332 - so this is typed by hand against the real Python pydantic
- * model instead). Cache-only - a cache miss returns every field at its zero/empty value
- * (generatedAt: null), never a 500. Proposal F charts 1 (resolutionProgress) and 5
- * (hashCoverage) are deliberately absent from this shape this pass - see catalog_stats.py's own
- * module docstring. `Convert.toCatalogStatsResponse`/`catalogStatsResponseToJson` and this type's
- * (and its five nested panel types') `typeMap` entries were added by the /stats page consumer
- * session (feat/stats-page-frontend) - `frontend/src/store/api.ts`'s `getCatalogStats` endpoint
- * doesn't call either (RTK Query trusts the fetch response's shape directly, same as every other
- * endpoint in that file), so this wiring exists for parity/future use rather than being exercised
- * on the request path today.
- */
-export interface CatalogStatsResponse {
-  generatedAt: null | string;
-  contributionsOverTime: ContributionsOverTime;
-  skipBreakdown: SkipBreakdown;
-  runHistory: RunHistory;
-  catalogComposition: CatalogComposition;
-  participation: Participation;
+export interface SubmitTagVoteRequest {
+  anonymousId: string;
+  identifier: string;
+  polarity: number;
+  tagName: string;
+  voteSurface?: null | string;
 }
 
 export interface TagConsensusRequest {
@@ -1503,6 +1512,16 @@ export class Convert {
     return JSON.stringify(uncast(value, r("NewCardsFirstPage")), null, 2);
   }
 
+  public static toPilotRunHistoryEntry(json: string): PilotRunHistoryEntry {
+    return cast(JSON.parse(json), r("PilotRunHistoryEntry"));
+  }
+
+  public static pilotRunHistoryEntryToJson(
+    value: PilotRunHistoryEntry
+  ): string {
+    return JSON.stringify(uncast(value, r("PilotRunHistoryEntry")), null, 2);
+  }
+
   public static toPrintingCandidate(json: string): PrintingCandidate {
     return cast(JSON.parse(json), r("PrintingCandidate"));
   }
@@ -1605,6 +1624,16 @@ export class Convert {
 
   public static searchTypeSettingsToJson(value: SearchTypeSettings): string {
     return JSON.stringify(uncast(value, r("SearchTypeSettings")), null, 2);
+  }
+
+  public static toSkipReasonEngineCount(json: string): SkipReasonEngineCount {
+    return cast(JSON.parse(json), r("SkipReasonEngineCount"));
+  }
+
+  public static skipReasonEngineCountToJson(
+    value: SkipReasonEngineCount
+  ): string {
+    return JSON.stringify(uncast(value, r("SkipReasonEngineCount")), null, 2);
   }
 
   public static toSortBy(json: string): SortBy {
@@ -1803,6 +1832,22 @@ export class Convert {
     return JSON.stringify(uncast(value, r("ArtistConsensusResponse")), null, 2);
   }
 
+  public static toArtistExternalLinksResponse(
+    json: string
+  ): ArtistExternalLinksResponse {
+    return cast(JSON.parse(json), r("ArtistExternalLinksResponse"));
+  }
+
+  public static artistExternalLinksResponseToJson(
+    value: ArtistExternalLinksResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistExternalLinksResponse")),
+      null,
+      2
+    );
+  }
+
   public static toCardbacksRequest(json: string): CardbacksRequest {
     return cast(JSON.parse(json), r("CardbacksRequest"));
   }
@@ -1835,6 +1880,28 @@ export class Convert {
     return JSON.stringify(uncast(value, r("CardsResponse")), null, 2);
   }
 
+  public static toCastImplicitVoteRequest(
+    json: string
+  ): CastImplicitVoteRequest {
+    return cast(JSON.parse(json), r("CastImplicitVoteRequest"));
+  }
+
+  public static castImplicitVoteRequestToJson(
+    value: CastImplicitVoteRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("CastImplicitVoteRequest")), null, 2);
+  }
+
+  public static toCatalogStatsResponse(json: string): CatalogStatsResponse {
+    return cast(JSON.parse(json), r("CatalogStatsResponse"));
+  }
+
+  public static catalogStatsResponseToJson(
+    value: CatalogStatsResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("CatalogStatsResponse")), null, 2);
+  }
+
   public static toConfirmReviewClusterRequest(
     json: string
   ): ConfirmReviewClusterRequest {
@@ -1865,16 +1932,6 @@ export class Convert {
       null,
       2
     );
-  }
-
-  public static toCatalogStatsResponse(json: string): CatalogStatsResponse {
-    return cast(JSON.parse(json), r("CatalogStatsResponse"));
-  }
-
-  public static catalogStatsResponseToJson(
-    value: CatalogStatsResponse
-  ): string {
-    return JSON.stringify(uncast(value, r("CatalogStatsResponse")), null, 2);
   }
 
   public static toContributionsResponse(json: string): ContributionsResponse {
@@ -2417,6 +2474,22 @@ export class Convert {
     return JSON.stringify(uncast(value, r("ResetSavedDecksResponse")), null, 2);
   }
 
+  public static toRetractImplicitVoteRequest(
+    json: string
+  ): RetractImplicitVoteRequest {
+    return cast(JSON.parse(json), r("RetractImplicitVoteRequest"));
+  }
+
+  public static retractImplicitVoteRequestToJson(
+    value: RetractImplicitVoteRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("RetractImplicitVoteRequest")),
+      null,
+      2
+    );
+  }
+
   public static toReviewClusterDetailRequest(
     json: string
   ): ReviewClusterDetailRequest {
@@ -2643,6 +2716,70 @@ export class Convert {
     );
   }
 
+  public static toSubmitIllustrationRejectionRequest(
+    json: string
+  ): SubmitIllustrationRejectionRequest {
+    return cast(JSON.parse(json), r("SubmitIllustrationRejectionRequest"));
+  }
+
+  public static submitIllustrationRejectionRequestToJson(
+    value: SubmitIllustrationRejectionRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitIllustrationRejectionRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitIllustrationRejectionResponse(
+    json: string
+  ): SubmitIllustrationRejectionResponse {
+    return cast(JSON.parse(json), r("SubmitIllustrationRejectionResponse"));
+  }
+
+  public static submitIllustrationRejectionResponseToJson(
+    value: SubmitIllustrationRejectionResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitIllustrationRejectionResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitIllustrationVoteRequest(
+    json: string
+  ): SubmitIllustrationVoteRequest {
+    return cast(JSON.parse(json), r("SubmitIllustrationVoteRequest"));
+  }
+
+  public static submitIllustrationVoteRequestToJson(
+    value: SubmitIllustrationVoteRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitIllustrationVoteRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitIllustrationVoteResponse(
+    json: string
+  ): SubmitIllustrationVoteResponse {
+    return cast(JSON.parse(json), r("SubmitIllustrationVoteResponse"));
+  }
+
+  public static submitIllustrationVoteResponseToJson(
+    value: SubmitIllustrationVoteResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitIllustrationVoteResponse")),
+      null,
+      2
+    );
+  }
+
   public static toSubmitPrintingTagRequest(
     json: string
   ): SubmitPrintingTagRequest {
@@ -2654,6 +2791,38 @@ export class Convert {
   ): string {
     return JSON.stringify(
       uncast(value, r("SubmitPrintingTagRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitQuestionAbstentionRequest(
+    json: string
+  ): SubmitQuestionAbstentionRequest {
+    return cast(JSON.parse(json), r("SubmitQuestionAbstentionRequest"));
+  }
+
+  public static submitQuestionAbstentionRequestToJson(
+    value: SubmitQuestionAbstentionRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitQuestionAbstentionRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitQuestionAbstentionResponse(
+    json: string
+  ): SubmitQuestionAbstentionResponse {
+    return cast(JSON.parse(json), r("SubmitQuestionAbstentionResponse"));
+  }
+
+  public static submitQuestionAbstentionResponseToJson(
+    value: SubmitQuestionAbstentionResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitQuestionAbstentionResponse")),
       null,
       2
     );
@@ -2928,6 +3097,16 @@ const typeMap: any = {
         typ: u(undefined, u(null, "")),
       },
       {
+        json: "illustrationCandidates",
+        js: "illustrationCandidates",
+        typ: u(undefined, a(r("PrintingCandidate"))),
+      },
+      {
+        json: "scryfallIllustrationUrl",
+        js: "scryfallIllustrationUrl",
+        typ: u(undefined, u(null, "")),
+      },
+      {
         json: "suggestedPrinting",
         js: "suggestedPrinting",
         typ: u(undefined, r("PrintingCandidate")),
@@ -2944,11 +3123,7 @@ const typeMap: any = {
   ),
   PrintingCandidate: o(
     [
-      {
-        json: "artCropUrl",
-        js: "artCropUrl",
-        typ: u(undefined, u(null, "")),
-      },
+      { json: "artCropUrl", js: "artCropUrl", typ: u(undefined, u(null, "")) },
       { json: "artist", js: "artist", typ: "" },
       { json: "borderColor", js: "borderColor", typ: "" },
       { json: "canonicalId", js: "canonicalId", typ: "" },
@@ -3032,6 +3207,11 @@ const typeMap: any = {
         json: "suggestedCanonicalCard",
         js: "suggestedCanonicalCard",
         typ: u(undefined, u(r("CanonicalCard"), null)),
+      },
+      {
+        json: "suggestedCanonicalCardConfidence",
+        js: "suggestedCanonicalCardConfidence",
+        typ: u(undefined, u(3.14, null)),
       },
       {
         json: "suggestedFilterTagNames",
@@ -3124,6 +3304,23 @@ const typeMap: any = {
     ],
     false
   ),
+  ArtistExternalLinksResponse: o(
+    [
+      { json: "found", js: "found", typ: true },
+      { json: "hasSignatureService", js: "hasSignatureService", typ: true },
+      { json: "links", js: "links", typ: a(r("Link")) },
+      { json: "location", js: "location", typ: u(null, "") },
+      { json: "pageUrl", js: "pageUrl", typ: u(null, "") },
+    ],
+    false
+  ),
+  Link: o(
+    [
+      { json: "type", js: "type", typ: "" },
+      { json: "url", js: "url", typ: "" },
+    ],
+    false
+  ),
   CardbacksRequest: o(
     [
       {
@@ -3190,18 +3387,11 @@ const typeMap: any = {
     [{ json: "results", js: "results", typ: m(r("Card")) }],
     false
   ),
-  ConfirmReviewClusterRequest: o(
+  CastImplicitVoteRequest: o(
     [
-      { json: "clusterId", js: "clusterId", typ: "" },
-      { json: "memberIdentifiers", js: "memberIdentifiers", typ: a("") },
-    ],
-    false
-  ),
-  ConfirmReviewClusterResponse: o(
-    [
-      { json: "clusterId", js: "clusterId", typ: "" },
-      { json: "confirmedIdentifiers", js: "confirmedIdentifiers", typ: a("") },
-      { json: "votesCast", js: "votesCast", typ: 0 },
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "tagNames", js: "tagNames", typ: a("") },
     ],
     false
   ),
@@ -3224,66 +3414,6 @@ const typeMap: any = {
     ],
     false
   ),
-  ContributionsOverTime: o(
-    [
-      { json: "bucketDays", js: "bucketDays", typ: 0 },
-      {
-        json: "series",
-        js: "series",
-        typ: a(r("ContributionsOverTimeWeek")),
-      },
-    ],
-    false
-  ),
-  ContributionsOverTimeWeek: o(
-    [
-      { json: "bySurface", js: "bySurface", typ: m(0) },
-      { json: "weekStart", js: "weekStart", typ: "" },
-    ],
-    false
-  ),
-  SkipBreakdown: o(
-    [
-      { json: "byReason", js: "byReason", typ: a(r("SkipReasonCount")) },
-      {
-        json: "byReasonAndEngine",
-        js: "byReasonAndEngine",
-        typ: a(r("SkipReasonEngineCount")),
-      },
-    ],
-    false
-  ),
-  SkipReasonCount: o(
-    [
-      { json: "count", js: "count", typ: 0 },
-      { json: "reason", js: "reason", typ: "" },
-    ],
-    false
-  ),
-  SkipReasonEngineCount: o(
-    [
-      { json: "count", js: "count", typ: 0 },
-      { json: "engine", js: "engine", typ: "" },
-      { json: "reason", js: "reason", typ: "" },
-    ],
-    false
-  ),
-  RunHistory: o(
-    [{ json: "recent", js: "recent", typ: a(r("PilotRunHistoryEntry")) }],
-    false
-  ),
-  PilotRunHistoryEntry: o(
-    [
-      { json: "command", js: "command", typ: "" },
-      { json: "durationSeconds", js: "durationSeconds", typ: u(null, 0) },
-      { json: "finishedAt", js: "finishedAt", typ: u(null, "") },
-      { json: "runId", js: "runId", typ: "" },
-      { json: "startedAt", js: "startedAt", typ: "" },
-      { json: "status", js: "status", typ: "" },
-      { json: "votesWritten", js: "votesWritten", typ: u(null, 0) },
-    ],
-    false
-  ),
   CatalogComposition: o(
     [
       { json: "cardCountByType", js: "cardCountByType", typ: m(0) },
@@ -3292,28 +3422,31 @@ const typeMap: any = {
     ],
     false
   ),
-  HumanVoteCounts: o(
+  SourceContribution: o(
     [
-      { json: "artist", js: "artist", typ: 0 },
-      { json: "printingTag", js: "printingTag", typ: 0 },
-      { json: "tag", js: "tag", typ: 0 },
-      { json: "total", js: "total", typ: 0 },
+      { json: "avgdpi", js: "avgdpi", typ: "" },
+      { json: "description", js: "description", typ: "" },
+      { json: "externalLink", js: "externalLink", typ: u(undefined, "") },
+      { json: "name", js: "name", typ: "" },
+      { json: "qtyCardbacks", js: "qtyCardbacks", typ: "" },
+      { json: "qtyCards", js: "qtyCards", typ: "" },
+      { json: "qtyTokens", js: "qtyTokens", typ: "" },
+      { json: "size", js: "size", typ: "" },
+      { json: "sourceType", js: "sourceType", typ: r("SourceType") },
     ],
     false
   ),
-  Md5GroupStats: o(
+  ContributionsOverTime: o(
     [
-      {
-        json: "cardsInMultiCardGroups",
-        js: "cardsInMultiCardGroups",
-        typ: 0,
-      },
-      {
-        json: "groupsWithMultipleCards",
-        js: "groupsWithMultipleCards",
-        typ: 0,
-      },
-      { json: "largestGroupSize", js: "largestGroupSize", typ: 0 },
+      { json: "bucketDays", js: "bucketDays", typ: 0 },
+      { json: "series", js: "series", typ: a(r("Series")) },
+    ],
+    false
+  ),
+  Series: o(
+    [
+      { json: "bySurface", js: "bySurface", typ: m(0) },
+      { json: "weekStart", js: "weekStart", typ: "" },
     ],
     false
   ),
@@ -3338,9 +3471,87 @@ const typeMap: any = {
       },
       { json: "distinctHumanVoters", js: "distinctHumanVoters", typ: 0 },
       { json: "fresh", js: "fresh", typ: 0 },
-      { json: "humanVotes", js: "humanVotes", typ: r("HumanVoteCounts") },
-      { json: "md5Groups", js: "md5Groups", typ: r("Md5GroupStats") },
+      { json: "humanVotes", js: "humanVotes", typ: r("HumanVotes") },
+      { json: "md5Groups", js: "md5Groups", typ: r("Md5Groups") },
       { json: "total", js: "total", typ: 0 },
+    ],
+    false
+  ),
+  HumanVotes: o(
+    [
+      { json: "artist", js: "artist", typ: 0 },
+      { json: "printingTag", js: "printingTag", typ: 0 },
+      { json: "tag", js: "tag", typ: 0 },
+      { json: "total", js: "total", typ: 0 },
+    ],
+    false
+  ),
+  Md5Groups: o(
+    [
+      { json: "cardsInMultiCardGroups", js: "cardsInMultiCardGroups", typ: 0 },
+      {
+        json: "groupsWithMultipleCards",
+        js: "groupsWithMultipleCards",
+        typ: 0,
+      },
+      { json: "largestGroupSize", js: "largestGroupSize", typ: 0 },
+    ],
+    false
+  ),
+  RunHistory: o(
+    [{ json: "recent", js: "recent", typ: a(r("PilotRunHistoryEntry")) }],
+    false
+  ),
+  PilotRunHistoryEntry: o(
+    [
+      { json: "command", js: "command", typ: "" },
+      { json: "durationSeconds", js: "durationSeconds", typ: u(3.14, null) },
+      { json: "finishedAt", js: "finishedAt", typ: u(null, "") },
+      { json: "runId", js: "runId", typ: "" },
+      { json: "startedAt", js: "startedAt", typ: "" },
+      { json: "status", js: "status", typ: "" },
+      { json: "votesWritten", js: "votesWritten", typ: u(0, null) },
+    ],
+    false
+  ),
+  SkipBreakdown: o(
+    [
+      { json: "byReason", js: "byReason", typ: a(r("ByReason")) },
+      {
+        json: "byReasonAndEngine",
+        js: "byReasonAndEngine",
+        typ: a(r("SkipReasonEngineCount")),
+      },
+    ],
+    false
+  ),
+  ByReason: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "reason", js: "reason", typ: "" },
+    ],
+    false
+  ),
+  SkipReasonEngineCount: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "engine", js: "engine", typ: "" },
+      { json: "reason", js: "reason", typ: "" },
+    ],
+    false
+  ),
+  ConfirmReviewClusterRequest: o(
+    [
+      { json: "clusterId", js: "clusterId", typ: "" },
+      { json: "memberIdentifiers", js: "memberIdentifiers", typ: a("") },
+    ],
+    false
+  ),
+  ConfirmReviewClusterResponse: o(
+    [
+      { json: "clusterId", js: "clusterId", typ: "" },
+      { json: "confirmedIdentifiers", js: "confirmedIdentifiers", typ: a("") },
+      { json: "votesCast", js: "votesCast", typ: 0 },
     ],
     false
   ),
@@ -3349,20 +3560,6 @@ const typeMap: any = {
       { json: "cardCountByType", js: "cardCountByType", typ: m(0) },
       { json: "sources", js: "sources", typ: a(r("SourceContribution")) },
       { json: "totalDatabaseSize", js: "totalDatabaseSize", typ: 0 },
-    ],
-    false
-  ),
-  SourceContribution: o(
-    [
-      { json: "avgdpi", js: "avgdpi", typ: "" },
-      { json: "description", js: "description", typ: "" },
-      { json: "externalLink", js: "externalLink", typ: u(undefined, "") },
-      { json: "name", js: "name", typ: "" },
-      { json: "qtyCardbacks", js: "qtyCardbacks", typ: "" },
-      { json: "qtyCards", js: "qtyCards", typ: "" },
-      { json: "qtyTokens", js: "qtyTokens", typ: "" },
-      { json: "size", js: "size", typ: "" },
-      { json: "sourceType", js: "sourceType", typ: r("SourceType") },
     ],
     false
   ),
@@ -3776,6 +3973,14 @@ const typeMap: any = {
     [{ json: "deletedDeckCount", js: "deletedDeckCount", typ: 0 }],
     false
   ),
+  RetractImplicitVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "tagName", js: "tagName", typ: "" },
+    ],
+    false
+  ),
   ReviewClusterDetailRequest: o(
     [{ json: "clusterId", js: "clusterId", typ: "" }],
     false
@@ -3960,6 +4165,64 @@ const typeMap: any = {
     ],
     false
   ),
+  SubmitIllustrationRejectionRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "illustrationId", js: "illustrationId", typ: "" },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  SubmitIllustrationRejectionResponse: o(
+    [{ json: "illustrationId", js: "illustrationId", typ: "" }],
+    false
+  ),
+  SubmitIllustrationVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      {
+        json: "illustrationId",
+        js: "illustrationId",
+        typ: u(undefined, u(null, "")),
+      },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  SubmitIllustrationVoteResponse: o(
+    [
+      {
+        json: "artistAbstainReason",
+        js: "artistAbstainReason",
+        typ: u(undefined, u(null, "")),
+      },
+      { json: "artistVoteCast", js: "artistVoteCast", typ: true },
+      {
+        json: "illustrationId",
+        js: "illustrationId",
+        typ: u(undefined, u(null, "")),
+      },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      { json: "printingVoteCast", js: "printingVoteCast", typ: true },
+      {
+        json: "resolvedPrinting",
+        js: "resolvedPrinting",
+        typ: u(undefined, r("PrintingCandidate")),
+      },
+    ],
+    false
+  ),
   SubmitPrintingTagRequest: o(
     [
       { json: "anonymousId", js: "anonymousId", typ: "" },
@@ -3976,6 +4239,19 @@ const typeMap: any = {
         typ: u(undefined, u(null, "")),
       },
     ],
+    false
+  ),
+  SubmitQuestionAbstentionRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "questionType", js: "questionType", typ: "" },
+      { json: "reason", js: "reason", typ: u(undefined, "") },
+    ],
+    false
+  ),
+  SubmitQuestionAbstentionResponse: o(
+    [{ json: "recorded", js: "recorded", typ: true }],
     false
   ),
   SubmitTagVoteRequest: o(
@@ -4097,7 +4373,14 @@ const typeMap: any = {
   PrintingTagStatus: ["no_match", "resolved", "unresolved"],
   SourceType: ["AWS S3", "Google Drive", "Local File"],
   TagVoteDisplayStatus: ["resolved", "suggested"],
-  Type: ["artist", "confirm_suggestion", "identify_printing", "tag"],
+  Type: [
+    "artist",
+    "border",
+    "confirm_suggestion",
+    "identify_printing",
+    "illustration",
+    "tag",
+  ],
   SortBy: [
     "dateCreatedAscending",
     "dateCreatedDescending",

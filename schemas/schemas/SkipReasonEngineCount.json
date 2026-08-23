@@ -1,0 +1,12 @@
+{
+  "title": "Skip Reason Engine Count",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "reason": { "type": "string" },
+    "engine": { "type": "string" },
+    "count": { "type": "integer" }
+  },
+  "required": ["reason", "engine", "count"],
+  "additionalProperties": false
+}

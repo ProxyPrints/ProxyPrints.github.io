@@ -54,16 +54,7 @@
         },
         "byReasonAndEngine": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "reason": { "type": "string" },
-              "engine": { "type": "string" },
-              "count": { "type": "integer" }
-            },
-            "required": ["reason", "engine", "count"],
-            "additionalProperties": false
-          }
+          "items": { "$ref": "../SkipReasonEngineCount.json" }
         }
       },
       "required": ["byReason", "byReasonAndEngine"],
@@ -75,28 +66,7 @@
       "properties": {
         "recent": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "runId": { "type": "string" },
-              "command": { "type": "string" },
-              "status": { "type": "string" },
-              "startedAt": { "type": "string" },
-              "finishedAt": { "type": ["string", "null"] },
-              "durationSeconds": { "type": ["number", "null"] },
-              "votesWritten": { "type": ["integer", "null"] }
-            },
-            "required": [
-              "runId",
-              "command",
-              "status",
-              "startedAt",
-              "finishedAt",
-              "durationSeconds",
-              "votesWritten"
-            ],
-            "additionalProperties": false
-          }
+          "items": { "$ref": "../PilotRunHistoryEntry.json" }
         }
       },
       "required": ["recent"],
