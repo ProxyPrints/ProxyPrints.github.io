@@ -302,6 +302,16 @@ class Card(BaseModel):
     debug/introspection field, not load-bearing for any current frontend logic.
     """
     canonicalCard: Optional[CanonicalCardClass] = None
+    layout: Optional[str] = None
+    """Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme"), read
+    from whichever printing backs canonicalCard (CanonicalPrintingMetadata.layout) - same
+    canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses for
+    canonicalCard itself. null whenever canonicalCard is null, or the resolved printing has no
+    metadata row, or that row's layout hasn't been populated. Lets a consumer ask "does this card
+    have a back face" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in
+    printing_metadata_import.py) directly from a card it already has, rather than
+    cross-referencing a separately-fetched name list.
+    """
     sourceExternalLink: Optional[str] = None
     sourceType: Optional[SourceType] = None
     suggestedCanonicalCard: Optional[CanonicalCardClass] = None
@@ -358,6 +368,7 @@ class Card(BaseModel):
         canonicalArtistIsFromVoteOnly = from_union([from_bool, from_none], obj.get("canonicalArtistIsFromVoteOnly"))
         canonicalArtistSource = from_union([from_none, from_str], obj.get("canonicalArtistSource"))
         canonicalCard = from_union([from_none, CanonicalCardClass.from_dict], obj.get("canonicalCard"))
+        layout = from_union([from_str, from_none], obj.get("layout"))
         sourceExternalLink = from_union([from_str, from_none], obj.get("sourceExternalLink"))
         sourceType = from_union([SourceType, from_none], obj.get("sourceType"))
         suggestedCanonicalCard = from_union(
@@ -393,6 +404,7 @@ class Card(BaseModel):
             canonicalArtistIsFromVoteOnly,
             canonicalArtistSource,
             canonicalCard,
+            layout,
             sourceExternalLink,
             sourceType,
             suggestedCanonicalCard,
@@ -435,6 +447,8 @@ class Card(BaseModel):
             result["canonicalCard"] = from_union(
                 [from_none, lambda x: to_class(CanonicalCardClass, x)], self.canonicalCard
             )
+        if self.layout is not None:
+            result["layout"] = from_union([from_str, from_none], self.layout)
         if self.sourceExternalLink is not None:
             result["sourceExternalLink"] = from_union([from_str, from_none], self.sourceExternalLink)
         if self.sourceType is not None:

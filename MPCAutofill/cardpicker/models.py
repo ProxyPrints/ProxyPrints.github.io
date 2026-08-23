@@ -811,6 +811,7 @@ class Card(models.Model):
                 if self.canonical_card
                 else (self.inferred_canonical_card.serialise() if self.inferred_canonical_card else None)
             ),
+            layout=self.get_layout(),
             canonicalArtist=resolved_artist.serialise() if resolved_artist is not None else None,
             canonicalArtistIsFromVoteOnly=artist_source == "inferred_canonical_artist",
             canonicalArtistSource=artist_source,
@@ -921,6 +922,10 @@ class Card(models.Model):
     def get_full_art(self) -> bool:
         metadata = self._get_indexed_printing_metadata()
         return metadata.full_art if metadata is not None else False
+
+    def get_layout(self) -> str | None:
+        metadata = self._get_indexed_printing_metadata()
+        return metadata.layout or None if metadata is not None else None
 
     class Meta:
         ordering = ["-priority"]

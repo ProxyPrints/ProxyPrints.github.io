@@ -40,6 +40,7 @@ import {
   useGetSampleCardsQuery,
   useGetSplitCardNamesQuery,
 } from "@/store/api";
+import { useRemoteBackendConfigured } from "@/store/slices/backendSlice";
 import { addMembers, selectProjectSize } from "@/store/slices/projectSlice";
 import { selectFuzzySearch } from "@/store/slices/searchSettingsSlice";
 
@@ -74,8 +75,24 @@ export function ImportText({
   const sampleCardsQuery = useGetSampleCardsQuery();
   const dfcPairsQuery = useGetDFCPairsQuery();
   const splitCardNamesQuery = useGetSplitCardNamesQuery();
+  const remoteBackendConfigured = useRemoteBackendConfigured();
   const fuzzySearch = useAppSelector(selectFuzzySearch);
   const projectSize = useAppSelector(selectProjectSize);
+
+  // Both queries are `skip`ped for good (never resolve) when there's no remote backend, so
+  // readiness can't be read off `isSuccess` alone there - `remoteBackendConfigured` disambiguates
+  // "will never fetch" from "hasn't resolved yet". When a backend IS configured, submitting
+  // before either resolves would silently fall through to `?? {}`/`?? []` below and misparse a
+  // split/adventure/flip/aftermath card's compound name as a manual front/back override (its
+  // second face then gets searched as its own card instead of recognised as the same physical
+  // card) - so submission is blocked, not merely defaulted, until both are in.
+  const dfcPairsReady = !remoteBackendConfigured || dfcPairsQuery.isSuccess;
+  const splitCardNamesReady =
+    !remoteBackendConfigured || splitCardNamesQuery.isSuccess;
+  const discriminatorsReady = dfcPairsReady && splitCardNamesReady;
+  const discriminatorsFailed =
+    remoteBackendConfigured &&
+    (dfcPairsQuery.isError || splitCardNamesQuery.isError);
 
   const [internalTextValue, setInternalTextValue] = useState<string>("");
   const textValue = controlledTextValue ?? internalTextValue;
@@ -85,6 +102,12 @@ export function ImportText({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // Guards here too, not just via the Submit button's `disabled` prop below - the
+    // Ctrl+Enter shortcut in `onKeyDown` calls `form.requestSubmit()` directly, which a
+    // disabled submit button does not intercept.
+    if (!discriminatorsReady) {
+      return;
+    }
     const processedLines = processStringAsMultipleLines(
       textValue,
       dfcPairsQuery.data ?? {},
@@ -111,7 +134,7 @@ export function ImportText({
     }
   };
 
-  const disabled = dfcPairsQuery.isFetching || splitCardNamesQuery.isFetching;
+  const disabled = !discriminatorsReady;
   const placeholderText =
     sampleCardsQuery.data != null
       ? formatPlaceholderText(sampleCardsQuery.data)
@@ -220,6 +243,15 @@ export function ImportText({
         </Accordion.Item>
       </Accordion>
       <br />
+      {discriminatorsFailed && (
+        <p
+          className="text-danger"
+          aria-label="import-text-discriminators-failed"
+        >
+          Couldn&apos;t load double-faced/split card data from the backend, so
+          text import is unavailable right now. Try refreshing the page.
+        </p>
+      )}
       <Form onSubmit={handleSubmit}>
         <Form.Group className="mb-3">
           <Form.Control
