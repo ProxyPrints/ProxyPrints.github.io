@@ -153,6 +153,11 @@ export const api = createApi({
         );
       },
     }),
+    getSplitCardNames: builder.query<Array<string>, void>({
+      query: () => ({ url: `2/SplitCardNames/`, method: "GET" }),
+      providesTags: [QueryTags.BackendSpecific],
+      transformResponse: (response: { names: Array<string> }) => response.names,
+    }),
     getLanguages: builder.query<Array<Language>, void>({
       query: () => ({ url: `2/languages/`, method: "GET" }),
       providesTags: [QueryTags.BackendSpecific],
@@ -392,6 +397,7 @@ const {
   useGetImportSitesQuery: useRawGetImportSitesQuery,
   useQueryImportSiteQuery: useRawQueryImportSiteQuery,
   useGetDFCPairsQuery: useRawGetDFCPairsQuery,
+  useGetSplitCardNamesQuery: useRawGetSplitCardNamesQuery,
   useGetLanguagesQuery: useRawGetLanguagesQuery,
   useGetTagsQuery: useRawGetTagsQuery,
   useGetSampleCardsQuery: useRawGetSampleCardsQuery,
@@ -433,6 +439,13 @@ export function useGetImportSitesQuery() {
 export function useGetDFCPairsQuery() {
   const remoteBackendConfigured = useRemoteBackendConfigured();
   return useRawGetDFCPairsQuery(undefined, {
+    skip: !remoteBackendConfigured,
+  });
+}
+
+export function useGetSplitCardNamesQuery() {
+  const remoteBackendConfigured = useRemoteBackendConfigured();
+  return useRawGetSplitCardNamesQuery(undefined, {
     skip: !remoteBackendConfigured,
   });
 }

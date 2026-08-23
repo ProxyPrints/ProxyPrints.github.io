@@ -111,6 +111,7 @@ from cardpicker.printing_consensus import (
     resolve_and_persist_printing,
     resolve_printing,
 )
+from cardpicker.printing_metadata_import import get_split_style_compound_names
 from cardpicker.question_feed import get_next_question_feed_item, get_remaining_estimate
 from cardpicker.review_clusters import (
     ReviewCluster,
@@ -514,6 +515,22 @@ def get_dfc_pairs(request: HttpRequest) -> HttpResponse:
 
     dfc_pairs = {x.front: x.back for x in DFCPair.objects.all()}
     return JsonResponse(DFCPairsResponse(dfcPairs=dfc_pairs).model_dump())
+
+
+@csrf_exempt
+@ErrorWrappers.to_json
+def get_split_card_names(request: HttpRequest) -> HttpResponse:
+    """
+    Return the full printed name of every split/adventure/flip/aftermath card (e.g.
+    "Fire // Ice") - see `printing_metadata_import.get_split_style_compound_names`. Not a
+    quicktype-generated response like the other endpoints in this file: this is a plain
+    `{"names": [...]}` list, added to fix a live bug without a schema-toolchain regeneration.
+    """
+
+    if request.method != "GET":
+        raise BadRequestException("Expected GET request.")
+
+    return JsonResponse({"names": sorted(get_split_style_compound_names())})
 
 
 @csrf_exempt

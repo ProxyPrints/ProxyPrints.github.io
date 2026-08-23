@@ -20,11 +20,13 @@ import {
   dfcPairsMatchingCards1And4,
   sampleCards,
   searchResultsForDFCMatchedCards1And4,
+  searchResultsForSplitCardName,
   searchResultsOneResult,
   searchResultsResolvedPrintingMatch,
   searchResultsSixResults,
   sourceDocumentsOneResult,
   sourceDocumentsThreeResults,
+  splitCardNamesMatchingFireIce,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -253,6 +255,40 @@ test.describe("ImportText", () => {
       page,
       [{ slot: 1, name: cardDocument1.name }],
       [{ slot: 1, name: cardDocument4.name }]
+    );
+  });
+
+  test("importing a split card by its own compound name imports as one card, not a front/back split", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      cardDocumentsThreeResults,
+      cardbacksTwoOtherResults,
+      sourceDocumentsOneResult,
+      searchResultsForSplitCardName,
+      splitCardNamesMatchingFireIce,
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page);
+
+    // "Fire // Ice" is a real split card's own printed name, not a front/back override -
+    // this must resolve to three slots of the SAME card, not one slot split into a front of
+    // "Fire" and a back of "Ice"
+    await importTextOnEditorLanding(page, "3x Fire // Ice");
+
+    await expectDisplaySheetSlotStates(
+      page,
+      [
+        { slot: 1, name: cardDocument1.name },
+        { slot: 2, name: cardDocument1.name },
+        { slot: 3, name: cardDocument1.name },
+      ],
+      [
+        { slot: 1, name: cardDocument2.name },
+        { slot: 2, name: cardDocument2.name },
+        { slot: 3, name: cardDocument2.name },
+      ]
     );
   });
 
