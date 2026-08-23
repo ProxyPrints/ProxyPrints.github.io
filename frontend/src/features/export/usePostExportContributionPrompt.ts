@@ -6,7 +6,7 @@
  * PDFGenerator.tsx's downloadPDF/saveToDrive button handlers) - this hook owns whether that
  * translates into actually showing the prompt (never twice in one session).
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   hasShownPostExportContributionPromptThisSession,
@@ -19,6 +19,12 @@ export interface PostExportContributionPromptState {
   notifyExportSucceeded: () => void;
   dismiss: () => void;
 }
+
+// Longer than Toasts.tsx's shared 7s autohide (PostExportContributionPrompt.tsx's own module
+// comment explains why a CTA needs more read time than a glance-and-vanish notice) but still
+// finite, so the prompt doesn't sit on screen for the rest of the session if the user never
+// interacts with it.
+const AUTO_DISMISS_DELAY_MS = 20000;
 
 export function usePostExportContributionPrompt(): PostExportContributionPromptState {
   const [visible, setVisible] = useState(false);
@@ -39,6 +45,14 @@ export function usePostExportContributionPrompt(): PostExportContributionPromptS
   }, []);
 
   const dismiss = useCallback(() => setVisible(false), []);
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+    const timeoutId = window.setTimeout(dismiss, AUTO_DISMISS_DELAY_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [visible, dismiss]);
 
   return { visible, notifyExportSucceeded, dismiss };
 }
