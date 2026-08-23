@@ -35,6 +35,17 @@ jobs:
         with:
           shard_index: ${{ matrix.shardIndex }}
           shard_total: ${{ matrix.shardTotal }}
+  test-build-and-jest:
+    name: Frontend build & Jest tests
+    runs-on: ubuntu-latest
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/test-frontend
+        with:
+          run_build_and_jest: "true"
+          run_playwright: "false"
   merge-reports:
     name: Merge Playwright reports
     if: ${{ !cancelled() }}
