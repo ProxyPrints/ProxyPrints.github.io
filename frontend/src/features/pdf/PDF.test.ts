@@ -5,7 +5,6 @@ import { CardType } from "@/common/schema_types";
 import { CardDocument } from "@/common/types";
 import {
   buildDisplayPDFProps,
-  DisplayExportSettings,
   DisplayPDFPropsInput,
   DisplaySheetExportSettings,
 } from "@/features/pdf/displayPdfProps";
@@ -64,13 +63,10 @@ const DEFAULT_SHEET_SETTINGS = {
   pageRangeEnd: undefined,
   marginOverride: undefined,
   drawPageCutLines: true,
-};
-
-const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
   scmMode: false,
-  scmPaperSize: "letter",
-  scmVariant: "default",
-  scmRegistration: 3,
+  scmPaperSize: "letter" as const,
+  scmVariant: "default" as const,
+  scmRegistration: 3 as const,
   scmDuplex: true,
   scmOffsetXMM: 0,
   scmOffsetYMM: 0,
@@ -106,7 +102,6 @@ const DECK_DOCS: { [identifier: string]: CardDocument | undefined } =
 
 const baseInput: DisplayPDFPropsInput = {
   sheetSettings: DEFAULT_SHEET_SETTINGS,
-  exportSettings: DEFAULT_EXPORT_SETTINGS,
   marginProfile: "rearFeed",
   cardSpacing: { row: 14.5, col: 0 },
   projectMembers: DECK_MEMBERS,
@@ -114,11 +109,6 @@ const baseInput: DisplayPDFPropsInput = {
   cardDocumentsByIdentifier: DECK_DOCS,
   manualOverrides: {},
 };
-
-const withExportSettings = (
-  input: DisplayPDFPropsInput,
-  exportSettings: DisplayExportSettings
-): DisplayPDFPropsInput => ({ ...input, exportSettings });
 
 const withSheetSettings = (
   input: DisplayPDFPropsInput,
@@ -171,20 +161,15 @@ describe("computePDFRenderPageCount - standard path", () => {
 
 describe("computePDFRenderPageCount - SCM path", () => {
   const scmInput = (
-    exportOverrides: Partial<DisplayExportSettings> = {},
     sheetOverrides: Partial<DisplaySheetExportSettings> = {}
   ): DisplayPDFPropsInput =>
-    withSheetSettings(
-      withExportSettings(baseInput, {
-        ...DEFAULT_EXPORT_SETTINGS,
-        scmMode: true,
-        scmPaperSize: "letter",
-        scmVariant: "default",
-        scmDuplex: true,
-        ...exportOverrides,
-      }),
-      sheetOverrides
-    );
+    withSheetSettings(baseInput, {
+      scmMode: true,
+      scmPaperSize: "letter",
+      scmVariant: "default",
+      scmDuplex: true,
+      ...sheetOverrides,
+    });
 
   it("counts the SCM render's own pagination (letter default 2x4, duplex -> 2/group)", () => {
     // 20 members -> ceil(20/8) = 3 groups -> 6 duplex pages.
@@ -202,7 +187,7 @@ describe("computePDFRenderPageCount - SCM path", () => {
 
   it("applies the range to the SCM page sequence (front/back interleaved)", () => {
     const props = buildFullPDFProps(
-      scmInput({}, { pageRangeStart: 2, pageRangeEnd: 4 })
+      scmInput({ pageRangeStart: 2, pageRangeEnd: 4 })
     );
     // Pages 2..4 = group0 back, group1 front, group1 back.
     expect(computePDFRenderPageCount(props)).toBe(3);
@@ -269,10 +254,7 @@ describe("computeExportedCardIdentifiers", () => {
 
   it("returns no identifiers for SCM mode, which never reads bleedPriors", () => {
     const props = buildFullPDFProps(
-      withExportSettings(baseInput, {
-        ...DEFAULT_EXPORT_SETTINGS,
-        scmMode: true,
-      })
+      withSheetSettings(baseInput, { scmMode: true })
     );
     expect(computeExportedCardIdentifiers(props)).toEqual([]);
   });

@@ -4,7 +4,6 @@ import { ClientSearchService } from "@/features/clientSearch/clientSearchService
 import { downloadFile } from "@/features/download/download";
 import {
   buildDisplayPDFProps,
-  DisplayExportSettings,
   DisplayPDFPropsInput,
 } from "@/features/pdf/displayPdfProps";
 import { DEFAULT_CARD_SELECTION_MODE, PDFProps } from "@/features/pdf/PDF";
@@ -74,18 +73,6 @@ const DECK_DOCS: { [identifier: string]: CardDocument | undefined } =
     ].map((id) => [id, cardDoc(id)])
   );
 
-const DEFAULT_EXPORT_SETTINGS: DisplayExportSettings = {
-  drawPageCutLines: true,
-  scmMode: false,
-  scmPaperSize: "letter",
-  scmVariant: "default",
-  scmRegistration: 3,
-  scmDuplex: true,
-  scmOffsetXMM: 0,
-  scmOffsetYMM: 0,
-  scmOffsetAngleDeg: 0,
-};
-
 const baseInput = (
   pageRangeStart?: number,
   pageRangeEnd?: number
@@ -108,8 +95,16 @@ const baseInput = (
     pageRangeStart,
     pageRangeEnd,
     marginOverride: undefined,
+    drawPageCutLines: true,
+    scmMode: false,
+    scmPaperSize: "letter",
+    scmVariant: "default",
+    scmRegistration: 3,
+    scmDuplex: true,
+    scmOffsetXMM: 0,
+    scmOffsetYMM: 0,
+    scmOffsetAngleDeg: 0,
   },
-  exportSettings: DEFAULT_EXPORT_SETTINGS,
   marginProfile: "rearFeed",
   cardSpacing: { row: 14.5, col: 0 },
   projectMembers: DECK_MEMBERS,
