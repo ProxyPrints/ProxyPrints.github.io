@@ -52,15 +52,13 @@ const goToDisplay = async (page: Page) => {
   await expect(page.getByTestId("display-page")).toBeVisible();
 };
 
-// Opens the Export dropdown's PDF settings modal - the editor's own export entry point, now that
-// FinishFooter.tsx no longer has a separate Print/Export button.
-const openPDFExportSettings = async (page: Page) => {
+// Opens the Export dropdown - the editor's own export entry point, now that FinishFooter.tsx no
+// longer has a separate Print/Export button and PDF is a direct download action with no settings
+// step of its own.
+const openExportMenu = async (page: Page) => {
   const footer = page.getByTestId("display-finish-footer");
   await footer.getByTestId("display-export-menu-toggle").click();
-  await footer.getByTestId("display-export-pdf-button").click();
-  const settingsModal = page.getByTestId("display-export-pdf-settings-modal");
-  await expect(settingsModal).toBeVisible();
-  return settingsModal;
+  return footer;
 };
 
 test.describe("/display Finish footer (issue #275)", () => {
@@ -84,14 +82,12 @@ test.describe("/display Finish footer (issue #275)", () => {
       0
     );
 
-    const settingsModal = await openPDFExportSettings(page);
+    await openExportMenu(page);
 
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: 30_000 }),
       (async () => {
-        await settingsModal
-          .getByTestId("display-export-pdf-download-button")
-          .click();
+        await footer.getByTestId("display-export-pdf-button").click();
 
         // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still "riding
         // the untouched default" cardback, so the reminder gate fires before the (absent, for an
@@ -149,14 +145,12 @@ test.describe("/display Finish footer (issue #275)", () => {
     );
     await goToDisplay(page);
 
-    const settingsModal = await openPDFExportSettings(page);
+    const footer = await openExportMenu(page);
 
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: 30_000 }),
       (async () => {
-        await settingsModal
-          .getByTestId("display-export-pdf-download-button")
-          .click();
+        await footer.getByTestId("display-export-pdf-button").click();
 
         // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
         // save gate (a deck-completeness decision precedes the persistence one).
@@ -205,14 +199,12 @@ test.describe("/display Finish footer (issue #275)", () => {
     );
     await goToDisplay(page);
 
-    const settingsModal = await openPDFExportSettings(page);
+    const footer = await openExportMenu(page);
 
     const [download] = await Promise.all([
       page.waitForEvent("download", { timeout: 30_000 }),
       (async () => {
-        await settingsModal
-          .getByTestId("display-export-pdf-download-button")
-          .click();
+        await footer.getByTestId("display-export-pdf-button").click();
 
         // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - the reminder gate runs BEFORE the
         // save gate (a deck-completeness decision precedes the persistence one).

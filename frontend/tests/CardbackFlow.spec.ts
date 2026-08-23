@@ -54,19 +54,12 @@ test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", 
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "my search query");
 
-    const openPDFSettingsAndClickDownload = async () => {
+    const clickExportPDFDownload = async () => {
       await page.getByTestId("display-export-menu-toggle").click();
       await page.getByTestId("display-export-pdf-button").click();
-      const settingsModal = page.getByTestId(
-        "display-export-pdf-settings-modal"
-      );
-      await expect(settingsModal).toBeVisible();
-      await settingsModal
-        .getByTestId("display-export-pdf-download-button")
-        .click();
     };
 
-    await openPDFSettingsAndClickDownload();
+    await clickExportPDFDownload();
 
     const gate = page.getByTestId("pre-print-cardback-gate");
     await expect(gate).toBeVisible();
@@ -86,7 +79,7 @@ test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", 
     // project is still covered by it) shows no gate at all.
     const [secondDownload] = await Promise.all([
       page.waitForEvent("download", { timeout: 30_000 }),
-      openPDFSettingsAndClickDownload(),
+      clickExportPDFDownload(),
     ]);
     await expect(page.getByTestId("pre-print-cardback-gate")).toHaveCount(0);
     expect(secondDownload.suggestedFilename()).toBe("cards.pdf");
@@ -102,11 +95,6 @@ test.describe("Cardback reminder gate (SPEC-cardback-pdfwait.md §C.1, PKG1a)", 
 
     await page.getByTestId("display-export-menu-toggle").click();
     await page.getByTestId("display-export-pdf-button").click();
-    const settingsModal = page.getByTestId("display-export-pdf-settings-modal");
-    await expect(settingsModal).toBeVisible();
-    await settingsModal
-      .getByTestId("display-export-pdf-download-button")
-      .click();
 
     const gate = page.getByTestId("pre-print-cardback-gate");
     await expect(gate).toBeVisible();

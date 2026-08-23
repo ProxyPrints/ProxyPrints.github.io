@@ -20,8 +20,9 @@ import {
   loadPageWithDefaultBackend,
 } from "./test-utils";
 
-// The editor's real Export ▾ -> PDF settings step (DisplayExportPDF.tsx) - every control that
-// replaced a named default in displayPdfProps.ts (card selection, page range, cut-line colour/
+// The editor's real Export ▾ -> PDF flow (DisplayExportPDF.tsx, now a direct download/Save-to-
+// Drive action with no settings step of its own) - every control that replaced a named default
+// in displayPdfProps.ts (card selection, page range, cut-line colour/
 // geometry, an opt-in crosshair-marks toggle, an advanced per-side margin override, SCM cutting
 // mode), plus the rail's own Page Setup / Print quality controls it shares an export pipeline
 // with (Custom page size, image quality, corner rounding), and the willGenerateBleed signal on
@@ -64,22 +65,20 @@ const tenCardHandlers = [
   ...defaultHandlers,
 ];
 
-const openPDFSettings = async (page: import("@playwright/test").Page) => {
+const openExportMenu = async (page: import("@playwright/test").Page) => {
   await page.getByTestId("display-export-menu-toggle").click();
-  await page.getByTestId("display-export-pdf-button").click();
-  await expect(
-    page.getByTestId("display-export-pdf-settings-modal")
-  ).toBeVisible();
 };
 
 // Editor export rescue (docs/features/pdf-generator.md's "Page cut guide lines, Google Drive
-// save, and retiring the Finish footer's own print route") - the Download button now runs
-// through `runExportGate`, so a fresh project (still riding the untouched default cardback) shows
-// the cardback reminder gate on the FIRST export attempt each test. CB1 suppresses it for the
-// rest of that session, so later calls in the same test see no gate - `.click()`'s own auto-wait
-// (bounded here) absorbs both cases without a race.
+// save, and retiring the Finish footer's own print route") - the PDF item now runs through
+// `runExportGate` as a direct download action (no settings step in between), so a fresh project
+// (still riding the untouched default cardback) shows the cardback reminder gate on the FIRST
+// export attempt each test. CB1 suppresses it for the rest of that session, so later calls in
+// the same test see no gate - `.click()`'s own auto-wait (bounded here) absorbs both cases
+// without a race.
 const clickDownload = async (page: import("@playwright/test").Page) => {
-  await page.getByTestId("display-export-pdf-download-button").click();
+  await openExportMenu(page);
+  await page.getByTestId("display-export-pdf-button").click();
   await page
     .getByTestId("pre-print-cardback-gate")
     .getByTestId("cardback-gate-use-current")
@@ -101,14 +100,12 @@ test.describe("DisplayExportPDF - Save PDF to Google Drive (rescued from /print'
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    await openPDFSettings(page);
+    await openExportMenu(page);
     await expect(
       page.getByTestId("display-export-pdf-drive-button")
     ).toHaveCount(0);
-    // Absent rather than broken - Download PDF is still the sole, working action.
-    await expect(
-      page.getByTestId("display-export-pdf-download-button")
-    ).toBeVisible();
+    // Absent rather than broken - the PDF item is still the sole, working action.
+    await expect(page.getByTestId("display-export-pdf-button")).toBeVisible();
   });
 });
 
@@ -138,11 +135,9 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "10x my search query");
 
-    // Rail control now - set before opening the dialog, since its backdrop blocks the rail
-    // behind it while open.
+    // Rail control now, in the same "Export" section.
     await page.getByTestId("display-page-range-start").fill("1");
     await page.getByTestId("display-page-range-end").fill("1");
-    await openPDFSettings(page);
     const download1 = page.waitForEvent("download");
     await clickDownload(page);
     const path1 = await (await download1).path();
@@ -151,7 +146,6 @@ test.describe("DisplayExportPDF - editor export controls", () => {
 
     await page.getByTestId("display-page-range-start").fill("");
     await page.getByTestId("display-page-range-end").fill("");
-    await openPDFSettings(page);
     const download2 = page.waitForEvent("download");
     await clickDownload(page);
     const path2 = await (await download2).path();
@@ -169,18 +163,16 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     // + Backs" (the default) has 10 real fronts across 2 pages. A real, opposite-end difference.
     await importTextOnEditorLanding(page, "10x my search query");
 
-    await openPDFSettings(page);
     const defaultDownload = page.waitForEvent("download");
     await clickDownload(page);
     const defaultPath = await (await defaultDownload).path();
     if (!defaultPath) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(defaultPath))).toBe(2);
 
-    // Rail control now, not the dialog's.
+    // Rail control.
     await page
       .getByTestId("display-card-selection-mode")
       .selectOption("backsOnly");
-    await openPDFSettings(page);
     const backsOnlyDownload = page.waitForEvent("download");
     await clickDownload(page);
     const backsOnlyPath = await (await backsOnlyDownload).path();
@@ -203,16 +195,13 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    // These now live in the rail's own "Print quality"/"Export" sections, not the export dialog -
-    // set before opening it, since the dialog's backdrop blocks the rail behind it while it's
-    // open. "Print quality" is collapsed by default.
+    // These now live in the rail's own "Print quality"/"Export" sections. "Print quality" is
+    // collapsed by default.
     await expandRailSection(page, "print-quality");
     await page.getByTestId("display-image-dpi").fill("100");
     await page.getByTestId("display-jpg-quality").fill("5");
     await page.getByTestId("display-page-range-start").fill("1");
     await page.getByTestId("display-page-range-end").fill("1");
-
-    await openPDFSettings(page);
 
     const requestPromise = page.waitForRequest(
       (request) =>
@@ -303,14 +292,12 @@ test.describe("DisplayExportPDF - page cut guide lines (rail)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "1x my search query");
 
-    // Now a rail control, in the "Cut lines & snip guides" section - set before opening the
-    // dialog, since its backdrop blocks the rail behind it while open.
+    // Now a rail control, in the "Cut lines & snip guides" section.
     await expandRailSection(page, "cut-lines-guides");
     const pageCutLines = page.getByTestId("display-page-cut-lines-toggle");
     // Matches /print's PDFGenerator.tsx own default.
     await expect(pageCutLines).toBeChecked();
 
-    await openPDFSettings(page);
     const onDownload = page.waitForEvent("download");
     await clickDownload(page);
     const onPath = await (await onDownload).path();
@@ -318,7 +305,6 @@ test.describe("DisplayExportPDF - page cut guide lines (rail)", () => {
     const onOps = await countPageOneDrawOps(readFileSync(onPath));
 
     await pageCutLines.uncheck();
-    await openPDFSettings(page);
     const offDownload = page.waitForEvent("download");
     await clickDownload(page);
     const offPath = await (await offDownload).path();
@@ -335,7 +321,7 @@ test.describe("DisplayExportPDF - page cut guide lines (rail)", () => {
 const mmToPt = (mm: number) => (mm / 25.4) * 72;
 
 test.describe("DisplayExportPDF - SCM cutting mode (rail)", () => {
-  test("the mode switch reveals SCM's own sub-settings in the rail's Export section, independent of the dialog", async ({
+  test("the mode switch reveals SCM's own sub-settings in the rail's Export section", async ({
     page,
     network,
   }) => {
@@ -366,12 +352,10 @@ test.describe("DisplayExportPDF - SCM cutting mode (rail)", () => {
     await expandRailSection(page, "print-quality");
     await expect(page.getByTestId("display-image-dpi")).toBeVisible();
 
-    // The export dialog itself carries no settings of its own anymore - it opens straight to
-    // the download/Save-to-Drive actions.
-    await openPDFSettings(page);
-    await expect(
-      page.getByTestId("display-export-pdf-download-button")
-    ).toBeVisible();
+    // The Export dropdown itself carries no settings step of its own anymore - PDF is a direct
+    // download action.
+    await openExportMenu(page);
+    await expect(page.getByTestId("display-export-pdf-button")).toBeVisible();
   });
 
   test("an SCM export is a structurally different document from the standard export", async ({
@@ -382,17 +366,14 @@ test.describe("DisplayExportPDF - SCM cutting mode (rail)", () => {
     await loadPageWithDefaultBackend(page);
     await importTextOnEditorLanding(page, "10x my search query");
 
-    await openPDFSettings(page);
     const standardDownload = page.waitForEvent("download");
     await clickDownload(page);
     const standardPath = await (await standardDownload).path();
     if (!standardPath) throw new Error("Download path is null");
     const standardPages = await readNumPages(readFileSync(standardPath));
 
-    // Rail control now - set before reopening the dialog, since its backdrop blocks the rail
-    // behind it while open.
+    // Rail control.
     await page.getByTestId("display-scm-mode-switch").check();
-    await openPDFSettings(page);
     const scmDownload = page.waitForEvent("download");
     await clickDownload(page);
     const scmPath = await (await scmDownload).path();
@@ -501,22 +482,19 @@ test.describe("DisplayExportPDF - advanced page-margin override", () => {
     // fixture the "editor export controls" describe block's own page-count tests use).
     await importTextOnEditorLanding(page, "10x my search query");
 
-    await openPDFSettings(page);
     const baselineDownload = page.waitForEvent("download");
     await clickDownload(page);
     const baselinePath = await (await baselineDownload).path();
     if (!baselinePath) throw new Error("Download path is null");
     expect(await readNumPages(readFileSync(baselinePath))).toBe(2);
 
-    // Rail controls - set before reopening the dialog, since its backdrop blocks the rail
-    // behind it while open. A large left/right override collapses the column count from 4 down
-    // to 1, shrinking cards per page and forcing more real pages for the same 10-card deck -
-    // proof the override reaches PDF.tsx's actual layout, not just the rail's own UI state.
+    // Rail controls. A large left/right override collapses the column count from 4 down to 1,
+    // shrinking cards per page and forcing more real pages for the same 10-card deck - proof the
+    // override reaches PDF.tsx's actual layout, not just the rail's own UI state.
     await page.getByTestId("display-margin-override-toggle").check();
     await page.getByTestId("display-margin-override-left").fill("100");
     await page.getByTestId("display-margin-override-right").fill("100");
 
-    await openPDFSettings(page);
     const overriddenDownload = page.waitForEvent("download");
     await clickDownload(page);
     const overriddenPath = await (await overriddenDownload).path();
@@ -537,12 +515,9 @@ test.describe("DisplayExportPDF - Custom page size (rail)", () => {
     await page.getByLabel("Paper size").selectOption("CUSTOM");
     await page.getByTestId("display-custom-page-width").fill("100");
     await page.getByTestId("display-custom-page-height").fill("150");
-    // Rail control now - set before opening the dialog, since its backdrop blocks the rail
-    // behind it while open.
     await page.getByTestId("display-page-range-start").fill("1");
     await page.getByTestId("display-page-range-end").fill("1");
 
-    await openPDFSettings(page);
     const download = page.waitForEvent("download");
     await clickDownload(page);
     const downloadPath = await (await download).path();
