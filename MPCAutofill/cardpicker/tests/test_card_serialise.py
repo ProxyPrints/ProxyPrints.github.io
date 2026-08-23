@@ -27,12 +27,91 @@ from cardpicker.models import (
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
     CanonicalCardFactory,
+    CanonicalPrintingMetadataFactory,
     CardFactory,
     CardPrintingTagFactory,
     CardTagVoteFactory,
     SourceFactory,
     TagFactory,
 )
+
+
+class TestLayout:
+    """
+    `Card.serialise().layout` - read via `Card.get_layout()`, which shares
+    `_get_indexed_printing_metadata()`'s canonical_card/RESOLVED-gated-inferred_canonical_card
+    precedence with the existing `get_border_color`/`get_frame`/`get_frame_effects`/
+    `get_full_art` ES-field getters.
+    """
+
+    def test_none_when_no_canonical_card_at_all(self, db):
+        card = CardFactory()
+        assert card.serialise().layout is None
+
+    def test_none_when_canonical_card_has_no_printing_metadata_row(self, db):
+        card = CardFactory(canonical_card=CanonicalCardFactory())
+        assert card.serialise().layout is None
+
+    def test_none_when_printing_metadata_layout_is_blank(self, db):
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=printing, layout="")
+        card = CardFactory(canonical_card=printing)
+        assert card.serialise().layout is None
+
+    def test_populated_from_canonical_card_printing_metadata_transform(self, db):
+        # real Scryfall example: Delver of Secrets // Insectile Aberration, a genuinely
+        # double-faced card (DOUBLE_FACED_LAYOUTS).
+        printing = CanonicalCardFactory(name="Delver of Secrets")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, layout="transform")
+        card = CardFactory(canonical_card=printing)
+        assert card.serialise().layout == "transform"
+
+    def test_populated_from_canonical_card_printing_metadata_split(self, db):
+        # real Scryfall example: Fire // Ice, a single-faced split card whose printed name is
+        # the " // "-joined compound (SPLIT_STYLE_LAYOUTS), not a second physical face.
+        printing = CanonicalCardFactory(name="Fire // Ice")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, layout="split")
+        card = CardFactory(canonical_card=printing)
+        assert card.serialise().layout == "split"
+
+    def test_populated_from_inferred_canonical_card_when_resolved(self, db):
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=printing, layout="transform")
+        card = CardFactory(inferred_canonical_card=printing, printing_tag_status=PrintingTagStatus.RESOLVED)
+        assert card.serialise().layout == "transform"
+
+    def test_none_from_inferred_canonical_card_when_not_resolved(self, db):
+        # mirrors get_border_color/get_frame/get_full_art's own RESOLVED gate - an
+        # inferred_canonical_card that isn't yet a confirmed community-vote match must not
+        # leak its layout any more than it leaks those other printing-metadata fields.
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=printing, layout="transform")
+        card = CardFactory(inferred_canonical_card=printing, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        assert card.serialise().layout is None
+
+    def test_canonical_card_takes_precedence_over_inferred_canonical_card(self, db):
+        confirmed = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=confirmed, layout="transform")
+        inferred = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=inferred, layout="split")
+        card = CardFactory(
+            canonical_card=confirmed, inferred_canonical_card=inferred, printing_tag_status=PrintingTagStatus.RESOLVED
+        )
+        assert card.serialise().layout == "transform"
+
+    def test_present_in_post_cards_bulk_payload(self, db, client, django_settings):
+        source = SourceFactory()
+        printing = CanonicalCardFactory()
+        CanonicalPrintingMetadataFactory(canonical_card=printing, layout="transform")
+        card = CardFactory(source=source, canonical_card=printing)
+
+        response = client.post(
+            reverse(views.post_cards), {"cardIdentifiers": [card.identifier]}, content_type="application/json"
+        )
+
+        assert response.status_code == 200
+        payload = response.json()["results"][card.identifier]
+        assert payload["layout"] == "transform"
 
 
 class TestSuggestedCanonicalCard:

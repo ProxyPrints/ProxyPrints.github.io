@@ -203,6 +203,17 @@ export interface Card {
   extension: string;
   identifier: string;
   language: string;
+  /**
+   * Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme"), read
+   * from whichever printing backs canonicalCard (CanonicalPrintingMetadata.layout) - same
+   * canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses for
+   * canonicalCard itself. null whenever canonicalCard is null, or the resolved printing has no
+   * metadata row, or that row's layout hasn't been populated. Lets a consumer ask "does this card
+   * have a back face" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in
+   * printing_metadata_import.py) directly from a card it already has, rather than
+   * cross-referencing a separately-fetched name list.
+   */
+  layout?: null | string;
   mediumThumbnailUrl: string;
   name: string;
   /**
@@ -2991,6 +3002,7 @@ const typeMap: any = {
       { json: "extension", js: "extension", typ: "" },
       { json: "identifier", js: "identifier", typ: "" },
       { json: "language", js: "language", typ: "" },
+      { json: "layout", js: "layout", typ: u(undefined, u(null, "")) },
       { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
       { json: "name", js: "name", typ: "" },
       {

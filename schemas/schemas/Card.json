@@ -71,6 +71,10 @@
     "canonicalCard": {
       "$ref": "./CanonicalCard.json"
     },
+    "layout": {
+      "description": "Scryfall's own layout tag verbatim (e.g. \"normal\", \"transform\", \"planar\", \"scheme\"), read from whichever printing backs canonicalCard (CanonicalPrintingMetadata.layout) - same canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses for canonicalCard itself. null whenever canonicalCard is null, or the resolved printing has no metadata row, or that row's layout hasn't been populated. Lets a consumer ask \"does this card have a back face\" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in printing_metadata_import.py) directly from a card it already has, rather than cross-referencing a separately-fetched name list.",
+      "type": ["string", "null"]
+    },
     "suggestedCanonicalCard": {
       "description": "The catalog's own best unconfirmed guess at this card's printing - a machine-cast (VoteSource.DEDUCTION/OCR) CardPrintingTag vote's printing, surfaced only while printingTagStatus is not 'resolved' (never redundant with the already-resolved canonicalCard). null when no machine vote exists yet, printingTagStatus is already 'resolved', or the serializing endpoint didn't request this field (see cardpicker/models.py Card.serialise's include_suggested_printing kwarg - opt-in per endpoint to keep this a zero-cost no-op everywhere it isn't needed).",
       "$ref": "./CanonicalCard.json"
