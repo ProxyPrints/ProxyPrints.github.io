@@ -1,8 +1,9 @@
 /**
  * Issue #166 - the post-export contribution prompt itself. Purely presentational (see
- * usePostExportContributionPrompt.ts for the show-once-per-session logic) - a dismissible
- * Alert, not a self-hiding Toast (Toasts.tsx's own 7s autohide is wrong for a CTA the user
- * should be able to actually act on, not just glance at before it vanishes), following the same
+ * usePostExportContributionPrompt.ts for the show-once-per-session logic AND the auto-dismiss
+ * timer) - a dismissible Alert, not Toasts.tsx's shared Toast component (that 7s autohide is too
+ * short for a CTA the user should be able to actually act on, not just glance at before it
+ * vanishes - usePostExportContributionPrompt.ts owns a longer timer instead), following the same
  * `<Alert dismissible onClose={...}>` shape QuestionFeed.tsx's own rate-limit notice already
  * uses. Routes into the EXISTING "What's That Card?" vote-queue funnel (docs/features/
  * printing-tags.md) via the same /whatsthat route Navbar.tsx and HomepagePanel.tsx already link
