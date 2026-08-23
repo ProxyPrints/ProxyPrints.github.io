@@ -437,6 +437,25 @@ export const searchResultsOneResult = http.post(
     )
 );
 
+// processQuery strips "/" as punctuation, so a split card's own compound name (e.g.
+// "Fire // Ice") arrives here as "fire ice" once isKnownSingleFacedCompoundName has kept it
+// from being split into a front/back pair - see processing.ts's own handling.
+export const searchResultsForSplitCardName = http.post(
+  buildRoute("3/editorSearch/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [computeSearchQueryHashKey({
+            query: "fire ice",
+            cardType: CardType.Card,
+          })]: [cardDocument1.identifier],
+        },
+      },
+      { status: 200 }
+    )
+);
+
 export const searchResultsOneResultCorrectSearchq = http.post(
   buildRoute("3/editorSearch/"),
   () =>
@@ -757,6 +776,25 @@ export const dfcPairsMatchingCards1And4 = http.get(
 
 export const dfcPairsServerError = http.get(buildRoute("2/DFCPairs/"), () =>
   HttpResponse.json(createError("2/DFCPairs"), { status: 500 })
+);
+
+//# endregion
+
+//# region split card names
+
+export const splitCardNamesNoResults = http.get(
+  buildRoute("2/SplitCardNames/"),
+  () => HttpResponse.json({ names: [] }, { status: 200 })
+);
+
+export const splitCardNamesMatchingFireIce = http.get(
+  buildRoute("2/SplitCardNames/"),
+  () => HttpResponse.json({ names: ["Fire // Ice"] }, { status: 200 })
+);
+
+export const splitCardNamesServerError = http.get(
+  buildRoute("2/SplitCardNames/"),
+  () => HttpResponse.json(createError("2/SplitCardNames"), { status: 500 })
 );
 
 //# endregion
@@ -2198,6 +2236,7 @@ export const defaultHandlers = [
   cardbacksNoResults,
   searchResultsNoResults,
   dfcPairsNoResults,
+  splitCardNamesNoResults,
   languagesTwoResults,
   tagsNoResults,
   importSitesOneResult,
