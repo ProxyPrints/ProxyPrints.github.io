@@ -329,6 +329,35 @@ export const projectSlice = createAppSlice({
       }
       state.mostRecentlySelectedSlot = null;
     },
+    /**
+     * "Apply to other copies" - propagates `slot`'s currently selected image (on `face`) to
+     * every other slot sharing that same search query, using the same query-equality grouping
+     * `bulkAlignMemberSelection` already uses for bulk selection. Deliberately only fills
+     * siblings with no image selected yet: a slot that already carries a DIFFERENT image is a
+     * deliberate per-copy choice and is left untouched, never silently overwritten.
+     */
+    applyImageToSiblingSlots: (
+      state,
+      action: PayloadAction<{ face: Faces; slot: number }>
+    ) => {
+      const { face, slot } = action.payload;
+      const source = state.members[slot]?.[face];
+      const sourceImage = source?.selectedImage;
+      if (source == null || sourceImage == null) {
+        return;
+      }
+      for (const member of state.members) {
+        const sibling = member[face];
+        if (
+          sibling != null &&
+          sibling !== source &&
+          sibling.selectedImage == null &&
+          areSearchQueriesEqual(sibling.query, source.query)
+        ) {
+          sibling.selectedImage = sourceImage;
+        }
+      }
+    },
     deleteSlots: (state, action: PayloadAction<{ slots: Array<number> }>) => {
       action.payload.slots
         .sort(function (a, b) {
@@ -441,6 +470,7 @@ export const {
   bulkSetMemberSelection,
   bulkRemovePrintingFilter,
   bulkAlignMemberSelection,
+  applyImageToSiblingSlots,
   deleteSlots,
   moveSlot,
   duplicateSlot,

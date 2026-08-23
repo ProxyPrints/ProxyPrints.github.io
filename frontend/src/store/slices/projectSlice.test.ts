@@ -1,8 +1,14 @@
 import { Back, Front } from "@/common/constants";
 import { computeSearchQueryHashKey } from "@/common/processing";
-import { CardType, Project, ThunkStatus } from "@/common/types";
+import {
+  CardType,
+  Project,
+  SlotProjectMembers,
+  ThunkStatus,
+} from "@/common/types";
 import {
   applyCardbackToAllSlots,
+  applyImageToSiblingSlots,
   projectSlice,
   selectIsCardbackExplicitlySet,
   selectIsRidingUntouchedDefaultCardback,
@@ -504,5 +510,76 @@ describe("cardback flow round - explicit-choice tracking + apply-all", () => {
     ).toStrictEqual(["new-cardback", "new-cardback", "new-cardback"]);
     // Front faces are untouched.
     expect(applied.members.every((member) => member[Front] == null)).toBe(true);
+  });
+});
+
+describe("applyImageToSiblingSlots", () => {
+  function frontMember(
+    id: string,
+    query: string,
+    selectedImage: string | undefined
+  ): SlotProjectMembers {
+    return {
+      id,
+      front: {
+        query: { query, cardType: "CARD" as CardType },
+        selectedImage,
+        selected: false,
+      },
+      back: null,
+    };
+  }
+
+  test("sets the same image on other slots holding that card, leaving unrelated slots alone", () => {
+    const seeded: Project = {
+      ...baseProjectState,
+      members: [
+        frontMember("t-0", "Lightning Bolt", "bolt-art-a"),
+        frontMember("t-1", "Lightning Bolt", undefined),
+        frontMember("t-2", "Counterspell", undefined),
+      ],
+    };
+    const applied = projectSlice.reducer(
+      seeded,
+      applyImageToSiblingSlots({ face: Front, slot: 0 })
+    );
+    expect(
+      applied.members.map((member) => member[Front]?.selectedImage)
+    ).toStrictEqual(["bolt-art-a", "bolt-art-a", undefined]);
+  });
+
+  test("never overwrites a sibling that already carries a different, deliberately-chosen image", () => {
+    const seeded: Project = {
+      ...baseProjectState,
+      members: [
+        frontMember("t-0", "Lightning Bolt", "bolt-art-a"),
+        frontMember("t-1", "Lightning Bolt", "bolt-art-b"),
+        frontMember("t-2", "Lightning Bolt", undefined),
+      ],
+    };
+    const applied = projectSlice.reducer(
+      seeded,
+      applyImageToSiblingSlots({ face: Front, slot: 0 })
+    );
+    expect(
+      applied.members.map((member) => member[Front]?.selectedImage)
+    ).toStrictEqual(["bolt-art-a", "bolt-art-b", "bolt-art-a"]);
+  });
+
+  test("does nothing when the source slot has no selected image", () => {
+    const seeded: Project = {
+      ...baseProjectState,
+      members: [
+        frontMember("t-0", "Lightning Bolt", undefined),
+        frontMember("t-1", "Lightning Bolt", undefined),
+      ],
+    };
+    const applied = projectSlice.reducer(
+      seeded,
+      applyImageToSiblingSlots({ face: Front, slot: 0 })
+    );
+    expect(
+      applied.members.map((member) => member[Front]?.selectedImage)
+    ).toStrictEqual([undefined, undefined]);
   });
 });
