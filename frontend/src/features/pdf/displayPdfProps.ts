@@ -141,6 +141,14 @@ export interface DisplaySheetExportSettings {
    * groups with the rail's own margin-profile control (`DisplayPage.tsx`'s Page Setup section),
    * not the export dialog - a manual override of that same profile decision. */
   marginOverride?: PageMarginOverride;
+  /** The guillotine-cut page guide lines (as opposed to `showCutLines`'s per-card trim marks) - a
+   * full sheet's own cut guides, independent of whether card cut lines are drawn at all. Moved
+   * here from the export step's own `DisplayExportSettings` - it groups with the rail's "Cut
+   * lines & snip guides" section (`DisplayPage.tsx`) rather than the export dialog, same
+   * reasoning as the per-card guide appearance fields above. `/print`'s `PDFGenerator.tsx`
+   * exposes this as its own "Page Cut Guide Lines" toggle; this field is the editor's
+   * equivalent. */
+  drawPageCutLines: boolean;
 }
 
 /** An explicit per-side override for `DisplaySheetExportSettings.marginOverride` — see the module
@@ -156,11 +164,6 @@ export interface PageMarginOverride {
  * relationship to the sheet's own layout, so they live separately from
  * `DisplaySheetExportSettings` above. */
 export interface DisplayExportSettings {
-  /** The guillotine-cut page guide lines (as opposed to `sheetSettings.showCutLines`'s per-card
-   * trim marks) - a full sheet's own cut guides, independent of whether card cut lines are drawn
-   * at all. `/print`'s `PDFGenerator.tsx` exposes this as its own "Page Cut Guide Lines" toggle;
-   * this field is the editor's equivalent. */
-  drawPageCutLines: boolean;
   /** Switches the whole export to `SCMPDF.tsx`'s registration-mark layout - a genuinely different
    * output format, not another flag on the standard grid. The six `scm*` fields below are only
    * read by `PDF.tsx` when this is true. */
@@ -214,7 +217,7 @@ export const buildDisplayPDFProps = (
     bleedEdgeMM: sheetSettings.bleedEdgeMM,
     roundCorners: sheetSettings.roundCorners,
     drawCardCutLines: sheetSettings.showCutLines,
-    drawPageCutLines: exportSettings.drawPageCutLines,
+    drawPageCutLines: sheetSettings.drawPageCutLines,
     cutLineLengthMM: sheetSettings.cutLineLengthMM,
     cutLineOffsetMM: sheetSettings.cutLineOffsetMM,
     cutLineThicknessMM: sheetSettings.cutLineThicknessMM,

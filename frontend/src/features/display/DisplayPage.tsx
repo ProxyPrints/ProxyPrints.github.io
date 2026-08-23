@@ -409,6 +409,10 @@ interface DisplaySheetSettings {
   // (see displayPdfProps.ts's "Margin-preset vs. per-side override" comment) - the live sheet
   // below always reads `margins` (the profile), never this field, matching pre-migration behavior.
   marginOverride?: PageMarginOverride;
+  // Page-level guillotine cut guide lines (as opposed to showCutLines' per-card trim marks) -
+  // moved from DisplayExportPDF.tsx's own settings step (this PR), into the "Cut lines & snip
+  // guides" rail section it groups with rather than the Export PDF dialog.
+  drawPageCutLines: boolean;
 }
 
 // Proposal H D1/D4/D6 (docs/proposals/proposal-h-display-layout-spec.md, amended by issue #286's
@@ -443,6 +447,8 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   pageRangeStart: undefined,
   pageRangeEnd: undefined,
   marginOverride: undefined,
+  // Matches the old DisplayExportPDF.tsx DEFAULT_EXPORT_SETTINGS value this migrated from.
+  drawPageCutLines: true,
 };
 
 // The mode names alone mislead ("Distinct Backs" sounds like it emits backs, and for a
@@ -3786,6 +3792,29 @@ export function DisplayPage() {
                         />
                       </div>
                     )}
+                    {/* Page-level guillotine cut guide lines, independent of the per-card Guides
+                        switch above (a full sheet's own cut guides vs. per-card trim marks) -
+                        moved from DisplayExportPDF.tsx's own settings step (this PR), same
+                        reasoning as the fields above: it's Cut lines & snip guides content, not
+                        an export-run-only choice. */}
+                    <Form.Check
+                      type="switch"
+                      id="display-page-cut-lines-toggle"
+                      className="mb-0 mt-2"
+                      data-testid="display-page-cut-lines-toggle"
+                      label={
+                        settings.drawPageCutLines
+                          ? "Page cut guide lines: On"
+                          : "Page cut guide lines: Off"
+                      }
+                      checked={settings.drawPageCutLines}
+                      onChange={(event) =>
+                        setSettings((previous) => ({
+                          ...previous,
+                          drawPageCutLines: event.target.checked,
+                        }))
+                      }
+                    />
                   </div>
                 </AutofillCollapse>
               </div>
