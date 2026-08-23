@@ -36,7 +36,11 @@ export const PAGES_PER_BATCH = 8;
 
 export const renderPDF = async (props: PDFProps): Promise<RenderPDFResult> => {
   const { pdf } = await import("@react-pdf/renderer");
-  const { computePDFRenderWindow, createPDFElement } = await import("./PDF");
+  const {
+    computeExportedCardIdentifiers,
+    computePDFRenderWindow,
+    createPDFElement,
+  } = await import("./PDF");
   const { MemorySink, PDFIncrementalWriter } = await import(
     "./pdfIncrementalWriter"
   );
@@ -45,15 +49,22 @@ export const renderPDF = async (props: PDFProps): Promise<RenderPDFResult> => {
   );
 
   const failures: Array<ImageFetchFailure> = [];
-  // Approximate, not exact: counts unique card identifiers in the export, but `completed`
-  // increments once per resolved image SLOT (PDF.tsx's PDFCardImage calls reportImageProgress
-  // from every slot's own image resolution), not once per identifier - a card that appears in
-  // more than one slot (e.g. multiple copies in the deck) still counts once per slot even though
-  // pdfImage.ts's identifier-keyed cache (see getCachedImageBlob) means it's only actually
-  // FETCHED once per batch - completed can end up slightly ahead of this total on decks with
-  // duplicates. Good enough for a "this is actively working" indicator; not presented as an
-  // exact fraction in the UI for that reason.
-  const total = Object.keys(props.cardDocumentsByIdentifier).length;
+  // Approximate, not exact: counts unique card identifiers this export's page-range-restricted
+  // output actually renders (computeExportedCardIdentifiers, PDF.tsx - the same set
+  // pdfDownload.tsx already scopes its bleed-prior fetch to, reused here rather than re-derived
+  // so the two can't drift). `completed` increments once per resolved image SLOT (PDF.tsx's
+  // PDFCardImage calls reportImageProgress from every slot's own image resolution), not once
+  // per identifier - a card that appears in more than one slot within the range (e.g. multiple
+  // copies in the deck) still counts once per slot even though pdfImage.ts's identifier-keyed
+  // cache (see getCachedImageBlob) means it's only actually FETCHED once per batch - completed
+  // can end up slightly ahead of this total on decks with duplicates. Good enough for a "this is
+  // actively working" indicator; not presented as an exact fraction in the UI for that reason.
+  // SCM mode is excluded from computeExportedCardIdentifiers by that function's own design (SCM
+  // paginates independently - see SCMPDF.tsx - and never reads the bleedPriors that function
+  // exists to scope), so it falls back to the full project count here unchanged.
+  const total = props.scmMode
+    ? Object.keys(props.cardDocumentsByIdentifier).length
+    : computeExportedCardIdentifiers(props).length;
   let completed = 0;
 
   const reportImageFailure = (identifier: string, label: string) =>
