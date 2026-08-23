@@ -13,7 +13,10 @@ from datetime import timedelta
 
 from django.utils import timezone
 
-from cardpicker.illustration_vote import DERIVED_ARTIST_VOTE_SURFACE
+from cardpicker.illustration_vote import (
+    DERIVED_ARTIST_VOTE_SURFACE,
+    DERIVED_PRINTING_VOTE_SURFACE,
+)
 from cardpicker.management.commands.retract_derived_illustration_printing_tags import (
     SIBLING_CORRELATION_WINDOW,
     annotate_would_leave_resolved,
@@ -224,7 +227,7 @@ class TestAnnotateWouldLeaveResolved:
 
 
 class TestCommand:
-    def test_dry_run_deletes_nothing(self, db):
+    def test_dry_run_writes_nothing(self, db):
         from django.core.management import call_command
 
         card = CardFactory(name="Brainstorm")
@@ -232,13 +235,17 @@ class TestCommand:
 
         call_command("retract_derived_illustration_printing_tags")
 
-        assert CardPrintingTag.objects.filter(pk=derived_tag.pk).exists()
+        derived_tag.refresh_from_db()
+        assert derived_tag.source == VoteSource.USER
+        assert derived_tag.vote_surface == "question-feed"
 
-    def test_write_deletes_exactly_the_identified_set(self, db):
+    def test_write_re_sources_exactly_the_identified_set_and_deletes_nothing(self, db):
         from django.core.management import call_command
 
         card = CardFactory(name="Brainstorm")
         derived_tag, _ = _cast_derived_pair(card, "voter-1")
+        derived_tag_user = derived_tag.user
+        derived_tag_anonymous_id = derived_tag.anonymous_id
 
         other_card = CardFactory(name="Forest")
         untouched_explicit_tag = CardPrintingTagFactory(card=other_card, anonymous_id="voter-2", source=VoteSource.USER)
@@ -246,11 +253,20 @@ class TestCommand:
             card=other_card, anonymous_id="voter-3", source=VoteSource.DEDUCTION
         )
 
+        before_count = CardPrintingTag.objects.count()
         call_command("retract_derived_illustration_printing_tags", "--write")
 
-        assert not CardPrintingTag.objects.filter(pk=derived_tag.pk).exists()
-        assert CardPrintingTag.objects.filter(pk=untouched_explicit_tag.pk).exists()
-        assert CardPrintingTag.objects.filter(pk=untouched_deduction_tag.pk).exists()
+        assert CardPrintingTag.objects.count() == before_count
+        derived_tag.refresh_from_db()
+        assert derived_tag.source == VoteSource.DEDUCTION
+        assert derived_tag.vote_surface == DERIVED_PRINTING_VOTE_SURFACE
+        assert derived_tag.user == derived_tag_user
+        assert derived_tag.anonymous_id == derived_tag_anonymous_id
+
+        untouched_explicit_tag.refresh_from_db()
+        assert untouched_explicit_tag.source == VoteSource.USER
+        untouched_deduction_tag.refresh_from_db()
+        assert untouched_deduction_tag.source == VoteSource.DEDUCTION
 
     def test_write_never_touches_the_sibling_artist_vote_table(self, db):
         from django.core.management import call_command
@@ -260,7 +276,9 @@ class TestCommand:
 
         call_command("retract_derived_illustration_printing_tags", "--write")
 
-        assert CardArtistVote.objects.filter(pk=sibling_vote.pk).exists()
+        sibling_vote.refresh_from_db()
+        assert sibling_vote.source == VoteSource.USER
+        assert sibling_vote.vote_surface == DERIVED_ARTIST_VOTE_SURFACE
 
     def test_a_card_with_only_an_explicit_non_derived_user_vote_is_untouched(self, db):
         from django.core.management import call_command
@@ -270,9 +288,10 @@ class TestCommand:
 
         call_command("retract_derived_illustration_printing_tags", "--write")
 
-        assert CardPrintingTag.objects.filter(pk=explicit_tag.pk).exists()
+        explicit_tag.refresh_from_db()
+        assert explicit_tag.source == VoteSource.USER
 
-    def test_ambiguous_row_survives_the_write_path(self, db):
+    def test_ambiguous_row_survives_the_write_path_unchanged(self, db):
         from django.core.management import call_command
 
         card = CardFactory(name="Brainstorm")
@@ -282,9 +301,11 @@ class TestCommand:
 
         call_command("retract_derived_illustration_printing_tags", "--write")
 
-        assert CardPrintingTag.objects.filter(pk=tag.pk).exists()
+        tag.refresh_from_db()
+        assert tag.source == VoteSource.USER
+        assert tag.vote_surface == "question-feed"
 
-    def test_is_no_match_escape_vote_survives_the_write_path(self, db):
+    def test_is_no_match_escape_vote_survives_the_write_path_unchanged(self, db):
         from django.core.management import call_command
 
         card = CardFactory(name="Brainstorm")
@@ -300,4 +321,6 @@ class TestCommand:
 
         call_command("retract_derived_illustration_printing_tags", "--write")
 
-        assert CardPrintingTag.objects.filter(pk=escape_vote.pk).exists()
+        escape_vote.refresh_from_db()
+        assert escape_vote.source == VoteSource.USER
+        assert escape_vote.vote_surface == "question-feed"
