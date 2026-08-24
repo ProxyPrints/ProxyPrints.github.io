@@ -27,7 +27,6 @@ import {
 import { useLongPress } from "@/common/useLongPress";
 import { wrapIndex } from "@/common/utils";
 import { RightPaddedIcon } from "@/components/icon";
-import { ApplySiblingImageAffordance } from "@/features/card/ApplySiblingImageAffordance";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import { CardFooter } from "@/features/card/CardFooter";
 import { CardSlotContextMenu } from "@/features/card/CardSlotContextMenu";
@@ -363,10 +362,6 @@ export function CardSlot({ id, searchQuery, face, slot }: CardSlotProps) {
           searchQuery={searchQuery}
           onOpenGridSelector={handleShowGridSelector}
         />
-      )}
-
-      {selectedImage != null && (
-        <ApplySiblingImageAffordance face={face} slot={slot} />
       )}
 
       {searchResultsForQuery.length > 1 && showGridSelector && (

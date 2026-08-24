@@ -259,6 +259,7 @@ import { useLongPress } from "@/common/useLongPress";
 import { AutofillCollapse } from "@/components/AutofillCollapse";
 import { RightPaddedIcon } from "@/components/icon";
 import { RenderIfVisible } from "@/components/RenderIfVisible";
+import { ApplySiblingImageAffordance } from "@/features/card/ApplySiblingImageAffordance";
 import { CardSlotContextMenu } from "@/features/card/CardSlotContextMenu";
 import { getCardSlotMenuActions } from "@/features/card/CardSlotMenuActions";
 import { CardbackRailControl } from "@/features/card/CommonCardback";
@@ -2290,6 +2291,18 @@ const Rail = ({
           backendURL={backendURL}
           onImplicitSupport={onImplicitSupport}
         />
+        {/* Left-rail subject-matter round - relocated from CardSlot.tsx's own per-tile mount
+            (the classic editor's grid); this rail is now the one subject-matter surface for the
+            display page, so a convenience action about the currently-edited face's own image
+            belongs beside Select Version rather than scattered across sheet tiles. Follows
+            `previewFace` like everything else above - applies to the face currently being
+            edited, front or back. */}
+        {selectedImage != null && (
+          <ApplySiblingImageAffordance
+            face={previewFace ?? selectedSlotRef.face}
+            slot={selectedSlotRef.slot}
+          />
+        )}
       </div>
       {/* Rail restructure ruling 2 - the per-slot cardback control proposes a DIFFERENT card
           (a different back face), so it moves past the identity zone and the candidate grid
@@ -2312,6 +2325,27 @@ const Rail = ({
           backImage={backProjectMember?.selectedImage}
           projectCardback={projectCardback}
         />
+      </div>
+      {/* Left-rail subject-matter round - the project-wide cardback control migrates out of the
+          right (print/export settings) rail entirely: a cardback is subject matter, the same
+          category as the per-slot control immediately above it, not a print setting. Sits right
+          after "Cardback (this slot)" rather than a new top-level section, so the rail reads as
+          one continuous cardback story (per-slot, then project-wide) instead of two unrelated
+          entries. */}
+      <div className="railsec">
+        <div
+          className="lg"
+          style={{
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            color: "var(--theme-muted)",
+            marginBottom: 5,
+          }}
+        >
+          Cardback (project)
+        </div>
+        <CardbackRailControl />
       </div>
       {/* Rail-delegacy round (item 7, RD5)/editor-polish item 4 (REV RD5) - Print Options +
           Report collapse into ONE designed control stack (Slot Actions moved up to the rail
@@ -4324,19 +4358,6 @@ export function DisplayPage() {
                     </ToggleButtonGroup>
                   </div>
                 </AutofillCollapse>
-              </div>
-
-              <div className="mb-3">
-                {/* R9 (editor-repass round, item 2) - the right rail's Cardback section is now a
-                    swatch strip (CardbackSwatchStrip) under a "Cardback (project)" legend, with
-                    the project-wide "Apply to all card backs" / "Set as my default cardback"
-                    actions as two buttons beneath the strip (exact names per the R9 task text)
-                    and a "Browse all cardbacks…" button opening the same GridSelectorModal
-                    instance CommonCardback.tsx's editor mount already owns - the modal keeps its
-                    inline apply prompt (proposal-h's own strip + "Choose cardback…" pairing).
-                    The old single trigger button (CardbackToolbarButton) is retired with this
-                    round. */}
-                <CardbackRailControl />
               </div>
             </div>
 

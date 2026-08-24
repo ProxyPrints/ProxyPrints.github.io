@@ -4,13 +4,14 @@
  * cardback picker's modal footer (`CommonCardbackGridSelector`'s `footerContent`). Never a second
  * stacked modal - always rendered inline by its caller.
  *
- * R9 (editor-repass round, item 2) - the rail (per-slot) entry of this prompt is retired with
- * the per-slot picker's move to the `CardbackSwatchStrip`: the left rail has no apply-all/
- * set-default affordances at all any more, and the right rail's Cardback section puts them
- * beneath the strip as its own two plain buttons (`CardbackRailControl`), not via this
- * component. This prompt's only surviving call site is the modal footer (the "Browse all
- * cardbacks…" full-browse path), so the `entry` prop's rail half - the never-pre-checked
- * trap-guard line and the per-slot copy - is gone with its caller.
+ * Left-rail subject-matter round - `CardbackRailControl` (left rail, project-wide) is now this
+ * component's SECOND call site: its own two plain apply-all/set-default buttons are gone,
+ * replaced by this same inline prompt so there's one apply/set-default surface for both the
+ * modal's full-browse path and the rail's swatch-strip pick, not two divergent ones.
+ *
+ * "customBackThumbnails"/"affectedCount" now describe SPECIFIED backs a cardback apply will
+ * SKIP (never overwritten - see `cardbackApply.ts`'s own module comment), not backs it would
+ * override - the copy below reflects that.
  *
  * Token table E.2 (BINDING, #302 palette; re-themed to Tokyo-11, 2026-07-24 - see
  * docs/features/theming.md - tokens and spec tables move together, same discipline
@@ -232,11 +233,14 @@ export function CardbackApplyPrompt({
       <Choice>
         <ChoiceLabel>
           <div className="h">Apply to all card backs in this deck</div>
-          <div className="s">
-            {`also overrides ${customBackThumbnails.length} card${
-              customBackThumbnails.length === 1 ? "" : "s"
-            } with a custom back`}
-          </div>
+          {customBackThumbnails.length > 0 &&
+            (customBackThumbnails.length === 1 ? (
+              <div className="s">1 card above keeps its own back</div>
+            ) : (
+              <div className="s">
+                {customBackThumbnails.length} cards above keep their own back
+              </div>
+            ))}
         </ChoiceLabel>
         <ApplyButton
           type="button"

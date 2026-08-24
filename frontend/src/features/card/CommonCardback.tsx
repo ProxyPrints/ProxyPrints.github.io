@@ -12,8 +12,9 @@ import { useAppDispatch, useAppSelector } from "@/common/types";
 import { wrapIndex } from "@/common/utils";
 import { MemoizedEditorCard } from "@/features/card/Card";
 import {
-  countBackFacesAffectedByApplyAll,
+  countCardbackApplyTargets,
   resolveCustomBackSlotThumbnails,
+  resolveEligibleCardbackApplySlots,
 } from "@/features/card/cardbackApply";
 import { CardbackApplyPrompt } from "@/features/card/CardbackApplyPrompt";
 import { setUserDefaultCardback } from "@/features/card/cardbackDefaultPreference";
@@ -89,7 +90,16 @@ export function CommonCardbackGridSelector({
 
   const handleApplyAll = () => {
     if (lastPickedImage != null) {
-      dispatch(applyCardbackToAllSlots({ selectedImage: lastPickedImage }));
+      dispatch(
+        applyCardbackToAllSlots({
+          selectedImage: lastPickedImage,
+          slots: resolveEligibleCardbackApplySlots(
+            projectMembers,
+            projectCardback,
+            cardDocumentsByIdentifier
+          ),
+        })
+      );
     }
   };
   const handleSetDefault = () => {
@@ -137,10 +147,14 @@ export function CommonCardbackGridSelector({
       footerContent={
         lastPickedImage != null && (
           <CardbackApplyPrompt
-            affectedCount={countBackFacesAffectedByApplyAll(
-              projectMembers,
-              lastPickedImage
-            )}
+            affectedCount={
+              countCardbackApplyTargets(
+                projectMembers,
+                lastPickedImage,
+                projectCardback,
+                cardDocumentsByIdentifier
+              ).toUpdate
+            }
             customBackThumbnails={customBackThumbnails}
             onApplyAll={handleApplyAll}
             onSetDefault={handleSetDefault}
@@ -253,29 +267,33 @@ export function CommonCardback({ selectedImage }: CommonCardbackProps) {
 //# region cardback rail control (R9, editor-repass round)
 
 /**
- * The right rail's Cardback section on the unified display page (DisplayPage.tsx) - the R9
- * swatch-strip surface replacing the old single `CardbackToolbarButton` trigger. The strip
- * (`CardbackSwatchStrip`) IS the picker: a pick dispatches the same project-wide
- * `bulkReplaceSelectedImage`/`setSelectedCardback` pair the modal's own grid uses. The two
- * project-wide actions sit beneath the strip as plain buttons with the R9 task's exact names,
- * acting on the strip's currently-selected project cardback (the apply/set-default prompt
- * component itself is for the modal's own footer - see `CommonCardbackGridSelector`). A
- * "Browse all cardbacks…" button keeps the full `GridSelectorModal` (filters/sort/search)
- * reachable, unchanged - proposal-h's own strip + "Choose cardback…" pairing, so the modal
- * stays the page's one full-browse path and its existing test coverage keeps a host.
+ * The LEFT rail's project-wide Cardback section on the unified display page (DisplayPage.tsx,
+ * moved there from the right rail in the left-rail subject-matter round - a cardback is subject
+ * matter, not a print/export setting). The strip (`CardbackSwatchStrip`) IS the picker: a pick
+ * dispatches the same project-wide `bulkReplaceSelectedImage`/`setSelectedCardback` pair the
+ * modal's own grid uses. Rule A (project-wide application prompts before it runs, stating its
+ * blast radius) now applies here exactly as it already did in the modal's own footer - the two
+ * project-wide actions no longer fire straight off a plain button; picking a swatch surfaces the
+ * SAME `CardbackApplyPrompt` the modal's `CommonCardbackGridSelector` uses, so there is one
+ * apply/set-default surface, not two divergent ones. A "Browse all cardbacks…" button keeps the
+ * full `GridSelectorModal` (filters/sort/search) reachable, unchanged - proposal-h's own strip +
+ * "Choose cardback…" pairing, so the modal stays the page's one full-browse path and its
+ * existing test coverage keeps a host.
  */
 export function CardbackRailControl() {
   const dispatch = useAppDispatch();
   const searchResults = useAppSelector(selectCardbacks);
   const projectCardback = useAppSelector(selectProjectCardback);
+  const projectMembers = useAppSelector(selectProjectMembers);
+  const cardDocumentsByIdentifier = useCardDocumentsByIdentifier();
 
   const [showGridSelector, setShowGridSelector] = useState<boolean>(false);
-  const [applyDone, setApplyDone] = useState(false);
-  const [defaultDone, setDefaultDone] = useState(false);
+  const [lastPickedImage, setLastPickedImage] = useState<string | undefined>(
+    undefined
+  );
 
   const handleSelect = (image: string) => {
-    setApplyDone(false);
-    setDefaultDone(false);
+    setLastPickedImage(image);
     if (projectCardback != null) {
       dispatch(
         bulkReplaceSelectedImage({
@@ -289,50 +307,61 @@ export function CardbackRailControl() {
   };
 
   const handleApplyAll = () => {
-    if (projectCardback != null) {
-      dispatch(applyCardbackToAllSlots({ selectedImage: projectCardback }));
-      setApplyDone(true);
+    if (lastPickedImage != null) {
+      dispatch(
+        applyCardbackToAllSlots({
+          selectedImage: lastPickedImage,
+          slots: resolveEligibleCardbackApplySlots(
+            projectMembers,
+            projectCardback,
+            cardDocumentsByIdentifier
+          ),
+        })
+      );
     }
   };
   const handleSetDefault = () => {
-    if (projectCardback != null) {
+    if (lastPickedImage != null) {
       // Annex A-2 - seam-mocked: no real persistence layer exists for the default preference yet.
-      void setUserDefaultCardback(projectCardback);
-      setDefaultDone(true);
+      void setUserDefaultCardback(lastPickedImage);
     }
   };
   const handleShowGridSelector = () => setShowGridSelector(true);
   const handleCloseGridSelector = () => setShowGridSelector(false);
 
+  const customBackThumbnails =
+    lastPickedImage != null
+      ? resolveCustomBackSlotThumbnails(
+          projectMembers,
+          projectCardback,
+          cardDocumentsByIdentifier
+        )
+      : [];
+
   return (
     <div data-testid="cardback-rail-control">
-      <h6>Cardback (project)</h6>
       <CardbackSwatchStrip
         imageIdentifiers={searchResults}
         selectedImage={projectCardback}
         onSelect={handleSelect}
         testId="cardback-rail-strip"
       />
-      <div className="d-flex flex-wrap gap-2 mt-2">
-        <Button
-          size="sm"
-          variant={applyDone ? "outline-success" : "outline-secondary"}
-          disabled={projectCardback == null}
-          onClick={handleApplyAll}
-          data-testid="cardback-rail-apply-all-button"
-        >
-          {applyDone ? "Applied to all ✓" : "Apply to all card backs"}
-        </Button>
-        <Button
-          size="sm"
-          variant={defaultDone ? "outline-success" : "outline-secondary"}
-          disabled={projectCardback == null}
-          onClick={handleSetDefault}
-          data-testid="cardback-rail-set-default-button"
-        >
-          {defaultDone ? "Default set ✓" : "Set as my default cardback"}
-        </Button>
-      </div>
+      {lastPickedImage != null && (
+        <CardbackApplyPrompt
+          affectedCount={
+            countCardbackApplyTargets(
+              projectMembers,
+              lastPickedImage,
+              projectCardback,
+              cardDocumentsByIdentifier
+            ).toUpdate
+          }
+          customBackThumbnails={customBackThumbnails}
+          onApplyAll={handleApplyAll}
+          onSetDefault={handleSetDefault}
+          onDismiss={() => setLastPickedImage(undefined)}
+        />
+      )}
       <Button
         size="sm"
         variant="outline-light"
