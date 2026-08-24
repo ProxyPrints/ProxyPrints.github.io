@@ -193,9 +193,8 @@
  * redux state to the same `PDFProps` `PDF.tsx` already consumes, so a rail configured here (page
  * size, bleed, guides, spacing, margins, registration offset) exports exactly that sheet - no
  * modal, no second settings panel, no preview beyond the sheet itself. It reuses
- * `pdfDownload.tsx`'s `useDownloadPDF` (the same download plumbing `pages/print.tsx`'s
- * `PDFGenerator` uses) rather than reintroducing the removed item-2 inline pipeline; Save PDF to
- * Google Drive and the post-export contribution prompt remain Print-page-only, unchanged.
+ * `pdfDownload.tsx`'s own render/save-to-disk/save-to-Drive plumbing rather than reintroducing
+ * the removed item-2 inline pipeline; the post-export contribution prompt fires from here too.
  *
  * Known, deliberately-out-of-scope gap that remains for the separate Print page: this page's own
  * Page Setup controls don't carry over to the Print page's classic `PDFGenerator`, which has

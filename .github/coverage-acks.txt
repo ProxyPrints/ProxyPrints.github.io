@@ -350,3 +350,10 @@ coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF 
 # Images/Decklist items) that run runExportGate straight into the generating-progress modal, with
 # no settings step in between.
 coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - SCM cutting mode (rail) > the mode switch reveals SCM's own sub-settings in the rail's Export section, independent of the dialog — renamed to "the mode switch reveals SCM's own sub-settings in the rail's Export section" now that the dialog is deleted outright (nothing left for the rail's behaviour to be "independent of"); every reveal/hide assertion on the SCM sub-settings is unchanged, and the trailing dialog-check assertion is replaced with the equivalent check that the Export dropdown's PDF item is visible with no settings step of its own.
+
+# Waiting-surface actions round - destination (Save to disk / Save to Google Drive) is now chosen
+# AFTER PDF generation completes, not via a dedicated Export-dropdown item per destination
+# (DisplayExportPDF.tsx's own module comment). The dropdown now carries a single "PDF" trigger
+# that only renders; Save to Google Drive moved to a button in the resulting ready state, gated
+# behind the same isGoogleDriveAppConfigured() check the old dropdown item used.
+coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - Save PDF to Google Drive (rescued from /print's PDFGenerator.tsx) > the Drive button is absent when Drive isn't configured (this suite's own env), matching PDFGenerator.tsx's own isGoogleDriveAppConfigured() gate — renamed to "the Save to Google Drive action is absent when Drive isn't configured (this suite's own env), matching the old isGoogleDriveAppConfigured() gate"; same assertion intent (the Drive destination is absent, not broken, when Drive isn't configured), now checked against the post-generation Save to Google Drive button instead of the removed per-destination dropdown item.

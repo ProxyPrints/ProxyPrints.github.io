@@ -7,7 +7,7 @@ import {
   DisplayPDFPropsInput,
 } from "@/features/pdf/displayPdfProps";
 import { DEFAULT_CARD_SELECTION_MODE, PDFProps } from "@/features/pdf/PDF";
-import { downloadPDF } from "@/features/pdf/pdfDownload";
+import { renderCardsPdf } from "@/features/pdf/pdfDownload";
 import { pdfRenderService } from "@/features/pdf/pdfRenderService";
 import { APIGetTagConsensus } from "@/store/api";
 
@@ -124,14 +124,15 @@ const mockClientSearchService = {
 } as unknown as ClientSearchService;
 
 const runDownloadPDF = (props: Omit<PDFProps, "fileHandles">) =>
-  downloadPDF(
+  renderCardsPdf(
     props,
     mockClientSearchService,
     jest.fn(),
     "http://backend",
     jest.fn(),
+    jest.fn().mockResolvedValue(true),
     jest.fn()
-  );
+  ).outcome;
 
 describe("downloadPDF - bleed-prior resolution's fetch set", () => {
   beforeEach(() => {

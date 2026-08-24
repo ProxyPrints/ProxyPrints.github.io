@@ -1,21 +1,16 @@
 /**
- * The PDF download/save-to-Drive orchestration shared by every surface that generates a PDF:
- * `/print`'s `PDFGenerator.tsx` (the original home of this code) and the /display editor's own
- * export item (`DisplayExportPDF.tsx`). Extracted so the editor can reuse the exact same
- * pipeline without statically importing `PDFGenerator.tsx` — that module pulls in
- * `PDFCanvasPreview` (pdfjs-dist) and the whole settings panel, which the editor must not pay
- * for (its page has to stay fast; see `DisplayExportPDF.tsx`'s own module comment).
- *
- * Nothing here is reimplemented — every line moved verbatim from `PDFGenerator.tsx`, which now
- * imports these same functions from here. The render engine itself (`PDF.tsx`, `pdf.worker.ts`,
- * `pdfRenderService.ts`) is untouched.
+ * The PDF render/save orchestration used by the editor's export item (`DisplayExportPDF.tsx`).
+ * Generation and destination are two independent steps here, not one: `renderCardsPdf` produces
+ * a `Blob` and nothing else, and `saveCardsPdfToDisk`/`saveCardsPdfToDrive` each take that same
+ * blob and place it somewhere. A caller that picks "Save to Drive" after already rendering never
+ * re-renders - it just uploads the blob the render step already produced.
  */
 import React from "react";
 import Button from "react-bootstrap/Button";
 import Modal from "react-bootstrap/Modal";
 
 import { ClientSearchService } from "@/features/clientSearch/clientSearchService";
-import { downloadFile, useDoFileDownload } from "@/features/download/download";
+import { downloadFile } from "@/features/download/download";
 import { requestGoogleDriveWriteToken } from "@/features/googleDrive/googleDriveAuth";
 import { GoogleDriveService } from "@/features/googleDrive/GoogleDriveService";
 import { resolveBleedPriors } from "@/features/pdf/bleedPriorResolution";
@@ -46,158 +41,134 @@ export type ConfirmDespiteFailures = (
   failures: Array<ImageFetchFailure>
 ) => Promise<boolean>;
 
-export const downloadPDF = async (
+export type CardsPdfRenderOutcome =
+  | { status: "ready"; blob: Blob }
+  | { status: "declined" }
+  | { status: "cancelled" };
+
+export interface CancellableCardsPdfRender {
+  outcome: Promise<CardsPdfRenderOutcome>;
+  /** Hard-cancels the render - see pdfRenderService.terminateAndReinitialise's own comment for
+   * why this has to kill and replace the worker rather than something more surgical. Only
+   * meaningful up until `onRenderSettled` fires; the render's own CPU/network work is done by
+   * then; calling this after that point kills a worker with nothing left to cancel. */
+  cancel: () => void;
+}
+
+/**
+ * The generation step alone - produces a `Blob`, decides nothing about where it goes.
+ * `onRenderSettled` fires the instant the worker call itself resolves (before the failure-
+ * confirm step, if there is one) - a caller uses it to know cancellation is no longer possible,
+ * since there's no in-progress worker call left to cancel from that point on.
+ */
+export const renderCardsPdf = (
   props: Omit<PDFProps, "fileHandles">,
   clientSearchService: ClientSearchService,
   dispatch: AppDispatch,
   backendURL: string | null,
   setProgress: (progress: { completed: number; total: number } | null) => void,
-  confirmDespiteFailures: ConfirmDespiteFailures
-): Promise<boolean> => {
-  const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
-    props.cardDocumentsByIdentifier
-  );
-  dispatch(
-    setNotification([
-      Math.random().toString(),
-      {
-        name: "Download Started",
-        message: "Generating your PDF...",
-        level: "info",
-      },
-    ])
-  );
-  // Proposal B PR-1: resolved here (main thread, has cookie access for the CSRF header) rather
-  // than inside pdf.worker.ts, which can't fetch this itself - see bleedPriorResolution.ts's
-  // module comment. Skipped entirely (bleedPriors stays undefined) when no remote backend is
-  // configured - PDFCardImage already defaults a missing entry to the safe "unresolved" fallback.
-  const bleedPriors =
-    backendURL != null
-      ? await resolveBleedPriors(
-          backendURL,
-          computeExportedCardIdentifiers(props)
-        )
-      : undefined;
-  // Registered before the render call, not after - see pdfRenderService.onImageProgress's own
-  // comment for why. A large export can take several minutes once full-resolution fetches are
-  // paced to the image CDN's shared rate limit (see pdfImage.ts) - this is what turns that wait
-  // into "fetching images: N/M" instead of a spinner that looks hung.
-  pdfRenderService.onImageProgress((completed, total) =>
-    setProgress({ completed, total })
-  );
-  const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
-    ...props,
-    fileHandles,
-    bleedPriors,
+  confirmDespiteFailures: ConfirmDespiteFailures,
+  onRenderSettled: () => void
+): CancellableCardsPdfRender => {
+  let cancelled = false;
+  let notifyCancelled: () => void = () => undefined;
+  const cancelSignal = new Promise<"cancelled">((resolve) => {
+    notifyCancelled = () => resolve("cancelled");
   });
-  setProgress(null);
-  const failures = dedupeFailuresByIdentifier(rawFailures);
-  if (failures.length > 0 && !(await confirmDespiteFailures(failures))) {
+
+  const cancel = () => {
+    if (cancelled) {
+      return;
+    }
+    cancelled = true;
+    pdfRenderService.terminateAndReinitialise();
+    notifyCancelled();
+  };
+
+  const run = async (): Promise<CardsPdfRenderOutcome> => {
+    const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
+      props.cardDocumentsByIdentifier
+    );
     dispatch(
       setNotification([
         Math.random().toString(),
         {
-          name: "Download Cancelled",
-          message: `${failures.length} card image${
-            failures.length === 1 ? "" : "s"
-          } failed to load - PDF was not downloaded.`,
-          level: "warning",
+          name: "Generating PDF",
+          message: "Generating your PDF...",
+          level: "info",
         },
       ])
     );
-    return false;
-  }
+    // Proposal B PR-1: resolved here (main thread, has cookie access for the CSRF header) rather
+    // than inside pdf.worker.ts, which can't fetch this itself - see bleedPriorResolution.ts's
+    // module comment. Skipped entirely (bleedPriors stays undefined) when no remote backend is
+    // configured - PDFCardImage already defaults a missing entry to the safe "unresolved" fallback.
+    const bleedPriors =
+      backendURL != null
+        ? await resolveBleedPriors(
+            backendURL,
+            computeExportedCardIdentifiers(props)
+          )
+        : undefined;
+    // Registered before the render call, not after - see pdfRenderService.onImageProgress's own
+    // comment for why. A large export can take several minutes once full-resolution fetches are
+    // paced to the image CDN's shared rate limit (see pdfImage.ts) - this is what turns that wait
+    // into "fetching images: N/M" instead of a spinner that looks hung.
+    pdfRenderService.onImageProgress((completed, total) =>
+      setProgress({ completed, total })
+    );
+    if (cancelled) {
+      return { status: "cancelled" };
+    }
+    const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
+      ...props,
+      fileHandles,
+      bleedPriors,
+    });
+    setProgress(null);
+    onRenderSettled();
+    if (cancelled) {
+      return { status: "cancelled" };
+    }
+    const failures = dedupeFailuresByIdentifier(rawFailures);
+    if (failures.length > 0 && !(await confirmDespiteFailures(failures))) {
+      dispatch(
+        setNotification([
+          Math.random().toString(),
+          {
+            name: "Export Cancelled",
+            message: `${failures.length} card image${
+              failures.length === 1 ? "" : "s"
+            } failed to load - PDF was not generated.`,
+            level: "warning",
+          },
+        ])
+      );
+      return { status: "declined" };
+    }
+    return { status: "ready", blob };
+  };
+
+  const outcome = Promise.race([
+    run(),
+    cancelSignal.then((): CardsPdfRenderOutcome => ({ status: "cancelled" })),
+  ]);
+  return { outcome, cancel };
+};
+
+/** Places an already-rendered blob on disk - the destination half of the old `downloadPDF`,
+ * split out so choosing it never re-renders a document that already exists. */
+export const saveCardsPdfToDisk = async (
+  blob: Blob,
+  clientSearchService: ClientSearchService
+): Promise<boolean> => {
   await downloadFile(blob, undefined, "cards.pdf", clientSearchService);
   return true;
 };
 
-export const useDownloadPDF = (
-  props: Omit<PDFProps, "fileHandles">,
-  clientSearchService: ClientSearchService,
-  dispatch: AppDispatch,
-  setIsDownloading: (newState: boolean) => void,
-  backendURL: string | null,
-  setProgress: (progress: { completed: number; total: number } | null) => void,
-  confirmDespiteFailures: ConfirmDespiteFailures
-) => {
-  const doFileDownload = useDoFileDownload();
-  return () =>
-    Promise.resolve(setIsDownloading(true))
-      .then(() =>
-        doFileDownload(
-          "pdf",
-          "cards.pdf",
-          (): Promise<boolean> =>
-            downloadPDF(
-              props,
-              clientSearchService,
-              dispatch,
-              backendURL,
-              setProgress,
-              confirmDespiteFailures
-            )
-        )
-      )
-      .finally(() => {
-        setIsDownloading(false);
-        setProgress(null);
-      });
-};
-
-export const saveToDrivePDF = async (
-  props: Omit<PDFProps, "fileHandles">,
-  clientSearchService: ClientSearchService,
-  dispatch: AppDispatch,
-  backendURL: string | null,
-  setProgress: (progress: { completed: number; total: number } | null) => void,
-  confirmDespiteFailures: ConfirmDespiteFailures
-): Promise<boolean> => {
-  const fileHandles = await clientSearchService.getFileHandlesByIdentifier(
-    props.cardDocumentsByIdentifier
-  );
-  dispatch(
-    setNotification([
-      Math.random().toString(),
-      {
-        name: "Saving to Google Drive",
-        message: "Generating your PDF...",
-        level: "info",
-      },
-    ])
-  );
-  // See downloadPDF's identical step for why this runs here, not inside the worker.
-  const bleedPriors =
-    backendURL != null
-      ? await resolveBleedPriors(
-          backendURL,
-          computeExportedCardIdentifiers(props)
-        )
-      : undefined;
-  pdfRenderService.onImageProgress((completed, total) =>
-    setProgress({ completed, total })
-  );
-  const { blob, failures: rawFailures } = await pdfRenderService.renderPDF({
-    ...props,
-    fileHandles,
-    bleedPriors,
-  });
-  setProgress(null);
-  const failures = dedupeFailuresByIdentifier(rawFailures);
-  if (failures.length > 0 && !(await confirmDespiteFailures(failures))) {
-    dispatch(
-      setNotification([
-        Math.random().toString(),
-        {
-          name: "Save Cancelled",
-          message: `${failures.length} card image${
-            failures.length === 1 ? "" : "s"
-          } failed to load - PDF was not saved.`,
-          level: "warning",
-        },
-      ])
-    );
-    return false;
-  }
+/** Places an already-rendered blob in the user's Google Drive - the destination half of the old
+ * `saveToDrivePDF`, split out for the same reason as `saveCardsPdfToDisk`. */
+export const saveCardsPdfToDrive = async (blob: Blob): Promise<boolean> => {
   const token = await requestGoogleDriveWriteToken(
     process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID as string
   );
@@ -206,57 +177,7 @@ export const saveToDrivePDF = async (
     blob,
     mimeType: "application/pdf",
   });
-  dispatch(
-    setNotification([
-      Math.random().toString(),
-      {
-        name: "Saved to Google Drive",
-        message: "cards.pdf was saved to your Google Drive.",
-        level: "info",
-      },
-    ])
-  );
   return true;
-};
-
-export const useSaveToDrivePDF = (
-  props: Omit<PDFProps, "fileHandles">,
-  clientSearchService: ClientSearchService,
-  dispatch: AppDispatch,
-  setIsSavingToDrive: (newState: boolean) => void,
-  backendURL: string | null,
-  setProgress: (progress: { completed: number; total: number } | null) => void,
-  confirmDespiteFailures: ConfirmDespiteFailures
-) => {
-  return () =>
-    Promise.resolve(setIsSavingToDrive(true))
-      .then(() =>
-        saveToDrivePDF(
-          props,
-          clientSearchService,
-          dispatch,
-          backendURL,
-          setProgress,
-          confirmDespiteFailures
-        )
-      )
-      .catch((reason) =>
-        dispatch(
-          setNotification([
-            Math.random().toString(),
-            {
-              name: "Saving to Google Drive Failed",
-              message:
-                reason instanceof Error ? reason.message : String(reason),
-              level: "error",
-            },
-          ])
-        )
-      )
-      .finally(() => {
-        setIsSavingToDrive(false);
-        setProgress(null);
-      });
 };
 
 export interface ImageFailureConfirmModalProps {

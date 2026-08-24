@@ -6,15 +6,32 @@ import type { PDFWorker, RenderPDFResult } from "./pdf.worker";
 
 export class PDFRenderService {
   worker: Remote<PDFWorker> | undefined;
+  private rawWorker: Worker | undefined;
   constructor() {
     this.worker = undefined;
+    this.rawWorker = undefined;
   }
 
   public initialiseWorker() {
     const worker = new Worker(new URL("./pdf.worker.ts", import.meta.url), {
       type: "module",
     });
+    this.rawWorker = worker;
     this.worker = wrap<PDFWorker>(worker);
+  }
+
+  /** Hard-cancels whatever renderPDF call is currently in flight on this worker. There's no
+   * cooperative cancellation channel into @react-pdf/renderer's own render loop (no
+   * AbortSignal it reads), so the only way to actually stop the in-progress work - not just
+   * stop waiting on it - is to kill the worker thread outright and stand up a fresh one so the
+   * next render call has somewhere to run. Any comlink RPC promise still pending against the
+   * killed worker (there shouldn't be one once callers race their own await against this) never
+   * settles, but the worker itself, and everything it was holding, is gone. */
+  public terminateAndReinitialise(): void {
+    this.rawWorker?.terminate();
+    this.rawWorker = undefined;
+    this.worker = undefined;
+    this.initialiseWorker();
   }
 
   public renderPDF(props: PDFProps): Promise<RenderPDFResult> {

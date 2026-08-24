@@ -9,6 +9,7 @@ import {
 
 import { test } from "../playwright.setup";
 import {
+  completePdfExportToDisk,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
 } from "./test-utils";
@@ -57,20 +58,17 @@ test.describe("Unsaved-work guard (priority bug fix)", () => {
       void dialog.dismiss();
     });
 
-    const [download] = await Promise.all([
-      page.waitForEvent("download", { timeout: 30_000 }),
-      (async () => {
-        await page.getByTestId("display-export-menu-toggle").click();
-        await page.getByTestId("display-export-pdf-button").click();
+    await page.getByTestId("display-export-menu-toggle").click();
+    await page.getByTestId("display-export-pdf-button").click();
 
-        // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still riding
-        // the untouched default cardback, so the reminder gate fires first; "Use current &
-        // continue" proceeds with the export itself.
-        const cardbackGate = page.getByTestId("pre-print-cardback-gate");
-        await expect(cardbackGate).toBeVisible();
-        await cardbackGate.getByTestId("cardback-gate-use-current").click();
-      })(),
-    ]);
+    // Cardback flow round (SPEC-cardback-pdfwait.md §C.1) - a fresh project is still riding
+    // the untouched default cardback, so the reminder gate fires first; "Use current &
+    // continue" proceeds with the export itself.
+    const cardbackGate = page.getByTestId("pre-print-cardback-gate");
+    await expect(cardbackGate).toBeVisible();
+    await cardbackGate.getByTestId("cardback-gate-use-current").click();
+
+    const download = await completePdfExportToDisk(page);
     // A real download completed with the deck's own card, not an empty/failed export that
     // merely happened not to show a dialog - the store genuinely stayed populated in place
     // (no navigation ever happens for this flow any more).
