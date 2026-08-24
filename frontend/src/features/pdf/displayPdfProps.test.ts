@@ -342,20 +342,59 @@ describe("buildDisplayPDFProps - card selection mode and page range map straight
     expect(props.cardSelectionMode).toBe("backsOnly");
   });
 
-  it("page range maps straight through, undefined by default (all pages)", () => {
-    expect(buildDisplayPDFProps(baseInput).pageRangeStart).toBeUndefined();
-    expect(buildDisplayPDFProps(baseInput).pageRangeEnd).toBeUndefined();
+  it("page range is undefined by default (all sheets), for both the PDF page range and projectMembers", () => {
+    const props = buildDisplayPDFProps(baseInput);
+    expect(props.pageRangeStart).toBeUndefined();
+    expect(props.pageRangeEnd).toBeUndefined();
+    expect(props.projectMembers).toEqual(baseInput.projectMembers);
+  });
+});
 
+describe("buildDisplayPDFProps - page range is a SHEET range for the standard grid, not a raw PDF page range", () => {
+  const members: DisplayPDFPropsInput["projectMembers"] = Array.from(
+    { length: 12 },
+    (_, i) => ({
+      id: `member-${i}`,
+      front: {
+        query: { cardType: CardType.Card, query: `q-${i}` },
+        selectedImage: `front-${i}`,
+        selected: true,
+      },
+      back: null,
+    })
+  );
+
+  it("a sheet range restricts projectMembers to that sheet's own slots and clears the PDF page range fields", () => {
+    // LETTER/rearFeed/default spacing is this file's own documented 4x2 grid (8 cards/sheet) -
+    // sheet 2 of a 12-member deck is members 8-11, the deck's trailing partial sheet.
     const props = buildDisplayPDFProps({
       ...baseInput,
+      projectMembers: members,
       sheetSettings: {
         ...DEFAULT_SHEET_SETTINGS,
         pageRangeStart: 2,
-        pageRangeEnd: 4,
+        pageRangeEnd: 2,
+      },
+    });
+    expect(props.pageRangeStart).toBeUndefined();
+    expect(props.pageRangeEnd).toBeUndefined();
+    expect(props.projectMembers).toEqual(members.slice(8, 12));
+  });
+
+  it("SCM mode keeps its own, pre-existing reading of the page range untouched", () => {
+    const props = buildDisplayPDFProps({
+      ...baseInput,
+      projectMembers: members,
+      sheetSettings: {
+        ...DEFAULT_SHEET_SETTINGS,
+        scmMode: true,
+        pageRangeStart: 2,
+        pageRangeEnd: 2,
       },
     });
     expect(props.pageRangeStart).toBe(2);
-    expect(props.pageRangeEnd).toBe(4);
+    expect(props.pageRangeEnd).toBe(2);
+    expect(props.projectMembers).toEqual(members);
   });
 });
 
