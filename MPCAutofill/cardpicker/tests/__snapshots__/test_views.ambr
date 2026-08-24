@@ -443,16 +443,6 @@
     'status_code': 400,
   })
 # ---
-# name: TestGetSplitCardNames.test_post_request
-  dict({
-    'json': dict({
-      'errors': None,
-      'message': 'Expected GET request.',
-      'name': 'Bad request',
-    }),
-    'status_code': 400,
-  })
-# ---
 # name: TestGetTags.test_post_request
   dict({
     'json': dict({

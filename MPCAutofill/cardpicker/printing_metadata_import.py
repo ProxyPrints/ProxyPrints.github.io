@@ -41,9 +41,14 @@ DOUBLE_FACED_LAYOUTS = frozenset({"transform", "modal_dfc", "double_faced_token"
 # The single-faced layouts (per DOUBLE_FACED_LAYOUTS' own comment) whose `name` field is still
 # Scryfall's " // "-joined compound of both named modes, e.g. "Fire // Ice" or "Bonecrusher
 # Giant // Stomp" - `mutate`/`prototype` also nest multiple modes under `card_faces` but don't
-# use this naming convention, so they're excluded here. get_split_style_compound_names uses this
-# to tell the frontend's import parser which "X // Y" lines are one card's real printed name
-# rather than a manual front/back query override (see processing.ts's FaceSeparator).
+# use this naming convention, so they're excluded here. This is the canonical bucket definition
+# the frontend's `SplitStyleLayouts` (common/constants.ts) independently mirrors: a card whose
+# resolved `layout` (CanonicalPrintingMetadata.layout, serialised onto Card.layout) falls in
+# this set has exactly one physical face despite its " // "-joined name, so the import parser's
+# listenerMiddleware.ts clears any query typed against a second face rather than resolving it
+# to an unrelated card. No longer consumed by any endpoint here - the frontend used to ask for
+# the full name list up front (`get_split_style_compound_names`, since removed) and match
+# against it at parse time, before the ordering problem that routing on `layout` instead solves.
 SPLIT_STYLE_LAYOUTS = frozenset({"split", "adventure", "flip", "aftermath"})
 
 
@@ -84,7 +89,7 @@ class PrintingMetadataRow(BaseModel):
     # is actually printed on the back of the physical card). See DOUBLE_FACED_LAYOUTS' own comment.
     layout: str = ""
     # The card's full printed name - for SPLIT_STYLE_LAYOUTS this is Scryfall's own
-    # " // "-joined compound (e.g. "Fire // Ice"), used by get_split_style_compound_names below.
+    # " // "-joined compound (e.g. "Fire // Ice"). See SPLIT_STYLE_LAYOUTS' own comment above.
     name: str = ""
 
     @property
@@ -345,40 +350,6 @@ def is_back_face(name: str, default_cards_path: Path | None = None) -> bool:
     a caller pulling the whole set themselves.
     """
     return name in get_back_face_names(default_cards_path)
-
-
-@lru_cache(maxsize=8)
-def _load_split_style_compound_names(path_str: str) -> frozenset[str]:
-    """
-    Cached worker behind `get_split_style_compound_names`, mirroring `_load_back_face_names`'s
-    per-path caching (see that function's own docstring).
-    """
-    path = Path(path_str)
-    if not path.exists():
-        logger.warning(
-            "Scryfall bulk-data file not found at %s - split-style compound name lookup "
-            "returning an empty set (no network fetch is performed here)",
-            path,
-        )
-        return frozenset()
-
-    compound_names: set[str] = set()
-    for row in _parse_rows(path):
-        if row.layout not in SPLIT_STYLE_LAYOUTS:
-            continue
-        if row.name:
-            compound_names.add(row.name)
-    return frozenset(compound_names)
-
-
-def get_split_style_compound_names(default_cards_path: Path | None = None) -> frozenset[str]:
-    """
-    Every full printed name (e.g. "Fire // Ice") of a SPLIT_STYLE_LAYOUTS card, built from the
-    Scryfall bulk data already on disk - same source, same no-fetch/empty-on-missing contract as
-    `get_back_face_names`.
-    """
-    path = default_cards_path or _cache_path()
-    return _load_split_style_compound_names(str(path))
 
 
 # The fields `_sync_printing_metadata` writes on CanonicalPrintingMetadata - the single source

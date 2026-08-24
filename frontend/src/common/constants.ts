@@ -99,6 +99,20 @@ export const CardTypeSeparator = ":";
 export const FaceSeparator = "// ";
 export const FaceSeparatorRegexEscaped = "s//s";
 
+// Mirrors the backend's `printing_metadata_import.SPLIT_STYLE_LAYOUTS` - Scryfall layouts whose
+// physical card has exactly one face despite a " // "-joined `name` (e.g. "Fire // Ice"),
+// textually identical to the manual front/back override syntax FaceSeparator implements above.
+// A slot whose front resolves to one of these layouts has no second face to search
+// independently - see listenerMiddleware.ts's own back-query suppression, which is what
+// actually routes on this set (the parser itself no longer decides split-vs-directive at all;
+// see processing.ts's removal of its old name-list lookup).
+export const SplitStyleLayouts: ReadonlySet<string> = new Set([
+  "split",
+  "adventure",
+  "flip",
+  "aftermath",
+]);
+
 export const CardTypePrefixes: { [prefix: string]: CardType } = {
   "": Card,
   b: Cardback,

@@ -921,18 +921,6 @@ class TestGetDFCPairs:
         assert response.status_code == 400
 
 
-class TestGetSplitCardNames:
-    def test_get_returns_names_from_bulk_data(self, client, django_settings, monkeypatch):
-        monkeypatch.setattr(views, "get_split_style_compound_names", lambda: frozenset({"Wear // Tear", "Fire // Ice"}))
-        response = client.get(reverse(views.get_split_card_names))
-        assert response.json() == {"names": ["Fire // Ice", "Wear // Tear"]}
-
-    def test_post_request(self, client, django_settings, snapshot):
-        response = client.post(reverse(views.get_split_card_names))
-        snapshot_response(response, snapshot)
-        assert response.status_code == 400
-
-
 class TestGetLanguages:
     def test_get_zero_languages(self, client, django_settings):
         response = client.get(reverse(views.get_languages))

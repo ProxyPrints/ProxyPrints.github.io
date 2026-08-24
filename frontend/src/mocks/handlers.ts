@@ -185,6 +185,25 @@ export const cardDocumentsThreeResults = http.post(buildRoute("2/cards/"), () =>
   )
 );
 
+// cardDocument1 carries a real split-style `layout` here (the fixture itself has none set) -
+// used by the split-card-import spec to exercise listenerMiddleware's layout-based back-query
+// suppression against a resolved front CardDocument, same shape a real /2/cards/ response for a
+// split card would have.
+export const cardDocumentsThreeResultsWithSplitCardLayout = http.post(
+  buildRoute("2/cards/"),
+  () =>
+    HttpResponse.json(
+      {
+        results: {
+          [cardDocument1.identifier]: { ...cardDocument1, layout: "split" },
+          [cardDocument2.identifier]: cardDocument2,
+          [cardDocument3.identifier]: cardDocument3,
+        },
+      },
+      { status: 200 }
+    )
+);
+
 export const cardDocumentsFourResults = http.post(buildRoute("2/cards/"), () =>
   HttpResponse.json(
     {
@@ -437,9 +456,10 @@ export const searchResultsOneResult = http.post(
     )
 );
 
-// processQuery strips "/" as punctuation, so a split card's own compound name (e.g.
-// "Fire // Ice") arrives here as "fire ice" once isKnownSingleFacedCompoundName has kept it
-// from being split into a front/back pair - see processing.ts's own handling.
+// "Fire // Ice" always parses as two independent queries now ("fire" / "ice" - see
+// processing.ts), so only the front query needs a real result here: listenerMiddleware's
+// layout-based suppression (triggered by cardDocumentsThreeResultsWithSplitCardLayout's
+// layout="split" front) clears the back query before it's ever searched.
 export const searchResultsForSplitCardName = http.post(
   buildRoute("3/editorSearch/"),
   () =>
@@ -447,7 +467,7 @@ export const searchResultsForSplitCardName = http.post(
       {
         results: {
           [computeSearchQueryHashKey({
-            query: "fire ice",
+            query: "fire",
             cardType: CardType.Card,
           })]: [cardDocument1.identifier],
         },
@@ -776,25 +796,6 @@ export const dfcPairsMatchingCards1And4 = http.get(
 
 export const dfcPairsServerError = http.get(buildRoute("2/DFCPairs/"), () =>
   HttpResponse.json(createError("2/DFCPairs"), { status: 500 })
-);
-
-//# endregion
-
-//# region split card names
-
-export const splitCardNamesNoResults = http.get(
-  buildRoute("2/SplitCardNames/"),
-  () => HttpResponse.json({ names: [] }, { status: 200 })
-);
-
-export const splitCardNamesMatchingFireIce = http.get(
-  buildRoute("2/SplitCardNames/"),
-  () => HttpResponse.json({ names: ["Fire // Ice"] }, { status: 200 })
-);
-
-export const splitCardNamesServerError = http.get(
-  buildRoute("2/SplitCardNames/"),
-  () => HttpResponse.json(createError("2/SplitCardNames"), { status: 500 })
 );
 
 //# endregion
@@ -2236,7 +2237,6 @@ export const defaultHandlers = [
   cardbacksNoResults,
   searchResultsNoResults,
   dfcPairsNoResults,
-  splitCardNamesNoResults,
   languagesTwoResults,
   tagsNoResults,
   importSitesOneResult,

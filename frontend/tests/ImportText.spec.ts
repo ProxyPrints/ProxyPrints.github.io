@@ -15,6 +15,7 @@ import {
   cardDocumentsFourResults,
   cardDocumentsSixResults,
   cardDocumentsThreeResults,
+  cardDocumentsThreeResultsWithSplitCardLayout,
   cardDocumentsWithResolvedPrintingMatch,
   defaultHandlers,
   dfcPairsMatchingCards1And4,
@@ -26,7 +27,6 @@ import {
   searchResultsSixResults,
   sourceDocumentsOneResult,
   sourceDocumentsThreeResults,
-  splitCardNamesMatchingFireIce,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -263,18 +263,20 @@ test.describe("ImportText", () => {
     network,
   }) => {
     network.use(
-      cardDocumentsThreeResults,
+      cardDocumentsThreeResultsWithSplitCardLayout,
       cardbacksTwoOtherResults,
       sourceDocumentsOneResult,
       searchResultsForSplitCardName,
-      splitCardNamesMatchingFireIce,
       ...defaultHandlers
     );
     await loadPageWithDefaultBackend(page);
 
-    // "Fire // Ice" is a real split card's own printed name, not a front/back override -
-    // this must resolve to three slots of the SAME card, not one slot split into a front of
-    // "Fire" and a back of "Ice"
+    // "Fire // Ice" is a real split card's own printed name, not a front/back override. It
+    // parses as two independent queries ("fire" / "ice") same as any other line, but the
+    // front query resolves to a card whose layout is "split" - once that's known, the back
+    // query is cleared rather than resolving to an unrelated card, so this must land as
+    // three slots of the SAME card, not one slot split into a front of "Fire" and a back of
+    // "Ice".
     await importTextOnEditorLanding(page, "3x Fire // Ice");
 
     await expectDisplaySheetSlotStates(
