@@ -111,6 +111,7 @@ from cardpicker.pilot_run_lifecycle import (
 from cardpicker.printing_consensus import (
     NO_MATCH,
     identity_group_cards,
+    identity_group_expanded_card_ids,
     identity_group_key,
     resolve_and_persist_printing,
     resolve_printing,
@@ -130,6 +131,37 @@ DEFAULT_BATCH_SIZE = 500
 def _chunked(items: list[int], size: int) -> Iterator[list[int]]:
     for i in range(0, len(items), size):
         yield items[i : i + size]
+
+
+def _parse_card_ids_argument(raw: str) -> list[int]:
+    """
+    Parses `--card-ids`: a comma-separated list of `Card` pks ("101,102,103"), or `@<path>` to
+    read a larger list from a file (newline- and/or comma-separated, blank lines ignored) - the
+    `@file` convention argparse itself uses for `fromfile_prefix_chars`, adopted here by hand
+    instead because this value also needs comma-splitting, which that mechanism doesn't offer.
+    """
+    if raw.startswith("@"):
+        path = raw[1:]
+        try:
+            with open(path) as fh:
+                text = fh.read()
+        except OSError as exc:
+            raise CommandError(f"--card-ids: could not read {path!r}: {exc}")
+    else:
+        text = raw
+
+    ids: list[int] = []
+    for token in text.replace("\n", ",").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            ids.append(int(token))
+        except ValueError:
+            raise CommandError(f"--card-ids: {token!r} is not a valid Card id (expected an integer pk).")
+    if not ids:
+        raise CommandError("--card-ids: no card ids parsed from input.")
+    return ids
 
 
 def _would_be_printing_status(card: Card, group_card_ids: Sequence[int] | None = None) -> str:
@@ -254,7 +286,13 @@ def _record_transition(section: dict[str, Any], before: Any, after: Any, sample:
             section["samples"][key].append(sample)
 
 
-def _recompute_printing(report: dict[str, Any], apply: bool, batch_size: int, sample_limit: int) -> None:
+def _recompute_printing(
+    report: dict[str, Any],
+    apply: bool,
+    batch_size: int,
+    sample_limit: int,
+    scope_card_ids: set[int] | None = None,
+) -> None:
     """
     Iterates md5 identity GROUPS once each, not their members N times (issue #473): the group's
     pooled tally resolves to one outcome and `resolve_and_persist_printing` writes that outcome
@@ -271,9 +309,21 @@ def _recompute_printing(report: dict[str, Any], apply: bool, batch_size: int, sa
     A checksum-less catalogue (every card a group of one - and, until #473's PR-1 lands, that is
     every card) keys every card to its own pk, so `seen_group_keys` never skips anything and this
     walks exactly the cards, queries, writes, and counters it walked before #473.
+
+    `scope_card_ids` (issue #931), when given, is ALREADY the full identity-group expansion of
+    whatever the caller requested (`Command.handle` computes it via
+    `identity_group_expanded_card_ids`, never this function) - it restricts which root candidates
+    this loop visits, not what a visited group resolves against: `identity_group_cards(card)`
+    below still derives and pools the FULL group regardless of this filter, so a scoped run
+    persists the identical verdict a full run would for every group it touches. The filter's own
+    job is only to make sure a group is reached at all when the requested card itself carries no
+    votes but a sibling does - see this module's own `_parse_card_ids_argument`.
     """
     section = report["printing"]
-    card_ids = list(Card.objects.filter(printing_tags__isnull=False).values_list("id", flat=True).distinct())
+    card_ids_qs = Card.objects.filter(printing_tags__isnull=False)
+    if scope_card_ids is not None:
+        card_ids_qs = card_ids_qs.filter(pk__in=scope_card_ids)
+    card_ids = list(card_ids_qs.values_list("id", flat=True).distinct())
     seen_group_keys: set[Hashable] = set()
     for batch_ids in _chunked(card_ids, batch_size):
         with transaction.atomic():
@@ -298,9 +348,18 @@ def _recompute_printing(report: dict[str, Any], apply: bool, batch_size: int, sa
                         _record_transition(section, before, after, member.identifier, sample_limit)
 
 
-def _recompute_artist(report: dict[str, Any], apply: bool, batch_size: int, sample_limit: int) -> None:
+def _recompute_artist(
+    report: dict[str, Any],
+    apply: bool,
+    batch_size: int,
+    sample_limit: int,
+    scope_card_ids: set[int] | None = None,
+) -> None:
     section = report["artist"]
-    card_ids = list(Card.objects.filter(artist_votes__isnull=False).values_list("id", flat=True).distinct())
+    card_ids_qs = Card.objects.filter(artist_votes__isnull=False)
+    if scope_card_ids is not None:
+        card_ids_qs = card_ids_qs.filter(pk__in=scope_card_ids)
+    card_ids = list(card_ids_qs.values_list("id", flat=True).distinct())
     for batch_ids in _chunked(card_ids, batch_size):
         with transaction.atomic():
             cards = Card.objects.filter(pk__in=batch_ids).prefetch_related("artist_votes")
@@ -316,9 +375,18 @@ def _recompute_artist(report: dict[str, Any], apply: bool, batch_size: int, samp
                 _record_transition(section, before, after, card.identifier, sample_limit)
 
 
-def _recompute_tag(report: dict[str, Any], apply: bool, batch_size: int, sample_limit: int) -> None:
+def _recompute_tag(
+    report: dict[str, Any],
+    apply: bool,
+    batch_size: int,
+    sample_limit: int,
+    scope_card_ids: set[int] | None = None,
+) -> None:
     section = report["tag"]
-    card_ids = list(CardTagVote.objects.values_list("card_id", flat=True).distinct())
+    tag_votes_qs = CardTagVote.objects.all()
+    if scope_card_ids is not None:
+        tag_votes_qs = tag_votes_qs.filter(card_id__in=scope_card_ids)
+    card_ids = list(tag_votes_qs.values_list("card_id", flat=True).distinct())
     moderator_ids = get_moderator_user_ids()
 
     for batch_ids in _chunked(card_ids, batch_size):
@@ -364,7 +432,10 @@ def _recompute_tag(report: dict[str, Any], apply: bool, batch_size: int, sample_
 
 
 def run_consensus_recompute(
-    apply: bool = False, batch_size: int = DEFAULT_BATCH_SIZE, sample_limit: int = DEFAULT_SAMPLE_LIMIT
+    apply: bool = False,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    sample_limit: int = DEFAULT_SAMPLE_LIMIT,
+    scope_card_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     """
     Returns the same report shape `consensus_impact_report.compute_consensus_impact_report`
@@ -378,11 +449,17 @@ def run_consensus_recompute(
     for every voted pair, batched `batch_size` cards at a time, each batch in its own database
     transaction - see this module's own docstring for the idempotence and ES-side-effect
     reasoning.
+
+    `scope_card_ids` (issue #931), when given, restricts all three domains to that set of card
+    pks - the caller (`Command.handle`) is responsible for having already widened it to the full
+    identity-group expansion of whatever the user actually requested via
+    `identity_group_expanded_card_ids`, so this function never sees a partial group. `None` (the
+    default) is the unscoped, whole-catalogue behaviour this command always had before #931.
     """
     report = _new_report()
-    _recompute_printing(report, apply, batch_size, sample_limit)
-    _recompute_artist(report, apply, batch_size, sample_limit)
-    _recompute_tag(report, apply, batch_size, sample_limit)
+    _recompute_printing(report, apply, batch_size, sample_limit, scope_card_ids)
+    _recompute_artist(report, apply, batch_size, sample_limit, scope_card_ids)
+    _recompute_tag(report, apply, batch_size, sample_limit, scope_card_ids)
     return report
 
 
@@ -424,10 +501,23 @@ class Command(BaseCommand):
             help=f"Max sample identifiers recorded per transition (default {DEFAULT_SAMPLE_LIMIT}).",
         )
         parser.add_argument("--run-id", default=None, help="Reuse a specific run_id. Default: freshly generated.")
-        # Forced-dry-run guard (issue #362, Phase 0 rails): this command always operates over the
-        # WHOLE voted pool (printing/artist/tag) - no caller-chosen cohort narrower than "the
-        # whole command", matching local_calculate_verdicts's own reasoning - so the guard below
-        # always passes scope=None.
+        parser.add_argument(
+            "--card-ids",
+            default=None,
+            help="Restrict this run to a set of Card pks (issue #931): a comma-separated list "
+            "('101,102,103') or '@<path>' to read a larger list from a file (newline- and/or "
+            "comma-separated). Each requested card is widened to its full combined identity "
+            "group (identity_group_expanded_card_ids) before the run starts, so a sibling card "
+            "that holds the actual votes is still found and pooled correctly even if only its "
+            "identity-group partner was named. Default: unscoped (every voted card, as before).",
+        )
+        # Forced-dry-run guard (issue #362, Phase 0 rails): `scope=None` below is UNCHANGED by
+        # --card-ids. This command's guard has always matched on `command` alone (no per-run
+        # cohort was possible before #931), and that is deliberately left as-is here rather than
+        # widened to also compare --card-ids: any COMPLETED dry-run of this command within the
+        # window still satisfies --apply, scoped or not, and a scoped --apply is therefore not
+        # currently forced to have been preceded by a dry-run of that SAME scope - see this
+        # change's own PR description for why that gap is left open rather than closed silently.
         add_dry_run_guard_arguments(parser, write_flag="--apply")
 
     def handle(self, *args: Any, **kwargs: Any) -> None:
@@ -446,9 +536,21 @@ class Command(BaseCommand):
         dry_run = not apply
         run_id = kwargs["run_id"] or generate_run_id()
 
+        requested_card_ids: list[int] | None = None
+        scope_card_ids: set[int] | None = None
+        if kwargs["card_ids"] is not None:
+            requested_card_ids = _parse_card_ids_argument(kwargs["card_ids"])
+            scope_card_ids = identity_group_expanded_card_ids(requested_card_ids)
+
         mode = "APPLY" if apply else "DRY RUN"
         suffix = "" if apply else " - zero writes will occur."
-        print(f"[{mode}] consensus_recompute run_id={run_id} --batch-size={batch_size}{suffix}")
+        scope_suffix = ""
+        if requested_card_ids is not None and scope_card_ids is not None:
+            scope_suffix = (
+                f" --card-ids={len(requested_card_ids)} requested -> {len(scope_card_ids)} after "
+                "identity-group expansion"
+            )
+        print(f"[{mode}] consensus_recompute run_id={run_id} --batch-size={batch_size}{scope_suffix}{suffix}")
 
         skip_used = enforce_dry_run_precondition(
             command="consensus_recompute",
@@ -458,17 +560,31 @@ class Command(BaseCommand):
             scope=None,
         )
 
+        initial_ledger_counters = initial_counters(skip_dryrun_check_used=skip_used)
+        if requested_card_ids is not None and scope_card_ids is not None:
+            initial_ledger_counters = merge_counters(
+                initial_ledger_counters,
+                {
+                    "card_scope": {
+                        "requested_card_ids": len(requested_card_ids),
+                        "expanded_card_ids": len(scope_card_ids),
+                    }
+                },
+            )
+
         ledger = PilotRunLedger.objects.create(
             run_id=run_id,
             command="consensus_recompute",
             dry_run=dry_run,
             status=PilotRunLedger.Status.RUNNING,
             git_sha=get_baked_git_sha(),
-            counters=initial_counters(skip_dryrun_check_used=skip_used),
+            counters=initial_ledger_counters,
         )
 
         try:
-            report = run_consensus_recompute(apply=apply, batch_size=batch_size, sample_limit=sample_limit)
+            report = run_consensus_recompute(
+                apply=apply, batch_size=batch_size, sample_limit=sample_limit, scope_card_ids=scope_card_ids
+            )
 
             total_written = sum(report[kind]["written"] for kind in ("printing", "artist", "tag"))
             total_changed = sum(sum(report[kind]["transitions"].values()) for kind in ("printing", "artist", "tag"))
