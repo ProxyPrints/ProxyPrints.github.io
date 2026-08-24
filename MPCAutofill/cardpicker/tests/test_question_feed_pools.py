@@ -251,6 +251,11 @@ class TestBuildPoolCold:
         illustration_id = uuid.uuid4()
         CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=illustration_id)
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        # a second, distinct-illustration printing of the same name - what makes the ranked
+        # candidate set the pool's own gate checks (`_illustration_item`) a genuine multi-way
+        # choice, not a collapse to one candidate.
+        second_printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=second_printing, illustration_id=uuid.uuid4())
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
         assert PoolEntry(kind=KIND_ILLUSTRATION, card_id=card.pk, reason="tier_4_fresh_illustration") in without_scores(
@@ -259,6 +264,20 @@ class TestBuildPoolCold:
 
     def test_excludes_a_card_with_no_illustration_data_at_all(self, db):
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        warm_pool_cache(LANE_COLD)
+        entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
+        assert all(entry.card_id != card.pk for entry in entries if entry.kind == KIND_ILLUSTRATION)
+
+    def test_excludes_a_card_whose_candidates_collapse_to_one_illustration(self, db):
+        """FAILS against pre-fix code: the coarse admission filter
+        (`illustration_id__isnull=False` on SOME cast printing tag) admits this card, but its
+        actual ranked candidate set (what `_illustration_item` renders from) is a single
+        printing - not a multi-way choice - so it must never be materialised into a
+        `KIND_ILLUSTRATION` pool entry."""
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=uuid.uuid4())
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
         warm_pool_cache(LANE_COLD)
         entries = caches[SHARED_CACHE_ALIAS].get(_cache_key(LANE_COLD))
         assert all(entry.card_id != card.pk for entry in entries if entry.kind == KIND_ILLUSTRATION)
@@ -618,6 +637,8 @@ class TestDrawColdEntry:
         printing = CanonicalCardFactory(name="Brainstorm")
         CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=uuid.uuid4())
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        second_printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=second_printing, illustration_id=uuid.uuid4())
         warm_pool_cache(LANE_COLD)
 
         drawn = draw_cold_entry("anon-1", set(), set(), contested_card_ids=[])
@@ -637,6 +658,8 @@ class TestDrawColdEntry:
         printing = CanonicalCardFactory(name="Brainstorm")
         CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=uuid.uuid4())
         CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        second_printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=second_printing, illustration_id=uuid.uuid4())
         warm_pool_cache(LANE_COLD)  # pooled while still unresolved
         card.illustration_vote_status = IllustrationVoteStatus.RESOLVED
         card.save(update_fields=["illustration_vote_status"])
