@@ -36,7 +36,7 @@ after it does.
 | [XML-Schema-Specification](https://github.com/chilli-axe/mpc-autofill/wiki/XML-Schema-Specification)                     | 2026-01-24            | `af06fe2` |
 | [\_Footer](https://github.com/chilli-axe/mpc-autofill/wiki/_Footer)                                                      | 2023-05-31            | `03a205a` |
 
-Last checked: 2026-08-17
+Last checked: 2026-08-24
 
 | Page                                                                                                                     | Last changed upstream | Commit    |
 | ------------------------------------------------------------------------------------------------------------------------ | --------------------- | --------- |
