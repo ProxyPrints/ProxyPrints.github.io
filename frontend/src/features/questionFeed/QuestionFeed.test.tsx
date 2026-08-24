@@ -147,6 +147,89 @@ describe("QuestionFeed", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("identify_printing's contextual search reaches a printing outside the machine-ranked shortlist", async () => {
+    server.use(questionFeedOnce());
+    // Mirrors what get_ranked_printing_candidates actually emits (PrintingCandidate) - the
+    // shortlist's own two candidates (printing-1/printing-2) never include this one, standing
+    // in for a printing the CANDIDATE_RESULT_LIMIT-capped shortlist cut off.
+    const outsideGridCandidate = {
+      identifier: "printing-outside-grid",
+      canonicalId: "canonical-1",
+      expansionCode: "out",
+      expansionName: "Outside The Grid",
+      collectorNumber: "999",
+      artist: "Some Artist",
+      smallThumbnailUrl: "https://example.com/small-outside.png",
+      mediumThumbnailUrl: "https://example.com/medium-outside.png",
+      fullArt: false,
+      isBorderless: false,
+      frame: "2015",
+      borderColor: "black",
+      isShowcase: false,
+      isExtendedArt: false,
+      isEtched: false,
+    };
+    let submittedIdentifier: string | undefined;
+    server.use(
+      http.post(buildRoute("2/printingCandidates/"), () =>
+        HttpResponse.json({ results: [outsideGridCandidate] }, { status: 200 })
+      ),
+      http.post(buildRoute("2/submitPrintingTag/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          printingIdentifier?: string;
+        };
+        submittedIdentifier = body.printingIdentifier;
+        return HttpResponse.json(
+          { resolvedPrinting: null, isNoMatch: false, voteTally: [] },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+    await revealCard();
+
+    expect(screen.queryByAltText("out 999")).not.toBeInTheDocument();
+
+    const searchInput = await screen.findByTestId(
+      "question-feed-printing-search"
+    );
+    fireEvent.change(searchInput, { target: { value: "outside" } });
+
+    const candidateTile = await screen.findByAltText("out 999");
+    // A search replaces the shortlist grid rather than supplementing it.
+    expect(screen.queryByAltText("xyz 42")).not.toBeInTheDocument();
+
+    fireEvent.click(candidateTile);
+    await waitFor(() =>
+      expect(submittedIdentifier).toBe("printing-outside-grid")
+    );
+  });
+
+  it("identify_printing's contextual search is present even with no machine-ranked shortlist at all (shape d)", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: { ...identifyPrintingItem, candidates: [] },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    expect(
+      await screen.findByTestId("question-feed-printing-search")
+    ).toBeInTheDocument();
+  });
+
   it("renders the shared report panel for the question's card and submits through the existing report flow", async () => {
     server.use(questionFeedOnce(), reportCardSuccess);
     renderFeed();
