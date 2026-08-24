@@ -107,6 +107,10 @@
       "items": {
         "type": "string"
       }
+    },
+    "suggestedCanonicalCardConfidence": {
+      "description": "SEAM, not yet populated server-side (owner decision, D14 numeric-confidence round, 2026-07-23 - see docs/features/display-left-rail.md's \"D14 numeric confidence\" section for the full flag-to-backend note). Expected shape once a calibrated score lands: an integer 0-100 percentage, present only alongside a non-null suggestedCanonicalCard (never sent for an already-resolved card, same opt-in-per-endpoint pattern as suggestedCanonicalCard/suggestedFilterTagNames above). Until the backend sends this field, every real API response omits it and it reads as undefined - ConfidenceElement.tsx degrades to its existing qualitative \"Suggested\" pill in that case, never a crash or a fabricated number.",
+      "type": ["number", "null"]
     }
   },
   "required": [

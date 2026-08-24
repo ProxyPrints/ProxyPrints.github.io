@@ -1,0 +1,24 @@
+{
+  "title": "Pilot Run History Entry",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "runId": { "type": "string" },
+    "command": { "type": "string" },
+    "status": { "type": "string" },
+    "startedAt": { "type": "string" },
+    "finishedAt": { "type": ["string", "null"] },
+    "durationSeconds": { "type": ["number", "null"] },
+    "votesWritten": { "type": ["integer", "null"] }
+  },
+  "required": [
+    "runId",
+    "command",
+    "status",
+    "startedAt",
+    "finishedAt",
+    "durationSeconds",
+    "votesWritten"
+  ],
+  "additionalProperties": false
+}

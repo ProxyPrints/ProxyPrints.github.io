@@ -19,7 +19,8 @@
     "isExtendedArt": { "type": "boolean" },
     "isEtched": { "type": "boolean" },
     "releasedAt": { "type": ["string", "null"] },
-    "illustrationId": { "type": ["string", "null"] }
+    "illustrationId": { "type": ["string", "null"] },
+    "artCropUrl": { "type": ["string", "null"] }
   },
   "required": [
     "identifier",

@@ -10,12 +10,17 @@
         "identify_printing",
         "artist",
         "tag",
-        "border"
+        "border",
+        "illustration"
       ]
     },
     "card": { "$ref": "./Card.json" },
     "suggestedPrinting": { "$ref": "./PrintingCandidate.json" },
     "candidates": {
+      "type": "array",
+      "items": { "$ref": "./PrintingCandidate.json" }
+    },
+    "illustrationCandidates": {
       "type": "array",
       "items": { "$ref": "./PrintingCandidate.json" }
     },
