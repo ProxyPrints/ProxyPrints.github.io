@@ -476,11 +476,12 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     expect(slotCount).toBeGreaterThan(1);
   });
 
-  // EP6 (§D.1 `.fbtoggle`, N) - the rail-head Front/Back toggle exists once a card is selected,
-  // and toggling it updates the subject box's own `data-face` attribute (the preview-only swap -
-  // see RailHeader's own module comment for why D14/identify/More-details stay pinned to the
-  // real editing face throughout).
-  test("the rail-head Front/Back toggle previews the subject box's data-face without touching D14", async ({
+  // EP6 (§D.1 `.fbtoggle`, N) - the rail-head Front/Back toggle exists once a card is selected.
+  // Left-rail subject-matter round: toggling it now changes which face's data the WHOLE rail
+  // shows and edits (the subject box's `data-face`, and everything below it including D14),
+  // not just the subject box's own preview - see DisplayPage.tsx's own `previewFace` comment for
+  // why the flip toggle is now the face selector, not a read-only peek.
+  test("the rail-head Front/Back toggle changes which face's data the whole rail shows and edits, including D14", async ({
     page,
     network,
   }) => {
@@ -489,10 +490,7 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
 
     const subject = page.getByTestId("display-rail-subject");
     await expect(subject).toHaveAttribute("data-face", "front");
-    const idTextBefore = await page
-      .getByTestId("display-confidence-element")
-      .locator(".idtext")
-      .textContent();
+    await expect(page.getByTestId("display-confidence-element")).toBeVisible();
 
     // WCAG/APCA audit fold-in (2026-07-24, PR #432's report; owner-ruled amendment to
     // SPEC-editor-polish.md §D.1's `.fbtoggle` row) - `min-height:24px` closes the WCAG 2.2
@@ -527,11 +525,11 @@ test.describe("Editor-polish round: rail-head Front/Back + compare reveal, D14 p
     await expect(backSubject.first()).toBeVisible();
     await expect(backSubject.first()).toHaveAttribute("data-face", "back");
 
-    // D14 - identity of the ACTUAL selected/resolved printing - never moves with the preview
-    // toggle.
-    await expect(
-      page.getByTestId("display-confidence-element").locator(".idtext")
-    ).toHaveText(idTextBefore ?? "");
+    // D14 now follows the edited face - this fixture's back has no resolved printing, so the
+    // confidence element (which renders nothing without one - ConfidenceElement.tsx's own
+    // `cardDocument == null` guard) disappears entirely instead of staying pinned to the
+    // front's resolved printing.
+    await expect(page.getByTestId("display-confidence-element")).toHaveCount(0);
   });
 
   // EP9 (§D.1 `.compare`, §D.2 `.statepill.cmp`, N) - the compare trigger lives on the D14

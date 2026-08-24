@@ -13,9 +13,9 @@ import {
 import { test } from "../playwright.setup";
 import {
   completePdfExportToDisk,
-  ensureDisplayRightRailOpen,
   importTextOnEditorLanding,
   loadPageWithDefaultBackend,
+  openDisplayCardbackGridSelector,
   openDisplayExportMenu,
 } from "./test-utils";
 
@@ -120,17 +120,16 @@ for (const viewport of [
         waitUntil: "domcontentloaded",
       });
       await importTextOnEditorLanding(page, "my search query");
-      await ensureDisplayRightRailOpen(page);
       // R9 (editor-repass round, item 2) - the toolbar's CardbackToolbarButton is retired in
-      // favour of the shared CardbackSwatchStrip + two plain buttons; the full grid selector is
-      // still reachable via "Browse all cardbacks…", and its inline apply prompt's tokens are
-      // asserted below unchanged.
-      await page.getByTestId("cardback-browse-all-button").click();
-      const cardbackModal = page.getByTestId("cardback-grid-selector");
-      await expect(cardbackModal).toBeVisible();
+      // favour of the shared CardbackSwatchStrip + two plain buttons; the left-rail
+      // subject-matter round then moved that whole control into the left rail, so reaching the
+      // full grid selector now selects a slot first (openDisplayCardbackGridSelector's own
+      // updated gating) rather than opening the right rail - its inline apply prompt's tokens
+      // are asserted below unchanged.
+      const cardbackModal = await openDisplayCardbackGridSelector(page);
       await cardbackModal.getByAltText(cardDocument2.name).click();
 
-      // R9 - the right rail's Cardback section is now the shared swatch strip
+      // R9 - the project-wide Cardback section is now the shared swatch strip
       // (CardbackSwatchStrip). Swatch token (SPEC-editor-repass mockup, strip rows 251-258):
       // 52px wide at 63/88 aspect, 1px $theme-divider border; the SELECTED swatch (the project
       // cardback, still cardDocument1 at this point) carries a 2px $theme-accent outline.

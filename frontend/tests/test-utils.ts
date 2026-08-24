@@ -836,23 +836,27 @@ export const enableDisplayFuzzySearch = async (page: Page) => {
 // this modal exposes is identical regardless of which caller's identifiers feed it - this is the
 // full-fidelity instance this wave's GridSelectorModal.spec.ts/GridSelectorModalVariants.spec.ts
 // clusters port onto. R9 (editor-repass round, item 2): CardbackToolbarButton is retired in
-// favour of CardbackRailControl (the shared CardbackSwatchStrip + two plain buttons), and the
-// full picker is reached via its "Browse all cardbacks…" button (`cardback-browse-all-button`).
-// Requires the right rail open first (same isVisible()-guard pattern as
-// openDisplaySearchSettingsModal). Also requires a NON-empty project already: DisplayPage.tsx's
-// own `if (isProjectEmpty) return <DeckInputLanding ... />` early-return means the toolbar/gear
-// button/right rail (and this button inside it) don't exist at all until at least one project
-// member does - callers must run an import (e.g. importTextOnEditorLanding) first, the same
-// precondition openDisplaySearchSettingsModal's own callers already carry.
+// favour of CardbackRailControl (the shared CardbackSwatchStrip + two plain buttons); the
+// left-rail subject-matter round then moved CardbackRailControl itself out of the right
+// (print/export) rail into the left one, so the full picker's "Browse all cardbacks…" button
+// (`cardback-browse-all-button`) now requires a slot selected rather than the right rail open -
+// same isVisible()-guard pattern as openDisplaySearchSettingsModal, just gated on the button
+// itself rather than a container, since clicking a sheet slot reveals the left rail's content
+// directly regardless of viewport tier (expectDisplaySheetSlotToExist's own established
+// pattern). Also requires a NON-empty project already: DisplayPage.tsx's own `if (isProjectEmpty)
+// return <DeckInputLanding ... />` early-return means the toolbar/sheet (and this button, once a
+// slot is selected) don't exist at all until at least one project member does - callers must run
+// an import (e.g. importTextOnEditorLanding) first, the same precondition
+// openDisplaySearchSettingsModal's own callers already carry.
 export const openDisplayCardbackGridSelector = async (page: Page) => {
-  const rail = page.getByTestId("display-print-settings-rail");
-  if (!(await rail.isVisible())) {
-    await page.getByTestId("display-gear-button").click();
-    await expect(rail).toBeVisible();
-  }
   // Dedicated testid (not a name-based locator): the sheet slot's own "⟲" flip button can carry
   // an accessible name mentioning "cardback" too (SPEC-cardback-pdfwait.md OWNER AMENDMENT 3).
-  await page.getByTestId("cardback-browse-all-button").click();
+  const button = page.getByTestId("cardback-browse-all-button");
+  if (!(await button.isVisible())) {
+    await page.getByTestId("page-preview-slot").first().click();
+    await expect(button).toBeVisible();
+  }
+  await button.click();
   const gridSelector = page.getByTestId("cardback-grid-selector");
   await expect(gridSelector).toBeVisible();
   return gridSelector;

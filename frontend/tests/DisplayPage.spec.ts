@@ -451,15 +451,17 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
 
   // Issue #240 (design doc §5's CommonCardback row) - the toolbar previously had no way to reach
   // the project-wide cardback picker at all on this page (only the classic editor's own right
-  // panel could). R9 (editor-repass round, item 2) retires CardbackToolbarButton in favour of the
-  // shared CardbackSwatchStrip + two plain buttons (CardbackRailControl, CommonCardback.tsx) and
-  // keeps the full picker reachable via the strip section's "Browse all cardbacks…" button, which
-  // reuses MemoizedCommonCardbackGridSelector's existing GridSelectorModal verbatim - this test
-  // only needs to confirm it opens from the right rail and that a selection made through it
-  // actually updates the shared project cardback (visible via a back-face slot on the sheet), not
-  // that the grid selector's own internals work (already covered by CardSlot.spec.ts's cardback
-  // tests).
-  test("the right rail's Browse all cardbacks… opens the same project-wide cardback picker the classic editor uses, and a selection made through it updates back-face slots on the sheet", async ({
+  // panel could). R9 (editor-repass round, item 2) retired CardbackToolbarButton in favour of the
+  // shared CardbackSwatchStrip + two plain buttons; the left-rail subject-matter round then moved
+  // that whole control (CardbackRailControl, CommonCardback.tsx) out of the right (print/export)
+  // rail into the left one, beside the per-slot cardback control - a cardback is subject matter,
+  // not a print setting - so it now only renders once a slot is selected. The full picker stays
+  // reachable via the strip section's "Browse all cardbacks…" button, which reuses
+  // MemoizedCommonCardbackGridSelector's existing GridSelectorModal verbatim - this test only
+  // needs to confirm it opens from the left rail and that a selection made through it actually
+  // updates the shared project cardback (visible via a back-face slot on the sheet), not that the
+  // grid selector's own internals work (already covered by CardSlot.spec.ts's cardback tests).
+  test("the left rail's Browse all cardbacks… opens the same project-wide cardback picker the classic editor uses, and a selection made through it updates back-face slots on the sheet", async ({
     page,
     network,
   }) => {
@@ -478,7 +480,11 @@ test.describe("DisplayPage (Proposal H, Step 1)", () => {
     await importTextOnEditorLanding(page, "my search query");
 
     await expect(page.getByTestId("display-toolbar")).toBeVisible();
-    // R9 - the right rail's Cardback section is the shared swatch strip; the strip's own
+    // The left rail's own content (and this control with it) only renders once a slot is
+    // selected - select the one slot this project has.
+    const sheetSlots = page.getByTestId("page-preview-slot");
+    await sheetSlots.first().click();
+    // R9 - the project-wide Cardback section is the shared swatch strip; the strip's own
     // selected swatch reflects the project cardback (cardDocument1) even before any pick here.
     await expect(page.getByTestId("cardback-rail-control")).toBeVisible();
     await expect(page.getByTestId("cardback-rail-strip")).toBeVisible();
