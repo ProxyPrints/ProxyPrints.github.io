@@ -2151,8 +2151,9 @@ const Rail = ({
   // LeftRailOffcanvas's own comment on that `key`).
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [identifyOpen, setIdentifyOpen] = useState(false);
-  // EP6 - which face's art the rail-head subject preview currently shows; `null` means "the
-  // slot's own editing face" (the default, reset on every slot change for the same reason as
+  // EP6 - which face the rail is currently showing AND editing (see the left-rail
+  // subject-matter round comment below `previewFace` computes from this); `null` means "the
+  // slot's own anchor face" (the default, reset on every slot change for the same reason as
   // `detailsOpen`/`identifyOpen` above).
   const [faceOverride, setFaceOverride] = useState<Faces | null>(null);
   // EP9 - the D14 pill's compare-reveal, lifted here since the trigger (ConfidenceElement,
@@ -2162,9 +2163,21 @@ const Rail = ({
   // `ConfidenceElement`'s own `compareProps` for how the two compose without fighting each other.
   const [compareOpen, setCompareOpen] = useState(false);
 
+  // Left-rail subject-matter round - `previewFace` used to drive ONLY the header's own preview
+  // swap (`RailHeader`'s `.subject` box); everything below it (D14, identify, More details,
+  // Select Version) stayed pinned to `selectedSlotRef.face` regardless of the flip. That split
+  // meant a user could LOOK at the other face but never EDIT it from the rail. Flipping now
+  // drives every data-fetch below off `previewFace` instead, so the rail always presents the
+  // controls for whichever face is currently shown - the flip toggle IS the face selector, not a
+  // read-only peek. `selectedSlotRef.face` remains the slot's own anchor identity (which tile the
+  // user actually clicked on the sheet) - still read directly where that distinction still
+  // matters (SlotActionsSection, the header's own "not set" placeholder copy).
+  const previewFace: Faces | null =
+    selectedSlotRef != null ? faceOverride ?? selectedSlotRef.face : null;
+
   const projectMember = useAppSelector((state) =>
-    selectedSlotRef != null
-      ? selectProjectMember(state, selectedSlotRef.face, selectedSlotRef.slot)
+    selectedSlotRef != null && previewFace != null
+      ? selectProjectMember(state, previewFace, selectedSlotRef.slot)
       : undefined
   );
   const query = projectMember?.query;
@@ -2175,13 +2188,11 @@ const Rail = ({
   // EP6 - the OTHER face's own ProjectMember (Front/Back are separate slots in this app's data
   // model, not two sides of one card - see RailHeader's own module comment). Always computed
   // (never conditionally-called) so this hook call is unconditional regardless of
-  // `selectedSlotRef`, matching `projectMember`'s own pattern just above.
+  // `selectedSlotRef`, matching `projectMember`'s own pattern just above. Relative to
+  // `previewFace` (the face currently being edited), not the anchor - it's "the face the flip
+  // toggle would switch TO", used below for the per-slot cardback control's own Back lookup.
   const otherFace: Faces | null =
-    selectedSlotRef != null
-      ? selectedSlotRef.face === Front
-        ? Back
-        : Front
-      : null;
+    previewFace === Front ? Back : previewFace === Back ? Front : null;
   const otherProjectMember = useAppSelector((state) =>
     selectedSlotRef != null && otherFace != null
       ? selectProjectMember(state, otherFace, selectedSlotRef.slot)
@@ -2210,17 +2221,6 @@ const Rail = ({
       ? cardDocumentsByIdentifier[selectedImage]
       : undefined;
 
-  const otherCardDocument =
-    otherProjectMember?.selectedImage != null
-      ? cardDocumentsByIdentifier[otherProjectMember.selectedImage]
-      : undefined;
-
-  const previewFace = faceOverride ?? selectedSlotRef.face;
-  const previewCardDocument =
-    previewFace === selectedSlotRef.face
-      ? selectedCardDocument
-      : otherCardDocument;
-
   const resolvedPrinting =
     selectedCardDocument?.canonicalCard ??
     selectedCardDocument?.suggestedCanonicalCard ??
@@ -2234,10 +2234,10 @@ const Rail = ({
       : null;
 
   // Cardback flow round (SPEC-cardback-pdfwait.md §C.2, `PKG1b` rail entry) - the slot's own back
-  // face, regardless of which face is currently selected for editing (`selectedSlotRef.face` can
-  // be either Front or Back - the cardback control always concerns the Back one specifically).
+  // face, regardless of which face is currently being edited (`previewFace` can be either Front
+  // or Back - the cardback control always concerns the Back one specifically).
   const backProjectMember =
-    selectedSlotRef.face === Back ? projectMember : otherProjectMember;
+    previewFace === Back ? projectMember : otherProjectMember;
 
   return (
     <RailRoot data-testid="display-rail-content">
@@ -2247,8 +2247,8 @@ const Rail = ({
         cardName={cardName}
         searchQuery={query}
         cardDocument={selectedCardDocument}
-        previewFace={previewFace}
-        previewCardDocument={previewCardDocument}
+        previewFace={previewFace ?? selectedSlotRef.face}
+        previewCardDocument={selectedCardDocument}
         onToggleFace={setFaceOverride}
         onSlotDeleted={onSlotDeleted}
         compareOpen={compareOpen}
@@ -2283,7 +2283,7 @@ const Rail = ({
       <div className="select-version-wrapper sv" style={{ padding: "8px 8px" }}>
         <h6 className="select-version-heading">Select Version</h6>
         <SelectVersionSection
-          face={selectedSlotRef.face}
+          face={previewFace ?? selectedSlotRef.face}
           slot={selectedSlotRef.slot}
           query={query}
           selectedImage={selectedImage}
