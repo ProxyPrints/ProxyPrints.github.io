@@ -1548,23 +1548,23 @@ def _printing_with_border(name: str, border_color: str, illustration_id=None) ->
 
 class TestIllustrationItem:
     """`_illustration_item` (wtc-question-model.md §7.2): asks which artwork a card depicts,
-    deduplicating candidates that share an `illustration_id`."""
+    deduplicating candidates that share an `illustration_id`. Returns `None` unless the
+    deduplicated set is a genuine multi-way choice (at least two distinct illustrations) - a
+    zero- or one-candidate result is not a choice for the grid UI to render."""
 
-    def test_illustration_item_is_type_illustration(self, db):
+    def test_no_ranked_candidates_declines(self, db):
+        """FAILS against pre-fix code, which built and returned a `QuestionFeedItem` with
+        `illustrationCandidates=[]` here instead of declining."""
         card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
 
-        item = _illustration_item(card)
+        assert _illustration_item(card) is None
 
-        assert item.type.value == "illustration"
-        assert item.card.name == card.name
+    def test_single_illustration_after_dedupe_declines(self, db):
+        """FAILS against pre-fix code, which served this exact one-candidate-after-dedupe shape
+        as a real illustration question."""
+        card, _illustration_id = make_shared_illustration_group("Brainstorm")
 
-    def test_illustration_item_dedupes_by_illustration_id(self, db):
-        card, illustration_id = make_shared_illustration_group("Brainstorm")
-
-        item = _illustration_item(card)
-
-        assert len(item.illustrationCandidates) == 1
-        assert item.illustrationCandidates[0].illustrationId == str(illustration_id)
+        assert _illustration_item(card) is None
 
     def test_illustration_item_keeps_distinct_illustrations_separate(self, db):
         card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -1573,6 +1573,9 @@ class TestIllustrationItem:
 
         item = _illustration_item(card)
 
+        assert item is not None
+        assert item.type.value == "illustration"
+        assert item.card.name == card.name
         assert len(item.illustrationCandidates) == 2
 
 
@@ -1627,13 +1630,24 @@ class TestLikelyResolveRouting:
 
     def test_candidates_do_not_split_on_border_falls_through_to_illustration(self, db):
         card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _printing_with_border("Brainstorm", "black", illustration_id=uuid.uuid4())
+        _printing_with_border("Brainstorm", "black", illustration_id=uuid.uuid4())
+
+        item = _likely_resolve_item(card)
+
+        assert item.type.value == "illustration"
+
+    def test_a_single_illustration_after_dedupe_falls_through_to_identify_printing(self, db):
+        """FAILS against pre-fix code: two printings sharing ONE illustration_id dedupe to a
+        single candidate, which `_illustration_item` used to serve as a real choice anyway."""
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
         illustration_id = uuid.uuid4()
         _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
         _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
 
         item = _likely_resolve_item(card)
 
-        assert item.type.value == "illustration"
+        assert item.type.value == "identify_printing"
 
     def test_illustration_already_resolved_falls_through_to_identify_printing(self, db):
         card = CardFactory(
@@ -1778,14 +1792,34 @@ class TestLikelyResolveNarrowingCap:
 
 class TestTier4FreshServesIllustration:
     """The REMAINDER lane's own illustration-before-printing precedence
-    (`_tier_4_fresh`/`_build_pool_cold`): a card whose illustration identity is unresolved but
-    which already carries a candidate with a known `illustration_id` is answerable via the
-    cheaper illustration question, ahead of `identify_printing`."""
+    (`_tier_4_fresh`/`_build_pool_cold`): a card whose illustration identity is unresolved and
+    resolves to a genuine multi-way choice of artwork (`_illustration_item`) is answerable via
+    the cheaper illustration question, ahead of `identify_printing`."""
 
-    def test_a_remainder_card_with_unresolved_illustration_is_served_illustration(self, db):
+    def test_a_remainder_card_with_two_illustrations_is_served_illustration(self, db):
         # `_tier_4_fresh`'s illustration filter reads `card.printing_tags` (an actual cast
         # vote), not `get_ranked_printing_candidates`' name-matched search results - unlike
-        # `_likely_resolve_item`'s gate, so this fixture needs a real `CardPrintingTag` row.
+        # `_likely_resolve_item`'s gate, so this fixture needs a real `CardPrintingTag` row. A
+        # second, distinct-illustration printing of the same name is what makes the ranked
+        # candidate set `_illustration_item` actually renders from a genuine multi-way choice.
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        printing = CanonicalCardFactory(name="Brainstorm")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, illustration_id=uuid.uuid4())
+        CardPrintingTagFactory(card=card, printing=printing, source=VoteSource.DEDUCTION, anonymous_id="ai-bot")
+        _printing_with_border("Brainstorm", "black", illustration_id=uuid.uuid4())
+
+        result = _tier_4_fresh("anon-1")
+
+        assert result is not None
+        item, reason = result
+        assert item.type.value == "illustration"
+        assert reason == "tier_4_fresh_illustration"
+
+    def test_a_remainder_card_with_a_single_illustration_falls_through_to_printing(self, db):
+        """FAILS against pre-fix code: the coarse admission filter
+        (`illustration_id__isnull=False` on SOME cast printing tag) admits this card, but the
+        name-similarity search `_illustration_item` actually builds its answers from resolves to
+        exactly one candidate here - a confirm wearing a chooser's clothes, not a real choice."""
         card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
         illustration_id = uuid.uuid4()
         printing = CanonicalCardFactory(name="Brainstorm")
@@ -1796,8 +1830,7 @@ class TestTier4FreshServesIllustration:
 
         assert result is not None
         item, reason = result
-        assert item.type.value == "illustration"
-        assert reason == "tier_4_fresh_illustration"
+        assert item.type.value != "illustration"
 
     def test_a_remainder_card_with_no_illustration_data_falls_through_to_printing(self, db):
         CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)

@@ -488,7 +488,7 @@ def _border_item(card: Card) -> QuestionFeedItem:
     )
 
 
-def _illustration_item(card: Card) -> QuestionFeedItem:
+def _illustration_item(card: Card) -> Optional[QuestionFeedItem]:
     """
     The illustration question (wtc-question-model.md §7.2): asks which artwork this card
     depicts. Renders art crops only, never framed card renders, grouped by unique
@@ -499,8 +499,17 @@ def _illustration_item(card: Card) -> QuestionFeedItem:
     unofficial variant of the artwork, so illustration identification is distinct from
     printing identification.
 
-    Returns candidates grouped by unique illustration_id, deduplicating candidates that
-    share the same artwork identity.
+    `None` unless the deduplicated candidate set is a genuine MULTI-WAY choice (at least two
+    distinct illustration_ids): the illustration UI is a grid to pick among, and a set that
+    collapses to zero or one distinct artwork is not a choice at all - a zero-candidate result
+    renders nothing under the prompt, and a one-candidate result is a confirmation wearing a
+    chooser's clothes. Every caller must treat `None` as "this card is not servable as
+    illustration right now" and either try the next candidate or fall through to the next
+    tier/lane, mirroring `_identify_printing_item`'s own "None means unservable this way"
+    contract. This is the fix for the mismatch between what admits a card into the illustration
+    lane (`_tier_4_fresh`/`_build_pool_cold` check only whether SOME cast printing tag carries
+    an illustration_id) and what actually builds its answers (a name-similarity search of the
+    card, `get_ranked_printing_candidates`, which routinely disagrees with that one tag).
     """
     candidates = get_ranked_printing_candidates(card, card.name)
     seen_illustration_ids: set[Optional[str]] = set()
@@ -510,6 +519,8 @@ def _illustration_item(card: Card) -> QuestionFeedItem:
         if illustration_id not in seen_illustration_ids:
             seen_illustration_ids.add(illustration_id)
             unique_candidates.append(candidate.serialise_as_printing_candidate())
+    if len(unique_candidates) < 2:
+        return None
     return QuestionFeedItem(
         type=TypeEnum.illustration,
         card=card.serialise(),
@@ -745,6 +756,22 @@ def _first_answerable_printing_candidate(
     as an empty `cards` sequence already would."""
     for card in sorted(cards, key=score_fn, reverse=True):
         item = _identify_printing_item(card)
+        if item is not None:
+            return card, item
+    return None
+
+
+def _first_answerable_illustration_candidate(
+    cards: Sequence[Card], score_fn: Callable[[Card], float]
+) -> Optional[tuple[Card, QuestionFeedItem]]:
+    """The illustration-tier analogue of `_first_answerable_printing_candidate` above:
+    `_illustration_item` returns `None` for a card whose deduplicated candidate set is not a
+    genuine multi-way choice (see that function's own docstring). Tries every candidate in
+    score order and returns the first `(card, item)` pair that is actually servable, or `None`
+    if the whole window has nothing - the caller falls through to its next kind/lane exactly as
+    an empty `cards` sequence already would."""
+    for card in sorted(cards, key=score_fn, reverse=True):
+        item = _illustration_item(card)
         if item is not None:
             return card, item
     return None
@@ -1065,10 +1092,17 @@ def _likely_resolve_item(card: Card, allow_narrowing: bool = True) -> Optional[Q
         # `illustration_id__isnull=False` filter), not merely UNRESOLVED - that status is the
         # model default for every card, so an ungated check would route almost every likely-resolve
         # card through here regardless of whether an illustration question is even answerable for it.
+        # This is a cheap pre-filter only (reusing `serialised_candidates`, already computed
+        # above) - `_illustration_item` itself is the real gate, and can still decline (`None`)
+        # for a card that has SOME illustration_id-carrying candidate but whose deduplicated set
+        # isn't a genuine multi-way choice; that card falls through to step 3 below exactly like
+        # a card with no illustration data at all.
         if card.illustration_vote_status == IllustrationVoteStatus.UNRESOLVED and any(
             candidate.illustrationId is not None for candidate in serialised_candidates
         ):
-            return _illustration_item(card)
+            illustration_item = _illustration_item(card)
+            if illustration_item is not None:
+                return illustration_item
     item = _confirm_suggestion_item(card)
     if item is not None:
         return item
@@ -1292,9 +1326,10 @@ def _tier_4_fresh(
         .distinct()
         .order_by("-date_created")[:_CANDIDATE_SCORING_WINDOW]
     )
-    illustration_card = _max_scored_candidate(illustration_candidates, _printing_question_score)
-    if illustration_card is not None:
-        return _illustration_item(illustration_card), "tier_4_fresh_illustration"
+    illustration_result = _first_answerable_illustration_candidate(illustration_candidates, _printing_question_score)
+    if illustration_result is not None:
+        _, illustration_item = illustration_result
+        return illustration_item, "tier_4_fresh_illustration"
 
     printing_candidates = list(
         Card.objects.filter(printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -1491,7 +1526,12 @@ def _pool_cold_result(
         return None
     kind, card, tag_name, reason = drawn
     if kind == question_feed_pools.KIND_ILLUSTRATION:
-        return _illustration_item(card), reason or "tier_4_fresh_illustration"
+        # See `_pool_contested_result`'s identical guard for why this defensive re-check exists
+        # alongside `_build_pool_cold`'s own warm-time gate.
+        item = _illustration_item(card)
+        if item is None:
+            return None
+        return item, reason or "tier_4_fresh_illustration"
     if kind == question_feed_pools.KIND_PRINTING:
         # See `_pool_contested_result`'s identical guard for why this defensive re-check exists
         # alongside `_build_pool_cold`'s own warm-time gate.

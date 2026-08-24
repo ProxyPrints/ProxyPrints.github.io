@@ -581,21 +581,28 @@ def _build_pool_cold() -> list[PoolEntry]:
 
     # Illustration entries first (mirrors `_tier_4_fresh`'s own illustration-before-printing
     # check, and `_iter_by_kind_precedence`'s KIND_ILLUSTRATION-leads order above): a card whose
-    # illustration identity is unresolved but which already carries a candidate with a known
-    # illustration_id is answerable via the cheaper illustration question.
-    illustration_candidates = (
-        Card.objects.filter(
-            illustration_vote_status=IllustrationVoteStatus.UNRESOLVED,
-            printing_tags__printing__printing_metadata__illustration_id__isnull=False,
-        )
-        .distinct()
-        .values_list("pk", "date_created")
-    )
+    # illustration identity is unresolved and which resolves to a genuine multi-way choice of
+    # artwork (`question_feed._illustration_item`) is answerable via the cheaper illustration
+    # question.
+    #
+    # `illustration_id__isnull=False` only admits a card with SOME cast printing tag carrying an
+    # illustration_id - it says nothing about what `_illustration_item` will actually build,
+    # since that reruns a name-similarity search of the card rather than looking up that one
+    # tag's own printing, and the two routinely disagree. Every sampled card must be checked
+    # against the real builder before entering the pool, same as `_build_pool_contested`'s
+    # printing branch already does for its own zero-candidate gate. Full `Card` objects, not
+    # `.values_list(...)`, since that check needs `card.name`.
+    from cardpicker.question_feed import _illustration_item
+
+    illustration_candidates = Card.objects.filter(
+        illustration_vote_status=IllustrationVoteStatus.UNRESOLVED,
+        printing_tags__printing__printing_metadata__illustration_id__isnull=False,
+    ).distinct()
     illustration_rows: list[tuple[int, Any]] = []
-    for pk, date_created in _sample_across_pk_strata(
-        illustration_candidates, chunk_size=_pool_sample_chunk_size(limit)
-    ):
-        illustration_rows.append((pk, date_created))
+    for card in _sample_across_pk_strata(illustration_candidates, chunk_size=_pool_sample_chunk_size(limit)):
+        if _illustration_item(card) is None:
+            continue
+        illustration_rows.append((card.pk, card.date_created))
         if len(illustration_rows) >= limit:
             break
     illustration_rows.sort(key=lambda row: row[1], reverse=True)
