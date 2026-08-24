@@ -113,6 +113,7 @@ import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
 import { ReportCardPanel } from "@/features/reporting/ReportCardPanel";
 import { recordSessionContribution } from "@/features/stats/sessionContributionSlice";
 import {
+  APIGetPrintingCandidates,
   APIGetQuestionFeed,
   APISubmitIllustrationRejection,
   APISubmitIllustrationVote,
@@ -664,16 +665,45 @@ const NegWrap = styled.div`
   padding: 13px;
 `;
 
-// Shape (d) - open-ended, dashed accent "tricky one" (WD7). No new search endpoint exists on
-// the backend (API surface unchanged, per this task's own critical constraint) - this frames
-// the SAME Level 2 candidate-grid/"None of these"/Skip flow the app already has for a
-// zero-candidate `identify_printing` item, rather than a speculative search field wired to
-// nothing. See this PR's report for the "no invented backend surface" reasoning.
+// Shape (d) - open-ended, dashed accent "tricky one" framing (WD7) for a zero-candidate
+// `identify_printing` item. Renders the same `identificationBody` every candidate question
+// uses, including the contextual printing search - see that function's own comment.
 const OpenWrap = styled.div`
   border: 1px dashed var(--accent);
   border-radius: var(--r-card);
   background: color-mix(in srgb, var(--accent) 6%, var(--conf));
   padding: 14px;
+`;
+
+// The `identify_printing` contextual search (wtc-question-model.md §7) - a printing outside
+// the machine-ranked shortlist (CANDIDATE_RESULT_LIMIT, printing_candidates.py) is otherwise
+// unreachable, since the shortlist is capped and the grid shows only what already survived
+// ranking. Token-styled to match Btn/TriStateChip rather than a react-bootstrap Form.Control,
+// consistent with the rest of this file's plain-element design system.
+const SearchWrap = styled.div`
+  margin: 10px 0;
+`;
+
+const SearchInput = styled.input`
+  width: 100%;
+  min-height: 44px;
+  font: inherit;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--divider);
+  border-radius: var(--r-btn);
+  padding: 6px 14px;
+
+  &::placeholder {
+    color: var(--muted);
+  }
+`;
+
+const SearchStatus = styled.p`
+  color: var(--muted);
+  font-size: 13px;
+  margin: 6px 0 0;
 `;
 
 // Level 3 - exclusion-group chips + independent toggles.
@@ -811,6 +841,15 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
     initialChipStates()
   );
   const [followUp, setFollowUp] = useState<FollowUp>("none");
+  // identify_printing's contextual search (wtc-question-model.md §7) - `searchResults` is
+  // `null` while `searchQuery` is blank (shows the machine-ranked shortlist instead), and an
+  // array (possibly empty) once a search has resolved. Reset alongside the rest of the
+  // per-item state in the fetch effect below.
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchResults, setSearchResults] = useState<
+    PrintingCandidate[] | null
+  >(null);
+  const [searching, setSearching] = useState<boolean>(false);
   // The one candidate the user has explicitly said NO to within THIS item's flow (issue #728:
   // with the ladder gone this can only ever be the suggested candidate - the only candidate
   // rejected by name; "Not sure" is genuine uncertainty, not a rejection, and deliberately
@@ -933,6 +972,9 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
         }
         setChipStates(initialChipStates());
         setFollowUp("none");
+        setSearchQuery("");
+        setSearchResults(null);
+        setSearching(false);
         setRejectedCandidateIds(new Set());
         setSelectedCandidateId(null);
         setConfirmedArtistName(null);
@@ -1002,6 +1044,28 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageGeneration]);
+
+  // identify_printing's contextual search - fires `2/printingCandidates/` (the same endpoint
+  // PrintingTagPicker already calls) on every query change, matching that component's own
+  // typeahead pattern rather than adding a new debounce convention. A blank query clears
+  // `searchResults` back to `null` so the shortlist grid renders instead of an empty state.
+  useEffect(() => {
+    if (backendURL == null || item == null) {
+      return;
+    }
+    const trimmedQuery = searchQuery.trim();
+    if (trimmedQuery === "") {
+      setSearchResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    APIGetPrintingCandidates(backendURL, item.card.identifier, trimmedQuery)
+      .then((response) => setSearchResults(response.results))
+      .catch(() => setSearchResults([]))
+      .finally(() => setSearching(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendURL, item?.card.identifier, searchQuery]);
 
   const advance = () => {
     setFlavorText(randomFlavorText());
@@ -1767,6 +1831,13 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
       // The candidate-grid identification question - shared by identify_printing's own item
       // type and confirm_suggestion's "Not this art" follow-up (rejectedContext renders the
       // "you said not this one" line above the prompt in the latter case, null in the former).
+      // Also renders a contextual printing search (POST /2/printingCandidates/ via
+      // APIGetPrintingCandidates - the same endpoint PrintingTagPicker already calls, so this
+      // introduces no new backend surface): while a query is active its results replace the
+      // machine-ranked shortlist below rather than sitting alongside it, since a candidate
+      // that survived the shortlist ranking is always still findable by its own name/set/
+      // collector-number text.
+      const isSearchActive = searchQuery.trim() !== "";
       const identificationBody = (rejectedContext: React.ReactNode) => (
         <>
           <QHead>
@@ -1785,7 +1856,34 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
               your time.
             </QHint>
           )}
-          {filterExpanded && (
+          <SearchWrap>
+            <SearchInput
+              type="text"
+              inputMode="search"
+              placeholder="Search for a different printing…"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              data-testid="question-feed-printing-search"
+            />
+          </SearchWrap>
+          {isSearchActive && (
+            <div data-testid="question-feed-search-results">
+              {searching ? (
+                <SearchStatus>Searching…</SearchStatus>
+              ) : searchResults != null && searchResults.length > 0 ? (
+                <CandidateGrid data-testid="question-feed-search-results-grid">
+                  {searchResults.map((candidate) =>
+                    renderCandidateTile(candidate)
+                  )}
+                </CandidateGrid>
+              ) : searchResults != null ? (
+                <SearchStatus>
+                  No printings found for &quot;{searchQuery.trim()}&quot;.
+                </SearchStatus>
+              ) : null}
+            </div>
+          )}
+          {!isSearchActive && filterExpanded && (
             <FilterPanelWrap data-testid="question-feed-filter-panel">
               <AttributeChipPanel
                 backendURL={backendURL}
@@ -1798,7 +1896,7 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
               />
             </FilterPanelWrap>
           )}
-          {hiddenCount > 0 && (
+          {!isSearchActive && hiddenCount > 0 && (
             <p
               className="text-muted small"
               data-testid="question-feed-hidden-count"
@@ -1816,16 +1914,18 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
               </a>
             </p>
           )}
-          <div className="mb-2">
-            <Btn
-              className="ghost"
-              onClick={() => setFilterExpanded((previous) => !previous)}
-              data-testid="question-feed-filter-toggle"
-            >
-              {filterExpanded ? "Hide filters" : "Filter by attribute"}
-            </Btn>
-          </div>
-          {illustrationGroups.length > 0 && (
+          {!isSearchActive && (
+            <div className="mb-2">
+              <Btn
+                className="ghost"
+                onClick={() => setFilterExpanded((previous) => !previous)}
+                data-testid="question-feed-filter-toggle"
+              >
+                {filterExpanded ? "Hide filters" : "Filter by attribute"}
+              </Btn>
+            </div>
+          )}
+          {!isSearchActive && illustrationGroups.length > 0 && (
             <IllustrationGroupFlow data-testid="question-feed-illustration-groups">
               {illustrationGroups.map((group) => {
                 // Every member of `group` shares one illustrationId, i.e. one artwork - artist
@@ -1886,7 +1986,7 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
               })}
             </IllustrationGroupFlow>
           )}
-          {ungroupedCandidates.length > 0 && (
+          {!isSearchActive && ungroupedCandidates.length > 0 && (
             <CandidateGrid data-testid="question-feed-candidate-grid-ungrouped">
               {ungroupedCandidates.map((candidate) =>
                 renderCandidateTile(candidate)
@@ -2140,8 +2240,9 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
           );
         }
       } else {
-        // identify_printing - unchanged shape: the candidate-grid identification question,
-        // dashed "tricky one" framing (isOpenEndedShape) for a zero-candidate item.
+        // identify_printing - the candidate-grid identification question, now including the
+        // contextual printing search (see identificationBody's own comment), dashed "tricky
+        // one" framing (isOpenEndedShape) for a zero-candidate item.
         questionsNode = !revealed ? (
           spinnerNode
         ) : isOpenEndedShape ? (
