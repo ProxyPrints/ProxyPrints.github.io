@@ -3008,7 +3008,21 @@ class ImageEvidence(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["card", "content_hash"], name="unique_image_evidence_per_card_hash")
         ]
-        indexes = [models.Index(fields=["card", "content_hash"])]
+        indexes = [
+            models.Index(fields=["card", "content_hash"]),
+            # `_current_artbox_phash_queryset().filter(artbox_phash__in=phashes)`
+            # (printing_consensus.py) is filtered on `artbox_phash` alone - the
+            # `content_hash=F("card__content_phash")` and md5-currency clauses both compare
+            # against the joined `Card` row via F-expressions, not a constant this index could
+            # pre-filter on, so a composite key buys nothing this call site's plan can use. Every
+            # caller of `_current_artbox_phash_queryset` already applies `artbox_phash__isnull=
+            # False`, so the index is partial on that same condition.
+            models.Index(
+                fields=["artbox_phash"],
+                name="imgevid_artbox_phash_idx",
+                condition=models.Q(artbox_phash__isnull=False),
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"ImageEvidence card={self.card_id} content_hash={self.content_hash} extractors={sorted(self.extractor_versions)}"

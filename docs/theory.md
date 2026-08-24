@@ -396,6 +396,24 @@ turns out to be:
    grouping entirely, a group of one, never collapsed into a shared
    bucket with every other phash-less card.
 
+   **A partial index encodes this same null-exclusion, and depends on
+   callers preserving it** (`imgevid_artbox_phash_idx`, migration
+   `0117_imageevidence_artbox_phash_idx`, PR #938): `ImageEvidence`'s
+   `artbox_phash` column carries a B-tree index conditioned on
+   `artbox_phash IS NOT NULL`, matching the exclusion the pooling rule
+   above already applies for its own reasons. A partial index only
+   serves a query whose own `WHERE` clause carries the same condition —
+   Postgres cannot use it, and falls back to a sequential scan, for any
+   `artbox_phash` filter that omits `artbox_phash__isnull=False`, with
+   no error and nothing that would fail a test to mark the regression.
+   `_current_artbox_phash_queryset` (`printing_consensus.py`, the source
+   `identity_group_card_ids`'s phash-d0 lookup filters via
+   `.filter(artbox_phash__in=phashes)`) applies that condition today,
+   so the index is exact for every current caller — but that is a fact
+   about the current call sites, not something the index or the schema
+   enforces. A future query that filters `artbox_phash` without it
+   remains correct — it simply stops being fast, silently.
+
    This widening changes what pools, not what resolves. It replaces
    md5-alone in `group_printing_votes`/`resolve_printing`/
    `resolve_and_persist_printing` and in `question_feed.py`'s four
