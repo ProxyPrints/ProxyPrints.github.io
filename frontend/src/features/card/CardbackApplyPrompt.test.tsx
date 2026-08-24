@@ -111,8 +111,10 @@ describe("CardbackApplyPrompt", () => {
     const thumbnails = screen.getByTestId("cardback-apply-prompt-thumbnails");
     expect(thumbnails).toHaveTextContent("Slot 2");
     expect(thumbnails).toHaveTextContent("Slot 5");
-    // also overrides copy names the count.
-    expect(screen.getByText(/also overrides 2 cards/)).toBeInTheDocument();
+    // the skip copy names the count - these slots are never touched, not overridden.
+    expect(
+      screen.getByText(/2 cards above keep their own back/)
+    ).toBeInTheDocument();
   });
 
   test("renders no thumbnail grid when nothing is currently custom", () => {

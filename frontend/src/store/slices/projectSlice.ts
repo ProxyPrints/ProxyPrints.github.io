@@ -165,18 +165,24 @@ export const projectSlice = createAppSlice({
     },
     /**
      * Cardback flow round (SPEC-cardback-pdfwait.md §C.2, OWNER AMENDMENT 2/OQ-B) - the
-     * toolbar/project-wide "Apply to all card backs" action. Unlike `bulkReplaceSelectedImage`
-     * (which only touches slots CURRENTLY carrying the old project cardback), this overrides
-     * EVERY slot's back face unconditionally - including ones a user deliberately gave a
-     * different, custom back - per the owner's override-with-count ruling. Never fires on its
-     * own; only ever dispatched from the apply-all prompt's own explicit, never-pre-checked
-     * button.
+     * project-wide "Apply to all card backs" action. Unlike `bulkReplaceSelectedImage` (which
+     * only touches slots CURRENTLY carrying the old project cardback), this can override a back
+     * that's already something else - but only for slots the caller has already screened as
+     * eligible (`cardbackApply.ts`'s `resolveEligibleCardbackApplySlots` - never a specified
+     * back: intrinsic, import-specified, or manually changed for just that slot). This reducer
+     * has no access to the card-document/layout data that screening needs, so it trusts the
+     * explicit `slots` list rather than re-deriving it. Never fires on its own; only ever
+     * dispatched from the apply-all prompt's own explicit, never-pre-checked button.
      */
     applyCardbackToAllSlots: (
       state,
-      action: PayloadAction<{ selectedImage: string }>
+      action: PayloadAction<{ selectedImage: string; slots: Array<number> }>
     ) => {
-      for (const member of state.members) {
+      for (const slot of action.payload.slots) {
+        const member = state.members[slot];
+        if (member == null) {
+          continue;
+        }
         if (member[Back] == null) {
           member[Back] = {
             query: { query: null, cardType: Cardback },

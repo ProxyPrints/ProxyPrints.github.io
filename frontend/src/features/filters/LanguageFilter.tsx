@@ -1,5 +1,5 @@
 import styled from "@emotion/styled";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import Form from "react-bootstrap/Form";
 import ToggleButton from "react-bootstrap/ToggleButton";
 import ToggleButtonGroup from "react-bootstrap/ToggleButtonGroup";
@@ -40,6 +40,13 @@ export const LanguageFilter = ({
   setFilterSettings,
   allowedLanguages,
 }: LanguageFilterProps) => {
+  // GridSelectorFilters.tsx mounts this component in more than one place at once (the display
+  // rail's own inline filters panel and a GridSelectorModal, both simultaneously present in the
+  // DOM - the rail's Collapse keeps its content mounted while closed). A static id here would
+  // collide across those instances, breaking the label[for] -> checkbox accessible-name
+  // association for whichever instance's input isn't first in DOM order.
+  const instanceId = useId();
+  const labelId = `language-filter-label-${instanceId}`;
   const getLanguagesQuery = useGetLanguagesQuery();
   const languageOptions = useMemo(() => {
     const allOptions = (getLanguagesQuery.data ?? []).map((row) => ({
@@ -59,14 +66,14 @@ export const LanguageFilter = ({
 
   return (
     <div data-testid="language-filter">
-      <Form.Label id="language-filter-label" as="span">
+      <Form.Label id={labelId} as="span">
         Languages
       </Form.Label>
       <div>
         <LanguageChipGroup
           type="checkbox"
           name="language-filter"
-          aria-labelledby="language-filter-label"
+          aria-labelledby={labelId}
           value={filterSettings.languages}
           onChange={(selected: Array<string>) =>
             setFilterSettings({ ...filterSettings, languages: selected })
@@ -75,7 +82,7 @@ export const LanguageFilter = ({
           {languageOptions.map((option) => (
             <LanguageChip
               key={option.value}
-              id={`language-chip-${option.value}`}
+              id={`language-chip-${option.value}-${instanceId}`}
               value={option.value}
               variant="outline-secondary"
               size="sm"

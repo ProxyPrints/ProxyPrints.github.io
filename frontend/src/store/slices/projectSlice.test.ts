@@ -470,7 +470,7 @@ describe("cardback flow round - explicit-choice tracking + apply-all", () => {
     ).toBe(false);
   });
 
-  test("applyCardbackToAllSlots overrides EVERY slot's back face, including ones that already differ (custom backs)", () => {
+  test("applyCardbackToAllSlots only touches the slot indices it's given, leaving the rest alone", () => {
     const seeded: Project = {
       ...baseProjectState,
       members: [
@@ -486,7 +486,8 @@ describe("cardback flow round - explicit-choice tracking + apply-all", () => {
         {
           id: "t-1",
           front: null,
-          // A deliberately-custom back, different from the old project default.
+          // A deliberately-custom back - excluded from the `slots` payload below, the way
+          // `cardbackApply.ts`'s `resolveEligibleCardbackApplySlots` would screen it out.
           back: {
             query: { query: null, cardType: "CARDBACK" as CardType },
             selectedImage: "already-custom",
@@ -503,11 +504,11 @@ describe("cardback flow round - explicit-choice tracking + apply-all", () => {
     };
     const applied = projectSlice.reducer(
       seeded,
-      applyCardbackToAllSlots({ selectedImage: "new-cardback" })
+      applyCardbackToAllSlots({ selectedImage: "new-cardback", slots: [0, 2] })
     );
     expect(
       applied.members.map((member) => member[Back]?.selectedImage)
-    ).toStrictEqual(["new-cardback", "new-cardback", "new-cardback"]);
+    ).toStrictEqual(["new-cardback", "already-custom", "new-cardback"]);
     // Front faces are untouched.
     expect(applied.members.every((member) => member[Front] == null)).toBe(true);
   });

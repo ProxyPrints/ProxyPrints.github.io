@@ -158,7 +158,7 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
     ).toHaveCount(0);
   });
 
-  test("toolbar (project-wide) entry: the right rail's swatch strip + its two plain buttons apply and remember independently, and Browse all cardbacks… still opens the full modal with the unchanged apply prompt", async ({
+  test("project-wide entry (now in the left rail): a swatch pick never touches a per-slot custom back, and Apply to all names its blast radius and skips protected slots (Rule A/B)", async ({
     page,
     network,
   }) => {
@@ -170,12 +170,8 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
     await expect(sheetSlots.nth(0).locator("img")).toBeVisible();
     await expect(sheetSlots.nth(1).locator("img")).toBeVisible();
 
-    // Toolbar entry precondition: slot 0 gets a deliberately custom back (cardDocument2) so the
-    // strip-pick assertion below can prove a project-wide pick never touches a per-slot custom
-    // back. (The modal prompt's own "would override" count is re-seeded separately later - the
-    // strip's apply-all wipes this custom back first, and the modal's pick auto-retargets every
-    // slot still following the project cardback, so only a freshly re-created custom back can
-    // survive long enough to be counted.)
+    // Precondition: slot 0 gets a deliberately custom back (cardDocument2) - a manually-changed
+    // back is one of Rule B's three protected sources, so it must survive every apply below.
     await sheetSlots.nth(0).click();
     const slotControl = page.getByTestId("slot-cardback-control");
     await slotControl.getByTestId("slot-cardback-choose").click();
@@ -184,28 +180,28 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
       .getByAltText(cardDocument2.name)
       .click();
 
-    // --- toolbar entry: the section is the strip + two plain buttons (R9) ---
-    const toolbarSection = page.getByTestId("cardback-rail-control");
-    await expect(toolbarSection).toBeVisible();
-    const toolbarStrip = page.getByTestId("cardback-rail-strip");
-    await expect(toolbarStrip).toBeVisible();
-    // Both the project default (cardDocument1) and the custom slot-0 back (cardDocument2) start
-    // unselected in this strip - the selected swatch is the project cardback itself. aria-pressed
-    // lives on the swatch <button>, not the <img> getByAltText resolves to - target the button by
-    // its accessible name (the same title/aria-label the swatch sets) instead.
+    // --- project-wide entry: left-rail subject-matter round moved this out of the right
+    //     (print/export) rail entirely - it now lives beside the per-slot control above, and
+    //     only renders once a slot is selected (slot 0 already is, from the step above). ---
+    const projectSection = page.getByTestId("cardback-rail-control");
+    await expect(projectSection).toBeVisible();
+    const projectStrip = page.getByTestId("cardback-rail-strip");
+    await expect(projectStrip).toBeVisible();
+    // The project default (cardDocument1) is the selected swatch; the custom slot-0 back
+    // (cardDocument2) is not. aria-pressed lives on the swatch <button>, not the <img>
+    // getByAltText resolves to - target the button by its accessible name instead.
     await expect(
-      toolbarStrip.getByRole("button", { name: cardDocument1.name })
+      projectStrip.getByRole("button", { name: cardDocument1.name })
     ).toHaveAttribute("aria-pressed", "true");
+    // No apply prompt until a swatch is actually picked (Rule A - never a pre-armed action).
     await expect(
-      toolbarSection.getByTestId("cardback-rail-apply-all-button")
-    ).toHaveText("Apply to all card backs");
-    await expect(
-      toolbarSection.getByTestId("cardback-rail-set-default-button")
-    ).toHaveText("Set as my default cardback");
+      projectSection.getByTestId("cardback-apply-prompt")
+    ).toHaveCount(0);
 
-    // A project-wide pick via the strip (cardDocument3) overrides the slot following the
-    // project default; the per-slot custom back is untouched.
-    await toolbarStrip.getByAltText(cardDocument3.name).click();
+    // A project-wide pick via the strip (cardDocument3) bulk-replaces the slot that was
+    // following the project default (slot 1); the per-slot custom back (slot 0) is untouched -
+    // unchanged §C.2 bulk-replace behaviour, now exercised from the left rail.
+    await projectStrip.getByAltText(cardDocument3.name).click();
     await page.getByTestId("display-view-toggle-backs").click();
     await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
       "alt",
@@ -216,94 +212,70 @@ test.describe("Cardback apply-all + set-default (SPEC-cardback-pdfwait.md §C.2,
       cardDocument3.name
     );
 
-    // Apply to all / Set as my default, under the strip, act on the project cardback (now
-    // cardDocument3) and flip to done states independently; "Apply to all" overrides the
-    // per-slot custom back too.
-    const applyAllButton = toolbarSection.getByTestId(
-      "cardback-rail-apply-all-button"
-    );
-    const setDefaultButton = toolbarSection.getByTestId(
-      "cardback-rail-set-default-button"
-    );
-    await applyAllButton.click();
-    await expect(applyAllButton).toHaveText("Applied to all ✓");
-    await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
-      "alt",
-      cardDocument3.name
-    );
-    // Slot 0's custom-cardback indicator is gone - it no longer differs from the deck default.
-    await expect(
-      sheetSlots
-        .nth(0)
-        .getByTestId("page-preview-slot-custom-cardback-indicator")
-    ).toHaveCount(0);
-    await setDefaultButton.click();
-    await expect(setDefaultButton).toHaveText("Default set ✓");
-
-    // R9 - the strip apply-all just normalized BOTH slots to cardDocument3, and the modal's own
-    // pick auto-bulk-replaces every slot still following the project cardback (§C.2, unchanged),
-    // so re-seeding a custom back here (cardDocument1, != the modal's upcoming cardDocument2
-    // pick) is what gives the prompt below a real "would override" count - the same precondition
-    // the pre-R9 toolbar test relied on, reached via the per-slot strip instead. The re-pick
-    // happens in the fronts view (where slot selection is exercised elsewhere in this suite);
-    // the modal section below runs in the backs view like the earlier assertions.
-    await page.getByTestId("display-view-toggle-fronts").click();
-    await sheetSlots.nth(0).click();
-    await page
-      .getByTestId("slot-cardback-control")
-      .getByTestId("slot-cardback-choose")
-      .click();
-    await page
-      .getByTestId("slot-cardback-picker")
-      .getByAltText(cardDocument1.name)
-      .click();
-    await expect(page.getByTestId("slot-cardback-picker")).toHaveCount(0);
-    await page.getByTestId("display-view-toggle-backs").click();
-
-    // --- Browse all cardbacks… still opens the same GridSelectorModal; its inline apply prompt
-    //     (thumbnails + count + done states, OWNER AMENDMENT 2/OQ-B) is unchanged. ---
-    await page.getByTestId("cardback-browse-all-button").click();
-    const cardbackModal = page.getByTestId("cardback-grid-selector");
-    await expect(cardbackModal).toBeVisible();
-    await cardbackModal.getByAltText(cardDocument2.name).click();
-
-    const toolbarPrompt = cardbackModal.getByTestId("cardback-apply-prompt");
-    await expect(toolbarPrompt).toBeVisible();
-    // Slot 0's re-seeded custom back (cardDocument1) survives the modal's pick untouched - the
-    // pick's §C.2 bulk-replace only retargeted slot 1 (back === old project cardback
-    // cardDocument3) to cardDocument2 - so the prompt names exactly that one slot as affected.
-    const thumbnails = toolbarPrompt.getByTestId(
+    // Picking surfaces the SAME CardbackApplyPrompt the modal's own footer uses (Rule A) - and
+    // it correctly identifies slot 0 as protected (manually changed) rather than "would
+    // override": the bulk-replace above already caught up every slot that was following the
+    // old default, so there is nothing left for "Apply to all" to change here - a real,
+    // meaningful (0), not a stub.
+    const applyPrompt = projectSection.getByTestId("cardback-apply-prompt");
+    await expect(applyPrompt).toBeVisible();
+    const thumbnails = applyPrompt.getByTestId(
       "cardback-apply-prompt-thumbnails"
     );
     await expect(thumbnails).toBeVisible();
     await expect(thumbnails).toContainText("Slot 1");
-    await expect(thumbnails).not.toContainText("Slot 2");
-    await expect(
-      toolbarPrompt.getByTestId("cardback-apply-all-button")
-    ).toHaveText("Apply to all (1)");
-    await expect(
-      toolbarPrompt.getByTestId("cardback-apply-prompt-not-now")
-    ).toBeVisible();
+    const applyAllButton = applyPrompt.getByTestId("cardback-apply-all-button");
+    const setDefaultButton = applyPrompt.getByTestId(
+      "cardback-set-default-button"
+    );
+    await expect(applyAllButton).toHaveText("Apply to all (0)");
 
-    await toolbarPrompt.getByTestId("cardback-apply-all-button").click();
-    await expect(
-      toolbarPrompt.getByTestId("cardback-apply-all-button")
-    ).toHaveText("Applied to all ✓");
-    await toolbarPrompt.getByTestId("cardback-set-default-button").click();
-    await expect(
-      toolbarPrompt.getByTestId("cardback-set-default-button")
-    ).toHaveText("Default set ✓");
-
-    await cardbackModal.getByRole("button", { name: "Close" }).last().click();
-    await expect(cardbackModal).not.toBeVisible();
-
-    // The sheet reflects the modal's pick - both slots now show cardDocument2's back (the
-    // back view is already active from the earlier display-view-toggle-backs switch).
+    // Rule B regression guard: clicking Apply to all must leave the protected back alone.
+    await applyAllButton.click();
+    await expect(applyAllButton).toHaveText("Applied to all ✓");
     await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
       "alt",
       cardDocument2.name
     );
-    await expect(sheetSlots.nth(1).locator("img")).toHaveAttribute(
+    await expect(
+      sheetSlots
+        .nth(0)
+        .getByTestId("page-preview-slot-custom-cardback-indicator")
+    ).toBeVisible();
+
+    await setDefaultButton.click();
+    await expect(setDefaultButton).toHaveText("Default set ✓");
+
+    // --- Browse all cardbacks… still opens the same GridSelectorModal; its inline apply prompt
+    //     (thumbnails + count + done states, OWNER AMENDMENT 2/OQ-B) is unchanged, and now
+    //     shares the exact same protection logic. Picking cardDocument1 here makes slot 0's
+    //     back (cardDocument2, untouched throughout) differ from the project cardback again, so
+    //     it's named as protected once more - proving the guarantee holds across both entry
+    //     points, not just the rail's own strip. ---
+    await page.getByTestId("cardback-browse-all-button").click();
+    const cardbackModal = page.getByTestId("cardback-grid-selector");
+    await expect(cardbackModal).toBeVisible();
+    await cardbackModal.getByAltText(cardDocument1.name).click();
+
+    const modalPrompt = cardbackModal.getByTestId("cardback-apply-prompt");
+    await expect(modalPrompt).toBeVisible();
+    const modalThumbnails = modalPrompt.getByTestId(
+      "cardback-apply-prompt-thumbnails"
+    );
+    await expect(modalThumbnails).toBeVisible();
+    await expect(modalThumbnails).toContainText("Slot 1");
+    // Slot 1 (currently cardDocument3, was just bulk-replaced along with the pick above to
+    // cardDocument1) is not protected and already matches - only slot 0 is named.
+    await expect(modalThumbnails).not.toContainText("Slot 2");
+    await expect(
+      modalPrompt.getByTestId("cardback-apply-all-button")
+    ).toHaveText("Apply to all (0)");
+
+    await cardbackModal.getByRole("button", { name: "Close" }).last().click();
+    await expect(cardbackModal).not.toBeVisible();
+
+    // Slot 0's protected custom back has survived every apply action above, untouched.
+    await expect(sheetSlots.nth(0).locator("img")).toHaveAttribute(
       "alt",
       cardDocument2.name
     );
