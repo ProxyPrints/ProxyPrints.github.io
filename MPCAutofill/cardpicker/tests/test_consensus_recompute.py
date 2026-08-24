@@ -11,16 +11,24 @@ import pytest
 
 from django.core.management import CommandError, call_command
 
-from cardpicker.management.commands.consensus_recompute import run_consensus_recompute
+from cardpicker import printing_consensus
+from cardpicker.management.commands.consensus_recompute import (
+    _parse_card_ids_argument,
+    run_consensus_recompute,
+)
 from cardpicker.models import (
     ArtistVoteStatus,
+    Card,
     PilotRunLedger,
     PrintingTagStatus,
     TagVoteStatus,
     VotePolarity,
     VoteSource,
 )
-from cardpicker.printing_consensus import resolve_and_persist_printing
+from cardpicker.printing_consensus import (
+    identity_group_expanded_card_ids,
+    resolve_and_persist_printing,
+)
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
@@ -31,6 +39,37 @@ from cardpicker.tests.factories import (
     CardTagVoteFactory,
     TagFactory,
 )
+
+
+@pytest.fixture
+def md5_groups(monkeypatch):
+    """
+    Same in-memory md5-identity-group stand-in `test_md5_group_pooling.py`'s own fixture uses
+    (kept local rather than imported cross-module - no existing test file in this suite imports a
+    fixture from another): `md5_groups("checksum", card_a, card_b)` puts those cards in one
+    group, faking the three `printing_consensus` primitives that read `Card.md5_checksum` so a
+    test doesn't need to hand-craft matching checksum strings.
+    """
+    checksum_by_card_id: dict[int, str] = {}
+
+    def fake_card_md5_checksum(card: Card) -> str | None:
+        return checksum_by_card_id.get(card.pk)
+
+    def fake_md5_checksums_for_card_ids(card_ids) -> set[str]:
+        return {checksum for card_id, checksum in checksum_by_card_id.items() if card_id in set(card_ids)}
+
+    def fake_card_ids_with_md5_checksums(checksums: set[str]) -> list[int]:
+        return [card_id for card_id, checksum in checksum_by_card_id.items() if checksum in checksums]
+
+    monkeypatch.setattr(printing_consensus, "_card_md5_checksum", fake_card_md5_checksum)
+    monkeypatch.setattr(printing_consensus, "_md5_checksums_for_card_ids", fake_md5_checksums_for_card_ids)
+    monkeypatch.setattr(printing_consensus, "_card_ids_with_md5_checksums", fake_card_ids_with_md5_checksums)
+
+    def assign(checksum: str, *cards) -> None:
+        for card in cards:
+            checksum_by_card_id[card.pk] = checksum
+
+    return assign
 
 
 class TestRunConsensusRecomputeDryRun:
@@ -384,3 +423,176 @@ class TestConsensusRecomputeDryRunGuard:
         assert "SKIP-DRYRUN-CHECK" in printed
         ledger = PilotRunLedger.objects.get(command="consensus_recompute")
         assert ledger.counters["skip_dryrun_check_used"] is True
+
+
+class TestParseCardIdsArgument:
+    """Unit coverage for --card-ids' own value parser - no DB needed."""
+
+    def test_parses_comma_separated_list(self):
+        assert _parse_card_ids_argument("101,102,103") == [101, 102, 103]
+
+    def test_strips_whitespace_around_tokens(self):
+        assert _parse_card_ids_argument(" 101 , 102 ") == [101, 102]
+
+    def test_at_file_reads_newline_and_comma_separated_ids(self, tmp_path):
+        path = tmp_path / "ids.txt"
+        path.write_text("101\n102,103\n\n104\n")
+        assert _parse_card_ids_argument(f"@{path}") == [101, 102, 103, 104]
+
+    def test_missing_file_raises_command_error(self, tmp_path):
+        with pytest.raises(CommandError, match="could not read"):
+            _parse_card_ids_argument(f"@{tmp_path / 'missing.txt'}")
+
+    def test_non_integer_token_raises_command_error(self):
+        with pytest.raises(CommandError, match="not a valid Card id"):
+            _parse_card_ids_argument("101,abc")
+
+    def test_empty_input_raises_command_error(self):
+        with pytest.raises(CommandError, match="no card ids parsed"):
+            _parse_card_ids_argument("")
+
+
+class TestRunConsensusRecomputeCardIdsScoping:
+    """issue #931: --card-ids restricts a run to a card set, without changing what any visited
+    pair resolves to - `run_consensus_recompute`'s own `scope_card_ids` parameter is the layer
+    under test here; `Command.handle`'s own --card-ids parsing/expansion is covered by
+    TestConsensusRecomputeCardIdsCommand below."""
+
+    def test_scoping_excludes_cards_outside_the_requested_set(self, db):
+        card_a = CardFactory(tags=[])
+        card_b = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+        CardTagVoteFactory(card=card_b, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+
+        report = run_consensus_recompute(apply=False, scope_card_ids={card_a.pk})
+
+        key = f"None->{TagVoteStatus.UNRESOLVED}"
+        assert report["tag"]["checked"] == 1
+        assert report["tag"]["transitions"][key] == 1
+        assert (card_a.identifier, "Borderless") in report["tag"]["samples"][key]
+        assert (card_b.identifier, "Borderless") not in report["tag"]["samples"][key]
+
+    def test_a_requested_cards_identity_group_sibling_holding_the_votes_is_still_found_and_pooled(self, db, md5_groups):
+        """The case #931 exists for: the requested card's OWN printing_tags are empty, but its
+        identity-group sibling carries the votes - `identity_group_expanded_card_ids` must widen
+        the scope to that sibling, or the group would never be visited (the sibling wouldn't pass
+        the `printing_tags__isnull=False` candidate filter under a narrower, unexpanded scope)
+        and the requested card's status would never update at all."""
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card_b, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card_b, printing=printing, source=VoteSource.USER)
+
+        scope = identity_group_expanded_card_ids([card_a.pk])
+        assert scope == {card_a.pk, card_b.pk}
+
+        report = run_consensus_recompute(apply=True, scope_card_ids=scope)
+
+        key = f"{PrintingTagStatus.UNRESOLVED}->{PrintingTagStatus.RESOLVED}"
+        assert report["printing"]["transitions"][key] == 2
+        for card in (card_a, card_b):
+            card.refresh_from_db()
+            assert card.printing_tag_status == PrintingTagStatus.RESOLVED
+            assert card.inferred_canonical_card_id == printing.pk
+
+    def test_scoped_to_every_voted_card_matches_an_unscoped_run(self, db):
+        card_a = CardFactory(tags=[])
+        card_b = CardFactory(tags=[])
+        printing = CanonicalCardFactory()
+        artist = CanonicalArtistFactory()
+        tag = TagFactory(name="Borderless")
+        CardPrintingTagFactory(card=card_a, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card_a, printing=printing, source=VoteSource.USER)
+        CardArtistVoteFactory(card=card_b, artist=artist, source=VoteSource.USER)
+        CardArtistVoteFactory(card=card_b, artist=artist, source=VoteSource.USER)
+        CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+
+        full = run_consensus_recompute(apply=False)
+        scoped = run_consensus_recompute(apply=False, scope_card_ids={card_a.pk, card_b.pk})
+
+        for kind in ("printing", "artist", "tag"):
+            assert dict(scoped[kind]["transitions"]) == dict(full[kind]["transitions"])
+            assert scoped[kind]["checked"] == full[kind]["checked"]
+
+
+class TestConsensusRecomputeCardIdsCommand:
+    """--card-ids end to end through `Command.handle`: CLI parsing, identity-group expansion,
+    and the PilotRunLedger scope record (issue #931)."""
+
+    def test_command_restricts_to_the_requested_card(self, db):
+        card_a = CardFactory(tags=[])
+        card_b = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+        CardTagVoteFactory(card=card_b, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+
+        call_command("consensus_recompute", f"--card-ids={card_a.pk}")
+
+        card_a.refresh_from_db()
+        card_b.refresh_from_db()
+        assert card_a.tag_vote_statuses == {}  # dry-run: no writes either way
+        ledger = PilotRunLedger.objects.get(command="consensus_recompute")
+        assert ledger.counters["tag"]["pairs_checked"] == 1
+
+    def test_dry_run_with_card_ids_records_card_scope_on_the_ledger(self, db):
+        card_a = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        CardTagVoteFactory(card=card_a, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+
+        call_command("consensus_recompute", f"--card-ids={card_a.pk}")
+
+        ledger = PilotRunLedger.objects.get(command="consensus_recompute")
+        assert ledger.counters["card_scope"]["requested_card_ids"] == 1
+        assert ledger.counters["card_scope"]["expanded_card_ids"] >= 1
+
+    def test_a_run_without_card_ids_has_no_card_scope_on_the_ledger(self, db):
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+
+        call_command("consensus_recompute")
+
+        ledger = PilotRunLedger.objects.get(command="consensus_recompute")
+        assert "card_scope" not in (ledger.counters or {})
+
+    def test_apply_with_card_ids_uses_expanded_scope_and_is_recorded_on_completion(self, db, md5_groups):
+        card_a, card_b = CardFactory(), CardFactory()
+        md5_groups("same-bytes", card_a, card_b)
+        printing = CanonicalCardFactory()
+        CardPrintingTagFactory(card=card_b, printing=printing, source=VoteSource.USER)
+        CardPrintingTagFactory(card=card_b, printing=printing, source=VoteSource.USER)
+
+        call_command("consensus_recompute", f"--card-ids={card_a.pk}", "--apply", "--skip-dryrun-check")
+
+        card_a.refresh_from_db()
+        card_b.refresh_from_db()
+        assert card_a.printing_tag_status == PrintingTagStatus.RESOLVED
+        assert card_b.printing_tag_status == PrintingTagStatus.RESOLVED
+        ledger = PilotRunLedger.objects.get(command="consensus_recompute")
+        assert ledger.counters["card_scope"]["requested_card_ids"] == 1
+        assert ledger.counters["card_scope"]["expanded_card_ids"] == 2
+        assert ledger.counters["printing"]["rows_written"] == 2
+
+    def test_scoped_apply_is_refused_without_any_prior_dry_run(self, db):
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+
+        with pytest.raises(CommandError, match="FORCED DRY-RUN GUARD"):
+            call_command("consensus_recompute", "--apply", f"--card-ids={card.pk}")
+
+    def test_a_full_dry_run_satisfies_the_guard_for_a_scoped_apply(self, db):
+        """Documents the current, intentionally-unmodified guard behaviour (see this command's
+        own OPEN ITEMS): the guard still matches on `command` alone, so ANY completed dry-run of
+        this command - scoped or not - satisfies a scoped --apply's guard."""
+        card = CardFactory(tags=[])
+        tag = TagFactory(name="Borderless")
+        CardTagVoteFactory(card=card, tag=tag, polarity=VotePolarity.APPLY, source=VoteSource.OCR)
+
+        call_command("consensus_recompute")  # unscoped dry-run
+        call_command("consensus_recompute", "--apply", f"--card-ids={card.pk}")  # scoped apply
+
+        ledger = PilotRunLedger.objects.filter(command="consensus_recompute", dry_run=False).get()
+        assert ledger.status == PilotRunLedger.Status.COMPLETED
