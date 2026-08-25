@@ -182,19 +182,23 @@ class Tags:
                         name_with_no_tags = name_with_no_tags[0:start] + name_with_no_tags[end:]
         return name_with_no_tags
 
-    def extract(self, name: Optional[str]) -> tuple[str, set[str], int | None, int | None, str | None]:
+    def extract(self, name: Optional[str]) -> tuple[str, set[str], int | None, int | None, str | None, str | None]:
         """
         This function unpacks a folder or image name which contains a name component and some number of tags
         into its constituents. Also returns the PKs of matched CanonicalCard and CanonicalArtist records
-        (nullable), and a lowercase CanonicalExpansion code "hint" (nullable) extracted from a lone set-code
+        (nullable), a lowercase CanonicalExpansion code "hint" (nullable) extracted from a lone set-code
         bracket token with no accompanying collector number (i.e. one that didn't resolve a CanonicalCard
-        outright) - a soft signal for ranking printing-tag candidates, not a semantic tag.
+        outright) - a soft signal for ranking printing-tag candidates, not a semantic tag - and the raw
+        `{...}` collector number this parse matched against `match_canonical_card` (nullable), regardless of
+        whether that match ended up resolving a `canonical_card` outright (see issue #946 -
+        `cardpicker.filename_candidates` also consults this when it narrowed a multi-candidate set rather
+        than resolving one).
         Tags are wrapped in either [square brackets] or (parentheses), and any combination of [] and () can be used
         within a single name.
         """
 
         if not name:
-            return "", set(), None, None, None
+            return "", set(), None, None, None, None
 
         tag_set: set[str] = set()
         # tags will be removed from this name below
@@ -261,7 +265,7 @@ class Tags:
         ]
         for artifact, replacement in artifacts:
             name_with_no_tags = name_with_no_tags.replace(artifact, replacement)
-        return name_with_no_tags, tag_set, canonical_card_pk, canonical_artist_pk, expansion_hint
+        return name_with_no_tags, tag_set, canonical_card_pk, canonical_artist_pk, expansion_hint, collector_number
 
 
 __all__ = ["Tags"]

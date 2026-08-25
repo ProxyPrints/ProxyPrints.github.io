@@ -1232,6 +1232,28 @@ buckets:
   366 new, Etched 230 new, Borderless 789 new, Future Frame 24 new) — the
   Extended figure corroborated at 90.7% agreement against the independent
   `ImageEvidence.art_edge_class` pixel classifier on the same population.
+- **`filename-candidates-v1`** (`cardpicker.filename_candidates`, NEW
+  2026-08-25, **0 rows — dry-run only, never run**) — not to be confused
+  with `filename-declaration-cast-v1` above (that one casts attribute-chip
+  `CardTagVote`s from filename treatment keywords; this one casts printing
+  `CardPrintingTag` votes). Picks up exactly where `deductive_backfill`'s
+  D1/D2 tiers give up: a filename whose name matches MORE THAN ONE
+  `CanonicalCard` row, which D1/D2 discard as ambiguous with no vote cast at
+  all. Rather than collapsing to no-match, it keeps every name-matched
+  candidate and weighs each one by how many of `expansion_hint`/
+  `canonical_artist_id`/treatment-tag signals corroborate it (base 0.5,
+  +0.2 per corroborating signal, capped at 0.85 — always below D1/D2's
+  exact-match 0.95/0.90), casting one `VoteSource.DEDUCTION` vote per
+  surviving candidate under this one identity. Abstains only on
+  CONTRADICTION — two or more signals each independently corroborating a
+  disjoint subset of the base candidates — never merely on a signal that
+  fails to narrow. `_eligible_base_queryset` excludes any card `deductive_ backfill.DEDUCTIVE_BACKFILL_ANONYMOUS_ID` already voted on, so this never
+  competes with or duplicates D1/D2's exact result. Management command
+  (`manage.py filename_candidate_narrowing`) is dry-run by default; `--write`
+  has never been invoked against production, hence 0 rows. See
+  `docs/theory.md`'s "Filename-candidate weighted narrowing" subsection
+  (§4) for the full mechanism and the reasoning behind the contradiction
+  rule and the multi-vote-per-card safety argument.
 
 Both `frame-style-cast-v1` and the now-retired `bleed-edge-cast-v1` were
 created because the 2026-07-29 composition audit found the only casters for

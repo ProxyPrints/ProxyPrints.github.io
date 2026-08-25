@@ -53,7 +53,7 @@ class Folder:
         """
 
         language, name = extract_language(self.name)
-        name_with_no_tags, extracted_tags, _, _, _ = tags.extract(name)
+        name_with_no_tags, extracted_tags, _, _, _, _ = tags.extract(name)
         return language, sanitisation.fix_whitespace(name_with_no_tags), extracted_tags
 
     def get_language(self, tags: Tags) -> Optional[pycountry.Languages]:
@@ -95,20 +95,30 @@ class Image:
 
     def unpack_name(
         self, tags: Tags
-    ) -> tuple[pycountry.Languages, str, set[str], str, int | None, int | None, str | None]:
+    ) -> tuple[pycountry.Languages, str, set[str], str, int | None, int | None, str | None, str, str | None]:
         """
         The image's name is unpacked according to the below schema. For example, consider `{EN} Opt [NSFW].png`:
              {EN}             opt          [NSFW]   .      png
         └─ language ──┘ └─ card name ──┘ └─ tags ──┘ └─ extension ──┘
+
+        Also returns `name_with_no_language` (issue #946's `Card.raw_name` - the filename component
+        `tags.extract()` is actually called with, before any tag/collector-number stripping) and the
+        `Tags.extract_collector_number()` match it produced (`Card.parsed_collector_number`), so both
+        survive past this call instead of being lost the moment extraction discards its own working state.
         """
 
         assert self.name, "File name is empty string"
         assert "." in self.name, "File name has no extension"
         name_with_no_extension, extension = self.name.rsplit(".", 1)
         language, name_with_no_language = extract_language(name_with_no_extension)
-        name_with_no_tags, extracted_tags, canonical_card_pk, canonical_artist_pk, expansion_hint = tags.extract(
-            name_with_no_language
-        )
+        (
+            name_with_no_tags,
+            extracted_tags,
+            canonical_card_pk,
+            canonical_artist_pk,
+            expansion_hint,
+            parsed_collector_number,
+        ) = tags.extract(name_with_no_language)
         final_name = sanitisation.fix_whitespace(name_with_no_tags)
         return (
             language or self.folder.get_language(tags=tags),
@@ -118,6 +128,8 @@ class Image:
             canonical_card_pk,
             canonical_artist_pk,
             expansion_hint,
+            name_with_no_language,
+            parsed_collector_number,
         )
 
 
