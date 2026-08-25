@@ -509,6 +509,56 @@ how this relates to (and is distinct from) the separate, already-settled
 question of whether Stage D re-votes a card this same backfill cohort
 already touched.
 
+### Filename-candidate weighted narrowing (2026-08-25, issue #946)
+
+`deductive_backfill`'s D1/D2 tiers above resolve a card's filename to a
+printing only when the name matches exactly one `CanonicalCard` row (D1),
+or an explicit `expansion_hint` narrows a multi-match name to exactly one
+(D2). Every other multi-match name — measured at 75.87% of the unlinked
+catalog, `pipeline-artifacts/filename-signal-sizing/` — used to be
+discarded outright by `Tags.match_canonical_card`'s own `len(matched_tags)
+
+> 1`branch: real narrowing work, thrown away the moment it failed to be unique.`cardpicker.filename_candidates` is the channel that keeps it.
+
+For each such card it starts from the same production name index
+(`CandidateNameIndex`, shared with D1/D2 via `local_calculate_verdicts. _get_cached_candidate_name_index()`) and layers up to three further,
+independent signals over the base name-match set — `expansion_hint`, the
+`canonical_artist_id` an explicit artist-tag bracket already resolved, and
+a treatment-tag comparison against each candidate's own
+`CanonicalPrintingMetadata` (full-art/border-color/frame-era) — corroborating
+rather than filtering: a signal that agrees with some but not all base
+candidates raises confidence on the ones it agrees with, and is simply
+discarded (no boost, no narrowing) when it agrees with none, since an
+incomplete catalogue is the likelier explanation for a hint matching zero
+candidates than an impossible card. **Abstention is reserved for
+CONTRADICTION, defined narrowly**: two or more signals that each
+independently corroborate a nonempty subset of the base candidates, whose
+corroborated subsets share no candidate at all — i.e. the filename asserts
+two facts about the same physical card (a set, an artist) that no single
+row in the catalogue satisfies together. A signal that merely fails to
+narrow is not this; only a genuine "cannot both be true" is.
+
+Every surviving candidate is emitted as an ordinary `VoteSource.DEDUCTION`
+`CardPrintingTag` — the same evidence channel `deductive_backfill` already
+writes to, through the same `vote_write.purge_and_write_votes` primitive,
+under one `anonymous_id` (`filename-candidates-v1`). Casting several
+weighted votes for the same card under one identity is safe by
+construction, not by convention: `resolve_weighted_consensus` groups votes
+by _outcome_ (the printing pk), so N guesses about one card land in N
+different outcome groups and can never inflate any single group's weight,
+and a `DEDUCTION` vote can never satisfy the human-backed gate at any
+volume (§4 above) — this channel narrows candidate sets for a human
+reviewer to choose between; it cannot resolve a card by itself, regardless
+of how many candidates it emits or how confidently any one of them is
+scored. Confidence here (0.5 base, +0.2 per corroborating signal, capped
+at 0.85 — always below D1/D2's exact-match 0.95/0.90) is, like every other
+machine confidence in this pipeline (§8a), an informational rank surfaced
+to a human reviewer, not a consensus-weight input:
+`vote_consensus.resolve_vote_weight` resolves weight from `source` alone.
+Default OFF, dry-run by default, scoped to exactly the residual D1/D2
+leaves behind (`_eligible_base_queryset` excludes any card `deductive_ backfill`'s own `anonymous_id` already voted on) — a new evidence channel
+alongside the existing ones, not a new resolver.
+
 ## 5. Honest novelty statement
 
 Nothing in this pipeline is individually new: OCR, perceptual hashing,

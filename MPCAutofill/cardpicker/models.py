@@ -621,6 +621,23 @@ class Card(models.Model):
     # source filename (e.g. "[MH3]") - not resolved to a specific printing (no collector
     # number was present to pair with it), just a ranking hint for get_ranked_printing_candidates
     expansion_hint = models.CharField(max_length=10, blank=True, db_index=True)
+    # issue #946: the RAW pre-tag-strip name and PARSED collector number `Tags.extract()` itself
+    # computed and matched against `match_canonical_card`, before either was discarded once
+    # parsing moved on - persisted so a wrong or missing link is auditable ("the uploader named
+    # the wrong card" vs "we misread a correctly-named upload") by query, instead of only by
+    # re-deriving the parse from the current `folder_location`/`name` and hoping neither has
+    # drifted since ingestion. `raw_name` is `Image.unpack_name`'s own `name_with_no_language` -
+    # the filename component `Tags.extract()` is actually called with (post-language-strip,
+    # pre-tag-strip); `name` (above) is what's left once extraction removes every matched
+    # tag/collector-number token, so the two necessarily differ whenever any tag matched.
+    # `parsed_collector_number` is `Tags.extract_collector_number()`'s own match, kept even when
+    # it never resolved a `canonical_card` outright (e.g. it only narrowed a multi-candidate set -
+    # see `cardpicker.filename_candidates`) - a strictly larger population than `canonical_card`
+    # being set. Both blank (never null) when nothing was present, matching `expansion_hint`'s
+    # own convention; `Folder.unpack_name` (folder-level tag extraction only, no per-image
+    # collector-number parse) never populates either, so both stay "" for a folder-only field.
+    raw_name = models.CharField(max_length=200, blank=True, default="")
+    parsed_collector_number = models.CharField(max_length=16, blank=True, default="")
     # Perceptual hash (imagehash.phash) of THIS card's own uploaded image - NOT the same concept
     # as CanonicalCard.image_hash above (that's a Scryfall CANDIDATE image's hash, computed
     # lazily by local_phash.get_or_compute_canonical_hash; this is OUR OWN uploaded image's

@@ -42,7 +42,7 @@ class TestExtractFuzzyTagPromotion:
         TagFactory(name="Full Art", aliases=[])
         tags = Tags()
 
-        name, tag_set, _, _, _ = tags.extract("Lightning Bolt [Fullart]")
+        name, tag_set, _, _, _, _ = tags.extract("Lightning Bolt [Fullart]")
 
         # extract() itself doesn't collapse whitespace left behind by a stripped tag -
         # real callers (Image/Folder.unpack_name) apply fix_whitespace() on top, same as here
@@ -61,7 +61,7 @@ class TestExtractFuzzyTagPromotion:
 
         # a fresh Tags() instance picks up the alias that got promoted above
         tags_again = Tags()
-        name, tag_set, _, _, _ = tags_again.extract("Lightning Strike [Fullart]")
+        name, tag_set, _, _, _, _ = tags_again.extract("Lightning Strike [Fullart]")
 
         assert fix_whitespace(name) == "Lightning Strike"
         assert tag_set == {"Full Art"}
@@ -75,7 +75,7 @@ class TestExtractFuzzyTagPromotion:
         TagFactory(name="Full Art", aliases=[])
         tags = Tags()
 
-        name, tag_set, _, _, _ = tags.extract("Lightning Bolt [Fullish]")
+        name, tag_set, _, _, _, _ = tags.extract("Lightning Bolt [Fullish]")
 
         assert name == "Lightning Bolt [Fullish]"
         assert tag_set == set()
@@ -107,7 +107,7 @@ class TestExtractFuzzyTagPromotion:
         )
         tags = Tags()
 
-        name, tag_set, _, _, _ = tags.extract("Lightning Bolt [Fullish]")
+        name, tag_set, _, _, _, _ = tags.extract("Lightning Bolt [Fullish]")
 
         assert name == "Lightning Bolt [Fullish]"
         assert tag_set == set()
@@ -119,7 +119,7 @@ class TestExtractFuzzyTagPromotion:
         TagFactory(name="Full Art", aliases=[])
         tags = Tags()
 
-        name, tag_set, _, _, _ = tags.extract("Lightning Bolt [Zzyzx]")
+        name, tag_set, _, _, _, _ = tags.extract("Lightning Bolt [Zzyzx]")
 
         assert name == "Lightning Bolt [Zzyzx]"
         assert tag_set == set()
@@ -131,7 +131,7 @@ class TestExtractExpansionHint:
         CanonicalExpansionFactory(code="mh3")
         tags = Tags()
 
-        name, tag_set, canonical_card_pk, _, expansion_hint = tags.extract("Lightning Bolt [MH3]")
+        name, tag_set, canonical_card_pk, _, expansion_hint, _ = tags.extract("Lightning Bolt [MH3]")
 
         assert fix_whitespace(name) == "Lightning Bolt"
         assert tag_set == set()
@@ -140,7 +140,7 @@ class TestExtractExpansionHint:
 
     def test_no_hint_when_no_expansion_code_present(self, db):
         tags = Tags()
-        name, _, _, _, expansion_hint = tags.extract("Lightning Bolt [Foo]")
+        name, _, _, _, expansion_hint, _ = tags.extract("Lightning Bolt [Foo]")
         assert name == "Lightning Bolt [Foo]"
         assert expansion_hint is None
 
@@ -149,7 +149,12 @@ class TestExtractExpansionHint:
         canonical_card = CanonicalCardFactory(expansion=expansion, collector_number="100")
         tags = Tags()
 
-        name, _, canonical_card_pk, _, expansion_hint = tags.extract("Lightning Bolt [LEA] {100}")
+        name, _, canonical_card_pk, _, expansion_hint, parsed_collector_number = tags.extract(
+            "Lightning Bolt [LEA] {100}"
+        )
 
         assert canonical_card_pk == canonical_card.pk
         assert expansion_hint is None
+        # issue #946: the raw `{100}` match survives even though it already resolved a
+        # canonical_card outright - `parsed_collector_number` round-trips regardless of outcome.
+        assert parsed_collector_number == "100"

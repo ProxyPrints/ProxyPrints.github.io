@@ -255,6 +255,17 @@ class CandidatePrinting:
     # to contribute" by every consumer. Trailing position + default so every existing hand-built
     # `CandidatePrinting(...)` in the test suite keeps constructing unchanged.
     artist_name: str = ""
+    # issue #946 (`cardpicker.filename_candidates`' treatment-tag signal): the same
+    # `CanonicalPrintingMetadata` row's own `full_art`/`border_color`/`frame` columns, carried at
+    # the same zero-extra-query cost as `artist_name` above (`CandidateNameIndex`'s single scan
+    # already `select_related`s `printing_metadata`). `""`/`False` where the printing has no
+    # metadata row at all (same "nothing to contribute" convention as `artist_name`), not
+    # `None` - every consumer compares these against a real card-tag-derived value, never
+    # branches on "was metadata present at all". Trailing position + defaults, same rationale as
+    # `artist_name`'s own comment.
+    border_color: str = ""
+    frame: str = ""
+    full_art: bool = False
 
 
 # FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX (module docstring) - stripped from the RAW name BEFORE
@@ -370,9 +381,27 @@ class CandidateNameIndex:
     def __init__(self) -> None:
         by_name: dict[str, list[CandidatePrinting]] = collections.defaultdict(list)
         rows = CanonicalCard.objects.select_related("expansion", "printing_metadata", "artist").values_list(
-            "pk", "name", "expansion__code", "collector_number", "printing_metadata__edhrec_rank", "artist__name"
+            "pk",
+            "name",
+            "expansion__code",
+            "collector_number",
+            "printing_metadata__edhrec_rank",
+            "artist__name",
+            "printing_metadata__border_color",
+            "printing_metadata__frame",
+            "printing_metadata__full_art",
         )
-        for pk, name, expansion_code, collector_number, edhrec_rank, artist_name in rows:
+        for (
+            pk,
+            name,
+            expansion_code,
+            collector_number,
+            edhrec_rank,
+            artist_name,
+            border_color,
+            frame,
+            full_art,
+        ) in rows:
             by_name[to_searchable(name)].append(
                 CandidatePrinting(
                     pk=pk,
@@ -383,6 +412,11 @@ class CandidateNameIndex:
                     # artist_name`. `artist` is nullable, so a printing with no artist on record
                     # yields None here and is normalised to "" rather than carried as None.
                     artist_name=artist_name or "",
+                    # issue #946: same "no metadata row -> normalise the null" treatment as
+                    # artist_name above - see CandidatePrinting.border_color/frame/full_art.
+                    border_color=border_color or "",
+                    frame=frame or "",
+                    full_art=bool(full_art),
                 )
             )
         self._by_name = dict(by_name)

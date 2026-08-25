@@ -73,6 +73,8 @@ def transform_image_into_object(source: Source, image: Image, tags: Tags) -> Car
         canonical_card_pk,
         canonical_artist_pk,
         expansion_hint,
+        raw_name,
+        parsed_collector_number,
     ) = image.unpack_name(tags=tags)
 
     searchable_name = to_searchable(name)
@@ -116,6 +118,10 @@ def transform_image_into_object(source: Source, image: Image, tags: Tags) -> Car
         canonical_card_id=canonical_card_pk,
         canonical_artist_id=canonical_artist_pk,
         expansion_hint=expansion_hint or "",
+        # issue #946: see Card.raw_name/parsed_collector_number's own docstring - persisted
+        # verbatim from this same parse, never re-derived later.
+        raw_name=raw_name,
+        parsed_collector_number=parsed_collector_number or "",
         # issue #473 PR-1: copied verbatim from the listing (image.md5_checksum is None for
         # LOCAL_FILE sources and any Drive file whose listing genuinely omitted it - never
         # invented here, matching Card.md5_checksum's own docstring).
@@ -257,6 +263,9 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
             | (incoming[identifier].canonical_artist_id != existing[identifier].canonical_artist_id)
             # or if the expansion hint has changed.
             | (incoming[identifier].expansion_hint != existing[identifier].expansion_hint)
+            # or if the raw pre-tag-strip name or parsed collector number has changed (issue #946).
+            | (incoming[identifier].raw_name != existing[identifier].raw_name)
+            | (incoming[identifier].parsed_collector_number != existing[identifier].parsed_collector_number)
             # or if the md5 checksum has changed (issue #473 PR-1) - unlike content_phash, this
             # is free metadata already present on `incoming[identifier]` from the same listing
             # this whole sync already fetched (no extra network call needed), so an ordinary
@@ -302,6 +311,8 @@ def bulk_sync_objects(source: Source, cards: list[Card]) -> None:
                     "canonical_card",
                     "canonical_artist",
                     "expansion_hint",
+                    "raw_name",
+                    "parsed_collector_number",
                     "md5_checksum",
                     "sha256_checksum",
                 ],
