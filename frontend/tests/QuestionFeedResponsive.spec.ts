@@ -129,8 +129,12 @@ test.describe("question feed - Level 2 layout containment (real-device regressio
       const cardImage = page.getByAltText(cardDocument1.name);
       await expect(cardImage).toBeVisible();
 
+      // The bleed-crop scan is now scaled up and clipped by its `overflow: hidden` frame
+      // (question-feed-subject-art-image), so the raw <img> itself is deliberately larger
+      // than what's visible - that frame, not the <img> element, is what must be contained.
+      const artFrame = page.getByTestId("question-feed-subject-art-image");
       const panelBox = await cardPanel.boundingBox();
-      const imageBox = await cardImage.boundingBox();
+      const imageBox = await artFrame.boundingBox();
       expect(panelBox).not.toBeNull();
       expect(imageBox).not.toBeNull();
       expect(isContainedWithin(imageBox!, panelBox!)).toBe(true);

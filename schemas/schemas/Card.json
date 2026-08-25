@@ -111,6 +111,10 @@
     "suggestedCanonicalCardConfidence": {
       "description": "SEAM, not yet populated server-side (owner decision, D14 numeric-confidence round, 2026-07-23 - see docs/features/display-left-rail.md's \"D14 numeric confidence\" section for the full flag-to-backend note). Expected shape once a calibrated score lands: an integer 0-100 percentage, present only alongside a non-null suggestedCanonicalCard (never sent for an already-resolved card, same opt-in-per-endpoint pattern as suggestedCanonicalCard/suggestedFilterTagNames above). Until the backend sends this field, every real API response omits it and it reads as undefined - ConfidenceElement.tsx degrades to its existing qualitative \"Suggested\" pill in that case, never a crash or a fabricated number.",
       "type": ["number", "null"]
+    },
+    "measuredBleedMm": {
+      "description": "This card's own measured bleed margin in millimetres, Method A (aspect-ratio-derived) from cardpicker.local_bleed_calculator - the same closed-form reading of this image's own pixel aspect ratio already used for the appropriate-bleed machine vote (Card.measured_bleed_mm(), BLEED_MARGIN_MM - ImageEvidence.bleed_diff_mm). null whenever no current ImageEvidence row has completed the geometry_bleed extractor for this card. Populated only for the single item the question feed actually serves (question_feed._log_served attaches it post-serialise, after the served card is already chosen - never computed while scanning pool-eligibility candidates, so it costs nothing anywhere else Card.serialise() is called) - every other response leaves this null. A consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend) / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already assumes.",
+      "type": ["number", "null"]
     }
   },
   "required": [

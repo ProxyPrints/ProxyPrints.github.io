@@ -765,6 +765,30 @@ class Card(models.Model):
 
         return get_suggested_filter_tags_overlay([self.pk]).get(self.pk, [])
 
+    def measured_bleed_mm(self) -> Optional[float]:
+        """
+        This card's own measured bleed margin in millimetres - Method A (aspect-ratio-derived)
+        from `local_bleed_calculator`'s own formula (`BLEED_MARGIN_MM - bleed_diff_mm`), reading
+        the SAME `ImageEvidence.bleed_diff_mm` Stage C already persists (no re-fetch, no
+        re-classification). Deliberately Method A alone, not the calculator's full two-method
+        cross-check: Method A measures the DISPLAYED image's own pixel aspect ratio, exactly what
+        a symmetric edge crop of that same image needs, whereas Method B's per-edge pinline
+        reading answers a different geometric question (trim-to-pinline distance) a single
+        symmetric crop has no use for. `None` whenever no current `ImageEvidence` row has
+        completed the `geometry_bleed` extractor for this card (`local_bleed_calculator.
+        REQUIRED_EXTRACTOR_KEYS`) - callers fall back to the profile default bleed in that case,
+        never a guess.
+        """
+        from cardpicker.image_evidence import (
+            current_evidence_queryset,  # local import - avoids a models<->image_evidence cycle
+        )
+        from cardpicker.local_bleed_calculator import BLEED_MARGIN_MM
+
+        evidence = current_evidence_queryset(self).order_by("-updated_at").first()
+        if evidence is None or evidence.bleed_diff_mm is None:
+            return None
+        return round(BLEED_MARGIN_MM - evidence.bleed_diff_mm, 4)
+
     def _serialise_tag_vote_statuses(self) -> dict[str, SerialisedTagVoteDisplayStatus]:
         """
         Collapses `tag_vote_statuses` (5-way DB status) to the 2-way suggested/resolved

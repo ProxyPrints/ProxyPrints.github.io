@@ -9,6 +9,7 @@ import {
   printingCandidate2,
   printingCandidate3,
 } from "@/common/test-constants";
+import { subjectCropFractions } from "@/features/questionFeed/subjectBleedCrop";
 import {
   artistCandidatesTwoResults,
   artistConsensusUnresolved,
@@ -25,6 +26,7 @@ import {
   questionFeedIdentifyPrinting,
   questionFeedIdentifyPrintingGroupedByIllustration,
   questionFeedIdentifyPrintingOpenBorderColor,
+  questionFeedIdentifyPrintingWithMeasuredBleed,
   questionFeedTag,
   submitArtistVoteResolvesToCanonicalArtist1,
   submitIllustrationVoteCastsPrintingAndArtist,
@@ -1025,6 +1027,67 @@ test.describe("question feed - subject art title placement (issue #741)", () => 
     expect(titleBox).not.toBeNull();
     expect(boxesIntersect(artBox!, titleBox!)).toBe(false);
     expect(titleBox!.y).toBeGreaterThanOrEqual(artBox!.y + artBox!.height);
+  });
+});
+
+test.describe("question feed - subject scan cropped to its own measured bleed", () => {
+  test("a card carrying its own measured bleed is scaled per-axis to exactly that fraction, not the profile default", async ({
+    page,
+    network,
+  }) => {
+    // 5mm is deliberately far from STANDARD_BLEED_MARGIN_MM (3.175mm) - if the crop were
+    // silently ignoring the served value and always using the profile default, this scale
+    // factor would be wrong and the assertion below would catch it.
+    const knownBleedMm = 5;
+    network.use(
+      questionFeedIdentifyPrintingWithMeasuredBleed(knownBleedMm),
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const frameBox = await page
+      .getByTestId("question-feed-subject-art-image")
+      .boundingBox();
+    const imageBox = await page.getByAltText(cardDocument1.name).boundingBox();
+    expect(frameBox).not.toBeNull();
+    expect(imageBox).not.toBeNull();
+
+    const { x: fracX, y: fracY } = subjectCropFractions(knownBleedMm);
+    const expectedScaleX = 1 / (1 - 2 * fracX);
+    const expectedScaleY = 1 / (1 - 2 * fracY);
+
+    expect(imageBox!.width / frameBox!.width).toBeCloseTo(expectedScaleX, 1);
+    expect(imageBox!.height / frameBox!.height).toBeCloseTo(expectedScaleY, 1);
+    // The frame itself still renders at the trimmed 63:88 card ratio regardless of the
+    // scan's own bleed - only the <img> inside it scales.
+    expect(frameBox!.width / frameBox!.height).toBeCloseTo(63 / 88, 1);
+  });
+
+  test("a card with no measured bleed still renders, cropped to the profile default instead of a broken image", async ({
+    page,
+    network,
+  }) => {
+    network.use(
+      questionFeedIdentifyPrintingWithMeasuredBleed(null),
+      ...defaultHandlers
+    );
+    await loadPageWithDefaultBackend(page, "whatsthat");
+
+    const frameBox = await page
+      .getByTestId("question-feed-subject-art-image")
+      .boundingBox();
+    const imageBox = await page.getByAltText(cardDocument1.name).boundingBox();
+    expect(frameBox).not.toBeNull();
+    expect(imageBox).not.toBeNull();
+    // Renders at all (no zero-size/collapsed box) and is still contained by its frame in the
+    // horizontal axis - proves the null-bleed fallback produces a real, sane crop rather than
+    // an unstyled or broken layout.
+    expect(imageBox!.width).toBeGreaterThan(0);
+    expect(imageBox!.height).toBeGreaterThan(0);
+
+    const { x: fracX, y: fracY } = subjectCropFractions(null);
+    const expectedScaleX = 1 / (1 - 2 * fracX);
+    expect(imageBox!.width / frameBox!.width).toBeCloseTo(expectedScaleX, 1);
   });
 });
 
