@@ -12,6 +12,9 @@ class Command(BaseCommand):
         "tiers discard as 'ambiguous, no match' (see cardpicker/filename_candidates.py). Every "
         "candidate is kept and weighted by how many of expansion_hint/canonical_artist_id/"
         "treatment-tag signals corroborate it, rather than collapsing the card to no-match. "
+        "The emitted set is capped at MAX_EMITTED_CANDIDATES per card, and a card whose base "
+        "candidate set exceeds TOO_MANY_CANDIDATES_THRESHOLD abstains instead of emitting a "
+        "truncated guess (see cardpicker/filename_candidates.py). "
         "These are suggestions, never resolutions - the human-backed gate in vote_consensus."
         "resolve_weighted_consensus means machine-only votes can never resolve a card by "
         "themselves. Idempotent: a card that already has a vote from this command, or from "
@@ -57,6 +60,7 @@ class Command(BaseCommand):
         print(f"Cards considered: {result.cards_considered}")
         print(f"Cards with a candidate set: {result.cards_with_candidates}")
         print(f"Cards abstained (no name match): {result.cards_abstained_no_name_match}")
+        print(f"Cards abstained (too many candidates): {result.cards_abstained_too_many_candidates}")
         print(f"Cards abstained (contradiction): {result.cards_abstained_contradiction}")
         print(f"Votes written: {result.votes_written}")
         print("Candidate-set size distribution:")
