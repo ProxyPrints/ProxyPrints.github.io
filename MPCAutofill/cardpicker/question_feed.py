@@ -192,6 +192,7 @@ from cardpicker.models import (
     CardArtistVote,
     CardIllustrationVote,
     CardPrintingTag,
+    CardQuestionAbstention,
     CardScanLog,
     CardTagVote,
     HiddenCard,
@@ -295,6 +296,12 @@ _REQUIRED_EVIDENCE_TYPES = frozenset({"border", "artist", "collector_line"})
 # values, not restated) - the likely-resolve routing gate below checks whether any of them has
 # reached RESOLVED_APPLY consensus for a card before treating its border colour as "recorded".
 _BORDER_COLOR_TAG_NAMES = frozenset(BORDER_COLOR_TO_TAG.values())
+
+# Reason code the frontend's "Can't tell from this scan." border answer sends on
+# `CardQuestionAbstention.reason` - a stated inability to read the border colour off the scan,
+# not a deferral. A plain Skip on the same question abstains with `reason=None`, which never
+# matches this constant, so it is excluded from exclusion (the card stays answerable later).
+CANNOT_TELL_ABSTENTION_REASON = "cannot-tell"
 
 
 def _evidence_justifies_confirmation(vote: CardPrintingTag) -> bool:
@@ -867,6 +874,38 @@ def _voter_answered_tag_card_ids_by_tag(anonymous_id: str) -> dict[str, set[int]
     return {tag_name: identity_group_expanded_card_ids(card_ids) for tag_name, card_ids in card_ids_by_tag.items()}
 
 
+def _voter_cannot_tell_card_ids(anonymous_id: str, question_type: str) -> set[int]:
+    """Cards (md5-widened) where this voter recorded a `CardQuestionAbstention` for
+    `question_type` with `reason=CANNOT_TELL_ABSTENTION_REASON` - a stated "the scan doesn't
+    show this", not a deferral. A plain Skip on the same question type abstains with
+    `reason=None` and never matches this filter, so it stays answerable later."""
+    card_ids = CardQuestionAbstention.objects.filter(
+        anonymous_id=anonymous_id, question_type=question_type, reason=CANNOT_TELL_ABSTENTION_REASON
+    ).values_list("card_id", flat=True)
+    return identity_group_expanded_card_ids(set(card_ids))
+
+
+def _voter_answered_border_card_ids(anonymous_id: str) -> set[int]:
+    """
+    Cards (md5-widened) this voter has already answered the border question for: either cast a
+    `CardTagVote` on one of the four border-colour tags (`_BORDER_COLOR_TAG_NAMES` - the same
+    vote every `BorderColorQuestion` chip tap casts), or abstained on a served `border` question
+    with reason `cannot-tell` (`_voter_cannot_tell_card_ids`).
+
+    Treated as ONE axis, not four independent tags like `_voter_answered_tag_card_ids_by_tag`'s
+    general attribute-chip walk: the four colours are mutually exclusive on the frontend's own
+    `BORDER_COLOR_GROUP`, so a vote on any one of them answers the whole "which border colour"
+    question for this card - unlike the ~11-tag walk, where a card carries many independent
+    questions and answering one must not hide the others.
+    """
+    voted_card_ids = CardTagVote.objects.filter(
+        anonymous_id=anonymous_id, tag__name__in=_BORDER_COLOR_TAG_NAMES
+    ).values_list("card_id", flat=True)
+    return identity_group_expanded_card_ids(set(voted_card_ids)) | _voter_cannot_tell_card_ids(
+        anonymous_id, TypeEnum.border.value
+    )
+
+
 def _not_official_art_card_ids() -> set[int]:
     """
     Cards a human has declared NOT official art via a positive (`VotePolarity.APPLY`)
@@ -1042,7 +1081,7 @@ def _candidates_split_on_border(candidates: Sequence[PrintingCandidate]) -> bool
     return len(border_colors) > 1
 
 
-def _likely_resolve_item(card: Card, allow_narrowing: bool = True) -> Optional[QuestionFeedItem]:
+def _likely_resolve_item(card: Card, allow_narrowing: bool = True, *, anonymous_id: str) -> Optional[QuestionFeedItem]:
     """
     For the LIKELY-RESOLVE pool (a printing question one more agreeing human vote would
     resolve, per `is_likely_resolve_printing`): serves the MOST DISCRIMINATING question for
@@ -1050,8 +1089,12 @@ def _likely_resolve_item(card: Card, allow_narrowing: bool = True) -> Optional[Q
     docs/features/wtc-question-model.md's routing rule -
 
     1. If `allow_narrowing` and `card`'s own candidates split on border colour AND that colour
-       hasn't been recorded yet (`_card_border_unrecorded`/`_candidates_split_on_border`), a
-       border answer narrows this card's own candidate set - serve `border`.
+       hasn't been recorded yet (`_card_border_unrecorded`/`_candidates_split_on_border`) AND
+       `anonymous_id` hasn't already answered border for this card
+       (`_voter_answered_border_card_ids`), a border answer narrows this card's own candidate
+       set - serve `border`. Without the third condition this card would be re-served to the
+       same voter on every future visit, since the first two conditions are catalogue-wide
+       facts that a single voter's own answer never changes.
     2. Otherwise, if `allow_narrowing` and `card`'s illustration identity is still unresolved,
        serve the illustration question.
     3. Otherwise, fall through to the pre-existing behaviour: a `confirm_suggestion` (it has a
@@ -1086,7 +1129,11 @@ def _likely_resolve_item(card: Card, allow_narrowing: bool = True) -> Optional[Q
     candidates = get_ranked_printing_candidates(card, card.name)
     serialised_candidates = [candidate.serialise_as_printing_candidate() for candidate in candidates]
     if allow_narrowing:
-        if _card_border_unrecorded(card) and _candidates_split_on_border(serialised_candidates):
+        if (
+            _card_border_unrecorded(card)
+            and _candidates_split_on_border(serialised_candidates)
+            and card.pk not in _voter_answered_border_card_ids(anonymous_id)
+        ):
             return _border_item(card)
         # Gated on actually carrying illustration data (mirrors `_tier_4_fresh`'s own
         # `illustration_id__isnull=False` filter), not merely UNRESOLVED - that status is the
@@ -1611,7 +1658,7 @@ def get_next_question_feed_item(
                 _likely_resolve_narrowing_ratio(anonymous_id)
                 < settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO
             )
-            item = _likely_resolve_item(likely_resolve_card, allow_narrowing=allow_narrowing)
+            item = _likely_resolve_item(likely_resolve_card, allow_narrowing=allow_narrowing, anonymous_id=anonymous_id)
             if item is not None:
                 return _log_served(
                     anonymous_id, item, QuestionFeedServedPool.LIKELY_RESOLVE, "printing_one_vote_from_resolving"
