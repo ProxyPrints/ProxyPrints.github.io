@@ -32,8 +32,8 @@ def _clear_cache():
     cache.clear()
 
 
-def make_review_card(*, content_phash=None, symbol_phash=None, legal_line_raw_text="", name=None):
-    card = CardFactory(content_phash=content_phash, **({"name": name} if name else {}))
+def make_review_card(*, md5_checksum=None, content_phash=None, symbol_phash=None, legal_line_raw_text="", name=None):
+    card = CardFactory(md5_checksum=md5_checksum, content_phash=content_phash, **({"name": name} if name else {}))
     CardScanLog.objects.create(
         card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
     )
@@ -47,12 +47,12 @@ def make_review_card(*, content_phash=None, symbol_phash=None, legal_line_raw_te
     return card
 
 
-def make_pair_cluster(content_phash: int = 1):
-    """Two cards sharing an exact content_phash - the smallest possible real cluster. Returns
+def make_pair_cluster(md5_checksum: str = "md5-1"):
+    """Two cards sharing an exact md5_checksum - the smallest possible real cluster. Returns
     (a, b, cluster_id) - cluster_id is whichever of the two has the lower pk, matching
     cardpicker.review_clusters' own "lowest-card-id member" convention."""
-    a = make_review_card(content_phash=content_phash)
-    b = make_review_card(content_phash=content_phash)
+    a = make_review_card(md5_checksum=md5_checksum)
+    b = make_review_card(md5_checksum=md5_checksum)
     cluster_id = a.identifier if a.pk < b.pk else b.identifier
     return a, b, cluster_id
 
@@ -77,10 +77,10 @@ class TestPostReviewClusterList:
 
     def test_moderator_sees_clusters_sorted_by_size_descending(self, client, moderator_user):
         for _ in range(3):
-            make_review_card(content_phash=1)
+            make_review_card(md5_checksum="md5-1")
         for _ in range(2):
-            make_review_card(content_phash=2)
-        make_review_card(content_phash=3)  # singleton - never listed
+            make_review_card(md5_checksum="md5-2")
+        make_review_card(md5_checksum="md5-3")  # singleton - never listed
 
         client.force_login(moderator_user)
         body = self.fetch(client).json()
@@ -88,13 +88,13 @@ class TestPostReviewClusterList:
         assert [item["size"] for item in body["items"]] == [3, 2]
 
     def test_cluster_item_shape(self, client, moderator_user):
-        a, b, cluster_id = make_pair_cluster(content_phash=123)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-123")
         client.force_login(moderator_user)
         body = self.fetch(client).json()
         (item,) = body["items"]
         assert item["size"] == 2
         assert {m["identifier"] for m in item["members"]} == {a.identifier, b.identifier}
-        assert item["signals"] == [{"signalType": "content_phash", "value": "123", "memberCount": 2}]
+        assert item["signals"] == [{"signalType": "md5_checksum", "value": "md5-123", "memberCount": 2}]
         assert item["clusterId"] in {a.identifier, b.identifier}
 
     def test_invalid_page_is_a_bad_request(self, client, moderator_user):
@@ -125,7 +125,7 @@ class TestPostReviewClusterDetail:
         assert self.fetch(client, "whatever").status_code == 403
 
     def test_moderator_sees_full_member_list(self, client, moderator_user):
-        a, b, cluster_id = make_pair_cluster(content_phash=7)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-7")
         client.force_login(moderator_user)
         response = self.fetch(client, cluster_id)
         assert response.status_code == 200
@@ -174,7 +174,7 @@ class TestPostConfirmReviewCluster:
         # (VoteSource.USER, weight 1.0, no privilege boost - printing consensus, unlike tag
         # consensus, never consults moderator privilege) is not enough to resolve a card by
         # itself - it contributes exactly one ordinary human vote, same as any other voter's.
-        a, b, cluster_id = make_pair_cluster(content_phash=42)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-42")
         client.force_login(moderator_user)
         response = self.fetch(client, cluster_id, [a.identifier, b.identifier])
         assert response.status_code == 200
@@ -191,7 +191,7 @@ class TestPostConfirmReviewCluster:
         # test_vote_queue_views.py etc. already use to test single-vote resolution).
         settings.PRINTING_TAG_MIN_VOTES = 1
         settings.PRINTING_TAG_MIN_SHARE = 0.5
-        a, b, cluster_id = make_pair_cluster(content_phash=42)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-42")
 
         client.force_login(moderator_user)
         response = self.fetch(client, cluster_id, [a.identifier, b.identifier])
@@ -211,7 +211,7 @@ class TestPostConfirmReviewCluster:
             assert vote.vote_surface == "review_cluster_confirm"
 
     def test_confirm_is_idempotent_per_user_and_card(self, client, moderator_user):
-        a, b, cluster_id = make_pair_cluster(content_phash=42)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-42")
         client.force_login(moderator_user)
 
         first = self.fetch(client, cluster_id, [a.identifier, b.identifier])
@@ -225,7 +225,7 @@ class TestPostConfirmReviewCluster:
         assert CardPrintingTag.objects.filter(card=b).count() == 1
 
     def test_partial_confirm_only_votes_for_the_submitted_subset(self, client, moderator_user):
-        a, b, cluster_id = make_pair_cluster(content_phash=42)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-42")
         client.force_login(moderator_user)
 
         response = self.fetch(client, cluster_id, [a.identifier])
@@ -234,8 +234,8 @@ class TestPostConfirmReviewCluster:
         assert not CardPrintingTag.objects.filter(card=b).exists()
 
     def test_identifier_not_in_the_cluster_is_rejected_whole(self, client, moderator_user):
-        a, b, cluster_id = make_pair_cluster(content_phash=42)
-        outsider = make_review_card(content_phash=999)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-42")
+        outsider = make_review_card(md5_checksum="md5-999")
         client.force_login(moderator_user)
 
         response = self.fetch(client, cluster_id, [a.identifier, outsider.identifier])
@@ -246,7 +246,7 @@ class TestPostConfirmReviewCluster:
     def test_confirm_invalidates_the_list_cache(self, client, moderator_user, settings):
         settings.PRINTING_TAG_MIN_VOTES = 1
         settings.PRINTING_TAG_MIN_SHARE = 0.5
-        a, b, cluster_id = make_pair_cluster(content_phash=42)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-42")
         client.force_login(moderator_user)
 
         list_response = client.post(
@@ -263,7 +263,7 @@ class TestPostConfirmReviewCluster:
         assert list_response_after.json()["hits"] == 0
 
     def test_different_moderators_each_get_their_own_vote(self, client, moderator_user, plain_user, moderators_group):
-        a, b, cluster_id = make_pair_cluster(content_phash=55)
+        a, b, cluster_id = make_pair_cluster(md5_checksum="md5-55")
         second_moderator = plain_user
         second_moderator.groups.add(moderators_group)
 

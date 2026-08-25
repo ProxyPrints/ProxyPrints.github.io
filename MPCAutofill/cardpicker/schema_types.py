@@ -2766,8 +2766,8 @@ class ReviewClusterMember(BaseModel):
 
 
 class ReviewClusterSignalType(str, Enum):
-    contentphash = "content_phash"
     legallinetext = "legal_line_text"
+    md5checksum = "md5_checksum"
     symbolphash = "symbol_phash"
 
 
@@ -2778,9 +2778,9 @@ class ReviewClusterSignal(BaseModel):
     """
     signalType: ReviewClusterSignalType
     value: str
-    """The shared value that binds this signal's members together - a decimal string for
-    content_phash/symbol_phash (avoids JS bigint precision issues), or the normalized
-    legal-line text itself for legal_line_text.
+    """The shared value that binds this signal's members together - the md5 checksum for
+    md5_checksum, a decimal string for symbol_phash (avoids JS bigint precision issues), or
+    the normalized legal-line text itself for legal_line_text.
     """
 
     @staticmethod

@@ -17,8 +17,8 @@ from cardpicker.review_clusters import (
     MIN_ALNUM_DENSITY,
     MIN_NORMALIZED_TEXT_LENGTH,
     REVIEW_CLUSTER_CACHE_KEY,
-    SIGNAL_TYPE_CONTENT_PHASH,
     SIGNAL_TYPE_LEGAL_LINE_TEXT,
+    SIGNAL_TYPE_MD5_CHECKSUM,
     SIGNAL_TYPE_SYMBOL_PHASH,
     compute_review_clusters,
     find_cluster,
@@ -36,12 +36,13 @@ def _clear_cache():
     cache.clear()
 
 
-def make_review_card(*, content_phash=None, symbol_phash=None, legal_line_raw_text="", name=None):
+def make_review_card(*, md5_checksum=None, content_phash=None, symbol_phash=None, legal_line_raw_text="", name=None):
     """A card routed to the slow-path review queue (a real CardScanLog row, same as
     local_calculate_verdicts.run_slow_path_calculator would write) with an optional CURRENT
     ImageEvidence row (content_hash matching this card's own content_phash, same freshness
-    convention every real caller relies on)."""
-    card = CardFactory(content_phash=content_phash, **({"name": name} if name else {}))
+    convention every real caller relies on). `md5_checksum` is the clustering identity signal;
+    `content_phash` here only anchors evidence freshness for symbol_phash/legal-line tests."""
+    card = CardFactory(md5_checksum=md5_checksum, content_phash=content_phash, **({"name": name} if name else {}))
     CardScanLog.objects.create(
         card=card, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
     )
@@ -93,27 +94,35 @@ class TestNormalizeLegalLineText:
 
 class TestComputeReviewClusters:
     def test_singletons_are_excluded_from_the_cluster_list(self, db):
-        make_review_card(content_phash=111)
-        make_review_card(content_phash=222)
+        make_review_card(md5_checksum="md5-111")
+        make_review_card(md5_checksum="md5-222")
         assert compute_review_clusters() == []
 
-    def test_exact_content_phash_match_forms_a_cluster(self, db):
-        a = make_review_card(content_phash=42)
-        b = make_review_card(content_phash=42)
+    def test_exact_md5_checksum_match_forms_a_cluster(self, db):
+        a = make_review_card(md5_checksum="md5-42")
+        b = make_review_card(md5_checksum="md5-42")
         clusters = compute_review_clusters()
         assert len(clusters) == 1
         (cluster,) = clusters
         assert cluster.size == 2
         assert {m.identifier for m in cluster.members} == {a.identifier, b.identifier}
         assert cluster.signals == [
-            _signal(SIGNAL_TYPE_CONTENT_PHASH, "42", 2),
+            _signal(SIGNAL_TYPE_MD5_CHECKSUM, "md5-42", 2),
         ]
 
-    def test_near_but_not_exact_content_phash_never_merges(self, db):
-        # this is the measurement's own headline guardrail: no Hamming-distance edges, ever -
-        # a one-bit-different hash must never be treated as "the same card".
-        make_review_card(content_phash=0b1010)
-        make_review_card(content_phash=0b1011)
+    def test_different_md5_checksums_never_merge(self, db):
+        # md5 is byte-exact identity, not a distance metric - two distinct checksums are two
+        # distinct printings' worth of bytes, full stop, regardless of how similar they look.
+        make_review_card(md5_checksum="deadbeef00000000000000000000001")
+        make_review_card(md5_checksum="deadbeef00000000000000000000002")
+        assert compute_review_clusters() == []
+
+    def test_a_card_sharing_content_phash_but_not_md5_never_merges(self, db):
+        # the defect this module now closes: two cards can perceptually hash identical while
+        # being genuinely different printings (different bytes) - content_phash must never be
+        # allowed to group them.
+        make_review_card(content_phash=999, md5_checksum="md5-real-a")
+        make_review_card(content_phash=999, md5_checksum="md5-real-b")
         assert compute_review_clusters() == []
 
     def test_exact_symbol_phash_match_forms_a_cluster(self, db):
@@ -142,11 +151,11 @@ class TestComputeReviewClusters:
         assert compute_review_clusters() == []
 
     def test_cross_signal_type_transitivity_merges_a_three_card_chain(self, db):
-        # A-B share content_phash, B-C share legal text, A and C share NOTHING directly - the
+        # A-B share md5_checksum, B-C share legal text, A and C share NOTHING directly - the
         # measurement's own "conservative grouping... union" headline number depends on this
         # cross-signal-type transitivity being intentional, not a bug.
-        a = make_review_card(content_phash=7)
-        b = make_review_card(content_phash=7, legal_line_raw_text="shared legal line text!!")
+        a = make_review_card(md5_checksum="shared-md5")
+        b = make_review_card(md5_checksum="shared-md5", content_phash=7, legal_line_raw_text="shared legal line text!!")
         c = make_review_card(content_phash=8, legal_line_raw_text="shared legal line text!!")
         clusters = compute_review_clusters()
         assert len(clusters) == 1
@@ -154,13 +163,13 @@ class TestComputeReviewClusters:
         assert cluster.size == 3
         assert {m.identifier for m in cluster.members} == {a.identifier, b.identifier, c.identifier}
         signal_types = {s.signal_type for s in cluster.signals}
-        assert signal_types == {SIGNAL_TYPE_CONTENT_PHASH, SIGNAL_TYPE_LEGAL_LINE_TEXT}
+        assert signal_types == {SIGNAL_TYPE_MD5_CHECKSUM, SIGNAL_TYPE_LEGAL_LINE_TEXT}
 
     def test_multiple_disjoint_clusters_sorted_by_size_descending(self, db):
         for _ in range(3):
-            make_review_card(content_phash=1)
+            make_review_card(md5_checksum="md5-1")
         for _ in range(2):
-            make_review_card(content_phash=2)
+            make_review_card(md5_checksum="md5-2")
         clusters = compute_review_clusters()
         assert [c.size for c in clusters] == [3, 2]
 
@@ -168,6 +177,21 @@ class TestComputeReviewClusters:
         make_review_card(content_phash=None)
         make_review_card(content_phash=None)
         assert compute_review_clusters() == []
+
+    def test_a_card_with_no_content_phash_but_a_real_md5_still_forms_a_cluster(self, db):
+        # a card whose content_phash was never computed (e.g. a Drive-sourced card whose listing
+        # walk populated md5 but whose phash extraction hasn't run yet) must not be excluded from
+        # clustering just because it lacks content_phash - its md5_checksum comes straight off the
+        # Card row, independent of the (content_phash-anchored) evidence lookup.
+        a = CardFactory(content_phash=None, md5_checksum="md5-no-phash")
+        CardScanLog.objects.create(
+            card=a, anonymous_id=SLOW_PATH_ANONYMOUS_ID, skip_reason=SLOW_PATH_TO_REVIEW_SKIP_REASON
+        )
+        b = make_review_card(md5_checksum="md5-no-phash")
+        clusters = compute_review_clusters()
+        assert len(clusters) == 1
+        (cluster,) = clusters
+        assert {m.identifier for m in cluster.members} == {a.identifier, b.identifier}
 
     def test_decision_count_arithmetic_matches_the_issue_262_measurement_shape(self, db):
         """Fixture-scale sanity check against issue #262's own read-only measurement ("16,928
@@ -181,14 +205,14 @@ class TestComputeReviewClusters:
         shape (a few large groups, mostly singletons)."""
         total_cards = 0
         expected_clustered_cards = 0
-        for phash, group_size in ((1, 5), (2, 3), (3, 2)):  # three multi-card clusters
+        for md5_checksum, group_size in (("md5-1", 5), ("md5-2", 3), ("md5-3", 2)):  # three multi-card clusters
             for _ in range(group_size):
-                make_review_card(content_phash=phash)
+                make_review_card(md5_checksum=md5_checksum)
             total_cards += group_size
             expected_clustered_cards += group_size
         singleton_count = 6
         for i in range(singleton_count):
-            make_review_card(content_phash=100 + i)
+            make_review_card(md5_checksum=f"md5-singleton-{i}")
         total_cards += singleton_count
 
         clusters = compute_review_clusters()
@@ -200,8 +224,8 @@ class TestComputeReviewClusters:
         assert decisions == 3 + 6 == 9  # 3 cluster-decisions + 6 singleton-decisions
 
     def test_resolved_cards_drop_out_of_the_queue(self, db):
-        make_review_card(content_phash=55)
-        b = make_review_card(content_phash=55)
+        make_review_card(md5_checksum="md5-55")
+        b = make_review_card(md5_checksum="md5-55")
         b.printing_tag_status = PrintingTagStatus.NO_MATCH
         b.save()
         clusters = compute_review_clusters()
@@ -224,34 +248,34 @@ class TestComputeReviewClusters:
 class TestReviewClusterCache:
     def test_cache_miss_computes_and_populates(self, db):
         assert cache.get(REVIEW_CLUSTER_CACHE_KEY) is None
-        make_review_card(content_phash=1)
-        make_review_card(content_phash=1)
+        make_review_card(md5_checksum="md5-1")
+        make_review_card(md5_checksum="md5-1")
         clusters = get_cached_review_clusters()
         assert len(clusters) == 1
         assert cache.get(REVIEW_CLUSTER_CACHE_KEY) == clusters
 
     def test_cache_hit_does_not_reflect_a_new_card(self, db):
-        make_review_card(content_phash=1)
-        make_review_card(content_phash=1)
+        make_review_card(md5_checksum="md5-1")
+        make_review_card(md5_checksum="md5-1")
         first = get_cached_review_clusters()
         assert len(first) == 1
 
-        make_review_card(content_phash=1)  # a third card sharing the same signal
+        make_review_card(md5_checksum="md5-1")  # a third card sharing the same signal
         cached_again = get_cached_review_clusters()
         assert cached_again == first  # still stale - cache wasn't invalidated
 
     def test_force_refresh_bypasses_the_cache(self, db):
-        make_review_card(content_phash=1)
-        make_review_card(content_phash=1)
+        make_review_card(md5_checksum="md5-1")
+        make_review_card(md5_checksum="md5-1")
         get_cached_review_clusters()
 
-        make_review_card(content_phash=1)
+        make_review_card(md5_checksum="md5-1")
         refreshed = get_cached_review_clusters(force_refresh=True)
         assert refreshed[0].size == 3
 
     def test_invalidate_clears_the_cache(self, db):
-        make_review_card(content_phash=1)
-        make_review_card(content_phash=1)
+        make_review_card(md5_checksum="md5-1")
+        make_review_card(md5_checksum="md5-1")
         get_cached_review_clusters()
         assert cache.get(REVIEW_CLUSTER_CACHE_KEY) is not None
         invalidate_review_cluster_cache()
@@ -260,8 +284,8 @@ class TestReviewClusterCache:
 
 class TestFindCluster:
     def test_finds_by_cluster_id(self, db):
-        make_review_card(content_phash=1)
-        make_review_card(content_phash=1)
+        make_review_card(md5_checksum="md5-1")
+        make_review_card(md5_checksum="md5-1")
         clusters = compute_review_clusters()
         found = find_cluster(clusters, clusters[0].cluster_id)
         assert found is clusters[0]

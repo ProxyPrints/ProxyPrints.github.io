@@ -2,20 +2,29 @@
 Review-queue clustering (public issue #262): groups cards routed to the human review queue
 (`CardScanLog(anonymous_id=local_calculate_verdicts.SLOW_PATH_ANONYMOUS_ID,
 skip_reason=local_calculate_verdicts.SLOW_PATH_TO_REVIEW_SKIP_REASON)`, see that module's docstring)
-by CONSERVATIVE exact-match signals only, per issue #262's own read-only measurement comment
-(2026-07-21): exact `Card.content_phash` union exact `ImageEvidence.symbol_phash` union exact
-normalized legal-line text - "conservative grouping... collapses 16,928 cards -> 11,802
-decisions (2,208 multi-card clusters covering 7,334 cards + 9,594 singletons)".
+by CONSERVATIVE exact-match signals only: exact `Card.md5_checksum` union exact
+`ImageEvidence.symbol_phash` union exact normalized legal-line text.
 
-WHAT THIS DELIBERATELY DOES NOT DO: Hamming-distance/near-duplicate clustering. The same
-measurement comment proved this fails - single-linkage union-find over near-duplicate edges
-(Hamming <=4 on symbol_phash) welded a 1,582-card "cluster" whose true max pairwise distance was
-32 (mean 15.6), and <=8 absorbed 47.6% of the population into one cluster. Only EXACT equality
-on any of the three signals ever creates an edge here - union-find over exact edges is safe
-(no false transitive chaining risk: two cards either share a literal identical value or they
-don't, there's no threshold to creep). Cross-SIGNAL-TYPE transitivity (A-B via content_phash,
-B-C via legal text, so A/B/C end up in one cluster despite A and C sharing nothing directly) is
-intentional and is exactly how issue #262's own headline number was computed - it is only
+`md5_checksum` is the identity signal here, not `content_phash`. `content_phash` is a
+perceptual hash (imagehash.phash on the uploaded image) - stable across re-uploads of a
+visually near-identical image, but that stability is exactly why it cannot stand in for
+identity: two genuinely different printings (e.g. a normal frame and a Distressed Border
+variant of the same illustration) can perceptually hash identical while differing byte-for-byte.
+`post_confirm_review_cluster` (views.py) applies one NO_MATCH verdict to every card in a
+confirmed cluster, so a signal that can silently merge two different printings is unsafe to
+group on. md5 is byte-exact - equal md5 means the same file bytes, which is the only claim
+"these are the same printing" can safely rest on. `content_phash` remains available on the
+`Card`/`ImageEvidence` models for the near-duplicate similarity work it's actually suited to
+(see `cardpicker.local_clustering`); it is deliberately withdrawn as a signal in this module.
+
+WHAT THIS DELIBERATELY DOES NOT DO: Hamming-distance/near-duplicate clustering. Issue #262's own
+measurement proved this fails - single-linkage union-find over near-duplicate edges (Hamming <=4
+on symbol_phash) welded a 1,582-card "cluster" whose true max pairwise distance was 32 (mean
+15.6), and <=8 absorbed 47.6% of the population into one cluster. Only EXACT equality on any of
+the three signals ever creates an edge here - union-find over exact edges is safe (no false
+transitive chaining risk: two cards either share a literal identical value or they don't, there's
+no threshold to creep). Cross-SIGNAL-TYPE transitivity (A-B via md5, B-C via legal text, so
+A/B/C end up in one cluster despite A and C sharing nothing directly) is intentional; it is only
 same-signal NEAR-DUPLICATE chaining that's forbidden.
 
 Cache/compute strategy (issue #262 item 1's own ask - "pick the simplest thing that answers a
@@ -59,7 +68,7 @@ from cardpicker.models import (
 # Guardrails on the normalized-legal-line-text signal (issue #262 measurement's own mandate -
 # "top-15 groups include pure OCR noise like '4'"). Both must pass for normalized text to count
 # as a grouping signal at all; a card whose legal-line OCR fails either check contributes no
-# text-based edge (its content_phash/symbol_phash signals, if any, are unaffected).
+# text-based edge (its md5_checksum/symbol_phash signals, if any, are unaffected).
 MIN_NORMALIZED_TEXT_LENGTH = 12
 MIN_ALNUM_DENSITY = 0.5
 
@@ -67,9 +76,9 @@ REVIEW_CLUSTER_CACHE_KEY = "review_clusters_v1"
 REVIEW_CLUSTER_CACHE_TTL_SECONDS = 300
 
 # The three signal types a cluster's `signals` list can report - order here is also the display
-# order the API returns them in (content, then set-symbol, then text), not load-bearing for
+# order the API returns them in (md5, then set-symbol, then text), not load-bearing for
 # clustering itself (union-find doesn't care what order edges are added in).
-SIGNAL_TYPE_CONTENT_PHASH = "content_phash"
+SIGNAL_TYPE_MD5_CHECKSUM = "md5_checksum"
 SIGNAL_TYPE_SYMBOL_PHASH = "symbol_phash"
 SIGNAL_TYPE_LEGAL_LINE_TEXT = "legal_line_text"
 
@@ -111,7 +120,7 @@ class CardSignals:
     identifier: str
     name: str
     small_thumbnail_url: str
-    content_phash: Optional[int]
+    md5_checksum: Optional[str]
     symbol_phash: Optional[int]
     legal_line_text: Optional[str]  # already normalized+guardrailed - see normalize_legal_line_text
 
@@ -207,12 +216,26 @@ def _current_evidence_by_card_id(cards: "list[Card]") -> dict[int, tuple[Optiona
     live md5, null-tolerant, same rule `image_evidence.current_evidence_queryset` applies for the
     single-card case) and returns {card_id: (symbol_phash, legal_line_raw_text)}. One query total,
     not one per card: ordered so the first row seen per card_id in iteration order is its most
-    recent, then filtered in Python against that card's live content_phash/md5_checksum."""
-    card_ids = [c.pk for c in cards if c.content_phash is not None]
+    recent, then filtered in Python against that card's live content_phash/md5_checksum.
+
+    Eligibility for this lookup is gated on EITHER live signal being present, not just
+    content_phash: a card can carry a real md5_checksum with no content_phash at all (e.g. a
+    Drive-sourced card whose listing walk populated md5 but whose phash extraction hasn't run
+    or failed) and must not be silently excluded from its own symbol_phash/legal-line lookup
+    just because it lacks the other signal. `ImageEvidence.content_hash` is itself NOT NULL, so
+    this card's own evidence rows (if any) still can't currently pass the content_hash freshness
+    check below when its live content_phash is None - this broadens eligibility correctly rather
+    than leaving it keyed on the wrong field, without claiming to recover evidence the schema
+    can't currently supply."""
+    card_ids = [c.pk for c in cards if c.content_phash is not None or c.md5_checksum is not None]
     if not card_ids:
         return {}
-    live_content_phash_by_card_id = {c.pk: c.content_phash for c in cards if c.content_phash is not None}
-    live_md5_by_card_id = {c.pk: c.md5_checksum for c in cards if c.content_phash is not None}
+    live_content_phash_by_card_id = {
+        c.pk: c.content_phash for c in cards if c.content_phash is not None or c.md5_checksum is not None
+    }
+    live_md5_by_card_id = {
+        c.pk: c.md5_checksum for c in cards if c.content_phash is not None or c.md5_checksum is not None
+    }
     result: dict[int, tuple[Optional[int], str]] = {}
     rows = (
         ImageEvidence.objects.filter(card_id__in=card_ids)
@@ -245,7 +268,7 @@ def _collect_card_signals() -> list[CardSignals]:
                 identifier=card.identifier,
                 name=card.name,
                 small_thumbnail_url=card.get_small_thumbnail_url() or "",
-                content_phash=card.content_phash,
+                md5_checksum=card.md5_checksum,
                 symbol_phash=symbol_phash,
                 legal_line_text=normalize_legal_line_text(legal_line_raw_text),
             )
@@ -280,7 +303,7 @@ def _build_clusters(all_signals: list[CardSignals]) -> list[ReviewCluster]:
             for other in card_ids[1:]:
                 uf.union(first, other)
 
-    _union_all_sharing(lambda s: s.content_phash)
+    _union_all_sharing(lambda s: s.md5_checksum)
     _union_all_sharing(lambda s: s.symbol_phash)
     _union_all_sharing(lambda s: s.legal_line_text)
 
@@ -315,7 +338,7 @@ def _build_clusters(all_signals: list[CardSignals]) -> list[ReviewCluster]:
 
 
 _SIGNAL_KEY_FNS: list[tuple[str, Callable[[CardSignals], Optional[object]]]] = [
-    (SIGNAL_TYPE_CONTENT_PHASH, lambda s: s.content_phash),
+    (SIGNAL_TYPE_MD5_CHECKSUM, lambda s: s.md5_checksum),
     (SIGNAL_TYPE_SYMBOL_PHASH, lambda s: s.symbol_phash),
     (SIGNAL_TYPE_LEGAL_LINE_TEXT, lambda s: s.legal_line_text),
 ]
@@ -375,7 +398,7 @@ __all__ = [
     "MIN_ALNUM_DENSITY",
     "REVIEW_CLUSTER_CACHE_KEY",
     "REVIEW_CLUSTER_CACHE_TTL_SECONDS",
-    "SIGNAL_TYPE_CONTENT_PHASH",
+    "SIGNAL_TYPE_MD5_CHECKSUM",
     "SIGNAL_TYPE_SYMBOL_PHASH",
     "SIGNAL_TYPE_LEGAL_LINE_TEXT",
     "normalize_legal_line_text",
