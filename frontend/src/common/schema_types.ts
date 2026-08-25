@@ -1139,16 +1139,16 @@ export interface ReviewClusterSignal {
   memberCount: number;
   signalType: ReviewClusterSignalType;
   /**
-   * The shared value that binds this signal's members together - a decimal string for
-   * content_phash/symbol_phash (avoids JS bigint precision issues), or the normalized
-   * legal-line text itself for legal_line_text.
+   * The shared value that binds this signal's members together - the md5 checksum for
+   * md5_checksum, a decimal string for symbol_phash (avoids JS bigint precision issues), or
+   * the normalized legal-line text itself for legal_line_text.
    */
   value: string;
 }
 
 export enum ReviewClusterSignalType {
-  ContentPhash = "content_phash",
   LegalLineText = "legal_line_text",
+  Md5Checksum = "md5_checksum",
   SymbolPhash = "symbol_phash",
 }
 
@@ -4391,6 +4391,6 @@ const typeMap: any = {
   ],
   LoadDeckResponseKind: ["deck", "snapshot"],
   Reason: ["broken_image", "low_quality", "nsfw", "other", "wrong_card"],
-  ReviewClusterSignalType: ["content_phash", "legal_line_text", "symbol_phash"],
+  ReviewClusterSignalType: ["legal_line_text", "md5_checksum", "symbol_phash"],
   VoteQueueRequestKind: ["artist", "printing", "tag"],
 };
