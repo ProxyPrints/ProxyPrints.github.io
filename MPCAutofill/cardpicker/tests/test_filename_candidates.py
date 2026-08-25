@@ -2,8 +2,10 @@ from cardpicker.deductive_backfill import DEDUCTIVE_BACKFILL_ANONYMOUS_ID
 from cardpicker.filename_candidates import (
     FILENAME_CANDIDATES_ANONYMOUS_ID,
     MAX_CANDIDATE_CONFIDENCE,
+    MAX_EMITTED_CANDIDATES,
     NAME_ONLY_CONFIDENCE,
     SIGNAL_CONFIDENCE_BONUS,
+    TOO_MANY_CANDIDATES_THRESHOLD,
     generate_candidates_for_card,
     run_filename_candidate_narrowing,
     select_candidates,
@@ -174,6 +176,54 @@ class TestGenerateCandidatesForCard:
         assert result.abstain_reason is None
         assert {c.printing_id for c in result.candidates} == {1, 2}
 
+    def test_small_candidate_set_is_emitted_in_full(self, db):
+        card = CardFactory(name="Forest", expansion_hint="", canonical_artist_id=None, tags=[])
+        index = _FixedIndex(
+            [CandidatePrinting(pk=pk, expansion_code="ust", collector_number=str(pk)) for pk in range(3)]
+        )
+        result = generate_candidates_for_card(card, index, {})
+        assert result.abstain_reason is None
+        assert len(result.candidates) == 3
+        assert {c.printing_id for c in result.candidates} == {0, 1, 2}
+
+    def test_candidate_set_over_threshold_abstains_instead_of_truncating(self, db):
+        # a card whose name match alone resolves to hundreds of candidates (basic lands, staple
+        # commons) has told us nothing a truncated top-5 could honestly assert.
+        card = CardFactory(name="Forest", expansion_hint="", canonical_artist_id=None, tags=[])
+        index = _FixedIndex(
+            [
+                CandidatePrinting(pk=pk, expansion_code="ust", collector_number=str(pk))
+                for pk in range(TOO_MANY_CANDIDATES_THRESHOLD + 1)
+            ]
+        )
+        result = generate_candidates_for_card(card, index, {})
+        assert result.candidates == ()
+        assert result.abstain_reason == "too-many-candidates"
+
+    def test_twenty_candidates_abstains_under_threshold(self, db):
+        card = CardFactory(name="Forest", expansion_hint="", canonical_artist_id=None, tags=[])
+        index = _FixedIndex(
+            [CandidatePrinting(pk=pk, expansion_code="ust", collector_number=str(pk)) for pk in range(20)]
+        )
+        result = generate_candidates_for_card(card, index, {})
+        assert result.candidates == ()
+        assert result.abstain_reason == "too-many-candidates"
+
+    def test_candidate_set_under_threshold_but_over_cap_emits_only_top_n_by_confidence(self, db):
+        # below TOO_MANY_CANDIDATES_THRESHOLD (so no abstention), but above MAX_EMITTED_CANDIDATES
+        # - only the highest-confidence candidates survive, and the expansion_hint match (higher
+        # confidence than the unboosted rest) must be among them.
+        card = CardFactory(name="Forest", expansion_hint="wwk", canonical_artist_id=None, tags=[])
+        candidates = [CandidatePrinting(pk=pk, expansion_code="ust", collector_number=str(pk)) for pk in range(10)]
+        candidates.append(CandidatePrinting(pk=99, expansion_code="wwk", collector_number="99"))
+        index = _FixedIndex(candidates)
+        result = generate_candidates_for_card(card, index, {})
+        assert result.abstain_reason is None
+        assert len(result.candidates) == MAX_EMITTED_CANDIDATES
+        by_pk = {c.printing_id: c for c in result.candidates}
+        assert 99 in by_pk
+        assert by_pk[99].confidence == NAME_ONLY_CONFIDENCE + SIGNAL_CONFIDENCE_BONUS
+
 
 class TestEligibility:
     def test_card_already_covered_by_deductive_backfill_is_excluded(self, db):
@@ -258,3 +308,19 @@ class TestRunFilenameCandidateNarrowing:
         assert result.cards_abstained_contradiction == 1
         assert result.votes_written == 0
         assert not CardPrintingTag.objects.filter(card=card).exists()
+
+    def test_no_name_match_and_too_many_candidates_are_counted_separately(self, db):
+        for i in range(TOO_MANY_CANDIDATES_THRESHOLD + 1):
+            printing = CanonicalCardFactory(name="Mountain", expansion=CanonicalExpansionFactory(code=f"e{i}"))
+            CanonicalPrintingMetadataFactory(canonical_card=printing)
+        huge_card = CardFactory(name="Mountain")
+        unmatched_card = CardFactory(name="Nonexistent Card Name Nobody Printed")
+
+        result = run_filename_candidate_narrowing(dry_run=True)
+
+        assert result.cards_abstained_too_many_candidates == 1
+        assert result.cards_abstained_no_name_match == 1
+        assert result.cards_with_candidates == 0
+        assert result.votes_written == 0
+        assert not CardPrintingTag.objects.filter(card=huge_card).exists()
+        assert not CardPrintingTag.objects.filter(card=unmatched_card).exists()

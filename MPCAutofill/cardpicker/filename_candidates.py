@@ -55,6 +55,16 @@ card (e.g. "this printing is from set X" and "this printing was illustrated by a
 single row in our own catalogue satisfies together. That is the narrow case where corroboration
 becomes impossible rather than merely absent, and it is the only case this module abstains on
 rather than weighing.
+
+CAPPING THE EMITTED SET (issue #946 follow-up, "cap the candidate set before it can be written"):
+a bounded production dry-run found ~14.6% of eligible cards (basic lands and other staple
+reprints) carrying 900+ name-matched candidates each, and since signal matching only WEIGHTS
+`base_candidates` rather than filtering it, every one of those hundreds was being emitted as a
+vote. Two changes fix this without touching the signals themselves: (1) a card whose base
+candidate set exceeds `TOO_MANY_CANDIDATES_THRESHOLD` abstains outright (reason
+"too-many-candidates") rather than emitting a handful of specific printings an evidence set that
+large cannot actually support; (2) a card that clears that bar still emits at most
+`MAX_EMITTED_CANDIDATES`, the top candidates by confidence.
 """
 
 import collections
@@ -72,6 +82,7 @@ from cardpicker.deductive_backfill import (
 )
 from cardpicker.local_calculate_verdicts import _get_cached_candidate_name_index
 from cardpicker.local_identify_printing_tags import (
+    PHASH_MAX_CANDIDATES,
     CandidateNameIndex,
     CandidatePrinting,
 )
@@ -102,8 +113,29 @@ NAME_ONLY_CONFIDENCE = 0.5
 SIGNAL_CONFIDENCE_BONUS = 0.2
 MAX_CANDIDATE_CONFIDENCE = 0.85
 
+# Cap on how many candidates a single card's result actually EMITS as votes (issue #946 follow-
+# up: "cap the candidate set before it can be written"). Owner ruling: a ranked shortlist, top N
+# by weight, fewer when a signal already makes the guess more decisive. Distinct from
+# TOO_MANY_CANDIDATES_THRESHOLD below - that governs whether this module has anything informative
+# to assert AT ALL; this governs how many assertions it makes once it does. Measured against the
+# live catalogue's own candidate-size distribution for cards that clear that threshold (2
+# candidates: 644 cards; 3: 522; 4: 486; 5: 361 - pipeline-artifacts/filename-signal-sizing/), a
+# cap of 5 leaves the emitted set UNTRUNCATED for the large majority of cards that reach this
+# point; only the long tail above 5 gets narrowed.
+MAX_EMITTED_CANDIDATES = 5
+
+# Reuse local_identify_printing_tags.PHASH_MAX_CANDIDATES (12) as the "candidate set this large
+# asserts nothing a consumer can act on" line, rather than inventing a second, unrelated number:
+# that constant already encodes this exact judgment call against the same underlying data (a name
+# match too broad to be useful - basic lands/staple commons with hundreds of printings), just
+# reached via a different caller (local_identify_printing_tags' phash engine skips per-candidate
+# hashing work above this same line, for the identical reason - see that constant's own comment).
+# A truncated top-5 out of a base set numbering in the hundreds would assert five specific
+# printings the evidence never supported; abstaining is the honest output instead.
+TOO_MANY_CANDIDATES_THRESHOLD = PHASH_MAX_CANDIDATES
+
 CandidateSignal = Literal["expansion_hint", "artist", "treatment"]
-AbstainReason = Literal["no-name-match", "contradiction"]
+AbstainReason = Literal["no-name-match", "contradiction", "too-many-candidates"]
 
 
 @dataclass(frozen=True)
@@ -170,6 +202,8 @@ def generate_candidates_for_card(
     base_candidates = index.candidates_for(card.name)
     if not base_candidates:
         return CardCandidateResult(card_id=card.pk, abstain_reason="no-name-match")
+    if len(base_candidates) > TOO_MANY_CANDIDATES_THRESHOLD:
+        return CardCandidateResult(card_id=card.pk, abstain_reason="too-many-candidates")
 
     signal_matches: dict[CandidateSignal, list[CandidatePrinting]] = {}
 
@@ -202,7 +236,7 @@ def generate_candidates_for_card(
         for c in matches:
             matched_signal_counts[c.pk].add(signal)
 
-    weighted = tuple(
+    all_weighted = [
         WeightedCandidate(
             printing_id=c.pk,
             confidence=min(
@@ -212,7 +246,9 @@ def generate_candidates_for_card(
             matched_signals=frozenset(matched_signal_counts.get(c.pk, ())),
         )
         for c in base_candidates
-    )
+    ]
+    all_weighted.sort(key=lambda wc: (-wc.confidence, wc.printing_id))
+    weighted = tuple(all_weighted[:MAX_EMITTED_CANDIDATES])
     return CardCandidateResult(card_id=card.pk, candidates=weighted)
 
 
@@ -272,6 +308,7 @@ class RunResult:
     cards_considered: int = 0
     cards_with_candidates: int = 0
     cards_abstained_no_name_match: int = 0
+    cards_abstained_too_many_candidates: int = 0
     cards_abstained_contradiction: int = 0
     votes_written: int = 0
     # candidate-set size -> number of cards that produced a set of exactly that size (the "size
@@ -323,6 +360,9 @@ def run_filename_candidate_narrowing(
         if card_result.abstain_reason == "no-name-match":
             result.cards_abstained_no_name_match += 1
             continue
+        if card_result.abstain_reason == "too-many-candidates":
+            result.cards_abstained_too_many_candidates += 1
+            continue
         if card_result.abstain_reason == "contradiction":
             result.cards_abstained_contradiction += 1
             if len(result.contradiction_examples) < _CONTRADICTION_EXAMPLES_LIMIT:
@@ -359,6 +399,8 @@ __all__ = [
     "NAME_ONLY_CONFIDENCE",
     "SIGNAL_CONFIDENCE_BONUS",
     "MAX_CANDIDATE_CONFIDENCE",
+    "MAX_EMITTED_CANDIDATES",
+    "TOO_MANY_CANDIDATES_THRESHOLD",
     "WeightedCandidate",
     "CardCandidateResult",
     "generate_candidates_for_card",
