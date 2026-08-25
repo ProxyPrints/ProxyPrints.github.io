@@ -296,3 +296,157 @@ describe("foreign-order resilience Phase 1 follow-up - project cardback listener
     );
   });
 });
+
+// Route faces on layout, not on a fetched name list - processing.ts's unpackLine no longer
+// decides split-vs-directive at parse time at all (see its own module comment), so "Fire //
+// Ice" and "Opt // Char" both arrive at this listener as a front query plus an independent
+// back query. The distinction can only be made once the front query resolves to a real
+// CardDocument and its `layout` is known.
+describe("split-face routing - back-query suppression for a split-style front layout", () => {
+  const frontQuery = { query: "fire", cardType: CardTypeConst };
+  const backQuery = { query: "ice", cardType: CardTypeConst };
+  const frontHashKey = computeSearchQueryHashKey(frontQuery);
+  const backHashKey = computeSearchQueryHashKey(backQuery);
+  const frontId = "front-result-id";
+  const backId = "back-result-id";
+  const projectCardbackId = "project-cardback-id";
+
+  function buildTwoFaceMemberState(): Partial<RootState> {
+    const members: Array<SlotProjectMembers> = [
+      {
+        id: "slot-1",
+        front: { query: frontQuery, selectedImage: undefined, selected: false },
+        back: { query: backQuery, selectedImage: undefined, selected: false },
+      },
+    ];
+    return {
+      project: {
+        members,
+        nextMemberId: 1,
+        cardback: projectCardbackId,
+        mostRecentlySelectedSlot: null,
+        manualOverrides: {},
+      },
+      cardDocuments: { cardDocuments: {}, status: "idle", error: null },
+    };
+  }
+
+  function dispatchSearchAndResolve(
+    store: ReturnType<typeof setupStore>,
+    frontCardDocument: Record<string, unknown>
+  ) {
+    store.dispatch(
+      fetchSearchResults.fulfilled(
+        {
+          results: { [frontHashKey]: [frontId], [backHashKey]: [backId] },
+          degradedQueryHashKeys: [],
+        },
+        "split-request-1",
+        undefined
+      )
+    );
+    store.dispatch(
+      fetchCardDocuments.fulfilled(
+        { [frontId]: frontCardDocument as never },
+        "split-request-2",
+        undefined
+      )
+    );
+  }
+
+  it("clears the back query once the front resolves to a split-style layout (Fire // Ice)", () => {
+    const store = setupStore(buildTwoFaceMemberState());
+
+    dispatchSearchAndResolve(store, {
+      cardType: CardType.Card,
+      dateCreated: "",
+      dateModified: "",
+      dpi: 100,
+      extension: "png",
+      identifier: frontId,
+      language: "EN",
+      layout: "split",
+      mediumThumbnailUrl: "",
+      name: "Fire // Ice",
+      printingTagStatus: PrintingTagStatus.Unresolved,
+      priority: 0,
+      searchq: "fire ice",
+      size: 0,
+      smallThumbnailUrl: "",
+      source: "some-source",
+      sourceId: 1,
+      sourceName: "Some Source",
+      sourceVerbose: "Some Source",
+      tags: [],
+    });
+
+    const [member] = store.getState().project.members;
+    expect(member.front?.selectedImage).toBe(frontId);
+    expect(member.back?.query.query).toBeNull();
+    expect(member.back?.selectedImage).toBe(projectCardbackId);
+  });
+
+  it("still resolves the back face of a genuine double-faced (transform) front", () => {
+    const store = setupStore(buildTwoFaceMemberState());
+
+    dispatchSearchAndResolve(store, {
+      cardType: CardType.Card,
+      dateCreated: "",
+      dateModified: "",
+      dpi: 100,
+      extension: "png",
+      identifier: frontId,
+      language: "EN",
+      layout: "transform",
+      mediumThumbnailUrl: "",
+      name: "Delver of Secrets",
+      printingTagStatus: PrintingTagStatus.Unresolved,
+      priority: 0,
+      searchq: "delver of secrets",
+      size: 0,
+      smallThumbnailUrl: "",
+      source: "some-source",
+      sourceId: 1,
+      sourceName: "Some Source",
+      sourceVerbose: "Some Source",
+      tags: [],
+    });
+
+    const [member] = store.getState().project.members;
+    expect(member.front?.selectedImage).toBe(frontId);
+    expect(member.back?.query.query).toBe("ice");
+    expect(member.back?.selectedImage).toBe(backId);
+  });
+
+  it("leaves the back query untouched when the front's layout is unknown", () => {
+    const store = setupStore(buildTwoFaceMemberState());
+
+    dispatchSearchAndResolve(store, {
+      cardType: CardType.Card,
+      dateCreated: "",
+      dateModified: "",
+      dpi: 100,
+      extension: "png",
+      identifier: frontId,
+      language: "EN",
+      mediumThumbnailUrl: "",
+      name: "Fire",
+      printingTagStatus: PrintingTagStatus.Unresolved,
+      priority: 0,
+      searchq: "fire",
+      size: 0,
+      smallThumbnailUrl: "",
+      source: "some-source",
+      sourceId: 1,
+      sourceName: "Some Source",
+      sourceVerbose: "Some Source",
+      tags: [],
+      // layout intentionally omitted
+    });
+
+    const [member] = store.getState().project.members;
+    expect(member.front?.selectedImage).toBe(frontId);
+    expect(member.back?.query.query).toBe("ice");
+    expect(member.back?.selectedImage).toBe(backId);
+  });
+});

@@ -316,26 +316,28 @@ test("dfc pair matching is case-insensitive against the front query", () => {
   ]);
 });
 
-test("a split card's full printed name is not split into two queries", () => {
-  const splitCardNames = new Set(["fire // ice"]);
-  expect(
-    processLine("3x Fire // Ice", dfcPairs, false, splitCardNames)
-  ).toEqual([
+test("a split card's full printed name is split into two queries at parse time", () => {
+  // The parser can't tell a split card's own compound name apart from a genuine front/back
+  // directive by text alone - both are handled identically here. The distinction is made
+  // later, once the front query resolves to a real card and its layout is known (see
+  // listenerMiddleware.test.ts).
+  expect(processLine("3x Fire // Ice", dfcPairs, false)).toEqual([
     3,
     {
-      query: { cardType: Card, query: "fire ice" },
+      query: { cardType: Card, query: "fire" },
       selectedImage: undefined,
       selected: false,
     },
-    null,
+    {
+      query: { cardType: Card, query: "ice" },
+      selectedImage: undefined,
+      selected: false,
+    },
   ]);
 });
 
-test("a name matching FaceSeparator but not a known split card name still splits", () => {
-  const splitCardNames = new Set(["fire // ice"]);
-  expect(
-    processLine(`5 Opt${FaceSeparator}Char`, dfcPairs, false, splitCardNames)
-  ).toEqual([
+test("a front/back directive matching FaceSeparator splits", () => {
+  expect(processLine(`5 Opt${FaceSeparator}Char`, dfcPairs, false)).toEqual([
     5,
     {
       query: { cardType: Card, query: "opt" },

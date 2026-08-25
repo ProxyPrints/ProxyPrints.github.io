@@ -35,11 +35,7 @@ import {
 import { useAppDispatch, useAppSelector } from "@/common/types";
 import { toTitleCase } from "@/common/utils";
 import { RightPaddedIcon } from "@/components/icon";
-import {
-  useGetDFCPairsQuery,
-  useGetSampleCardsQuery,
-  useGetSplitCardNamesQuery,
-} from "@/store/api";
+import { useGetDFCPairsQuery, useGetSampleCardsQuery } from "@/store/api";
 import { useRemoteBackendConfigured } from "@/store/slices/backendSlice";
 import { addMembers, selectProjectSize } from "@/store/slices/projectSlice";
 import { selectFuzzySearch } from "@/store/slices/searchSettingsSlice";
@@ -74,25 +70,22 @@ export function ImportText({
   const dispatch = useAppDispatch();
   const sampleCardsQuery = useGetSampleCardsQuery();
   const dfcPairsQuery = useGetDFCPairsQuery();
-  const splitCardNamesQuery = useGetSplitCardNamesQuery();
   const remoteBackendConfigured = useRemoteBackendConfigured();
   const fuzzySearch = useAppSelector(selectFuzzySearch);
   const projectSize = useAppSelector(selectProjectSize);
 
-  // Both queries are `skip`ped for good (never resolve) when there's no remote backend, so
+  // This query is `skip`ped for good (never resolves) when there's no remote backend, so
   // readiness can't be read off `isSuccess` alone there - `remoteBackendConfigured` disambiguates
   // "will never fetch" from "hasn't resolved yet". When a backend IS configured, submitting
-  // before either resolves would silently fall through to `?? {}`/`?? []` below and misparse a
-  // split/adventure/flip/aftermath card's compound name as a manual front/back override (its
-  // second face then gets searched as its own card instead of recognised as the same physical
-  // card) - so submission is blocked, not merely defaulted, until both are in.
-  const dfcPairsReady = !remoteBackendConfigured || dfcPairsQuery.isSuccess;
-  const splitCardNamesReady =
-    !remoteBackendConfigured || splitCardNamesQuery.isSuccess;
-  const discriminatorsReady = dfcPairsReady && splitCardNamesReady;
-  const discriminatorsFailed =
-    remoteBackendConfigured &&
-    (dfcPairsQuery.isError || splitCardNamesQuery.isError);
+  // before it resolves would silently fall through to `?? {}` below and drop a genuine
+  // double-faced card's automatic back-face lookup - so submission is blocked, not merely
+  // defaulted, until it's in. Front/back parsing itself no longer depends on any fetched
+  // discriminator (see processing.ts): a split/adventure/flip/aftermath card's own compound
+  // name is now told apart from a manual front/back directive by the resolved front card's
+  // `layout`, once it's known (see listenerMiddleware.ts).
+  const discriminatorsReady =
+    !remoteBackendConfigured || dfcPairsQuery.isSuccess;
+  const discriminatorsFailed = remoteBackendConfigured && dfcPairsQuery.isError;
 
   const [internalTextValue, setInternalTextValue] = useState<string>("");
   const textValue = controlledTextValue ?? internalTextValue;
@@ -111,10 +104,7 @@ export function ImportText({
     const processedLines = processStringAsMultipleLines(
       textValue,
       dfcPairsQuery.data ?? {},
-      fuzzySearch,
-      new Set(
-        (splitCardNamesQuery.data ?? []).map((name) => name.toLowerCase())
-      )
+      fuzzySearch
     );
     dispatch(
       addMembers({

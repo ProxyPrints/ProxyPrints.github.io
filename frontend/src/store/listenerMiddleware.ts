@@ -4,7 +4,7 @@ import {
   isAnyOf,
 } from "@reduxjs/toolkit";
 
-import { Back, Front, QueryTags } from "@/common/constants";
+import { Back, Front, QueryTags, SplitStyleLayouts } from "@/common/constants";
 import {
   getExistingAnonymousId,
   getLocalStorageSearchSettings,
@@ -44,6 +44,7 @@ import { recordInvalidIdentifier } from "@/store/slices/invalidIdentifiersSlice"
 import {
   addMembers,
   bulkRemovePrintingFilter,
+  clearQueries,
   selectProjectCardback,
   setAllManualOverrides,
   setManualOverride,
@@ -332,9 +333,28 @@ startAppListening({
     const projectCardback = selectProjectCardback(state);
     const favoriteIdentifiersSet = selectFavoriteIdentifiersSet(state);
     for (const [slot, slotProjectMember] of state.project.members.entries()) {
+      // Route faces on layout, not on a fetched name list - processing.ts no longer decides
+      // whether a "front // back" import line is a split card's own compound name or a
+      // genuine front/back directive; it always parses both faces as independent queries.
+      // The only place that distinction CAN be made is here, once the front query has
+      // resolved to a real card: if its layout says the physical card has only one face,
+      // any query on the back face is spurious (either the parser split a compound name that
+      // was never a directive, or the user wrote a directive against a card that doesn't
+      // support one) and must not be allowed to resolve to an unrelated card.
+      let frontIsSplitStyleLayout = false;
       for (const face of [Front, Back]) {
         const projectMember = slotProjectMember[face];
         const searchQuery = projectMember?.query;
+
+        if (
+          face === Back &&
+          frontIsSplitStyleLayout &&
+          searchQuery?.query != null
+        ) {
+          dispatch(clearQueries({ slots: [[Back, slot]] }));
+          continue;
+        }
+
         if (projectMember != null && searchQuery != null) {
           const searchResultsForQueryOrDefault =
             selectSearchResultsForQueryOrDefault(
@@ -409,6 +429,16 @@ startAppListening({
                 selectedImage: mutatedSelectedImage,
               })
             );
+
+            if (face === Front && mutatedSelectedImage != null) {
+              const frontCardDocument = selectCardDocumentByIdentifier(
+                state,
+                mutatedSelectedImage
+              );
+              frontIsSplitStyleLayout =
+                frontCardDocument?.layout != null &&
+                SplitStyleLayouts.has(frontCardDocument.layout);
+            }
           }
         }
       }

@@ -15,7 +15,6 @@ import {
   searchResultsServerError,
   sourceDocumentsOneResult,
   sourceDocumentsServerError,
-  splitCardNamesServerError,
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
@@ -124,22 +123,6 @@ test.describe("error reporting toasts", () => {
         sourceDocumentsOneResult,
         searchResultsOneResult,
         dfcPairsServerError,
-      ],
-      null
-    );
-  });
-
-  test("/2/SplitCardNames", async ({ page, network }) => {
-    await assertErrorToast(
-      page,
-      network,
-      "2/SplitCardNames",
-      [
-        cardDocumentsThreeResults,
-        cardbacksTwoResults,
-        sourceDocumentsOneResult,
-        searchResultsOneResult,
-        splitCardNamesServerError,
       ],
       null
     );

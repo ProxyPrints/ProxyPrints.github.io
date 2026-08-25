@@ -4,11 +4,7 @@ import React from "react";
 import { Provider } from "react-redux";
 
 import { localBackend, localBackendURL } from "@/common/test-constants";
-import {
-  defaultHandlers,
-  dfcPairsServerError,
-  splitCardNamesServerError,
-} from "@/mocks/handlers";
+import { defaultHandlers, dfcPairsServerError } from "@/mocks/handlers";
 import { server } from "@/mocks/server";
 import { setupStore } from "@/store/store";
 
@@ -22,21 +18,10 @@ const dfcPairsPending = http.get(buildRoute("2/DFCPairs/"), async () => {
   await delay("infinite");
   return HttpResponse.json({ dfcPairs: {} });
 });
-const splitCardNamesPending = http.get(
-  buildRoute("2/SplitCardNames/"),
-  async () => {
-    await delay("infinite");
-    return HttpResponse.json({ names: [] });
-  }
-);
 const dfcPairsMatchingDelver = http.get(buildRoute("2/DFCPairs/"), () =>
   HttpResponse.json({
     dfcPairs: { "Delver of Secrets": "Insectile Aberration" },
   })
-);
-const splitCardNamesMatchingFireIce = http.get(
-  buildRoute("2/SplitCardNames/"),
-  () => HttpResponse.json({ names: ["Fire // Ice"] })
 );
 const dfcPairsNoResults = http.get(buildRoute("2/DFCPairs/"), () =>
   HttpResponse.json({ dfcPairs: {} })
@@ -64,9 +49,9 @@ function submitText(text: string) {
   );
 }
 
-describe("ImportText - DFC pairs / split card names readiness", () => {
-  it("blocks submission while the DFC pairs and split card names fetches are in flight", async () => {
-    server.use(dfcPairsPending, splitCardNamesPending, ...defaultHandlers);
+describe("ImportText - DFC pairs readiness", () => {
+  it("blocks submission while the DFC pairs fetch is in flight", async () => {
+    server.use(dfcPairsPending, ...defaultHandlers);
     const store = renderWithStore();
 
     expect(screen.getByLabelText("import-text-submit")).toBeDisabled();
@@ -74,12 +59,8 @@ describe("ImportText - DFC pairs / split card names readiness", () => {
     expect(store.getState().project.members).toHaveLength(0);
   });
 
-  it("blocks submission and surfaces a failure message when either fetch errors", async () => {
-    server.use(
-      dfcPairsServerError,
-      splitCardNamesServerError,
-      ...defaultHandlers
-    );
+  it("blocks submission and surfaces a failure message when the fetch errors", async () => {
+    server.use(dfcPairsServerError, ...defaultHandlers);
     const store = renderWithStore();
 
     await waitFor(() =>
@@ -92,12 +73,12 @@ describe("ImportText - DFC pairs / split card names readiness", () => {
     expect(store.getState().project.members).toHaveLength(0);
   });
 
-  it("treats a real split-style card (Fire // Ice, layout=split) as one card once split card names have loaded", async () => {
-    server.use(
-      dfcPairsNoResults,
-      splitCardNamesMatchingFireIce,
-      ...defaultHandlers
-    );
+  // The parser no longer decides split-vs-directive itself (see processing.ts and
+  // listenerMiddleware.test.ts, which cover the layout-based back-query suppression once a
+  // front query resolves): both a split card's own compound name and a genuine front/back
+  // directive parse identically at submit time, as two independent queries.
+  it("parses a compound-named line as two independent front/back queries at submit time", async () => {
+    server.use(dfcPairsNoResults, ...defaultHandlers);
     const store = renderWithStore();
 
     await waitFor(() =>
@@ -107,20 +88,12 @@ describe("ImportText - DFC pairs / split card names readiness", () => {
 
     const members = store.getState().project.members;
     expect(members).toHaveLength(1);
-    expect(members[0].front?.query.query).toBe("fire ice");
-    // No back-face/cardback search query is issued for the second named mode - it's the
-    // same physical card as the front, not a second face.
-    expect(members[0].back?.query.query).toBeNull();
+    expect(members[0].front?.query.query).toBe("fire");
+    expect(members[0].back?.query.query).toBe("ice");
   });
 
   it("resolves the back face of a real transform card (Delver of Secrets // Insectile Aberration, layout=transform) once DFC pairs have loaded", async () => {
-    server.use(
-      dfcPairsMatchingDelver,
-      http.get(buildRoute("2/SplitCardNames/"), () =>
-        HttpResponse.json({ names: [] })
-      ),
-      ...defaultHandlers
-    );
+    server.use(dfcPairsMatchingDelver, ...defaultHandlers);
     const store = renderWithStore();
 
     await waitFor(() =>

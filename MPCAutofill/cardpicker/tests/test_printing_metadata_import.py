@@ -19,7 +19,6 @@ from cardpicker.printing_metadata_import import (
     _download_default_cards,
     _load_back_face_names,
     get_back_face_names,
-    get_split_style_compound_names,
     import_scryfall_printing_metadata,
     is_back_face,
 )
@@ -470,69 +469,6 @@ class TestGetBackFaceNames:
         info = _load_back_face_names.cache_info()
         assert info.hits == 1
         assert info.misses == 1
-
-
-class TestGetSplitStyleCompoundNames:
-    """
-    get_split_style_compound_names mirrors get_back_face_names' design (same on-disk bulk
-    data, same no-fetch/empty-on-missing contract) but for the OTHER direction of the same
-    layout ambiguity: split/adventure/flip/aftermath cards whose `name` field is a
-    " // "-joined compound (e.g. "Fire // Ice") that the frontend import parser must not
-    mistake for a manual front/back query directive. No `db` fixture needed - pure file read.
-    """
-
-    def test_split_card_full_name_is_captured(self, tmp_path):
-        record = _record(
-            layout="split",
-            name="Fire // Ice",
-            card_faces=[{"name": "Fire"}, {"name": "Ice"}],
-        )
-        path = _write_bulk_data_file(tmp_path, [record])
-
-        assert get_split_style_compound_names(default_cards_path=path) == frozenset({"Fire // Ice"})
-
-    def test_adventure_card_full_name_is_captured(self, tmp_path):
-        record = _record(
-            layout="adventure",
-            name="Bonecrusher Giant // Stomp",
-            card_faces=[{"name": "Bonecrusher Giant"}, {"name": "Stomp"}],
-        )
-        path = _write_bulk_data_file(tmp_path, [record])
-
-        assert get_split_style_compound_names(default_cards_path=path) == frozenset({"Bonecrusher Giant // Stomp"})
-
-    def test_genuine_dfc_name_is_not_captured(self, tmp_path):
-        # A real double-faced card's compound "Front // Back" name must NOT show up here -
-        # its front and back are genuinely independent searchable card names, so the import
-        # parser's existing DFCPairs-driven split behaviour is already correct for it.
-        record = _record(
-            layout="transform",
-            name="Delver of Secrets // Insectile Aberration",
-            card_faces=[{"name": "Delver of Secrets"}, {"name": "Insectile Aberration"}],
-        )
-        path = _write_bulk_data_file(tmp_path, [record])
-
-        assert get_split_style_compound_names(default_cards_path=path) == frozenset()
-
-    def test_normal_single_faced_card_is_not_captured(self, tmp_path):
-        record = _record(layout="normal", name="Lightning Bolt")
-        path = _write_bulk_data_file(tmp_path, [record])
-
-        assert get_split_style_compound_names(default_cards_path=path) == frozenset()
-
-    def test_missing_bulk_file_returns_empty_set_without_raising(self, tmp_path):
-        missing_path = tmp_path / "does_not_exist.json"
-
-        assert get_split_style_compound_names(default_cards_path=missing_path) == frozenset()
-
-    def test_multiple_split_style_rows_all_captured(self, tmp_path):
-        records = [
-            _record(layout="split", name="Fire // Ice", card_faces=[{"name": "Fire"}, {"name": "Ice"}]),
-            _record(layout="aftermath", name="Wear // Tear", card_faces=[{"name": "Wear"}, {"name": "Tear"}]),
-        ]
-        path = _write_bulk_data_file(tmp_path, records)
-
-        assert get_split_style_compound_names(default_cards_path=path) == frozenset({"Fire // Ice", "Wear // Tear"})
 
 
 class _FakeBulkDataResponse:

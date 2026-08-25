@@ -177,15 +177,6 @@ export const extractDriveIdBracketToken = (
   return [text.replace(match[0], "").trim(), candidateId];
 };
 
-// Scryfall names split/adventure/flip/aftermath cards with the exact same " // " convention
-// `FaceSeparator` uses for the manual front/back override below (e.g. "Fire // Ice"), so a
-// literal card name and a two-query directive are textually identical - `splitCardNames` is
-// what tells them apart.
-const isKnownSingleFacedCompoundName = (
-  trimmedLine: string,
-  splitCardNames: ReadonlySet<string>
-): boolean => splitCardNames.has(trimmedLine.toLowerCase());
-
 /**
  * Unpack `line` into its constituents.
  *
@@ -198,18 +189,24 @@ const isKnownSingleFacedCompoundName = (
  * Specifying an image ID (for each face) is optional. A `[mpc:<id>]` token anywhere in either
  * face's text (see `extractDriveIdBracketToken`) is another way to specify the image ID, and
  * takes precedence over a trailing `@id` for that same face if somehow both are present.
+ *
+ * A line whose text happens to match a split/adventure/flip/aftermath card's own compound
+ * printed name (e.g. "Fire // Ice") is split into two queries here exactly like a genuine
+ * front/back directive - this function has no way to tell them apart from the line text alone.
+ * The distinction is made later, once the front query resolves to a real card and its
+ * `layout` is known (see listenerMiddleware.ts's back-query suppression for a split-style
+ * front, and `SplitStyleLayouts` in common/constants.ts).
  */
 function unpackLine(
-  line: string,
-  splitCardNames: ReadonlySet<string> = new Set()
+  line: string
 ): [number, [string, string | null] | null, [string, string | null] | null] {
   const [quantity, trimmedLine] = extractQuantity(line);
 
   const faceParts = trimmedLine.split(FaceSeparator);
-  const [rawFrontLine, rawBackLine]: [string, string | undefined] =
-    isKnownSingleFacedCompoundName(trimmedLine, splitCardNames)
-      ? [trimmedLine, undefined]
-      : [faceParts[0], faceParts[1]];
+  const [rawFrontLine, rawBackLine]: [string, string | undefined] = [
+    faceParts[0],
+    faceParts[1],
+  ];
   const [frontLine, frontBracketId] = extractDriveIdBracketToken(rawFrontLine);
   const [backLine, backBracketId] =
     rawBackLine !== undefined
@@ -282,13 +279,9 @@ export const getDfcBack = (
 export function processLine(
   line: string,
   dfcPairs: DFCPairs,
-  fuzzySearch: boolean,
-  splitCardNames: ReadonlySet<string> = new Set()
+  fuzzySearch: boolean
 ): ProcessedLine {
-  const [quantity, frontRawQuery, backRawQuery] = unpackLine(
-    line,
-    splitCardNames
-  );
+  const [quantity, frontRawQuery, backRawQuery] = unpackLine(line);
 
   let frontQuery: SearchQuery | null = null;
   let frontSelectedImage: string | undefined = undefined;
@@ -334,8 +327,7 @@ export function processLine(
 export function processLines(
   lines: Array<string>,
   dfcPairs: DFCPairs,
-  fuzzySearch: boolean,
-  splitCardNames: ReadonlySet<string> = new Set()
+  fuzzySearch: boolean
 ): Array<ProcessedLine> {
   const queries: Array<[number, ProjectMember | null, ProjectMember | null]> =
     [];
@@ -344,8 +336,7 @@ export function processLines(
       const [quantity, frontMember, backMember] = processLine(
         line,
         dfcPairs,
-        fuzzySearch,
-        splitCardNames
+        fuzzySearch
       );
       if (quantity > 0 && (frontMember != null || backMember != null)) {
         queries.push([quantity, frontMember, backMember]);
@@ -358,15 +349,9 @@ export function processLines(
 export function processStringAsMultipleLines(
   lines: string,
   dfcPairs: DFCPairs,
-  fuzzySearch: boolean,
-  splitCardNames: ReadonlySet<string> = new Set()
+  fuzzySearch: boolean
 ): Array<ProcessedLine> {
-  return processLines(
-    lines.split(/\r?\n|\r|\n/g),
-    dfcPairs,
-    fuzzySearch,
-    splitCardNames
-  );
+  return processLines(lines.split(/\r?\n|\r|\n/g), dfcPairs, fuzzySearch);
 }
 
 /**
