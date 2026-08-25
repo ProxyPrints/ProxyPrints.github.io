@@ -323,7 +323,6 @@ import {
 } from "@/features/pdf/PagePreview";
 import {
   CardSelectionMode,
-  computePDFPageCount,
   DEFAULT_CARD_SELECTION_MODE,
   getPageSizeMM,
   isBleedNormalizationEligible,
@@ -2688,43 +2687,6 @@ export function DisplayPage() {
   );
   const cardsPerPage = layout.cardsPerRow * layout.cardsPerCol;
 
-  // The real, un-ranged page count the rail's own Page range control needs to show/clamp
-  // against (computePDFPageCount's own comment) - not meaningful in SCM mode, which is why this
-  // stays outside the (dialog-only) SCM branch entirely. Deliberately ignores
-  // settings.marginOverride (this PR moved that field into the rail's own state, but its EFFECT
-  // stays scoped to the export only, unchanged) - `margins` here is always the profile's own
-  // value, same as the live sheet.
-  const totalPages = useMemo(
-    () =>
-      computePDFPageCount({
-        pageSize: "CUSTOM",
-        pageWidth: sheetWidthMM,
-        pageHeight: sheetHeightMM,
-        bleedEdgeMM: settings.bleedEdgeMM,
-        cardSpacingRowMM: spacing.row,
-        cardSpacingColMM: spacing.col,
-        pageMarginTopMM: margins.top,
-        pageMarginBottomMM: margins.bottom,
-        pageMarginLeftMM: margins.left,
-        pageMarginRightMM: margins.right,
-        cardSelectionMode: settings.cardSelectionMode,
-        projectMembers,
-        cardDocumentsByIdentifier,
-        projectCardback,
-      }),
-    [
-      sheetWidthMM,
-      sheetHeightMM,
-      settings.bleedEdgeMM,
-      spacing,
-      margins,
-      settings.cardSelectionMode,
-      projectMembers,
-      cardDocumentsByIdentifier,
-      projectCardback,
-    ]
-  );
-
   // willLikelyGenerateBleed used to be reachable only from PDFGenerator.tsx's own fast preview
   // (/print), so this sheet never showed which cards would have bleed synthesized at export -
   // same eligibility rule and prior-resolution pattern as that surface's fastPreviewSlots, ported
@@ -3927,9 +3889,9 @@ export function DisplayPage() {
                     Export PDF dialog. Same Form.Select/Form.Control markup and copy the export
                     dialog used, so nothing degrades to a bare control on the move. Always shown,
                     regardless of the dialog's own Silhouette (SCM) mode toggle - scmMode lives
-                    only in that dialog's local state, and totalPages below is a plain,
-                    unconditional standard-grid count (computePDFPageCount's own comment: SCM
-                    paginates independently and isn't covered by it). */}
+                    only in that dialog's local state, and the sheet count below (`pages.length`)
+                    is the same plain, unconditional standard-grid sheet count the rail's own
+                    sheet renders - SCM paginates independently and isn't covered by it. */}
                 <AutofillCollapse
                   id="display-rail-export"
                   pad={0}
@@ -3981,16 +3943,16 @@ export function DisplayPage() {
 
                     <Form.Group className="mb-2">
                       <Form.Label className="small mb-1">
-                        Pages ({totalPages} total)
+                        Sheets ({pages.length} total)
                       </Form.Label>
                       <div className="d-flex gap-2 align-items-center">
                         <Form.Control
                           type="number"
                           size="sm"
                           min={1}
-                          max={totalPages}
+                          max={pages.length}
                           placeholder="1"
-                          aria-label="First page to export"
+                          aria-label="First sheet to export"
                           data-testid="display-page-range-start"
                           value={settings.pageRangeStart ?? ""}
                           onChange={(event) => {
@@ -4008,9 +3970,9 @@ export function DisplayPage() {
                           type="number"
                           size="sm"
                           min={1}
-                          max={totalPages}
-                          placeholder={`${totalPages}`}
-                          aria-label="Last page to export"
+                          max={pages.length}
+                          placeholder={`${pages.length}`}
+                          aria-label="Last sheet to export"
                           data-testid="display-page-range-end"
                           value={settings.pageRangeEnd ?? ""}
                           onChange={(event) => {
@@ -4025,7 +3987,7 @@ export function DisplayPage() {
                         />
                       </div>
                       <Form.Text className="text-muted">
-                        Leave blank on either end to export all pages.
+                        Leave blank on either end to export all sheets.
                       </Form.Text>
                     </Form.Group>
 

@@ -135,7 +135,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await expect(page.getByTestId("display-card-selection-mode")).toHaveValue(
       "frontsAndBacks"
     );
-    await expect(page.getByText("Pages (2 total)")).toBeVisible();
+    await expect(page.getByText("Sheets (2 total)")).toBeVisible();
   });
 
   test("page range slices the export to fewer real pages", async ({

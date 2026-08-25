@@ -178,12 +178,20 @@ describe("computePDFRenderPageCount - standard path", () => {
     expect(computePDFRenderPageCount(props)).toBe(FULL_DECK_PAGES);
   });
 
-  it("counts the range-sliced page total, not the full deck", () => {
+  it("a sheet range (not a raw PDF page range) restricts to that range's own real page total", () => {
+    // DisplaySheetExportSettings.pageRangeStart/End count SHEETS (paginateSlotsForDisplay's own
+    // chunking, 8 cards/sheet here), not real PDF pages - buildDisplayPDFProps restricts
+    // projectMembers to sheets 2-3 (members 8-19, 12 members) before the standard grid
+    // re-paginates them: 12 fronts -> 2 front pages (8, 4), 12 backs (all "cardback") -> 2 back
+    // pages (8, 4), interleaved -> 4 real pages. Nothing from sheet 1 (members 0-7) appears.
     const props = buildFullPDFProps(
-      withSheetSettings(baseInput, { pageRangeStart: 2, pageRangeEnd: 4 })
+      withSheetSettings(baseInput, { pageRangeStart: 2, pageRangeEnd: 3 })
     );
-    expect(computePDFRenderPageCount(props)).toBe(3);
-    expect(countRenderedPages(createPDFElement(props))).toBe(3);
+    expect(props.pageRangeStart).toBeUndefined();
+    expect(props.pageRangeEnd).toBeUndefined();
+    expect(props.projectMembers).toEqual(DECK_MEMBERS.slice(8, 20));
+    expect(computePDFRenderPageCount(props)).toBe(4);
+    expect(countRenderedPages(createPDFElement(props))).toBe(4);
   });
 
   it("an empty export still plans one page (the render's single-empty-page fallback)", () => {
@@ -254,14 +262,14 @@ describe("computePDFRenderWindow - absolute start page + range-sliced total", ()
     expect(totalPages).toBe(FULL_DECK_PAGES);
   });
 
-  it("a mid-deck range reports the slice's absolute start and its own length", () => {
+  it("a sheet range always starts its own render at page 1 - the restriction lives in which project members are included, not in a page offset", () => {
     const { startPage, totalPages } = computePDFRenderWindow(
       buildFullPDFProps(
-        withSheetSettings(baseInput, { pageRangeStart: 3, pageRangeEnd: 5 })
+        withSheetSettings(baseInput, { pageRangeStart: 2, pageRangeEnd: 3 })
       )
     );
-    expect(startPage).toBe(3);
-    expect(totalPages).toBe(3);
+    expect(startPage).toBe(1);
+    expect(totalPages).toBe(4);
   });
 });
 
@@ -273,21 +281,35 @@ describe("computeExportedCardIdentifiers", () => {
     );
   });
 
-  it("scopes to only the ranged page's identifiers, not the whole project", () => {
+  it("scopes to only the ranged sheet's identifiers, not the whole project", () => {
     const props = buildFullPDFProps(
       withSheetSettings(baseInput, { pageRangeStart: 2, pageRangeEnd: 2 })
     );
-    // Page 2 (index 1) is group 0's back page - every slot's back is the shared "cardback"
-    // identifier, deduplicated to the one entry actually needed for this ranged export.
-    expect(computeExportedCardIdentifiers(props)).toEqual(["cardback"]);
+    // Sheet 2 = members 8-15 (8 fronts, each a distinct identifier) plus their shared "cardback"
+    // back, deduplicated to the one entry actually needed for this ranged export.
+    expect(computeExportedCardIdentifiers(props).sort()).toEqual(
+      [
+        ...Array.from({ length: 8 }, (_, i) => `front-${i + 8}`),
+        "cardback",
+      ].sort()
+    );
   });
 
-  it("scopes to a front-only page's identifiers", () => {
+  it("a duplex sheet range includes both faces of that sheet, never just the fronts", () => {
+    // Sheet 3 = members 16-19, the deck's own trailing partial sheet (20 members, 8/sheet).
+    // "Fronts + Backs" (the default) must still emit every one of that sheet's own backs
+    // alongside its fronts - the exact regression this fix targets: a sheet range used to slice
+    // real PDF pages, which could isolate a front-only or back-only page from an unrelated
+    // sheet boundary; restricting projectMembers up front means every real page this produces
+    // is built only from THIS sheet's own members, both faces included.
     const props = buildFullPDFProps(
       withSheetSettings(baseInput, { pageRangeStart: 3, pageRangeEnd: 3 })
     );
     expect(computeExportedCardIdentifiers(props).sort()).toEqual(
-      Array.from({ length: 8 }, (_, i) => `front-${i + 8}`).sort()
+      [
+        ...Array.from({ length: 4 }, (_, i) => `front-${i + 16}`),
+        "cardback",
+      ].sort()
     );
   });
 

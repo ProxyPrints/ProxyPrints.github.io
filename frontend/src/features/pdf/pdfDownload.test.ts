@@ -154,20 +154,23 @@ describe("downloadPDF - bleed-prior resolution's fetch set", () => {
     );
   });
 
-  it("scopes the fetch set to only the ranged page's cards, not the whole project", async () => {
-    // Page 3 (index 2) is the front page for members 8..15 (front-8..front-15) - see
-    // PDF.test.ts's computeExportedCardIdentifiers coverage for the same page layout.
+  it("scopes the fetch set to only the ranged sheet's cards, both faces, not the whole project", async () => {
+    // Sheet 3 (8 cards/sheet) is the deck's trailing partial sheet, members 16..19
+    // (front-16..front-19) plus their shared "cardback" back - see PDF.test.ts's
+    // computeExportedCardIdentifiers coverage for the same sheet.
     await runDownloadPDF(buildFullPDFProps(3, 3));
 
     const fetchedIdentifiers = mockAPIGetTagConsensus.mock.calls.map(
       ([, identifier]) => identifier
     );
     expect(fetchedIdentifiers.sort()).toEqual(
-      Array.from({ length: 8 }, (_, i) => `front-${i + 8}`).sort()
+      [
+        ...Array.from({ length: 4 }, (_, i) => `front-${i + 16}`),
+        "cardback",
+      ].sort()
     );
     // The regression this guards against: before the fix, every ranged export still fetched
-    // all 21 project identifiers regardless of the 8 this page actually needs.
-    expect(fetchedIdentifiers.length).toBe(8);
-    expect(fetchedIdentifiers).not.toContain("cardback");
+    // all 21 project identifiers regardless of the 5 this sheet actually needs.
+    expect(fetchedIdentifiers.length).toBe(5);
   });
 });

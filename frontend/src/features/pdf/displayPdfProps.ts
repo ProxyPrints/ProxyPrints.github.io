@@ -65,6 +65,7 @@
  * profile. Seeded from the current profile's own values when the toggle turns on (see
  * `DisplayPage.tsx`), so turning it on never starts from a jarring unrelated number.
  */
+import { CardHeightMM, CardWidthMM } from "@/common/constants";
 import {
   CardDocument,
   MarginProfileKey,
@@ -73,6 +74,7 @@ import {
 } from "@/common/types";
 import { MARGIN_PROFILES } from "@/features/display/marginProfiles";
 import { ManualOverride } from "@/features/pdf/bleedNormalize";
+import { computeLayout } from "@/features/pdf/layout";
 import { getPageSizeMM, PageSize } from "@/features/pdf/pageSize";
 import type { CardSelectionMode, PDFProps } from "@/features/pdf/PDF";
 import type {
@@ -131,8 +133,15 @@ export interface DisplaySheetExportSettings {
    * which cards make it into the export and which of its pages actually render aren't a one-off
    * export-run choice, they're a property of what the printed artifact IS, so they live in the
    * rail's "Export" section next to the sheet they govern rather than behind the Export PDF
-   * dialog. `pageRangeStart`/`pageRangeEnd` are 1-indexed and inclusive (see
-   * `PDFProps.pageRangeStart`'s own comment); `undefined` on either means "all pages". */
+   * dialog. `pageRangeStart`/`pageRangeEnd` are 1-indexed and inclusive, `undefined` on either
+   * meaning "all sheets" - but unlike `PDFProps.pageRangeStart`/`pageRangeEnd` (a real,
+   * card-selection-mode-dependent PDF page count), these count the PREVIEW SHEETS the rail's own
+   * sheet renders (`paginateSlotsForDisplay`, `DisplayPage.tsx`'s own `pages`), the same total
+   * the rail's "Sheets" label and range bounds show. The two units genuinely disagree for any
+   * mode that emits more than one real PDF page per sheet ("Fronts + Backs", "Fronts + Distinct
+   * Backs") - see `buildDisplayPDFProps`'s own comment for how a sheet range gets applied.
+   * SCM mode is the one exception: it paginates independently of this sheet concept entirely
+   * (`SCMPDF.tsx`), so these two fields keep meaning real SCM page numbers there, unchanged. */
   cardSelectionMode: keyof typeof CardSelectionMode;
   pageRangeStart?: number;
   pageRangeEnd?: number;
@@ -188,6 +197,43 @@ export interface DisplayPDFPropsInput {
   manualOverrides: { [identifier: string]: ManualOverride };
 }
 
+/** Restricts `projectMembers` to just the slots belonging to a 1-indexed, inclusive SHEET range
+ * - the unit `DisplaySheetExportSettings.pageRangeStart`/`pageRangeEnd`'s own comment documents.
+ * `undefined` on both bounds means "no restriction" (mirrors `PDFProps.pageRangeStart`/`End`'s
+ * own "undefined = all" convention) or `cardsPerSheet <= 0` (nothing to chunk by).
+ *
+ * Deliberately a SLOT restriction applied before card-selection-mode pagination runs, rather
+ * than a page-INDEX formula applied after it (e.g. "sheet k is real pages 2k-1 and 2k"). A fixed
+ * per-sheet page count only holds for "Fronts + Backs" (`paginateFrontsAndBacks`, PDF.tsx),
+ * which chunks fronts and backs into separate, sheet-aligned page arrays before interleaving.
+ * "Fronts + Distinct Backs" (`paginateFrontsAndDistinctBacks`) instead flattens every member's
+ * front+back into ONE combined sequence and re-chunks THAT by cards-per-page - a real PDF page
+ * in that mode can straddle two different sheets' worth of cards, so no page-index formula can
+ * express "exactly sheet k's cards, both faces, nothing else" for it. Restricting the SLOTS
+ * first, before either paginator runs, gives every mode (including single-sided ones) an exact
+ * answer instead: whatever real pages `computePDFPages` produces from just those slots are
+ * necessarily built only from that sheet's own cards. */
+export const sliceProjectMembersToSheetRange = (
+  projectMembers: Array<SlotProjectMembers>,
+  cardsPerSheet: number,
+  sheetRangeStart: number | undefined,
+  sheetRangeEnd: number | undefined
+): Array<SlotProjectMembers> => {
+  if (
+    (sheetRangeStart == null && sheetRangeEnd == null) ||
+    cardsPerSheet <= 0
+  ) {
+    return projectMembers;
+  }
+  const startIndex = Math.max(0, (sheetRangeStart ?? 1) - 1) * cardsPerSheet;
+  const endIndex = Math.min(
+    projectMembers.length,
+    (sheetRangeEnd ?? Math.ceil(projectMembers.length / cardsPerSheet)) *
+      cardsPerSheet
+  );
+  return projectMembers.slice(startIndex, endIndex);
+};
+
 export const buildDisplayPDFProps = (
   input: DisplayPDFPropsInput
 ): Omit<PDFProps, "fileHandles"> => {
@@ -206,6 +252,35 @@ export const buildDisplayPDFProps = (
     sheetSettings.customPageWidthMM,
     sheetSettings.customPageHeightMM
   );
+  // Sheet range, not PDF page range - see sliceProjectMembersToSheetRange's own comment and
+  // DisplaySheetExportSettings.pageRangeStart's. Same computeLayout() inputs DisplayPage.tsx's
+  // own `layout` memo uses (this function's own `portraitSize`/`margins` plus the rail's card
+  // spacing), so this always agrees with the rail's own live sheet on how many cards make up
+  // one sheet. SCM mode keeps its pre-existing, independent reading of pageRangeStart/pageRangeEnd
+  // untouched (real SCM page numbers, unrelated to this sheet concept) - restricting
+  // projectMembers here would silently change what SCM renders, which isn't this fix's concern.
+  const cardsPerSheet = sheetSettings.scmMode
+    ? 0
+    : (() => {
+        const layout = computeLayout(
+          portraitSize.height,
+          portraitSize.width,
+          CardWidthMM,
+          CardHeightMM,
+          sheetSettings.bleedEdgeMM,
+          margins,
+          input.cardSpacing
+        );
+        return layout.cardsPerRow * layout.cardsPerCol;
+      })();
+  const exportedProjectMembers = sheetSettings.scmMode
+    ? input.projectMembers
+    : sliceProjectMembersToSheetRange(
+        input.projectMembers,
+        cardsPerSheet,
+        sheetSettings.pageRangeStart,
+        sheetSettings.pageRangeEnd
+      );
   return {
     cardSelectionMode: sheetSettings.cardSelectionMode,
     showCrossCutLines: sheetSettings.showCrossCutLines,
@@ -228,10 +303,14 @@ export const buildDisplayPDFProps = (
     pageMarginRightMM: margins.right,
     pageOffsetXMM: sheetSettings.offsetXMM,
     pageOffsetYMM: sheetSettings.offsetYMM,
-    pageRangeStart: sheetSettings.pageRangeStart,
-    pageRangeEnd: sheetSettings.pageRangeEnd,
+    pageRangeStart: sheetSettings.scmMode
+      ? sheetSettings.pageRangeStart
+      : undefined,
+    pageRangeEnd: sheetSettings.scmMode
+      ? sheetSettings.pageRangeEnd
+      : undefined,
     cardDocumentsByIdentifier: input.cardDocumentsByIdentifier,
-    projectMembers: input.projectMembers,
+    projectMembers: exportedProjectMembers,
     projectCardback: input.projectCardback,
     imageQuality: "full-resolution",
     imageDPI: sheetSettings.imageDPI,
