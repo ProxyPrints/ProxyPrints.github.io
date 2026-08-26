@@ -1282,11 +1282,12 @@ class AttributeReport:
     frame_votes_by_class: dict[str, int] = field(default_factory=lambda: collections.defaultdict(int))
     frame_abstain_count: int = 0
     frame_mismatches: list[dict[str, object]] = field(default_factory=list)  # up to 10, for the report
-    # of the totals above, how many came from the matched printing's own CanonicalPrintingMetadata
-    # (ground truth) rather than this module's pixel/OCR heuristic - see run_pilot's
-    # ground-truth-preferred wiring.
+    # of border_votes_by_class's total, how many came from the matched printing's own
+    # CanonicalPrintingMetadata (ground truth) rather than this module's pixel heuristic - see
+    # run_pilot's ground-truth-preferred wiring. Frame has no counterpart: the frame chip
+    # describes the RENDER (see local_fallback's "three questions" comment), so it is never
+    # ground-truth-preferred and this counter would be structurally always zero for it.
     border_ground_truth_count: int = 0
-    frame_ground_truth_count: int = 0
     # addendum item 7 (2026-07-15): bleed-edge classification, votes on the pre-existing
     # `appropriate-bleed` SENSITIVE tag (local_fallback.classify_bleed_edge/cast_bleed_edge_vote).
     # No ground-truth counterpart - unlike border/frame, there's no Scryfall field encoding this.
@@ -1379,6 +1380,31 @@ def printing_attribute_disagreement(evidence: Any, metadata: Any) -> Optional[st
             return ATTRIBUTE_FRAME_MISMATCH
 
     return None
+
+
+def frame_disagreement_direction(evidence: Any, metadata: Any) -> Optional[tuple[str, str]]:
+    """(observed, expected) frame classes for a CONFIRMED frame mismatch between this card's
+    stored evidence and the candidate printing's own metadata - None whenever
+    printing_attribute_disagreement would not return ATTRIBUTE_FRAME_MISMATCH for the same two
+    arguments. Kept separate from that function's own return rather than folded into it: its
+    Optional[str] is a stable FINDING NAME every existing caller already compares by equality
+    (`disagreement == ATTRIBUTE_FRAME_MISMATCH`), and broadening it to also carry direction
+    would change what every one of those callers receives for no benefit to the callers that
+    don't need direction. Re-derives frame_class via the same public
+    local_fallback.classify_frame_style call printing_attribute_disagreement already makes
+    (a second call to a two-argument pure function, not a second implementation of the
+    comparison itself, which stays owned by local_fallback.classify_frame_mismatch_direction).
+    Call this only once printing_attribute_disagreement has already returned
+    ATTRIBUTE_FRAME_MISMATCH for the same evidence/metadata pair."""
+    if metadata is None or evidence is None:
+        return None
+    if not (FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS <= (evidence.extractor_versions or {}).keys()):
+        return None
+    frame_class = local_fallback.classify_frame_style(
+        parsed_a_collector_number=bool(evidence.collector_line_collector_number),
+        illus_anchor_fired=bool(evidence.illus_anchor_fired),
+    )
+    return local_fallback.classify_frame_mismatch_direction(frame_class, getattr(metadata, "frame", None))
 
 
 def build_propagated_cluster_votes(
@@ -1789,6 +1815,11 @@ def run_pilot(
                 result_phash = results.get("phash")
 
                 printing_vote_withheld_for_frame_mismatch = False
+                # scan-log detail for whichever direction the mismatch below turns out to run -
+                # "old"->"modern" (the measured common case for pre-2003 printings) vs.
+                # "modern"->"old" (the deliberate retro-frame case) mean different things, and
+                # neither CardScanLog row recorded which one fired until this field existed.
+                frame_mismatch_direction: Optional[str] = None
                 # consistency check: only meaningful once a printing vote exists to compare
                 # against the observed frame reading.
                 candidate_vote = outcome.ocr_vote or outcome.phash_vote
@@ -1803,9 +1834,14 @@ def run_pilot(
                         if canonical is not None and getattr(canonical, "printing_metadata", None) is not None
                         else None
                     )
-                    if not local_fallback.frame_style_is_consistent(outcome.frame_class, printing_frame_value):
+                    direction = local_fallback.classify_frame_mismatch_direction(
+                        outcome.frame_class, printing_frame_value
+                    )
+                    if direction is not None:
+                        observed, expected = direction
                         outcome.frame_mismatch = True
                         printing_vote_withheld_for_frame_mismatch = True
+                        frame_mismatch_direction = f"{observed}->{expected}"
                         attributes.frame_mismatches.append(
                             {
                                 "card_id": card_id,
@@ -1850,6 +1886,7 @@ def run_pilot(
                                     anonymous_id=OCR_ANONYMOUS_ID,
                                     run_id=run_id,
                                     skip_reason=FRAME_MISMATCH_SKIP_REASON,
+                                    frame_mismatch_direction=frame_mismatch_direction,
                                 )
                             )
                         else:
@@ -1922,6 +1959,7 @@ def run_pilot(
                                     anonymous_id=PHASH_ANONYMOUS_ID,
                                     run_id=run_id,
                                     skip_reason=FRAME_MISMATCH_SKIP_REASON,
+                                    frame_mismatch_direction=frame_mismatch_direction,
                                 )
                             )
                         else:
@@ -1972,12 +2010,16 @@ def run_pilot(
                 # consistency-check outcome above - they fire for any card a border/frame reading
                 # was taken on, per the module docstring's "double duty" note. BUT when a printing
                 # was actually confirmed for this card this run, ground truth from that printing's
-                # own CanonicalPrintingMetadata (Scryfall border_color/frame) is preferred over the
-                # pixel/OCR heuristic estimate - the heuristic's whole purpose was to independently
-                # validate an uncertain match (the consistency check above needs an independent
-                # signal to compare against), not to guess an answer we now actually know. Falls
-                # back to the heuristic reading whenever no printing was confirmed this run, or the
-                # confirmed printing has no usable ground truth for that particular attribute.
+                # own CanonicalPrintingMetadata (Scryfall border_color) is preferred over the
+                # pixel heuristic estimate for BORDER ONLY - the heuristic's whole purpose there
+                # is to independently validate an uncertain match (the border consistency check
+                # local_calculate_verdicts runs needs an independent signal to compare against),
+                # not to guess an answer we now actually know. Falls back to the heuristic
+                # reading whenever no printing was confirmed this run, or the confirmed printing
+                # has no usable border ground truth. FRAME never does this substitution: the
+                # frame chip answers what the RENDER shows (local_fallback's "three questions"
+                # comment), which is a different question from what era the confirmed printing
+                # actually is, so there is no "now actually know" to fall back to.
                 card = all_selected_by_card_id[card_id].card
                 confirmed_printing_pk = (
                     candidate_vote.printing_pk
@@ -2020,14 +2062,18 @@ def run_pilot(
                     if border_vote is not None and not dry_run:
                         tag_votes_batch.append(border_vote)
 
+                # NOT ground-truth-preferred, unlike border immediately above - see this
+                # module's own module docstring and local_fallback's "three questions" comment.
+                # The frame chip answers "what does the RENDER show" (question B); the matched
+                # printing's own CanonicalPrintingMetadata.frame answers a different question
+                # ("what era was the PRINTING", question A). Casting the chip from A would
+                # describe the printing, not the image actually being tagged - wrong even when
+                # the vote is being cast because the two happen to agree (an ordinary confidence
+                # bump would be harmless there), and actively wrong when the heuristic abstained
+                # (frame_class is None): it would invent a chip from a fact the render gave no
+                # visual evidence for at all, rather than correctly abstaining.
                 frame_class = outcome.frame_class
                 frame_confidence = local_fallback.FRAME_VOTE_CONFIDENCE
-                if ground_truth_metadata is not None and ground_truth_metadata.frame:
-                    ground_truth_frame_class = local_fallback.FRAME_VALUE_TO_CLASS.get(ground_truth_metadata.frame)
-                    if ground_truth_frame_class is not None:
-                        frame_class = ground_truth_frame_class
-                        frame_confidence = local_fallback.GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE
-                        attributes.frame_ground_truth_count += 1
 
                 if outcome.frame_reading_attempted:
                     if frame_class is not None:

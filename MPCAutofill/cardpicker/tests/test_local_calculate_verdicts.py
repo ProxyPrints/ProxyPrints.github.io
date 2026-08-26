@@ -1317,6 +1317,10 @@ class TestAgreementChecks:
 
         assert verdict.skip_reason == "frame-mismatch"
         assert verdict.printing_pk is None
+        # a collector number had to parse for the match itself to exist, so the observed side
+        # is always "modern" for this calculator - "old"->"modern" isn't reachable here (see
+        # calculate_join_key_verdict's own matching precondition).
+        assert verdict.frame_mismatch_direction == "modern->old"
 
     def test_frame_agreement_does_not_veto_the_match(self, db):
         printing = CanonicalCardFactory(name="Test Card", expansion__code="mom", collector_number="158")

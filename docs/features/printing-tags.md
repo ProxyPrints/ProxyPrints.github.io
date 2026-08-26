@@ -2421,14 +2421,45 @@ reach at all:
   line-present vs. Illus.-anchor-present) run for **every** processed
   card regardless of printing-vote success, casting standalone
   attribute-chip votes (Black/White/Silver Border, Borderless, Old/Modern
-  Border) - and, when a printing vote **is** confirmed for that card this
-  run, preferring ground truth from that printing's own
-  `CanonicalPrintingMetadata` (Scryfall `border_color`/`frame`) over the
-  heuristic estimate. The same heuristic reading also feeds a
-  **consistency check**: if a card's observed frame class contradicts its
-  matched printing's real frame value, the printing vote itself is
-  withheld (kept as a frame-vote-only outcome) rather than trusting an
-  art/OCR match that likely landed on the wrong printing.
+  Border). **Three separate questions about a card's frame** are involved
+  here, and the code used to collapse two of them:
+
+  - **A - what frame era was the PRINTING?** Answered by
+    `CanonicalPrintingMetadata.frame` (Scryfall) - authoritative, no
+    pixels needed.
+  - **B - what frame does OUR IMAGE render?** Answered by
+    `local_fallback.classify_frame_style`. This is what the `Old Border`/
+    `Modern Border` chips describe.
+  - **C - is our image a period-accurate depiction of that printing?** A
+    vs. B, computed by `local_fallback.frame_style_is_consistent`.
+
+  When a printing vote **is** confirmed for a card this run, **border**
+  prefers ground truth from that printing's own `CanonicalPrintingMetadata`
+  (Scryfall `border_color`) over the heuristic estimate. **Frame does not**:
+  our images are user-made renders, and re-skinning an old card into a
+  newer template is much of the point of proxying one, so A and B
+  genuinely and routinely differ rather than B being a degraded estimate
+  of A - a 60-image audit (one draw per era folder) found MATCH rates of
+  only 1993 33%, 1997 40%, 2003 80%, 2015 73% (0/60 UNSURE), and 93%/87%
+  of images whose printing is frame=1993/1997 print a collector-number
+  line, a convention those eras never had. Casting the frame chip from
+  ground truth would describe the printing, not the image being tagged.
+
+  The heuristic reading also feeds a **consistency check** (question C):
+  if a card's observed frame class contradicts its matched printing's
+  real frame value, the printing vote itself is withheld (kept as a
+  frame-vote-only outcome, `skip_reason="frame-mismatch"`), recording
+  which direction the mismatch ran (`CardScanLog.frame_mismatch_direction`,
+  e.g. `"old->modern"` for a pre-2003 printing rendered in a newer
+  template vs. `"modern->old"` for a deliberate retro-frame render) so
+  the split is queryable. This is evidence about **period accuracy of the
+  render**, not about whether the printing match itself is wrong - the
+  match is keyed on name/set/collector-number/art, none of which the
+  frame check touches, and for pre-2003 printings a mismatch is the
+  _measured common case_ per the audit above, not an anomaly. The
+  withhold is retained pending that direction measurement, not because a
+  mismatch has been shown to make the match untrustworthy.
+
 - All engines vote under `VoteSource.OCR` (the 2026-07-15 split of the
   old single `VoteSource.AI` value into `DEDUCTION`/`OCR` - see
   `models.py`'s `VoteSource` docstring; same weight/gate treatment as

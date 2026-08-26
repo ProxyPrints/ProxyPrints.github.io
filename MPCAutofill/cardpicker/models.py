@@ -2396,6 +2396,14 @@ class CardScanLog(models.Model):
     # built by issue #433. Never populated for an OCR/phash row, or for a missing-`ImageEvidence`
     # skip (`calculate_fallback_verdict` is never reached, so no candidate set was ever resolved).
     survivor_pks = models.JSONField(null=True, blank=True)
+    # Which way a `skip_reason="frame-mismatch"` row's disagreement ran - "old->modern" (a
+    # pre-2003 printing rendered in a newer template, measured as the common case for those
+    # printings) vs. "modern->old" (a deliberate retro-frame render) mean different things (see
+    # local_fallback.classify_frame_mismatch_direction), and neither this row's skip_reason
+    # alone nor the pre-existing evidence_types_used/survivor_pks pair (both populated only by
+    # the unrelated Stage D fallback calculator, with their own documented meanings) could carry
+    # that split. Additive, nullable, no backfill - `null` for every OTHER skip_reason.
+    frame_mismatch_direction = models.CharField(max_length=32, null=True, blank=True)
 
     class Meta:
         indexes = [
@@ -2447,11 +2455,11 @@ class CardQuestionAbstention(models.Model):
 
     Unique on (card, anonymous_id, question_type); the write path is `get_or_create`, so a voter
     tapping "Not sure" more than once on the same pair (e.g. across repeat serves) records the
-    fact once, not once per tap. This is also exactly the shape a future exclusion query needs
-    (issue #713, not built here): "has this anonymous_id already abstained on this card for this
-    question_type" is a single indexed equality lookup against this table's own unique
-    constraint, e.g. `CardQuestionAbstention.objects.filter(card_id=..., anonymous_id=...,
-    question_type=...).exists()`.
+    fact once, not once per tap. `question_feed._voter_cannot_tell_card_ids` reads this table
+    (filtered on `reason=CANNOT_TELL_ABSTENTION_REASON`) to exclude a card from a voter's future
+    feed once they've stated the scan can't answer the question - a bare "Not sure"
+    (`reason=None`) is deliberately NOT read for exclusion there, since it is a real deferral,
+    not a statement about the card.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="question_abstentions")
