@@ -504,8 +504,24 @@ def cast_border_attribute_vote(
 
 # ---------------------------------------------------------------------------------------------
 # Frame-style votes (existing "Old Border"/"Modern Border" attribute chip tags only - see
-# attribute_tags.py; never seeds new tags, per instruction). Classification reuses signals the
-# pipeline already extracts, no new image processing:
+# attribute_tags.py; never seeds new tags, per instruction).
+#
+# THREE SEPARATE QUESTIONS ABOUT A CARD'S FRAME, EASILY COLLAPSED INTO ONE BY ACCIDENT:
+#   A - what frame era was the PRINTING? Answered by CanonicalPrintingMetadata.frame (Scryfall) -
+#       authoritative, no pixels needed. Not this module's concern.
+#   B - what frame does the fetched IMAGE actually render? Answered by classify_frame_style
+#       below, from signals this pipeline already extracts. This is what the "Old Border"/
+#       "Modern Border" chips describe, and it is NOT a degraded estimate of A: our images are
+#       user-made renders, and re-skinning an old card into a newer template is much of the
+#       point of proxying one, so A and B genuinely and routinely differ. Measured (60-image
+#       audit, one draw per era folder): MATCH rate 1993 33%, 1997 40%, 2003 80%, 2015 73%, with
+#       UNSURE at 0/60 - the renders are visually unambiguous, they simply do not depict the era
+#       their printing metadata names.
+#   C - is the image a period-accurate depiction of that specific printing? A vs B, computed by
+#       frame_style_is_consistent / classify_frame_mismatch_direction below.
+#
+# Classification (question B) reuses signals the pipeline already extracts, no new image
+# processing:
 #   - pass 1 (OCR) extracted a plausible collector number, with or without a set code (2015/M15
 #     prints a full "set collector" strip; 2003-2014 prints just a brush-glyph + number, no set
 #     code - both are post-2003 "modern" frame families, and this taxonomy only distinguishes
@@ -572,20 +588,44 @@ def cast_frame_style_vote(
     )
 
 
-def frame_style_is_consistent(frame_class: Optional[str], printing_frame_value: Optional[str]) -> bool:
-    """True when there's nothing to compare (either side unresolved/unknown - e.g. no frame
-    reading this run, or the matched printing predates/postdates the two reachable classes) OR
-    the two agree. False ONLY on a confirmed disagreement - the caller withholds the printing
-    vote in that case (see module docstring's CONSISTENCY CHECK), since an art match landing on
-    a printing whose real frame contradicts what's actually visible on the card face means the
-    image most likely doesn't faithfully depict that specific printing (a frame-converted
-    proxy), not that the printing match itself was wrong."""
+def classify_frame_mismatch_direction(
+    frame_class: Optional[str], printing_frame_value: Optional[str]
+) -> Optional[tuple[str, str]]:
+    """(observed_frame_class, expected_frame_class) whenever frame_style_is_consistent would
+    return False for the same two inputs - None in every case it would return True (nothing to
+    compare, or the two agree). A decomposition of that function's own comparison for a caller
+    that needs to know WHICH WAY a mismatch runs - an old printing rendered in a newer template
+    vs. a modern printing rendered in an old one, see this module's own "three questions" note
+    above for why that direction is informative rather than just a bool. Call this whenever the
+    direction is needed; frame_style_is_consistent stays the bool-only wrapper for callers that
+    only need to know THAT they disagree."""
     if frame_class is None or not printing_frame_value:
-        return True
+        return None
     expected_class = FRAME_VALUE_TO_CLASS.get(printing_frame_value)
-    if expected_class is None:
-        return True
-    return expected_class == frame_class
+    if expected_class is None or expected_class == frame_class:
+        return None
+    return (frame_class, expected_class)
+
+
+def frame_style_is_consistent(frame_class: Optional[str], printing_frame_value: Optional[str]) -> bool:
+    """Question C above: does the OBSERVED render (frame_class, question B) match what the
+    MATCHED PRINTING's own metadata implies (printing_frame_value, question A)? True when
+    there's nothing to compare (either side unresolved/unknown - e.g. no frame reading this
+    run, or the matched printing predates/postdates the two reachable classes) OR the two
+    agree. False ONLY on a confirmed disagreement.
+
+    A disagreement is evidence about PERIOD ACCURACY OF THE RENDER, not about whether the
+    printing match itself is wrong - the join-key match is keyed on name/set/collector-number/
+    art, none of which this check touches. For pre-2003 printings a mismatch is the MEASURED
+    COMMON CASE (module comment above: 1993/1997 MATCH at only 33%/40%), not an anomaly -
+    re-skinning an old card into a modern template is a normal, deliberate proxy choice.
+
+    Callers still withhold the printing vote on False (see call sites) - that rule is RETAINED
+    PENDING a direction measurement (classify_frame_mismatch_direction above records which way
+    each mismatch runs, on the scan-log row, making that measurement queryable), not because
+    this check has established the match itself is untrustworthy. Whether the withhold should
+    continue is a separate, not-yet-made decision."""
+    return classify_frame_mismatch_direction(frame_class, printing_frame_value) is None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -944,6 +984,7 @@ __all__ = [
     "classify_frame_style",
     "cast_frame_style_vote",
     "frame_style_is_consistent",
+    "classify_frame_mismatch_direction",
     "TRIM_ASPECT_RATIO",
     "BLEED_ASPECT_RATIO",
     "BLEED_EDGE_TAG_NAME",
