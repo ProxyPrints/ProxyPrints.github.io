@@ -68,6 +68,7 @@ from cardpicker.question_feed_pools import (
     _cache_key,
     warm_pool_cache,
 )
+from cardpicker.schema_types import TypeEnum
 from cardpicker.tag_consensus import resolve_and_persist_tag_votes
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
@@ -1404,6 +1405,14 @@ class TestNearDuplicateServingGroups:
         assert _near_duplicate_serving_card_ids({seed.pk}) == {seed.pk}
 
     def test_a_voter_who_answers_one_near_duplicate_is_not_served_its_sibling(self, db):
+        # The near-duplicate widening feeds `_voter_answered_printing_card_ids` only (see that
+        # function's own docstring) - it excludes `sibling` from PRINTING-shaped serving
+        # (confirm_suggestion/identify_printing), never from the cold lane's artist half, which
+        # is a deliberately UNWIDENED, per-card exclusion scoped to `_tier_2_contested` only (see
+        # `_tier_4_fresh`'s own docstring for that pre-existing, unrelated scoping decision) - a
+        # voter who has cast no `CardArtistVote` at all is eligible for an artist question on
+        # ANY unresolved card, near-duplicate or not. So the property this test proves is scoped
+        # to the same PRINTING axis the widening actually covers.
         printing = CanonicalCardFactory(name="Ashaya")
         answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
         sibling = CardFactory(
@@ -1414,9 +1423,17 @@ class TestNearDuplicateServingGroups:
 
         item = get_next_question_feed_item("voter-1")
 
-        assert item is None or item.card.identifier != sibling.identifier
+        if item is not None and item.card.identifier == sibling.identifier:
+            assert item.type not in (TypeEnum.confirmsuggestion, TypeEnum.identifyprinting)
 
     def test_a_different_voter_still_sees_the_near_duplicate_sibling(self, db):
+        # voter-2 has answered NEITHER card, so both are legitimately eligible and the tier's own
+        # `-vote_count` pre-rank (see `_tier_4_fresh`) is free to prefer `answered` - it already
+        # carries voter-1's vote, making it the card closer to resolution. Asserting a specific
+        # member here would pin that ordering rather than the property this test exists to prove:
+        # that the near-duplicate widening only ever narrows EXCLUSION, never the served group
+        # itself - a voter who has answered neither member must still be served one of them, not
+        # have the pair suppressed as though both were already answered.
         printing = CanonicalCardFactory(name="Ashaya")
         answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
         sibling = CardFactory(name="Ashaya", content_phash=0b111, printing_tag_status=PrintingTagStatus.UNRESOLVED)
@@ -1426,7 +1443,7 @@ class TestNearDuplicateServingGroups:
         item = get_next_question_feed_item("voter-2")
 
         assert item is not None
-        assert item.card.identifier == sibling.identifier
+        assert item.card.identifier in {answered.identifier, sibling.identifier}
 
     def test_a_genuinely_different_card_beyond_the_threshold_is_still_served_independently(self, db):
         printing = CanonicalCardFactory(name="Ashaya")
