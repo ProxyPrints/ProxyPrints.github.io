@@ -20,6 +20,7 @@ from cardpicker.local_calculate_verdicts import (
 from cardpicker.models import (
     ArtistVoteStatus,
     CardPrintingTag,
+    CardQuestionAbstention,
     CardScanLog,
     HiddenCard,
     IllustrationVoteStatus,
@@ -51,7 +52,9 @@ from cardpicker.question_feed import (
     _tier_1_confirm_suggestion,
     _tier_2_contested,
     _tier_4_fresh,
+    _voter_answered_border_card_ids,
     _voter_answered_printing_card_ids,
+    _voter_cannot_tell_card_ids,
     get_next_question_feed_item,
     get_remaining_estimate,
     is_likely_resolve_printing,
@@ -1649,7 +1652,7 @@ class TestLikelyResolveRouting:
         _printing_with_border("Brainstorm", "black")
         _printing_with_border("Brainstorm", "white")
 
-        item = _likely_resolve_item(card)
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value == "border"
 
@@ -1660,7 +1663,7 @@ class TestLikelyResolveRouting:
         _printing_with_border("Brainstorm", "black")
         _printing_with_border("Brainstorm", "white")
 
-        item = _likely_resolve_item(card)
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value != "border"
 
@@ -1669,7 +1672,7 @@ class TestLikelyResolveRouting:
         _printing_with_border("Brainstorm", "black", illustration_id=uuid.uuid4())
         _printing_with_border("Brainstorm", "black", illustration_id=uuid.uuid4())
 
-        item = _likely_resolve_item(card)
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value == "illustration"
 
@@ -1681,7 +1684,7 @@ class TestLikelyResolveRouting:
         _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
         _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
 
-        item = _likely_resolve_item(card)
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value == "identify_printing"
 
@@ -1695,7 +1698,7 @@ class TestLikelyResolveRouting:
         _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
         _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
 
-        item = _likely_resolve_item(card)
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value == "identify_printing"
 
@@ -1704,7 +1707,7 @@ class TestLikelyResolveRouting:
         _printing_with_border("Brainstorm", "black")
         _printing_with_border("Brainstorm", "black")
 
-        item = _likely_resolve_item(card)
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value == "identify_printing"
 
@@ -1714,7 +1717,7 @@ class TestLikelyResolveRouting:
         _printing_with_border("Brainstorm", "black", illustration_id=illustration_id)
         _printing_with_border("Brainstorm", "white", illustration_id=illustration_id)
 
-        item = _likely_resolve_item(card)
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value == "border"
 
@@ -1723,9 +1726,83 @@ class TestLikelyResolveRouting:
         card.illustration_vote_status = IllustrationVoteStatus.RESOLVED
         card.save(update_fields=["illustration_vote_status"])
 
-        item = _likely_resolve_item(card)
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value == "confirm_suggestion"
+
+
+class TestBorderPerVoterExclusion:
+    """A voter's own answer to the border question must remove that card from their own future
+    feed without affecting any other voter - `_voter_answered_border_card_ids` is the exclusion
+    set `_likely_resolve_item` checks alongside the pre-existing catalogue-wide
+    `_card_border_unrecorded` consensus gate."""
+
+    def _split_card(self, name: str = "Brainstorm"):
+        card = CardFactory(name=name, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _printing_with_border(name, "black")
+        _printing_with_border(name, "white")
+        return card
+
+    def test_voter_who_voted_a_border_colour_is_not_served_border_again(self, db):
+        card = self._split_card()
+        CardTagVoteFactory(card=card, tag=TagFactory(name="Black Border"), anonymous_id="voter-1")
+
+        item = _likely_resolve_item(card, anonymous_id="voter-1")
+
+        assert item.type.value != "border"
+
+    def test_a_different_voter_is_still_served_border(self, db):
+        """Proves the exclusion is per-voter: a global exclusion would fail this too."""
+        card = self._split_card()
+        CardTagVoteFactory(card=card, tag=TagFactory(name="Black Border"), anonymous_id="voter-1")
+
+        item = _likely_resolve_item(card, anonymous_id="voter-2")
+
+        assert item.type.value == "border"
+
+    def test_cannot_tell_abstention_excludes_the_voter_from_border(self, db):
+        card = self._split_card()
+        CardQuestionAbstention.objects.create(
+            card=card, anonymous_id="voter-1", question_type="border", reason="cannot-tell"
+        )
+
+        item = _likely_resolve_item(card, anonymous_id="voter-1")
+
+        assert item.type.value != "border"
+
+    def test_cannot_tell_abstention_does_not_exclude_a_different_voter(self, db):
+        card = self._split_card()
+        CardQuestionAbstention.objects.create(
+            card=card, anonymous_id="voter-1", question_type="border", reason="cannot-tell"
+        )
+
+        item = _likely_resolve_item(card, anonymous_id="voter-2")
+
+        assert item.type.value == "border"
+
+    def test_plain_skip_abstention_does_not_exclude_border(self, db):
+        card = self._split_card()
+        CardQuestionAbstention.objects.create(card=card, anonymous_id="voter-1", question_type="border", reason=None)
+
+        item = _likely_resolve_item(card, anonymous_id="voter-1")
+
+        assert item.type.value == "border"
+
+    def test_voter_answered_border_card_ids_reads_any_of_the_four_colour_tags(self, db):
+        card = self._split_card()
+        CardTagVoteFactory(card=card, tag=TagFactory(name="Borderless"), anonymous_id="voter-1")
+
+        assert card.pk in _voter_answered_border_card_ids("voter-1")
+        assert card.pk not in _voter_answered_border_card_ids("voter-2")
+
+    def test_voter_cannot_tell_card_ids_ignores_other_question_types(self, db):
+        card = self._split_card()
+        CardQuestionAbstention.objects.create(
+            card=card, anonymous_id="voter-1", question_type="identify_printing", reason="cannot-tell"
+        )
+
+        assert card.pk not in _voter_cannot_tell_card_ids("voter-1", "border")
+        assert card.pk in _voter_cannot_tell_card_ids("voter-1", "identify_printing")
 
 
 def _make_border_split_likely_resolve_card(name: str = "Brainstorm"):
@@ -1787,7 +1864,7 @@ class TestLikelyResolveNarrowingCap:
     def test_allow_narrowing_false_forces_a_printing_question_despite_a_border_split(self, db):
         card = _make_border_split_likely_resolve_card()
 
-        item = _likely_resolve_item(card, allow_narrowing=False)
+        item = _likely_resolve_item(card, allow_narrowing=False, anonymous_id="anon-1")
 
         assert item.type.value in ("confirm_suggestion", "identify_printing")
 
@@ -1797,7 +1874,9 @@ class TestLikelyResolveNarrowingCap:
         one of 20 likely-resolve servings comes back `border`, never a printing question."""
         card = _make_border_split_likely_resolve_card()
 
-        served_types = [_likely_resolve_item(card, allow_narrowing=True).type.value for _ in range(20)]
+        served_types = [
+            _likely_resolve_item(card, allow_narrowing=True, anonymous_id="anon-1").type.value for _ in range(20)
+        ]
 
         assert served_types == ["border"] * 20
         assert not any(t in ("confirm_suggestion", "identify_printing") for t in served_types)

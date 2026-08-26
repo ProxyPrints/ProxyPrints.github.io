@@ -2471,11 +2471,11 @@ class CardQuestionAbstention(models.Model):
 
     Unique on (card, anonymous_id, question_type); the write path is `get_or_create`, so a voter
     tapping "Not sure" more than once on the same pair (e.g. across repeat serves) records the
-    fact once, not once per tap. This is also exactly the shape a future exclusion query needs
-    (issue #713, not built here): "has this anonymous_id already abstained on this card for this
-    question_type" is a single indexed equality lookup against this table's own unique
-    constraint, e.g. `CardQuestionAbstention.objects.filter(card_id=..., anonymous_id=...,
-    question_type=...).exists()`.
+    fact once, not once per tap. `question_feed._voter_cannot_tell_card_ids` reads this table
+    (filtered on `reason=CANNOT_TELL_ABSTENTION_REASON`) to exclude a card from a voter's future
+    feed once they've stated the scan can't answer the question - a bare "Not sure"
+    (`reason=None`) is deliberately NOT read for exclusion there, since it is a real deferral,
+    not a statement about the card.
     """
 
     card = models.ForeignKey(to=Card, on_delete=models.CASCADE, related_name="question_abstentions")
