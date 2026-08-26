@@ -355,6 +355,27 @@ printings, artists, tags, and moderation from one screen.
   with no printing vote of their own that gain access to one through the
   union.
 
+  **Near-duplicate serving groups (SERVING ONLY, `question_feed.py`,
+  2026-08-26) widen further, but strictly outside this identity
+  boundary.** A re-encode or fresh re-scan of the same physical card
+  lands at neither an md5 nor a phash-d0 match — each is its own group
+  of one under everything above, so a voter answering one gets asked
+  about the next, and the next, repeatedly (measured: "Ashaya, Soul of
+  the Wild", 36 rows, 32 distinct md5 checksums, all unresolved).
+  `question_feed._voter_answered_printing_card_ids` widens its exclusion
+  set one step further, to `Card.content_phash` Hamming distance ≤4
+  (`_near_duplicate_serving_card_ids`, same-name-scoped for cost — a
+  near-duplicate of a card shares its name) — this ONLY changes which
+  question a voter is served next; it is never read by
+  `identity_group_card_ids`, `group_printing_votes`,
+  `resolve_and_persist_printing`, `review_clusters.py`, or
+  `consensus_recompute` — those all stay on the md5 ∪ phash-d0 boundary
+  above, unchanged. A card in the wider (4, 8] band is still served as
+  its own independent question but carries `isAnotherCopy=true` so the
+  frontend can tell the voter it's a different scan of a card they've
+  already answered, rather than let it read as the repeated-question bug
+  this widening exists to close.
+
 - **Frontend consumer (funnel round, docs/features/grid-selector.md's
   "art-picker FUNNEL" section)**: the two endpoints below are called
   from the `/display` rail's Select Version FUNNEL

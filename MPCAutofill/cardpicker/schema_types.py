@@ -502,6 +502,7 @@ class QuestionFeedItem(BaseModel):
     candidates: Optional[List[PrintingCandidate]] = None
     confidentlyKnownArtistName: Optional[str] = None
     illustrationCandidates: Optional[List[PrintingCandidate]] = None
+    isAnotherCopy: Optional[bool] = None
     scryfallIllustrationUrl: Optional[str] = None
     suggestedPrinting: Optional[PrintingCandidate] = None
     tagConfidence: Optional[Dict[str, float]] = None
@@ -517,6 +518,7 @@ class QuestionFeedItem(BaseModel):
         illustrationCandidates = from_union(
             [lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("illustrationCandidates")
         )
+        isAnotherCopy = from_union([from_bool, from_none], obj.get("isAnotherCopy"))
         scryfallIllustrationUrl = from_union([from_none, from_str], obj.get("scryfallIllustrationUrl"))
         suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
         tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
@@ -527,6 +529,7 @@ class QuestionFeedItem(BaseModel):
             candidates,
             confidentlyKnownArtistName,
             illustrationCandidates,
+            isAnotherCopy,
             scryfallIllustrationUrl,
             suggestedPrinting,
             tagConfidence,
@@ -548,6 +551,8 @@ class QuestionFeedItem(BaseModel):
                 [lambda x: from_list(lambda x: to_class(PrintingCandidate, x), x), from_none],
                 self.illustrationCandidates,
             )
+        if self.isAnotherCopy is not None:
+            result["isAnotherCopy"] = from_union([from_bool, from_none], self.isAnotherCopy)
         if self.scryfallIllustrationUrl is not None:
             result["scryfallIllustrationUrl"] = from_union([from_none, from_str], self.scryfallIllustrationUrl)
         if self.suggestedPrinting is not None:

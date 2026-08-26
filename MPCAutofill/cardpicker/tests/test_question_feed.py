@@ -33,6 +33,7 @@ from cardpicker.models import (
 )
 from cardpicker.printing_consensus import (
     get_contested_card_ids,
+    identity_group_card_ids,
     resolve_and_persist_printing,
 )
 from cardpicker.question_feed import (
@@ -45,6 +46,7 @@ from cardpicker.question_feed import (
     _likely_resolve_item,
     _likely_resolve_narrowing_ratio,
     _likely_resolve_printing_card,
+    _near_duplicate_serving_card_ids,
     _scryfall_illustration_url,
     _tag_review_card_ids_by_status,
     _tier_1_confirm_suggestion,
@@ -1375,6 +1377,107 @@ class TestIllustrationVoteAnsweredExclusion:
         )
 
         assert get_next_question_feed_item("voter-1") is None
+
+
+class TestNearDuplicateServingGroups:
+    """SERVING-ONLY near-duplicate widening (`Card.content_phash` Hamming distance) - the fix for
+    a voter repeatedly served questions about what looks like the same card when re-encodes land
+    at distinct md5 checksums. `identity_group_card_ids` (md5 union phash-d0) is the boundary
+    consensus/vote resolution actually pools on and must stay untouched - see the last test."""
+
+    def test_near_duplicate_serving_card_ids_widens_within_distance_and_same_name(self, db):
+        seed = CardFactory(name="Ashaya", content_phash=0)
+        near = CardFactory(name="Ashaya", content_phash=0b111)  # Hamming distance 3, <= 4
+        far = CardFactory(name="Ashaya", content_phash=0xFF)  # Hamming distance 8, > 4
+        different_name = CardFactory(name="Different Card", content_phash=0b111)  # distance 3, wrong name
+
+        expanded = _near_duplicate_serving_card_ids({seed.pk})
+
+        assert expanded == {seed.pk, near.pk}
+        assert far.pk not in expanded
+        assert different_name.pk not in expanded
+
+    def test_near_duplicate_serving_card_ids_ignores_cards_with_no_phash(self, db):
+        seed = CardFactory(name="Ashaya", content_phash=None)
+        CardFactory(name="Ashaya", content_phash=0)
+
+        assert _near_duplicate_serving_card_ids({seed.pk}) == {seed.pk}
+
+    def test_a_voter_who_answers_one_near_duplicate_is_not_served_its_sibling(self, db):
+        printing = CanonicalCardFactory(name="Ashaya")
+        answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        sibling = CardFactory(
+            name="Ashaya", content_phash=0b111, printing_tag_status=PrintingTagStatus.UNRESOLVED  # distance 3
+        )
+        CardPrintingTagFactory(card=answered, printing=printing, source=VoteSource.USER, anonymous_id="voter-1")
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("voter-1")
+
+        assert item is None or item.card.identifier != sibling.identifier
+
+    def test_a_different_voter_still_sees_the_near_duplicate_sibling(self, db):
+        printing = CanonicalCardFactory(name="Ashaya")
+        answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        sibling = CardFactory(name="Ashaya", content_phash=0b111, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=answered, printing=printing, source=VoteSource.USER, anonymous_id="voter-1")
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("voter-2")
+
+        assert item is not None
+        assert item.card.identifier == sibling.identifier
+
+    def test_a_genuinely_different_card_beyond_the_threshold_is_still_served_independently(self, db):
+        printing = CanonicalCardFactory(name="Ashaya")
+        answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        distinct = CardFactory(
+            name="Ashaya", content_phash=0x1FF, printing_tag_status=PrintingTagStatus.UNRESOLVED  # distance 9
+        )
+        CardPrintingTagFactory(card=answered, printing=printing, source=VoteSource.USER, anonymous_id="voter-1")
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("voter-1")
+
+        assert item is not None
+        assert item.card.identifier == distinct.identifier
+        assert item.isAnotherCopy is not True
+
+    def test_a_near_but_not_excluded_scan_is_flagged_as_another_copy(self, db):
+        printing = CanonicalCardFactory(name="Ashaya")
+        answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        informational = CardFactory(
+            name="Ashaya", content_phash=0b111111, printing_tag_status=PrintingTagStatus.UNRESOLVED  # distance 6
+        )
+        CardPrintingTagFactory(card=answered, printing=printing, source=VoteSource.USER, anonymous_id="voter-1")
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("voter-1")
+
+        assert item is not None
+        assert item.card.identifier == informational.identifier
+        assert item.isAnotherCopy is True
+
+    def test_a_card_new_to_the_voter_is_never_flagged_another_copy(self, db):
+        card = CardFactory(printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CanonicalCardFactory(name=card.name)
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("voter-1")
+
+        assert item is not None
+        assert item.isAnotherCopy is not True
+
+    def test_near_duplicate_widening_never_affects_consensus_identity(self, db):
+        """The boundary consensus actually pools votes across (`identity_group_card_ids` - md5
+        union phash-d0) must stay untouched by this serving-only widening: two cards at Hamming
+        distance 3 - well within the serving exclusion band - remain two SEPARATE identity
+        groups of one, exactly as they would with no md5/phash-d0 match at all."""
+        card_a = CardFactory(name="Ashaya", content_phash=0)
+        card_b = CardFactory(name="Ashaya", content_phash=0b111)
+
+        assert identity_group_card_ids(card_a) == [card_a.pk]
+        assert identity_group_card_ids(card_b) == [card_b.pk]
 
 
 class TestGetNextQuestionFeedItemUsesPools:
