@@ -1888,6 +1888,17 @@ class TestBorderPerVoterExclusion:
         assert card.pk not in _voter_cannot_tell_card_ids("voter-1", "border")
         assert card.pk in _voter_cannot_tell_card_ids("voter-1", "identify_printing")
 
+    def test_voter_answered_border_card_ids_widens_to_a_near_duplicate_sibling(self, db):
+        """Mirrors `_voter_answered_printing_card_ids`'s own near-duplicate widening
+        (`TestNearDuplicateServingGroups`) - a re-scanned or re-encoded copy of a card whose
+        border colour this voter already answered must count as already answered too, not
+        surface as a fresh border question under the sibling's own identifier."""
+        card = CardFactory(name="Ashaya", content_phash=0)
+        sibling = CardFactory(name="Ashaya", content_phash=0b111)  # Hamming distance 3, <= 4
+        CardTagVoteFactory(card=card, tag=TagFactory(name="Black Border"), anonymous_id="voter-1")
+
+        assert sibling.pk in _voter_answered_border_card_ids("voter-1")
+
 
 def _make_border_split_likely_resolve_card(name: str = "Brainstorm"):
     """A card that is BOTH `is_likely_resolve_printing` (two agreeing OCR votes on one

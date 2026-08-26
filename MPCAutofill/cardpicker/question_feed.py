@@ -1008,23 +1008,30 @@ def _voter_cannot_tell_card_ids(anonymous_id: str, question_type: str) -> set[in
 
 def _voter_answered_border_card_ids(anonymous_id: str) -> set[int]:
     """
-    Cards (md5-widened) this voter has already answered the border question for: either cast a
-    `CardTagVote` on one of the four border-colour tags (`_BORDER_COLOR_TAG_NAMES` - the same
-    vote every `BorderColorQuestion` chip tap casts), or abstained on a served `border` question
-    with reason `cannot-tell` (`_voter_cannot_tell_card_ids`).
+    Cards (md5-widened, then near-duplicate-widened) this voter has already answered the border
+    question for: either cast a `CardTagVote` on one of the four border-colour tags
+    (`_BORDER_COLOR_TAG_NAMES` - the same vote every `BorderColorQuestion` chip tap casts), or
+    abstained on a served `border` question with reason `cannot-tell`
+    (`_voter_cannot_tell_card_ids`).
 
     Treated as ONE axis, not four independent tags like `_voter_answered_tag_card_ids_by_tag`'s
     general attribute-chip walk: the four colours are mutually exclusive on the frontend's own
     `BORDER_COLOR_GROUP`, so a vote on any one of them answers the whole "which border colour"
     question for this card - unlike the ~11-tag walk, where a card carries many independent
     questions and answering one must not hide the others.
+
+    Widened by `_near_duplicate_serving_card_ids` exactly as `_voter_answered_printing_card_ids`
+    is (see this module's own "Near-duplicate serving groups" section) - a re-scanned or
+    re-encoded copy of a card whose border colour this voter already answered is, for serving
+    purposes, the same "already answered" card, not a fresh border question.
     """
     voted_card_ids = CardTagVote.objects.filter(
         anonymous_id=anonymous_id, tag__name__in=_BORDER_COLOR_TAG_NAMES
     ).values_list("card_id", flat=True)
-    return identity_group_expanded_card_ids(set(voted_card_ids)) | _voter_cannot_tell_card_ids(
+    identity_expanded = identity_group_expanded_card_ids(set(voted_card_ids)) | _voter_cannot_tell_card_ids(
         anonymous_id, TypeEnum.border.value
     )
+    return identity_expanded | _near_duplicate_serving_card_ids(identity_expanded)
 
 
 def _not_official_art_card_ids() -> set[int]:
