@@ -429,6 +429,7 @@ from cardpicker.local_identify_printing_tags import (
     FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS,
     CandidateNameIndex,
     CandidatePrinting,
+    frame_disagreement_direction,
     generate_run_id,
     printing_attribute_disagreement,
 )
@@ -663,6 +664,10 @@ class JoinKeyVerdict:
     confidence: Optional[float] = None
     detail: str = ""
     skip_reason: str = ""
+    # "old->modern"/"modern->old" for a skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON verdict
+    # (frame_disagreement_direction) - None for every other verdict shape. See CardScanLog.
+    # frame_mismatch_direction's own comment for why this is worth carrying at all.
+    frame_mismatch_direction: Optional[str] = None
 
 
 def _hamming_distance(a: int, b: int, bits: int = _SYMBOL_HASH_BITS) -> int:
@@ -863,7 +868,13 @@ def _apply_agreement_checks(
         if disagreement == ATTRIBUTE_BORDER_MISMATCH:
             border_disagreement = True
         if disagreement == ATTRIBUTE_FRAME_MISMATCH:
-            return JoinKeyVerdict(card_id=card_id, skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON, detail=detail)
+            direction = frame_disagreement_direction(evidence, metadata)
+            return JoinKeyVerdict(
+                card_id=card_id,
+                skip_reason=JOIN_KEY_FRAME_MISMATCH_SKIP_REASON,
+                detail=detail,
+                frame_mismatch_direction=f"{direction[0]}->{direction[1]}" if direction is not None else None,
+            )
 
         # THE COPYRIGHT-YEAR ERA CHECK (module docstring) - reuses the SAME metadata row the
         # border/frame checks above already fetched, no second query. Skipped entirely (not a
@@ -1748,6 +1759,7 @@ def run_join_key_calculator(
                         anonymous_id=JOIN_KEY_ANONYMOUS_ID,
                         run_id=run_id,
                         skip_reason=verdict.skip_reason,
+                        frame_mismatch_direction=verdict.frame_mismatch_direction,
                     )
                 )
             continue
