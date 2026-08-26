@@ -31,6 +31,7 @@ from cardpicker.local_fallback import (
     cast_frame_style_vote,
     classify_bleed_edge,
     classify_border_color,
+    classify_frame_mismatch_direction,
     classify_frame_style,
     extract_artist_name,
     filter_by_border_color,
@@ -463,6 +464,28 @@ class TestFrameStyleIsConsistent:
     def test_disagreement(self):
         assert frame_style_is_consistent("old", "2015") is False
         assert frame_style_is_consistent("modern", "1993") is False
+
+
+class TestClassifyFrameMismatchDirection:
+    def test_agrees_with_frame_style_is_consistent_on_every_consistent_case(self):
+        for frame_class, printing_frame_value in [
+            (None, "1993"),
+            ("modern", None),
+            ("modern", ""),
+            ("modern", "future"),
+            ("old", "1993"),
+            ("old", "1997"),
+            ("modern", "2003"),
+            ("modern", "2015"),
+        ]:
+            assert classify_frame_mismatch_direction(frame_class, printing_frame_value) is None
+            assert frame_style_is_consistent(frame_class, printing_frame_value) is True
+
+    def test_pre_2003_printing_rendered_in_a_modern_template(self):
+        assert classify_frame_mismatch_direction("modern", "1993") == ("modern", "old")
+
+    def test_modern_printing_rendered_in_a_retro_template(self):
+        assert classify_frame_mismatch_direction("old", "2015") == ("old", "modern")
 
 
 class TestClassifyBleedEdge:

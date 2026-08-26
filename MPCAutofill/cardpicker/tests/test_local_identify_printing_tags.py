@@ -19,7 +19,11 @@ from cardpicker.local_clustering import (
     NEAR_DUPLICATE_MAX_DISTANCE,
     compute_two_threshold_clusters,
 )
-from cardpicker.local_fallback import FALLBACK_ANONYMOUS_ID
+from cardpicker.local_fallback import (
+    FALLBACK_ANONYMOUS_ID,
+    FRAME_VOTE_CONFIDENCE,
+    GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE,
+)
 from cardpicker.local_identify_printing_tags import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
     NAME_FREQUENCY_ANONYMOUS_ID,
@@ -2852,6 +2856,8 @@ class TestPass2Wiring:
         assert results["ocr"].votes_written == 0
         assert results["ocr"].skip_counts["frame-mismatch"] == 1
         assert not CardPrintingTag.objects.filter(card=card).exists()
+        scan_log_row = CardScanLog.objects.get(card=card, anonymous_id=OCR_ANONYMOUS_ID)
+        assert scan_log_row.frame_mismatch_direction == "modern->old"
         assert len(attributes.frame_mismatches) == 1
         assert attributes.frame_mismatches[0]["card_id"] == card.pk
 
@@ -2895,16 +2901,56 @@ class TestGroundTruthAttributeVotes:
         assert results["ocr"].votes_written == 1
         assert attributes.border_votes_by_class == {"white": 1}
         assert attributes.border_ground_truth_count == 1
-        assert CardTagVote.objects.filter(card=card, tag__name="White Border").exists()
+        border_vote = CardTagVote.objects.get(card=card, tag__name="White Border")
+        assert border_vote.confidence == GROUND_TRUTH_ATTRIBUTE_VOTE_CONFIDENCE
         assert not CardTagVote.objects.filter(card=card, tag__name="Black Border").exists()
 
-        # frame: the heuristic (parsed_a_collector_number=True) already reads "modern", which
-        # happens to agree with the printing's own frame="2015" -> "modern" - still sourced
-        # from (and counted as) ground truth, since that's genuinely where the cast value came
-        # from this run.
+        # frame: the heuristic (parsed_a_collector_number=True) reads "modern", which happens
+        # to agree with the printing's own frame="2015" -> "modern" here - but unlike border,
+        # frame is never ground-truth-preferred (the chip describes the RENDER, a different
+        # question from the printing's own era - see local_fallback's "three questions"
+        # comment), so the cast confidence stays the heuristic tier even on agreement.
         assert attributes.frame_votes_by_class == {"modern": 1}
-        assert attributes.frame_ground_truth_count == 1
-        assert CardTagVote.objects.filter(card=card, tag__name="Modern Border").exists()
+        frame_vote = CardTagVote.objects.get(card=card, tag__name="Modern Border")
+        assert frame_vote.confidence == FRAME_VOTE_CONFIDENCE
+
+    def test_frame_chip_abstains_rather_than_being_invented_from_ground_truth(self, db, monkeypatch):
+        # a phash-only match: OCR parses no collector number and the artist-anchor OCR finds
+        # nothing either, so the render-derived frame heuristic has no signal at all
+        # (outcome.frame_class stays None) even though the matched printing's own metadata
+        # names an era. Before this behaviour existed, an abstaining heuristic still got
+        # overridden into a vote purely from that metadata; the chip must describe what the
+        # render shows, and "nothing shown" has to stay an abstention, not a borrowed fact.
+        printing = CanonicalCardFactory(name="Forest")
+        CanonicalPrintingMetadataFactory(canonical_card=printing, frame="1993")
+        card = CardFactory(name="Forest")
+        TagFactory(name="Old Border")
+
+        import cardpicker.local_identify_printing_tags as module
+        import cardpicker.local_ocr as local_ocr_module
+
+        monkeypatch.setattr(local_ocr_module, "run_tesseract", lambda image: "")
+        monkeypatch.setattr(
+            module,
+            "run_ocr_for_card",
+            lambda selected, image, crop_box, bleed_class=None, known_set_codes=None: module.OcrCardResult(),
+        )
+        monkeypatch.setattr(
+            module,
+            "run_phash_for_card",
+            lambda selected, image, threshold, margin, max_candidates, bleed_class=None: (
+                module.EngineVote(engine="phash", printing_pk=printing.pk, confidence=0.8, detail="d=0"),
+                "",
+            ),
+        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: Image.new("RGB", (750, 1050), (5, 5, 5)))
+
+        results, attributes = run_pilot(engine="both", limit=10, dry_run=False, nice=False)
+
+        assert results["phash"].votes_written == 1
+        assert attributes.frame_votes_by_class == {}
+        assert attributes.frame_abstain_count == 1
+        assert not CardTagVote.objects.filter(card=card, tag__name="Old Border").exists()
 
     def test_heuristic_used_when_no_printing_confirmed_this_run(self, db, monkeypatch):
         CanonicalCardFactory(name="Forest")

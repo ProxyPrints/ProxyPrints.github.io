@@ -274,9 +274,7 @@ class Command(BaseCommand):
         print(
             f"  border votes: {dict(attributes.border_votes_by_class)} (ground truth: {attributes.border_ground_truth_count})"
         )
-        print(
-            f"  frame votes: {dict(attributes.frame_votes_by_class)} (ground truth: {attributes.frame_ground_truth_count})"
-        )
+        print(f"  frame votes: {dict(attributes.frame_votes_by_class)}")
         print(f"  frame abstains: {attributes.frame_abstain_count}")
         print(f"  frame mismatches (printing vote withheld): {len(attributes.frame_mismatches)}")
         print(f"  bleed votes: {dict(attributes.bleed_votes_by_class)}")

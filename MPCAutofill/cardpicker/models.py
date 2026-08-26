@@ -2396,6 +2396,14 @@ class CardScanLog(models.Model):
     # built by issue #433. Never populated for an OCR/phash row, or for a missing-`ImageEvidence`
     # skip (`calculate_fallback_verdict` is never reached, so no candidate set was ever resolved).
     survivor_pks = models.JSONField(null=True, blank=True)
+    # Which way a `skip_reason="frame-mismatch"` row's disagreement ran - "old->modern" (a
+    # pre-2003 printing rendered in a newer template, measured as the common case for those
+    # printings) vs. "modern->old" (a deliberate retro-frame render) mean different things (see
+    # local_fallback.classify_frame_mismatch_direction), and neither this row's skip_reason
+    # alone nor the pre-existing evidence_types_used/survivor_pks pair (both populated only by
+    # the unrelated Stage D fallback calculator, with their own documented meanings) could carry
+    # that split. Additive, nullable, no backfill - `null` for every OTHER skip_reason.
+    frame_mismatch_direction = models.CharField(max_length=32, null=True, blank=True)
 
     class Meta:
         indexes = [
