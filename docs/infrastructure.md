@@ -64,10 +64,29 @@ them.
 
 ### Startup vs. scheduled catalog sync
 
-`docker/django/entrypoint.sh` runs only `migrate` (fast, schema-blocking)
-and `import_sources` (cheap, local) before binding gunicorn — a boot never
-waits on a catalog rescan, and a per-source scan failure can't take the
-API down. Actual content sync is scheduled work, not boot-time work:
+`docker/django/entrypoint.sh` runs `migrate` (fast, schema-blocking), the
+four tag-taxonomy seed commands (`seed_default_tags`, `seed_attribute_tags`,
+`seed_no_match_reason_tags`, `seed_sensitive_tags` — fast, local,
+idempotent `get_or_create` calls, non-fatal on failure), and `import_sources`
+(cheap, local) before binding gunicorn — a boot never waits on a catalog
+rescan, and a per-source scan failure can't take the API down. Actual
+content sync is scheduled work, not boot-time work:
+
+The seed commands run on every boot, not just a fresh instance, because a
+`Tag` row missing on an _established_ instance is exactly as broken as one
+missing on day one: `stage_e_dispatch`'s attribute-chip casters catch the
+resulting `RuntimeError` and turn it into a silently-zero vote counter
+rather than a startup failure, so a channel can look deployed while casting
+nothing. `seed_sensitive_tags` runs last because it upgrades
+`moderation_class` on tags the other three may have just created. Unlike
+`migrate`, a seed failure doesn't stop the container — see the entrypoint's
+own comment for why that asymmetry is deliberate. Deliberately absent from
+`.github/actions/test-backend/action.yml`'s CI path: that path runs
+`pytest` directly against a fresh test database with no entrypoint
+involved at all, and `test_views.py::TestGetTags` asserts a fresh DB has
+zero real `Tag` rows besides the synthetic "NSFW" pseudo-tag (see
+`cardpicker/reason_tags.py`'s module docstring) — seeding there would
+break that assertion.
 
 - **Steady state**: a daily `update_database` schedule and weekly
   `update_dfcs`/`import_canonical_card_data` schedules (seeded via data
