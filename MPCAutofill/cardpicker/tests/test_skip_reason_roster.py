@@ -73,8 +73,9 @@ EXPECTED_SKIP_REASONS = {
     "no-illustration-index-entry": {"NO_ILLUSTRATION_INDEX_ENTRY_SKIP_REASON"},
     "multiple-illustrations": {"MULTIPLE_ILLUSTRATIONS_SKIP_REASON"},
     "multiple-printings-one-illustration": {"MULTIPLE_PRINTINGS_SKIP_REASON"},
-    # AI-art detector — local_detect_ai_art.py
-    "no-marker-hit": {"AI_ART_NO_MARKER_HIT_SKIP_REASON"},
+    # AI-art detector — local_detect_ai_art.py; also proxy-marker cast below (both share this
+    # value's meaning: "ran, found nothing").
+    "no-marker-hit": {"AI_ART_NO_MARKER_HIT_SKIP_REASON", "PROXY_MARKER_NOT_DETECTED_SKIP_REASON"},
     # Layout-class cast — local_layout_class_cast.py
     "unmapped-layout-class": {"LAYOUT_CLASS_UNMAPPED_SKIP_REASON"},
     # Evidence transfer — evidence_transfer.py
@@ -104,6 +105,7 @@ EXPECTED_SKIP_REASONS = {
         "CHIP_NO_EVIDENCE_SKIP_REASON",
         "BLEED_CALC_NO_EVIDENCE_SKIP_REASON",
         "ART_EDGE_NO_EVIDENCE_SKIP_REASON",
+        "PROXY_MARKER_NO_EVIDENCE_SKIP_REASON",
     },
     "eliminated": {
         "FALLBACK_ELIMINATED_SKIP_REASON",
@@ -137,6 +139,7 @@ EXPECTED_SKIP_REASONS = {
         "LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON",
         "CHIP_INCOMPLETE_EVIDENCE_SKIP_REASON",
         "BLEED_CALC_INCOMPLETE_EVIDENCE_SKIP_REASON",
+        "PROXY_MARKER_INCOMPLETE_EVIDENCE_SKIP_REASON",
     },
     # Attribute-chip cast — local_attribute_chip_cast.py (frame-style-cast-v1, 2026-07-30).
     # ONE vocabulary written from a single identity: the bleed half of this module

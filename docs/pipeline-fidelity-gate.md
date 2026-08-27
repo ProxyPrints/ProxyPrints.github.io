@@ -1254,6 +1254,23 @@ buckets:
   `docs/theory.md`'s "Filename-candidate weighted narrowing" subsection
   (§4) for the full mechanism and the reasoning behind the contradiction
   rule and the multi-vote-per-card safety argument.
+- **`proxy-marker-cast-v1`** (`local_proxy_marker_cast`, NEW, public issue
+  #952, **0 rows — not yet merged**) — reads the already-persisted
+  `ImageEvidence.legal_line_proxy_marker_detected` (populated by the
+  `legal_line` extractor, no new OCR) and casts the `proxy-marked`
+  no-match-reason tag (`reason_tags.PROXY_MARKED_TAG_NAME`, seeded by
+  `seed_no_match_reason_tags`, not `seed_default_tags`/`seed_attribute_tags`)
+  on a `True` reading only — `False`/`None` cast nothing, since a `False`
+  reading is not evidence the render is unmarked (the legal-line crop is
+  separately measured to find a genuine legal line only 10.6% of the time,
+  issue #959, untouched by this caster). Wired into
+  `_run_attribute_chip_casters` alongside `filename-declaration-cast-v1`.
+  Derivable population measured read-only against production: of 234,823
+  current `ImageEvidence` rows (`content_hash` matching the card's own live
+  `content_phash`), 78,875 (33.6%) carry `legal_line_proxy_marker_detected= True`; a stricter `md5_checksum` currency check (the second half of
+  `current_evidence_queryset`'s own two-condition definition) affects at
+  most 24 of the rows this count includes, so the true eligible population
+  is 78,875 minus up to 24.
 
 Both `frame-style-cast-v1` and the now-retired `bleed-edge-cast-v1` were
 created because the 2026-07-29 composition audit found the only casters for
@@ -1267,22 +1284,23 @@ See `docs/features/printing-tags.md`, "Who actually casts the attribute chips".
 ### Wiring status — the streaming conveyor's `_run_stage_d` (2026-08-05, updated 2026-08-15)
 
 The question this section answers: for EVERY identity the roster tether
-derives from code (21 today, 2 of them not real vote-casting calculators —
+derives from code (22 today, 2 of them not real vote-casting calculators —
 `evidence-transfer-v1`/`question-feed-hypothetical-vote`, see
 `CALCULATOR_ROSTER_ALLOWLIST` in `.github/scripts/docs_lint.py` — leaving
-19 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
+20 real vote-casting identities), does a full-catalogue pass (`run_pipeline`,
 or the streaming conveyor's own `stage_e_dispatch._run_stage_d`) actually
 INVOKE it, verified by a real call site rather than a name match against
 this file? A prior claim in circulation held that a pass casts on "10 of
-roughly 28" channels — the derived roster is 19 real identities, not ~28,
-and as of this update **13 of 19** are invoked by a real call site (up from
+roughly 28" channels — the derived roster is 20 real identities, not ~28,
+and as of this update **14 of 20** are invoked by a real call site (up from
 7 before the 2026-08-05 pass, then 11 before two 2026-08-19 changes landed
 together: the art-edge vote wiring moved `art-edge-continuity-v1` from the
 unwired set into the wired one, and `filename-declaration-cast-v1` joined
 `_run_attribute_chip_casters` as a nineteenth identity, wired from the
-start). 5 are deliberately unwired with a stated reason, and 1
-(`bleed-edge-cast-v1`) is RETIRED — its wiring slot was taken over by
-`bleed-calculator-cast-v1`, which joins the wired set below.
+start; `proxy-marker-cast-v1` joined the same group as a twentieth,
+likewise wired from the start). 5 are deliberately unwired with a stated
+reason, and 1 (`bleed-edge-cast-v1`) is RETIRED — its wiring slot was taken
+over by `bleed-calculator-cast-v1`, which joins the wired set below.
 
 **Wired before this pass (7):** `stage-d-join-key-v1`, `stage-d-fallback-v1`,
 `stage-d-illustration-v2`, `stage-d-slow-path-v1` (all four
@@ -1301,7 +1319,12 @@ took the old identity's slot rather than adding a second channel onto
 `_run_attribute_chip_casters` try/except on 2026-08-19**, taking the wired
 count to 12 — it needs no `ImageEvidence` at all, so it shares the group's
 missing-tag-seed `RuntimeError` handling rather than the group's evidence
-gating.
+gating. **`proxy-marker-cast-v1` (public issue #952) joined the same
+try/except**, taking the wired count to 13 — it reads
+`ImageEvidence.legal_line_proxy_marker_detected` and shares the group's
+missing-tag-seed `RuntimeError` handling the same way, against
+`seed_no_match_reason_tags` rather than `seed_default_tags`/
+`seed_attribute_tags`.
 
 **Newly wired by this pass (4)** — `ai-art-detector-v1`,
 `lands-artist-decomp-v1`, `residual-classify-v1`, `art-hash-artist-v1`, via

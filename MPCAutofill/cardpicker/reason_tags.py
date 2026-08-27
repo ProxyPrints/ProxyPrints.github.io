@@ -61,6 +61,13 @@ from cardpicker.models import Tag
 # survives the code that used to honour it. `test_reason_tags` pins it against the list below.
 EXTERNAL_IP_TAG_NAME = "external-ip"
 
+# Same convergence-contract reasoning as EXTERNAL_IP_TAG_NAME above: a human picking this as
+# their no-match reason and `local_proxy_marker_cast`'s machine channel (which derives the same
+# observation from `ImageEvidence.legal_line_proxy_marker_detected`, already extracted at Stage C)
+# must write the SAME `Tag.name`, or the two vote populations fragment. Exported so that module
+# imports the string rather than re-declaring it.
+PROXY_MARKED_TAG_NAME = "proxy-marked"
+
 NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
     # axis: not-official-art
     ("custom-art", "Original or alternate artwork - does not depict a real printing", "Custom art"),
@@ -96,6 +103,10 @@ NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
         "Art is drawn from an external IP (crossover / licensed property) rather than original Magic art",
         "External IP",
     ),
+    # axis: not-official-printing (closest sibling: no-collector-line - the art itself is not in
+    # question, only whether this specific render is an official print; see PROXY_MARKED_TAG_NAME
+    # above for the machine channel that also writes this string)
+    (PROXY_MARKED_TAG_NAME, "Card face carries a proxy/not-for-sale/playtest marking", "Proxy marking"),
 ]
 
 # The WTC phase B partition (see the module docstring above) as real, checked constants rather
@@ -107,7 +118,7 @@ NO_MATCH_REASON_TAGS: list[tuple[str, str, str]] = [
 # `NO_MATCH_REASON_TAGS`, the same invariant `NoMatchReasonStrip.spec.ts` asserts on the frontend
 # side of this same split.
 NOT_OFFICIAL_PRINTING_REASON_TAGS: frozenset[str] = frozenset(
-    {"altered-frame", "upscaled", "no-collector-line", "non-english"}
+    {"altered-frame", "upscaled", "no-collector-line", "non-english", PROXY_MARKED_TAG_NAME}
 )
 NOT_OFFICIAL_ART_REASON_TAGS: frozenset[str] = frozenset({"custom-art", "ai-art", EXTERNAL_IP_TAG_NAME})
 
@@ -139,4 +150,6 @@ __all__ = [
     "NO_MATCH_REASON_TAGS",
     "NOT_OFFICIAL_PRINTING_REASON_TAGS",
     "NOT_OFFICIAL_ART_REASON_TAGS",
+    "EXTERNAL_IP_TAG_NAME",
+    "PROXY_MARKED_TAG_NAME",
 ]
