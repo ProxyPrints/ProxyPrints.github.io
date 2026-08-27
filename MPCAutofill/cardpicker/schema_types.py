@@ -312,6 +312,20 @@ class Card(BaseModel):
     printing_metadata_import.py) directly from a card it already has, rather than
     cross-referencing a separately-fetched name list.
     """
+    measuredBleedMm: Optional[float] = None
+    """This card's own measured bleed margin in millimetres, Method A (aspect-ratio-derived)
+    from cardpicker.local_bleed_calculator - the same closed-form reading of this image's own
+    pixel aspect ratio already used for the appropriate-bleed machine vote
+    (Card.measured_bleed_mm(), BLEED_MARGIN_MM - ImageEvidence.bleed_diff_mm). null whenever
+    no current ImageEvidence row has completed the geometry_bleed extractor for this card.
+    Populated only for the single item the question feed actually serves
+    (question_feed._log_served attaches it post-serialise, after the served card is already
+    chosen - never computed while scanning pool-eligibility candidates, so it costs nothing
+    anywhere else Card.serialise() is called) - every other response leaves this null. A
+    consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend)
+    / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already
+    assumes.
+    """
     sourceExternalLink: Optional[str] = None
     sourceType: Optional[SourceType] = None
     suggestedCanonicalCard: Optional[CanonicalCardClass] = None
@@ -380,6 +394,7 @@ class Card(BaseModel):
         canonicalArtistSource = from_union([from_none, from_str], obj.get("canonicalArtistSource"))
         canonicalCard = from_union([from_none, CanonicalCardClass.from_dict], obj.get("canonicalCard"))
         layout = from_union([from_none, from_str], obj.get("layout"))
+        measuredBleedMm = from_union([from_none, from_float], obj.get("measuredBleedMm"))
         sourceExternalLink = from_union([from_str, from_none], obj.get("sourceExternalLink"))
         sourceType = from_union([SourceType, from_none], obj.get("sourceType"))
         suggestedCanonicalCard = from_union(
@@ -419,6 +434,7 @@ class Card(BaseModel):
             canonicalArtistSource,
             canonicalCard,
             layout,
+            measuredBleedMm,
             sourceExternalLink,
             sourceType,
             suggestedCanonicalCard,
@@ -464,6 +480,8 @@ class Card(BaseModel):
             )
         if self.layout is not None:
             result["layout"] = from_union([from_none, from_str], self.layout)
+        if self.measuredBleedMm is not None:
+            result["measuredBleedMm"] = from_union([from_none, to_float], self.measuredBleedMm)
         if self.sourceExternalLink is not None:
             result["sourceExternalLink"] = from_union([from_str, from_none], self.sourceExternalLink)
         if self.sourceType is not None:

@@ -1673,6 +1673,27 @@ export const questionFeedIdentifyPrinting = http.get(
     )
 );
 
+// Bleed-crop coverage - a handler factory (not a fixed export) since the whole point is
+// exercising two different `measuredBleedMm` values against the same otherwise-identical item.
+export function questionFeedIdentifyPrintingWithMeasuredBleed(
+  measuredBleedMm: number | null
+) {
+  return http.get(buildRoute("2/questionFeed/"), () =>
+    HttpResponse.json(
+      {
+        item: {
+          type: "identify_printing",
+          card: { ...cardDocument1, measuredBleedMm },
+          candidates: [printingCandidate1, printingCandidate2],
+          tagConfidence: { "Full Art": 0, Borderless: 0.6 },
+        },
+        remainingEstimate: questionFeedCounts({ total: 3, fresh: 3 }),
+      },
+      { status: 200 }
+    )
+  );
+}
+
 // Level 3 border-color coverage needs a candidate whose Frame Treatment resolves (Showcase)
 // while its Border Color genuinely stays open (borderColor outside the taxonomy) - candidate2
 // can't serve this since it's itself Borderless, which resolves its own Border Color chip.

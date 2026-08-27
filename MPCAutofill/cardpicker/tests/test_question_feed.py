@@ -47,6 +47,7 @@ from cardpicker.question_feed import (
     _likely_resolve_item,
     _likely_resolve_narrowing_ratio,
     _likely_resolve_printing_card,
+    _log_served,
     _near_duplicate_serving_card_ids,
     _scryfall_illustration_url,
     _tag_review_card_ids_by_status,
@@ -82,6 +83,7 @@ from cardpicker.tests.factories import (
     CardIllustrationRejectionFactory,
     CardPrintingTagFactory,
     CardTagVoteFactory,
+    ImageEvidenceFactory,
     TagFactory,
 )
 from cardpicker.vote_consensus import contested_queryset
@@ -626,6 +628,40 @@ class TestBorderItem:
             "Silver Border": 0.0,
             "Borderless": 0.0,
         }
+
+
+class TestLogServedMeasuredBleed:
+    """`_log_served` attaches the served card's own measured bleed (Card.measured_bleed_mm())
+    onto `item.card.measuredBleedMm` - see that function's own docstring for why this is
+    resolved here rather than inside each item builder."""
+
+    def test_attaches_measured_bleed_when_current_evidence_has_it(self, db):
+        card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED, content_phash=123)
+        ImageEvidenceFactory(card=card, content_hash=123, bleed_diff_mm=0.675)
+        item = _border_item(card)
+
+        served = _log_served("anon", item, QuestionFeedServedPool.REMAINDER, "test")
+
+        assert served.card.measuredBleedMm == 2.5  # BLEED_MARGIN_MM (3.175) - 0.675
+
+    def test_leaves_measured_bleed_null_when_no_current_evidence(self, db):
+        card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED, content_phash=456)
+        item = _border_item(card)
+
+        served = _log_served("anon", item, QuestionFeedServedPool.REMAINDER, "test")
+
+        assert served.card.measuredBleedMm is None
+
+    def test_leaves_measured_bleed_null_when_evidence_is_stale(self, db):
+        # content_hash disagrees with the card's own current content_phash - current_evidence_
+        # queryset excludes it, the same staleness rule every other bleed reader honours.
+        card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED, content_phash=789)
+        ImageEvidenceFactory(card=card, content_hash=999, bleed_diff_mm=0.675)
+        item = _border_item(card)
+
+        served = _log_served("anon", item, QuestionFeedServedPool.REMAINDER, "test")
+
+        assert served.card.measuredBleedMm is None
 
 
 def _remaining_estimate(*args, **kwargs):

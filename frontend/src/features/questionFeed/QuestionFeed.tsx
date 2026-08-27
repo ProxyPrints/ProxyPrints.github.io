@@ -109,6 +109,7 @@ import {
   ZoomableThumbnail,
 } from "@/features/printingTags/cardPanel";
 import { IllustrationQuestion } from "@/features/questionFeed/IllustrationQuestion";
+import { subjectCropImageStyle } from "@/features/questionFeed/subjectBleedCrop";
 import { WhatsThatWords } from "@/features/questionFeed/WhatsThatWords";
 import { ReportCardPanel } from "@/features/reporting/ReportCardPanel";
 import { recordSessionContribution } from "@/features/stats/sessionContributionSlice";
@@ -279,6 +280,8 @@ const SubjectArtImage = styled.div<{ $landscape?: boolean }>`
   position: relative;
   aspect-ratio: ${(props) =>
     props.$landscape ? ILLUSTRATION_CROP_ASPECT_RATIO : CARD_ASPECT_RATIO};
+
+  overflow: hidden;
 
   @container hero (max-width: 560px) {
     flex: 1;
@@ -1595,10 +1598,15 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
     ? "no strong machine candidate for this one"
     : "the scanned image you're identifying";
 
+  // "large" (800px, GoogleDriveService.ImageSizes) is the CDN's next tier up from the prior
+  // "small" (400px) - still R2-cached like small, unlike "full" which bypasses the cache and
+  // hits a globally rate-limited Google endpoint. The non-worker fallback moves the same one
+  // tier, from smallThumbnailUrl (Drive's w400-h400) to mediumThumbnailUrl (w800-h800, already
+  // confirmed non-empty by the sentinel check above) so every source type serves ~800px.
   const heroImageSrc =
     item.card.mediumThumbnailUrl === ""
       ? ""
-      : getWorkerImageURL(item.card, "small") ?? item.card.smallThumbnailUrl;
+      : getWorkerImageURL(item.card, "large") ?? item.card.mediumThumbnailUrl;
 
   // Artist questions re-frame the subject as the artwork itself (WTC artist re-frame): the
   // backend surfaces the canonical printing's Scryfall art-crop URL on these items, so the
@@ -1609,6 +1617,10 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
       ? item.scryfallIllustrationUrl
       : heroImageSrc;
 
+  // The Scryfall art crop above is already cropped to its own harvest box, not a raw scan
+  // with bleed surround - the measured-bleed crop below only applies to the actual scan.
+  const subjectIsRawScan = subjectImageSrc === heroImageSrc;
+
   // The subject card's art + reveal overlay - no starburst (owner ruling 1 retires BurstSvg;
   // the token-derived `--wtc-field`/`--wtc-reveal-glow` carry the reveal moment's "game feel"
   // instead - ANNEX C).
@@ -1618,7 +1630,7 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
         ref={cardImageRef}
         src={heroImageSrc}
         alt={item.card.name}
-        style={{ width: "100%", aspectRatio: CARD_ASPECT_RATIO }}
+        style={subjectCropImageStyle(item.card.measuredBleedMm)}
         onLoad={() => onCardImageSettled(false)}
         onError={() => onCardImageSettled(item.card.mediumThumbnailUrl !== "")}
       />
@@ -2286,7 +2298,11 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
               data-testid={
                 item.type === "artist" ? "question-feed-artist-art" : undefined
               }
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              style={
+                subjectIsRawScan
+                  ? subjectCropImageStyle(item.card.measuredBleedMm)
+                  : { width: "100%", height: "100%", objectFit: "cover" }
+              }
               onLoad={() => onCardImageSettled(false)}
               onError={() =>
                 onCardImageSettled(item.card.mediumThumbnailUrl !== "")
