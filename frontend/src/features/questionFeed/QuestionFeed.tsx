@@ -1862,6 +1862,12 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
           </QHead>
           {rejectedContext}
           <Prompt>Which printing is this?</Prompt>
+          {item.isAnotherCopy === true && (
+            <QHint data-testid="question-feed-another-copy-hint">
+              Another copy of this card — a different scan from one you&apos;ve
+              already answered.
+            </QHint>
+          )}
           {isOpenEndedShape && (
             <QHint>
               No strong machine candidate. This is one of the harder ones - take
@@ -2163,6 +2169,12 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
                   Suggested match
                 </ShapePill>
               </QHead>
+              {item.isAnotherCopy === true && (
+                <QHint data-testid="question-feed-another-copy-hint">
+                  Another copy of this card — a different scan from one
+                  you&apos;ve already answered.
+                </QHint>
+              )}
               {item.suggestedPrinting != null && (
                 <>
                   <SuggestedCard>

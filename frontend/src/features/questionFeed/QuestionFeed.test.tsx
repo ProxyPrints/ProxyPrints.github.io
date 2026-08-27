@@ -564,6 +564,66 @@ describe("QuestionFeed", () => {
     ).toHaveTextContent("Suggested match");
   });
 
+  it("shows an 'another copy' hint on a confirm_suggestion item flagged isAnotherCopy", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              type: "confirm_suggestion",
+              suggestedPrinting: identifyPrintingItem.candidates[0],
+              isAnotherCopy: true,
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    expect(
+      await screen.findByTestId("question-feed-another-copy-hint")
+    ).toHaveTextContent("Another copy of this card");
+  });
+
+  it("shows no 'another copy' hint on an ordinary confirm_suggestion item", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              ...identifyPrintingItem,
+              type: "confirm_suggestion",
+              suggestedPrinting: identifyPrintingItem.candidates[0],
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 1,
+              contested: 0,
+              fresh: 0,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    await screen.findByTestId("question-feed-suggestion-yes");
+    expect(
+      screen.queryByTestId("question-feed-another-copy-hint")
+    ).not.toBeInTheDocument();
+  });
+
   it("confirm_suggestion's own question renders no chip panel and no candidate grid (composition contract)", async () => {
     server.use(
       http.get(buildRoute("2/questionFeed/"), () =>
@@ -842,6 +902,31 @@ describe("QuestionFeed", () => {
     expect(
       await screen.findByTestId("question-feed-tier-badge")
     ).toHaveTextContent("Needs identification");
+  });
+
+  it("shows an 'another copy' hint on an identify_printing item flagged isAnotherCopy", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: { ...identifyPrintingItem, isAnotherCopy: true },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+    await revealCard();
+
+    expect(
+      await screen.findByTestId("question-feed-another-copy-hint")
+    ).toHaveTextContent("Another copy of this card");
   });
 
   it("shows a submitting indicator only on the tapped candidate, not the others or 'No match'", async () => {

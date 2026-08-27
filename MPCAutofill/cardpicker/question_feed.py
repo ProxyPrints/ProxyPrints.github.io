@@ -784,11 +784,131 @@ def _first_answerable_illustration_candidate(
     return None
 
 
+# ---------------------------------------------------------------------------------------------
+# Near-duplicate serving groups (SERVING ONLY). A voter re-uploading, re-scanning or re-encoding
+# the same physical card produces rows that are visually the same or near-identical but NOT
+# byte-identical and NOT phash-d0-identical - each lands in its own group of one under
+# `identity_group_expanded_card_ids` (md5 union artbox-phash-d0, issue #661) and is therefore
+# served as its own, separate question, repeatedly, to the same voter (measured live on "Ashaya,
+# Soul of the Wild": 36 rows, 32 distinct md5 checksums, all unresolved). This section widens
+# ONLY which question a voter is served, never identity: `Card.content_phash` Hamming distance
+# up to `NEAR_DUPLICATE_SERVING_MAX_DISTANCE` is treated as "close enough that this voter has, in
+# effect, already answered this" for exclusion purposes - it is NEVER pooled into a consensus
+# tally, written as a vote, or read by `printing_consensus.py`/`review_clusters.py`. Those stay on
+# `identity_group_card_ids` (md5 union phash-d0) exactly as before; a card whose phash happens to
+# collide at d=0 with a genuinely different printing (measured live - see
+# `printing_consensus.py`'s own d=0 module note) is exactly why that boundary is not moved here.
+#
+# Threshold: measured across 400 sampled multi-row card names (1,582 rows, 1,386 distinct md5
+# groups) - d<=0 collapses 14.0% of groups (the identity boundary itself), d<=2 collapses 19.9%,
+# d<=4 collapses 24.1%, d<=8 collapses 30.3%. The curve is gradual, not a discovered cutoff - d<=4
+# is used below as a reasonable point short of the wider band's diminishing, riskier returns.
+#
+# Performance: restricted to CANDIDATES SHARING THE SEED CARD'S NAME - a near-duplicate of a card
+# shares its name, so this never approaches the whole-catalogue O(n^2) comparison
+# `local_clustering.py`'s own module docstring already rules out for a much larger batch pass;
+# each name's own row count (tens, occasionally low hundreds) bounds the comparison instead.
+# ---------------------------------------------------------------------------------------------
+
+NEAR_DUPLICATE_SERVING_MAX_DISTANCE = 4
+
+
+def _near_duplicate_serving_card_ids(card_ids: Iterable[int]) -> set[int]:
+    """
+    `card_ids` widened to every OTHER card within `NEAR_DUPLICATE_SERVING_MAX_DISTANCE` Hamming
+    distance (on `Card.content_phash`) of any member, restricted to cards sharing that member's
+    own `name` (see this section's own "Performance" note above for why that restriction is what
+    keeps this tractable). At most two queries regardless of how many `card_ids` are passed: one
+    to resolve the seeds' own (name, phash), one to fetch every (pk, phash) row sharing any of
+    those names - the rest is a bounded, in-memory popcount comparison.
+
+    A seed with no `content_phash` contributes nothing (no signal to compare) and matches
+    nothing - mirrors `identity_group_expanded_card_ids`'s own "absence is never a shared group"
+    rule for the identical reason.
+    """
+    ids = set(card_ids)
+    if not ids:
+        return ids
+    seed_rows = list(
+        Card.objects.filter(pk__in=ids, content_phash__isnull=False).values_list("pk", "name", "content_phash")
+    )
+    if not seed_rows:
+        return ids
+    names = {name for _pk, name, _phash in seed_rows}
+    candidates_by_name: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for pk, name, phash in Card.objects.filter(name__in=names, content_phash__isnull=False).values_list(
+        "pk", "name", "content_phash"
+    ):
+        if phash is None:  # excluded by the queryset filter above; narrows the field's Optional type for mypy
+            continue
+        candidates_by_name[name].append((pk, phash))
+
+    expanded = set(ids)
+    for seed_id, seed_name, seed_phash in seed_rows:
+        if seed_phash is None:  # excluded by the queryset filter above; narrows the field's Optional type for mypy
+            continue
+        for candidate_id, candidate_phash in candidates_by_name.get(seed_name, []):
+            if candidate_id == seed_id:
+                continue
+            if (seed_phash ^ candidate_phash).bit_count() <= NEAR_DUPLICATE_SERVING_MAX_DISTANCE:
+                expanded.add(candidate_id)
+    return expanded
+
+
+# Wider than `NEAR_DUPLICATE_SERVING_MAX_DISTANCE` above, and deliberately non-exclusionary - see
+# `_is_another_copy_of_answered` below. Reuses the same measured d<=8 point from this section's
+# own sizing table (30.3% collapse) as a wider "still recognizably the same card" band, purely
+# for the frontend hint - it excludes nothing and is never unioned into an exclusion set.
+NEAR_DUPLICATE_INFORMATIONAL_MAX_DISTANCE = 8
+
+
+def _is_another_copy_of_answered(card: Card, answered_card_ids: set[int]) -> bool:
+    """
+    True when `card` - about to be served as a printing-shaped question - sits in the
+    INFORMATIONAL band (`NEAR_DUPLICATE_SERVING_MAX_DISTANCE` < distance <=
+    `NEAR_DUPLICATE_INFORMATIONAL_MAX_DISTANCE`) of some OTHER same-name card already in
+    `answered_card_ids` (this voter's own already-answered exclusion set, itself already widened
+    by identity and by the tighter `NEAR_DUPLICATE_SERVING_MAX_DISTANCE` band - see
+    `_voter_answered_printing_card_ids`). A card within that tighter band was already excluded
+    and never reaches this check at all; this wider band exists only to tell the frontend "this
+    is a genuinely different question, but a close relative of one you already answered" - so a
+    legitimately different scan doesn't read as the repeated-question bug this section's
+    exclusion widening exists to close. False when `card` has no `content_phash`, or `answered_
+    card_ids` is empty, or no same-name member of it falls in the band.
+    """
+    if card.content_phash is None or not answered_card_ids:
+        return False
+    other_phashes = (
+        Card.objects.filter(pk__in=answered_card_ids, name=card.name, content_phash__isnull=False)
+        .exclude(pk=card.pk)
+        .values_list("content_phash", flat=True)
+    )
+    for other_phash in other_phashes:
+        if other_phash is None:  # excluded by the queryset filter above; narrows the field's Optional type for mypy
+            continue
+        distance = (card.content_phash ^ other_phash).bit_count()
+        if NEAR_DUPLICATE_SERVING_MAX_DISTANCE < distance <= NEAR_DUPLICATE_INFORMATIONAL_MAX_DISTANCE:
+            return True
+    return False
+
+
+def _apply_another_copy_flag(item: QuestionFeedItem, card: Card, answered_card_ids: set[int]) -> QuestionFeedItem:
+    """Sets `item.isAnotherCopy` (per `_is_another_copy_of_answered`) for a printing-shaped item
+    (confirm_suggestion/identify_printing) - a no-op for every other question type, which carry
+    no printing-scan-repetition ambiguity to disambiguate."""
+    if item.type in (TypeEnum.confirmsuggestion, TypeEnum.identifyprinting):
+        item.isAnotherCopy = _is_another_copy_of_answered(card, answered_card_ids)
+    return item
+
+
 def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
     """
     Every card this voter has already cast a printing vote on, WIDENED to those cards' full
     combined identity groups (`printing_consensus.identity_group_expanded_card_ids` - md5 union
-    artbox-phash-d0, issue #661) - the exclusion set the printing tiers below filter against, so
+    artbox-phash-d0, issue #661), THEN WIDENED AGAIN to each of those cards' near-duplicate
+    serving group (`_near_duplicate_serving_card_ids` - `Card.content_phash` Hamming distance
+    `<= NEAR_DUPLICATE_SERVING_MAX_DISTANCE`, SERVING ONLY, see this module's own "Near-duplicate
+    serving groups" section above) - the exclusion set the printing tiers below filter against, so
     a voter who answered one member of a group is never asked the same byte-identical or
     phash-d0-identical image again under a sibling's identifier (issue #473: the feed serves one
     member per group, not N).
@@ -830,7 +950,8 @@ def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
     illustration_voted_card_ids = set(
         CardIllustrationVote.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
     )
-    return identity_group_expanded_card_ids(voted_card_ids | illustration_voted_card_ids)
+    identity_expanded = identity_group_expanded_card_ids(voted_card_ids | illustration_voted_card_ids)
+    return identity_expanded | _near_duplicate_serving_card_ids(identity_expanded)
 
 
 def _voter_answered_artist_card_ids(anonymous_id: str) -> set[int]:
@@ -887,23 +1008,30 @@ def _voter_cannot_tell_card_ids(anonymous_id: str, question_type: str) -> set[in
 
 def _voter_answered_border_card_ids(anonymous_id: str) -> set[int]:
     """
-    Cards (md5-widened) this voter has already answered the border question for: either cast a
-    `CardTagVote` on one of the four border-colour tags (`_BORDER_COLOR_TAG_NAMES` - the same
-    vote every `BorderColorQuestion` chip tap casts), or abstained on a served `border` question
-    with reason `cannot-tell` (`_voter_cannot_tell_card_ids`).
+    Cards (md5-widened, then near-duplicate-widened) this voter has already answered the border
+    question for: either cast a `CardTagVote` on one of the four border-colour tags
+    (`_BORDER_COLOR_TAG_NAMES` - the same vote every `BorderColorQuestion` chip tap casts), or
+    abstained on a served `border` question with reason `cannot-tell`
+    (`_voter_cannot_tell_card_ids`).
 
     Treated as ONE axis, not four independent tags like `_voter_answered_tag_card_ids_by_tag`'s
     general attribute-chip walk: the four colours are mutually exclusive on the frontend's own
     `BORDER_COLOR_GROUP`, so a vote on any one of them answers the whole "which border colour"
     question for this card - unlike the ~11-tag walk, where a card carries many independent
     questions and answering one must not hide the others.
+
+    Widened by `_near_duplicate_serving_card_ids` exactly as `_voter_answered_printing_card_ids`
+    is (see this module's own "Near-duplicate serving groups" section) - a re-scanned or
+    re-encoded copy of a card whose border colour this voter already answered is, for serving
+    purposes, the same "already answered" card, not a fresh border question.
     """
     voted_card_ids = CardTagVote.objects.filter(
         anonymous_id=anonymous_id, tag__name__in=_BORDER_COLOR_TAG_NAMES
     ).values_list("card_id", flat=True)
-    return identity_group_expanded_card_ids(set(voted_card_ids)) | _voter_cannot_tell_card_ids(
+    identity_expanded = identity_group_expanded_card_ids(set(voted_card_ids)) | _voter_cannot_tell_card_ids(
         anonymous_id, TypeEnum.border.value
     )
+    return identity_expanded | _near_duplicate_serving_card_ids(identity_expanded)
 
 
 def _not_official_art_card_ids() -> set[int]:
@@ -1188,14 +1316,14 @@ def _tier_1_confirm_suggestion(
     for card in windowed:
         item = _confirm_suggestion_item(card)
         if item is not None:
-            return item
+            return _apply_another_copy_flag(item, card, answered_card_ids)
     windowed_pks = {card.pk for card in windowed}
     for card in cards.iterator():
         if card.pk in windowed_pks:
             continue
         item = _confirm_suggestion_item(card)
         if item is not None:
-            return item
+            return _apply_another_copy_flag(item, card, answered_card_ids)
     # Every tier-1 candidate carries a machine suggestion, but none built an item - either the
     # evidence gate (`_evidence_justifies_confirmation`) rejected the card, or every
     # suggestion's artwork is elimination-consensus-eliminated ("Not this art", §7.1) - this
@@ -1219,13 +1347,13 @@ def _tier_1_confirm_suggestion(
     for card in windowed:
         item = _identify_printing_item(card)
         if item is not None:
-            return item
+            return _apply_another_copy_flag(item, card, answered_card_ids)
     for card in cards.iterator():
         if card.pk in windowed_pks:
             continue
         item = _identify_printing_item(card)
         if item is not None:
-            return item
+            return _apply_another_copy_flag(item, card, answered_card_ids)
     return None
 
 
@@ -1268,8 +1396,8 @@ def _tier_2_contested(
     )
     printing_result = _first_answerable_printing_candidate(printing_candidates, _printing_question_score)
     if printing_result is not None:
-        _, printing_item = printing_result
-        return printing_item, "tier_2_contested_printing"
+        printing_card, printing_item = printing_result
+        return _apply_another_copy_flag(printing_item, printing_card, answered_card_ids), "tier_2_contested_printing"
 
     artist_candidates = list(
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.CONTESTED, pk__in=contested_artist_card_ids)
@@ -1409,7 +1537,7 @@ def _tier_4_fresh(
             if getattr(printing_card, "origin_reason", None) in QUICK_NEGATIVE_SKIP_REASONS
             else "tier_4_fresh_printing"
         )
-        return printing_item, origin_reason
+        return _apply_another_copy_flag(printing_item, printing_card, answered_card_ids), origin_reason
 
     artist_candidates = list(
         Card.objects.filter(artist_vote_status=ArtistVoteStatus.UNRESOLVED)
@@ -1565,7 +1693,7 @@ def _pool_contested_result(
         item = _identify_printing_item(card)
         if item is None:
             return None
-        return item, reason or "tier_2_contested_printing"
+        return _apply_another_copy_flag(item, card, answered_card_ids), reason or "tier_2_contested_printing"
     if kind == question_feed_pools.KIND_ARTIST:
         return _artist_item(card), reason or "tier_2_contested_artist"
     assert tag_name is not None  # guaranteed by draw_contested_entry for KIND_TAG
@@ -1601,7 +1729,7 @@ def _pool_cold_result(
         item = _identify_printing_item(card)
         if item is None:
             return None
-        return item, reason or "tier_4_fresh_printing"
+        return _apply_another_copy_flag(item, card, answered_card_ids), reason or "tier_4_fresh_printing"
     if kind == question_feed_pools.KIND_ARTIST:
         return _artist_item(card), reason or "tier_4_fresh_artist"
     assert tag_name is not None  # guaranteed by draw_cold_entry for KIND_TAG
@@ -1676,6 +1804,7 @@ def get_next_question_feed_item(
             )
             item = _likely_resolve_item(likely_resolve_card, allow_narrowing=allow_narrowing, anonymous_id=anonymous_id)
             if item is not None:
+                item = _apply_another_copy_flag(item, likely_resolve_card, answered_card_ids)
                 return _log_served(
                     anonymous_id, item, QuestionFeedServedPool.LIKELY_RESOLVE, "printing_one_vote_from_resolving"
                 )
@@ -1692,6 +1821,7 @@ def get_next_question_feed_item(
             if tier_1_card is not None:
                 tier_1_item = _confirm_suggestion_item(tier_1_card)
                 if tier_1_item is not None:
+                    tier_1_item = _apply_another_copy_flag(tier_1_item, tier_1_card, answered_card_ids)
                     return _log_served(
                         anonymous_id, tier_1_item, QuestionFeedServedPool.REMAINDER, "tier_1_confirm_suggestion"
                     )

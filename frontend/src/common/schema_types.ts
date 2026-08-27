@@ -159,6 +159,7 @@ export interface QuestionFeedItem {
   card: Card;
   confidentlyKnownArtistName?: null | string;
   illustrationCandidates?: PrintingCandidate[];
+  isAnotherCopy?: boolean;
   scryfallIllustrationUrl?: null | string;
   suggestedPrinting?: PrintingCandidate;
   tagConfidence?: { [key: string]: number };
@@ -3116,6 +3117,7 @@ const typeMap: any = {
         js: "illustrationCandidates",
         typ: u(undefined, a(r("PrintingCandidate"))),
       },
+      { json: "isAnotherCopy", js: "isAnotherCopy", typ: u(undefined, true) },
       {
         json: "scryfallIllustrationUrl",
         js: "scryfallIllustrationUrl",
