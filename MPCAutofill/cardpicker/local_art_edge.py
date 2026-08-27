@@ -93,10 +93,13 @@ if TYPE_CHECKING:
 # Its own calculator identity rather than borrowing `local_fallback.FALLBACK_ANONYMOUS_ID`: this
 # is a different reading, of a different property, with its own failure modes, and a shared
 # identity would make its votes indistinguishable from the border sample's in every audit that
-# groups by `anonymous_id`. Declared before it goes live on purpose - the same reasoning
+# groups by `anonymous_id`. Declared before it went live on purpose - the same reasoning
 # `local_fallback`'s skip-reason block gives for declaring constants ahead of first write, so the
-# docs_lint roster tether can see it BEFORE it starts producing rows. It has an entry in
-# docs/pipeline-fidelity-gate.md's calculator roster recording that it is declared-not-yet-live.
+# docs_lint roster tether could see it before it started producing rows. Issue #721's own gate
+# (the catalog-specific question of whether this classifier is accurate enough on the real
+# uploaded images already here to justify wiring the vote) cleared 2026-08-19, and this channel
+# has been wired and voting since - its docs/pipeline-fidelity-gate.md calculator roster entry
+# now records that.
 ART_EDGE_ANONYMOUS_ID = "art-edge-continuity-v1"
 
 # A PRE-EXISTING tag: "Extended" is already a `default_tags.DEFAULT_TAGS` row and already listed
@@ -153,8 +156,9 @@ def classify_art_edge_continuity(
 ) -> Optional[str]:
     """Returns 'framed' / 'extended' / 'mixed', or None when the reading is unusable (a
     degenerate `art_crop_px`, or any of the three regions this classifier needs failed to sample
-    - see module docstring). EVIDENCE-ONLY today - nothing votes on it yet (see
-    `cast_art_edge_continuity_vote`'s own docstring for the gate that has to clear first).
+    - see module docstring). This function only classifies; `cast_art_edge_continuity_vote` is
+    what casts the vote, wired since Issue #721's own gate cleared 2026-08-19 (see that
+    function's own docstring for the measurement).
 
       'framed'   - the art-adjacent strip's colour matches BOTH references (Reference A, the
                    same x-zones below the art; Reference B, the top band) - a real border
