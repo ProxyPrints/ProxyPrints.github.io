@@ -341,7 +341,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "collector_line_ocr": "collector-line-ocr-v3",
     "artist_ocr": "artist-ocr-v4",
     "collector_line_tsv": "collector-line-tsv-v3",
-    "artbox_phash": "artbox-phash-v1",
+    "artbox_phash": "artbox-phash-v2",
     "symbol_region": "symbol-region-v1",
     "legal_line": "legal-line-v2",
     "quality_signals": "quality-signals-v1",

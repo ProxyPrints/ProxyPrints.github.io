@@ -1927,6 +1927,26 @@ frame class, hash determinism, the bleed-class remap, the unclassifiable-frame s
 `MANIFEST_EXTRACTOR_KEYS` registration). Tracked as an open item for a future golden-set pass, same
 as `ARTBOX_OLD_CROP_BOX`'s own crop-fraction confidence.
 
+**CORRECTION — the unclassified-frame abstain reached rows written before it existed, uncorrected
+(issue #925, 2026-08-27)**: the crop-box selector's `frame_class is None` branch (this section's
+own "unclassifiable frame ... share `symbol_region`'s own 'ambiguous' skip-reason" sentence above)
+withholds `artbox_phash` correctly today, but an earlier revision of this same selector had no such
+branch - an unclassifiable frame fell through to `ARTBOX_OLD_CROP_BOX` and got a hash anyway. That
+earlier behaviour left a footprint: measured 2026-08-27, 8,534 of 234,823 `ImageEvidence` rows carry
+a populated `artbox_phash` with `artbox_frame_class=""`, and all 234,823 rows (the whole table, not
+just the tainted subset) still carry the original `artbox-phash-v1` tag, because the fix that added
+the abstain branch never bumped `ARTBOX_PHASH_EXTRACTOR_VERSION` - so the tainted rows have been
+indistinguishable from correct ones ever since, invisible to every consumer (`artbox_phash` is a
+plausible 64-bit int either way) and to `has_keys`-style completeness checks alike. Fixed by bumping
+to `artbox-phash-v2` (`image_evidence.py`'s own comment on that constant has the full reasoning),
+which stales this key for every currently-tagged row and lets the next incremental Stage C pass
+re-derive it under the current, correctly-abstaining selector - see
+`printing_consensus.phash_group_card_ids`'s own docstring for why abstaining (a group of one) is
+the safe outcome compared to a wrong-region hash (a false join). This PR is code-only: it does not
+run the regeneration itself, and does not touch `#736` (crop boxes not being frame-effects-aware)
+or `#640` (`ARTBOX_OLD_CROP_BOX` still unverified against a real image) - both remain open, separate
+defects on the same constants.
+
 **`bleed_diff_mm` — geometric bleed measurement added to `geometry_bleed` extractor, `extraction-soundness-batch` (2026-07-27)**: new `ImageEvidence.bleed_diff_mm = FloatField(null=True, blank=True)` (migration `0087`) records the per-edge bleed margin deviation from the 3.175 mm MPC standard. Derived purely from pixel dimensions: given aspect ratio `r = w/h`, solving `r = (63 + 2m)/(88 + 2m)` for `m` yields the measured per-edge bleed in mm; `bleed_diff_mm = 3.175 − m`. Positive means under-bleed; negative means over-bleed; zero is exact standard. Implementation: `measure_bleed_diff_mm(card_image)` added to `local_fallback.py` under an explicit owner exception (PROTECTED CORE — this function only); returns `None` for zero-height or non-portrait images. Written inside `geometry_bleed`'s extractor block in `extract_card_evidence` (`image_evidence.py`). All 30 golden cards have `bleed_diff_mm` expectations in `GOLDEN_EXPECTATIONS`. See [`docs/features/bleed-measurement.md`](bleed-measurement.md) for the full derivation.
 
 **Border-color `CardTagVote` cast inline during Stage C — `extraction-soundness-batch` (2026-07-27)**: `extract_card_evidence` in `image_evidence.py` now casts a `CardTagVote` for border color immediately after `compute_card_evidence` returns, using the `layout_class` field already extracted by the `layout_class` extractor block. `cast_border_attribute_vote(card, layout_class, confidence=0.5)` (existing function in `local_fallback.py`) is called with machine weight 0.5 (vs the 0.75 default used in the write loop's own post-import re-vote path). The empty-string ambiguous sentinel (`layout_class == ""`) is coerced to `None` before the call so no vote fires for ambiguous classifications. `compute_card_evidence` itself is unchanged and remains DB-free (required for `ProcessPoolExecutor` workers); the vote cast is the only DB write in `extract_card_evidence`. Test: `TestExtractCardEvidenceBorderColorVote` in `test_image_evidence.py` asserts that the extraction count equals the vote count for a non-ambiguous border color, that no vote is cast for an ambiguous classification, and that no vote is cast when `layout_class` is absent from the result.

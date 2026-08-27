@@ -298,6 +298,17 @@ class TestResumeFilterRunScoping:
         assert cohort_command.already_extracted_card_ids("run-a") == set()
 
     @pytest.mark.django_db
+    def test_a_row_from_the_pre_abstain_artbox_selector_is_not_skipped(self) -> None:
+        """issue #925: a row tagged `artbox-phash-v1` predates the crop-box selector's
+        unclassified-frame abstain branch and may hold a hash computed from a guessed region.
+        The v1 -> v2 bump is what makes such a row outstanding again rather than permanently
+        read as current - the same version-aware mechanism the sibling test above proves."""
+        card = CardFactory(content_phash=111)
+        self._evidence(card.pk, 111, "run-a", versions={"artbox_phash": "artbox-phash-v1"})
+
+        assert cohort_command.already_extracted_card_ids("run-a") == set()
+
+    @pytest.mark.django_db
     def test_only_never_extracted_restores_the_identity_scoped_predicate(self) -> None:
         """The narrowing flag, and the proof it is a genuine opt-in rather than decoration: the
         SAME fixture that `test_a_prior_runs_completed_card_is_redone_from_scratch` says is redone

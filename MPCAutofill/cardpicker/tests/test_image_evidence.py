@@ -2910,11 +2910,11 @@ class TestPerExtractorReextraction:
 
     def test_ocr_group_staleness_forces_artbox_phash_recompute(self, db, monkeypatch):
         """artbox_phash reads the OCR group's own collector_line_collector_number/
-        illus_anchor_fired as classify_frame_style's inputs, but its own extractor version
-        (ARTBOX_PHASH_EXTRACTOR_VERSION) never changed - only artist_ocr is marked stale here,
-        the same shape as the real regression (4ca2368f bumped the OCR group for an engine swap
-        and missed this indirect dependent). artbox_phash must still recompute against the fresh
-        OCR facts rather than carrying forward a frame class read under the old ones."""
+        illus_anchor_fired as classify_frame_style's inputs. This test's own stale_extractor_keys
+        marks only artist_ocr stale, not artbox_phash's own version - the same shape as the real
+        regression (4ca2368f bumped the OCR group for an engine swap and missed this indirect
+        dependent). artbox_phash must still recompute against the fresh OCR facts rather than
+        carrying forward a frame class read under the old ones."""
         card = CardFactory(content_phash=12345)
         self._stub_everything(
             monkeypatch,
