@@ -493,9 +493,11 @@ class TestExtractCardEvidenceGeometryBleed:
         # section in image_evidence.py's module docstring), so ARTBOX_MODERN_CROP_BOX is picked -
         # height=0 then makes ITS pixel box degenerate too (top == bottom == 0), the same real,
         # non-fabricated guard symbol_region's own degenerate-crop-box check exercises just below.
-        # No stub needed - _compute_region_phash is never called for a degenerate box.
-        assert "artbox_crop_px" not in result.fields
-        assert "artbox_phash" not in result.fields
+        # No stub needed - _compute_region_phash is never called for a degenerate box. Present
+        # and explicitly None, not absent (issue #925) - see compute_card_evidence's own comment
+        # on this branch.
+        assert result.fields["artbox_crop_px"] is None
+        assert result.fields["artbox_phash"] is None
         assert result.skip_reasons["artbox_phash"] == "ambiguous"
         # symbol_region (issue #160): height=0 makes SYMBOL_STRIP_BOX's own pixel box degenerate
         # (top == bottom == 0) - the genuine, non-fabricated trigger of its degenerate-crop-box
@@ -944,8 +946,10 @@ class TestExtractCardEvidenceArtboxPhash:
         result = fetch_and_compute_card_evidence_for_tests(card)
 
         assert result.fields["artbox_frame_class"] == ""
-        assert "artbox_crop_px" not in result.fields
-        assert "artbox_phash" not in result.fields
+        # issue #925: present and explicitly None, not absent - see compute_card_evidence's own
+        # comment on this branch for why an unclassifiable frame must clear rather than withhold.
+        assert result.fields["artbox_crop_px"] is None
+        assert result.fields["artbox_phash"] is None
         assert result.skip_reasons["artbox_phash"] == "ambiguous"
 
     def test_trimmed_image_applies_normalize_crop_box_remap(self, db, monkeypatch):
@@ -981,8 +985,10 @@ class TestExtractCardEvidenceArtboxPhash:
 
         result = fetch_and_compute_card_evidence_for_tests(card)
 
-        assert "artbox_crop_px" not in result.fields
-        assert "artbox_phash" not in result.fields
+        # Same explicit-clear reasoning as the unclassifiable-frame test above: the box was
+        # computed and rejected as degenerate, so this is also a genuine "no value" answer.
+        assert result.fields["artbox_crop_px"] is None
+        assert result.fields["artbox_phash"] is None
         assert result.skip_reasons["artbox_phash"] == "ambiguous"
 
     def test_fetch_failure_withholds_fields_and_shares_skip_reason(self, db, monkeypatch):
@@ -1066,6 +1072,59 @@ class TestExtractCardEvidenceArtboxPhash:
         assert evidence.artbox_crop_px == [70, 100, 930, 620]
         assert evidence.artbox_frame_class == "modern"
         assert evidence.artbox_phash == -54321
+
+    def test_persist_clears_a_pre_abstain_hash_when_reextraction_is_unclassifiable(self, db, monkeypatch):
+        """issue #925: the row this simulates is exactly what a v1-tagged, `artbox_frame_class=""`
+        row with a populated hash means today - a guess made by the pre-abstain two-way selector
+        for a frame the classifier could not read. Re-extraction under the current selector must
+        end with the stored hash and crop box gone, not merely re-stamped with the new version."""
+        card = CardFactory(content_phash=1)
+        ImageEvidenceFactory(
+            card=card,
+            content_hash=1,
+            artbox_phash=-54321,
+            artbox_crop_px=[70, 100, 930, 620],
+            artbox_frame_class="modern",
+            extractor_versions={"artbox_phash": "artbox-phash-v1"},
+        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: _BLEED_IMAGE)
+        _stub_border_color(monkeypatch, "black")
+        _stub_art_edge(monkeypatch, "framed")
+        _stub_ocr(monkeypatch, "no signal here at all")
+        _stub_symbol_region(monkeypatch)
+        _stub_quality_signals(monkeypatch)
+        _stub_pinline_inset(monkeypatch)
+
+        result = fetch_and_compute_card_evidence_for_tests(card)
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.artbox_phash is None
+        assert evidence.artbox_crop_px is None
+        assert evidence.artbox_frame_class == ""
+
+    def test_persist_keeps_the_existing_hash_when_reextraction_cannot_fetch(self, db, monkeypatch):
+        """The opposite outcome from the test above, for the branch that must NOT clear: the
+        extractor never ran at all here, so it has no basis to say the prior hash is wrong - a
+        transient fetch failure must not read as evidence of anything about the stored value."""
+        card = CardFactory(content_phash=1)
+        stored = ImageEvidenceFactory(
+            card=card,
+            content_hash=1,
+            artbox_phash=-54321,
+            artbox_crop_px=[70, 100, 930, 620],
+            artbox_frame_class="modern",
+            extractor_versions={"artbox_phash": "artbox-phash-v1"},
+        )
+        monkeypatch.setattr(module, "fetch_card_image", lambda card, dpi=None: None)
+
+        result = fetch_and_compute_card_evidence_for_tests(card)
+        evidence = persist_evidence(result)
+
+        assert evidence is not None
+        assert evidence.pk == stored.pk
+        assert evidence.artbox_phash == -54321
+        assert evidence.artbox_crop_px == [70, 100, 930, 620]
 
 
 class TestExtractCardEvidenceCollectorLineOcr:

@@ -1571,6 +1571,18 @@ def compute_card_evidence(
                 # int either way, so a wrong guess joins the card into a group it does not belong
                 # in, and that false join corrupts the printing-vote pool with no visible symptom.
                 # Withholding the value is strictly safer than guessing.
+                #
+                # CLEARING, NOT JUST WITHHOLDING (issue #925): the classifier ran and its answer
+                # is "this frame has no crop box I can name" - a fact about THIS extraction, not
+                # an absence of one. `persist_evidence` only writes keys present in `fields`, so
+                # leaving these two out would let a hash computed under the old two-way selector
+                # (before this abstain branch existed) survive re-extraction relabelled as current.
+                # Explicitly nulling both says what's actually known: no region was chosen, so no
+                # hash was computed from one, and no stored value should claim otherwise. This is
+                # the opposite of the fetch-failure branch above, where the extractor never ran at
+                # all and a prior value is carried forward rather than erased.
+                fields["artbox_phash"] = None
+                fields["artbox_crop_px"] = None
                 skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
             else:
                 assert isinstance(width, int) and isinstance(height, int)  # see crop_coordinates' own comment above
@@ -1580,6 +1592,11 @@ def compute_card_evidence(
                 if right <= left or bottom <= top:
                     # Same real, non-fabricated "sub-floor" guard symbol_region's own degenerate-crop-
                     # box check exists for - not expected to fire against real fetched images either.
+                    # Same reasoning as the frame_class is None branch above applies here too: the
+                    # box was computed and rejected as degenerate, so this is also a genuine "no
+                    # value" answer rather than a failure to run, and the stored fields must clear.
+                    fields["artbox_phash"] = None
+                    fields["artbox_crop_px"] = None
                     skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
                 else:
                     fields["artbox_crop_px"] = artbox_crop_px
