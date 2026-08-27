@@ -103,6 +103,71 @@ def _int_to_hash(value: int) -> "imagehash.ImageHash":
     return imagehash.hex_to_hash(f"{unsigned:0{_HASH_HEX_DIGITS}x}")
 
 
+# Card.content_phash_bands (question_feed._near_duplicate_serving_card_ids's candidate-retrieval
+# index): PHASH_BAND_COUNT non-overlapping bands partitioning the _HASH_BITS-bit hash. Chosen to
+# exceed question_feed.NEAR_DUPLICATE_SERVING_MAX_DISTANCE (4): d differing bits touch at most d
+# of the bands, so with PHASH_BAND_COUNT > d at least one band is guaranteed to agree exactly
+# between any two hashes within that distance, regardless of how the 64 bits are split among the
+# bands - retrieval by shared band is therefore exact for that distance, never a heuristic that
+# could miss a true near-duplicate.
+#
+# PHASH_BAND_COUNT is the TIGHTEST value satisfying that bound (5, not e.g. 8) deliberately: wider
+# bands (fewer of them) means more distinct values per band, which is what makes retrieval
+# SELECTIVE. Measured live against production (236,025 hashed cards): 8 equal 8-bit bands average
+# ~922 cards per band value - a single seed's 8 bands then match ~29% of the entire catalogue,
+# wide enough that Postgres abandons the GIN index for a sequential scan outright (measured
+# 230ms, slower than the pre-fix name-scoped query it replaces). 5 bands (mostly 12 bits, the
+# remainder folded into the last - see `_PHASH_BAND_WIDTHS` below) keep the candidate pool for a
+# real seed under 500 rows instead - see `content_phash_bands`'s own docstring for the measured
+# pool size and query plan at this width.
+PHASH_BAND_COUNT = 5
+# Unequal on purpose: _HASH_BITS (64) does not divide evenly by PHASH_BAND_COUNT (5) - Python
+# floor division gives 12 bits for the first four bands, leaving 16 for the last. The pigeonhole
+# argument above only needs PHASH_BAND_COUNT non-overlapping bands, not equal-width ones, so the
+# remainder is folded into the last band rather than reaching for a band count that divides
+# evenly (a wider PHASH_BAND_COUNT would trade away the selectivity this width was chosen for -
+# see this section's own comment above).
+_PHASH_BAND_WIDTHS = [_HASH_BITS // PHASH_BAND_COUNT] * (PHASH_BAND_COUNT - 1)
+_PHASH_BAND_WIDTHS.append(_HASH_BITS - sum(_PHASH_BAND_WIDTHS))
+# Bits reserved for the band-index tag in each returned value's high bits - must exceed the
+# widest band (16, `_PHASH_BAND_WIDTHS`'s own last entry) so a band's value can never collide
+# with another band's position tag.
+_PHASH_BAND_TAG_SHIFT = 16
+
+
+def content_phash_bands(phash: int) -> list[int]:
+    """
+    Splits `phash` (a `Card.content_phash`-shaped value, twos-complement-signed as stored - see
+    `_int_to_hash`'s own unmasking) into `PHASH_BAND_COUNT` position-tagged bands, one per
+    `_PHASH_BAND_WIDTHS` entry: `(band_index << _PHASH_BAND_TAG_SHIFT) | band_value`.
+    Position-tagging matters: two cards must only overlap (the `&&` query `content_phash_bands`'s
+    GIN index serves) when they share the same band VALUE at the same POSITION - the pigeonhole
+    guarantee (`PHASH_BAND_COUNT`'s own comment) is a per-position argument, so a plain "shares
+    some byte value" check without the position tag would both over- and under-select relative to
+    what the guarantee actually proves.
+
+    Measured live against production (236,025 hashed cards, `PHASH_BAND_COUNT=5`): a card from
+    the reported "Ashaya, Soul of the Wild" near-duplicate cluster retrieves a 401-row candidate
+    pool via the GIN-indexed overlap query, in 2.5ms (`Bitmap Heap Scan` on the index) - versus
+    the pre-fix name-scoped query's own 156.6ms (dominated by a sequential scan `name` has no
+    index for) to check only the 10 other rows sharing that exact name. The exact popcount check
+    this module's caller runs over the 401-row pool is what narrows it to true near-duplicates
+    (3, for that seed) - this function's only job is keeping the pool small enough for that check
+    to be cheap. Two of those 3 true near-duplicates carry a DIFFERENT `name` from the seed
+    (e.g. "Ashaya, Soul of the Wild (Normal) [ZNR]") - exactly the population the name-scoped
+    query could never have found regardless of how fast it ran.
+    """
+    unsigned = phash & ((1 << _HASH_BITS) - 1)
+    bands = []
+    shift = 0
+    for band_index, width in enumerate(_PHASH_BAND_WIDTHS):
+        mask = (1 << width) - 1
+        value = (unsigned >> shift) & mask
+        bands.append((band_index << _PHASH_BAND_TAG_SHIFT) | value)
+        shift += width
+    return bands
+
+
 def _fetch_scryfall_art_crop_url(scryfall_id: str) -> Optional[str]:
     try:
         response = rate_limited_get(
@@ -364,6 +429,7 @@ def run_content_phash_backfill(
 
                 if content_hash is not None:
                     card.content_phash = content_hash
+                    card.content_phash_bands = content_phash_bands(content_hash)
                     to_persist.append(card)
                     hashed += 1
                 else:
@@ -371,14 +437,16 @@ def run_content_phash_backfill(
 
                 if len(to_persist) >= batch_size:
                     if not dry_run:
-                        Card.objects.bulk_update(to_persist, ["content_phash"], batch_size=batch_size)
+                        Card.objects.bulk_update(
+                            to_persist, ["content_phash", "content_phash_bands"], batch_size=batch_size
+                        )
                     to_persist = []
 
                 if progress_every and processed % progress_every < len(done):
                     print(f"  ... {processed}/{total} cards hashed")
 
         if to_persist and not dry_run:
-            Card.objects.bulk_update(to_persist, ["content_phash"], batch_size=batch_size)
+            Card.objects.bulk_update(to_persist, ["content_phash", "content_phash_bands"], batch_size=batch_size)
 
     return BackfillResult(dry_run=dry_run, total_candidates=total, hashed=hashed, failed=failed)
 
@@ -451,4 +519,6 @@ __all__ = [
     "compute_content_phash_for_card",
     "run_content_phash_backfill",
     "find_best_match",
+    "PHASH_BAND_COUNT",
+    "content_phash_bands",
 ]

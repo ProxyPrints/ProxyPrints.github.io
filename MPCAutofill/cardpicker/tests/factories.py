@@ -5,6 +5,7 @@ import uuid
 import factory
 
 from cardpicker import models
+from cardpicker.local_phash import content_phash_bands
 from cardpicker.models import Games
 from cardpicker.search.sanitisation import to_searchable
 
@@ -50,6 +51,12 @@ class CardFactory(factory.django.DjangoModelFactory):
     size = factory.LazyFunction(lambda: 100)
     language = factory.LazyAttribute(lambda o: "en")
     content_phash = None
+    # Derived from content_phash, same as production's own write sites - kept in sync here so
+    # near-duplicate-serving tests exercise the real Card.content_phash_bands GIN query instead
+    # of matching against rows that never got the derived value the query actually filters on.
+    content_phash_bands = factory.LazyAttribute(
+        lambda o: content_phash_bands(o.content_phash) if o.content_phash is not None else None
+    )
 
 
 class TagFactory(factory.django.DjangoModelFactory):
