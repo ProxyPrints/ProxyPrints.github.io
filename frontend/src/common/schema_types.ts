@@ -226,6 +226,21 @@ export interface Card {
    * cross-referencing a separately-fetched name list.
    */
   layout?: null | string;
+  /**
+   * This card's own measured bleed margin in millimetres, Method A (aspect-ratio-derived)
+   * from cardpicker.local_bleed_calculator - the same closed-form reading of this image's own
+   * pixel aspect ratio already used for the appropriate-bleed machine vote
+   * (Card.measured_bleed_mm(), BLEED_MARGIN_MM - ImageEvidence.bleed_diff_mm). null whenever
+   * no current ImageEvidence row has completed the geometry_bleed extractor for this card.
+   * Populated only for the single item the question feed actually serves
+   * (question_feed._log_served attaches it post-serialise, after the served card is already
+   * chosen - never computed while scanning pool-eligibility candidates, so it costs nothing
+   * anywhere else Card.serialise() is called) - every other response leaves this null. A
+   * consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend)
+   * / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already
+   * assumes.
+   */
+  measuredBleedMm?: number | null;
   mediumThumbnailUrl: string;
   name: string;
   /**
@@ -3178,6 +3193,11 @@ const typeMap: any = {
       { json: "identifier", js: "identifier", typ: "" },
       { json: "language", js: "language", typ: "" },
       { json: "layout", js: "layout", typ: u(undefined, u(null, "")) },
+      {
+        json: "measuredBleedMm",
+        js: "measuredBleedMm",
+        typ: u(undefined, u(3.14, null)),
+      },
       { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
       { json: "name", js: "name", typ: "" },
       {

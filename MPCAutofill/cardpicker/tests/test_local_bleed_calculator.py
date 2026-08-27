@@ -7,12 +7,15 @@ honouring, the cross-method disagreement gate, and the batch runner's negative-o
 `test_local_layout_class_cast.py` already establishes for this pipeline family.
 """
 
+import pytest
+
 from cardpicker.attribute_tags import seed_attribute_tags
 from cardpicker.default_tags import seed_default_tags
 from cardpicker.local_bleed_calculator import (
     BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON,
     BLEED_CALC_NOT_TRIMMED_SKIP_REASON,
     BLEED_CALCULATOR_CAST_ANONYMOUS_ID,
+    BLEED_MARGIN_MM,
     METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM,
     calculate_bleed_verdict,
     run_bleed_calculator_cast,
@@ -249,3 +252,26 @@ class TestRunBleedCalculatorCast:
 
         assert result.votes_would_cast == 0
         assert CardTagVote.objects.filter(anonymous_id=BLEED_CALCULATOR_CAST_ANONYMOUS_ID).count() == 0
+
+
+class TestCardMeasuredBleedMm:
+    """Card.measured_bleed_mm() - the WTC reference-image crop's own read of Method A, via the
+    same `_trim_exact_evidence`/`_standard_bleed_evidence` fixtures the verdict tests above use,
+    so this can't silently drift from what `calculate_bleed_verdict`'s own method_a_mm reads."""
+
+    def test_trim_exact_card_reads_near_zero_bleed(self, db):
+        card = CardFactory(name="Trimmed Upload", content_phash=1)
+        _trim_exact_evidence(card)
+
+        assert card.measured_bleed_mm() == pytest.approx(0.0, abs=0.1)
+
+    def test_standard_bleed_card_reads_the_standard_margin(self, db):
+        card = CardFactory(name="Standard Upload", content_phash=2)
+        _standard_bleed_evidence(card)
+
+        assert card.measured_bleed_mm() == pytest.approx(BLEED_MARGIN_MM, abs=0.1)
+
+    def test_no_current_evidence_reads_none(self, db):
+        card = CardFactory(name="No Evidence", content_phash=3)
+
+        assert card.measured_bleed_mm() is None
