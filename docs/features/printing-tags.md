@@ -3010,6 +3010,37 @@ alone. Measured population that same pass: 20,629 distinct cards across
 109 sources declare a treatment this way, three chips (Full Art, Etched,
 Future Frame) with no other machine coverage at all.
 
+### Not an attribute chip, but sharing this dispatch step: proxy marking (`local_proxy_marker_cast`, public issue #952)
+
+`local_proxy_marker_cast.run_proxy_marker_cast` reads `ImageEvidence.legal_line_proxy_marker_ detected` — already extracted at Stage C by `local_ocr.parse_legal_line`'s `_PROXY_MARKER_RE`
+scanning the legal-line OCR crop for "proxy"/"not for sale"/"playtest"/"original design" tokens —
+and casts the `proxy-marked` tag on a `True` reading only. It shares `_run_attribute_chip_casters`
+purely because it is the same SHAPE of work (zero-fetch, evidence-only, independent of every other
+calculator's output), not because it is an attribute chip: its `Tag` row is seeded by
+`reason_tags.seed_no_match_reason_tags`, the no-match-reason taxonomy (see that section below),
+not `seed_default_tags`/`seed_attribute_tags`. That distinction matters for `attributeChips.ts`'s
+frontend candidate-filtering: every real attribute chip's `matches` predicate tests a Scryfall
+property of the CANDIDATE printing (`borderColor`, `fullArt`, `isShowcase`); a proxy marker is a
+property of OUR IMAGE, not of the printing, so it has no candidate-side truth to filter on and does
+not participate in that filtering — this tag is display/reason-strip metadata, not a chip.
+
+**Why `False` casts nothing.** `legal_line_proxy_marker_detected` is `True`/`False`/`None`: `None`
+means the extractor never reached a conclusion (fetch failure); `False` means it ran and found no
+marker token in whatever text the legal-line crop returned. That crop is separately measured
+(issue #959) to yield a genuine legal line only 10.6% of the time, so a `False` reading is not
+evidence the render is unmarked — the crop may simply have missed text present elsewhere on the
+card face. Both `False` and `None` therefore cast no vote at all, recorded identically as a
+`no-marker-hit` skip (see `docs/reference/skip-reasons.md`'s own entry).
+
+**Unrelated to the Stage D veto.** `legal_line_proxy_marker_detected` already has a role in
+`local_calculate_verdicts.calculate_join_key_verdict` (a moderator-flag SIGNAL, not a veto — see
+that function's own 2026-07-21 correction) and in `select_card_ids_proxy_marker_veto`. This caster
+adds a vote alongside that existing read; it does not touch either call site or change what a
+join-key match withholds.
+
+Derivable population, measured read-only against production: of 234,823 current `ImageEvidence`
+rows, 78,875 (33.6%) carry a `True` reading.
+
 ### A third channel, wired separately: extended-art continuity (`local_art_edge`, 2026-08-19)
 
 `local_art_edge.run_art_edge_continuity_cast` casts the pre-existing

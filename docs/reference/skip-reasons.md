@@ -359,6 +359,21 @@ why an unvalidated class abstains rather than casting a negative).
 | `framed`      | `ART_EDGE_FRAMED_SKIP_REASON`      | A reading was stored, and it is `framed` — a real border survives beside the art.                                                                               | Live, no rows yet (~161k eligible) |
 | `mixed`       | `ART_EDGE_MIXED_SKIP_REASON`       | A reading was stored, and it is `mixed` — the test strip matched exactly one of the two references, the classifier's least-confident outcome.                   | Live, no rows yet (~37k eligible)  |
 
+## Proxy-marker caster — `MPCAutofill/cardpicker/local_proxy_marker_cast.py`
+
+`anonymous_id` is `proxy-marker-cast-v1` (`PROXY_MARKER_CAST_ANONYMOUS_ID`, public issue #952) —
+casts the `proxy-marked` no-match-reason tag from `ImageEvidence.legal_line_proxy_marker_detected`
+on a `True` reading only. Positive-detection only, same reasoning as the AI-art detector above: a
+`False` reading is not evidence the render is unmarked (the legal-line crop is separately measured
+to find a genuine legal line only 10.6% of the time, issue #959), so it is recorded the same way as
+a genuine no-hit, not as a negative vote.
+
+| Reason                | Constant                                       | Means                                                                                              | Status            |
+| --------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------- |
+| `no-evidence`         | `PROXY_MARKER_NO_EVIDENCE_SKIP_REASON`         | No current `ImageEvidence` row. **Rescannable**.                                                   | Live, no rows yet |
+| `incomplete-evidence` | `PROXY_MARKER_INCOMPLETE_EVIDENCE_SKIP_REASON` | Evidence row present but the `legal_line` extractor hasn't run for it yet. **Rescannable**.        | Live, no rows yet |
+| `no-marker-hit`       | `PROXY_MARKER_NOT_DETECTED_SKIP_REASON`        | The field read `False` or `None` — no vote cast either way (module docstring's TRUE ONLY section). | Live, no rows yet |
+
 ## Evidence transfer — `MPCAutofill/cardpicker/evidence_transfer.py`
 
 `anonymous_id` is `evidence-transfer-v1` (`EVIDENCE_TRANSFER_ANONYMOUS_ID`).

@@ -309,6 +309,10 @@ class DispatchOutcome:
     # single card can cast several tags at once (Extended and Borderless are not exclusive), so
     # this counter is a vote count, not a card count - see that module's own docstring.
     stage_d_filename_declaration_votes: int = 0
+    # PROXY-MARKER CASTER (public issue #952, cardpicker.local_proxy_marker_cast,
+    # proxy-marker-cast-v1) - reads only ImageEvidence.legal_line_proxy_marker_detected, already
+    # extracted at Stage C. Positive-detection only, same reasoning as the AI-art detector below.
+    stage_d_proxy_marker_votes: int = 0
     # EVIDENCE-ONLY CALCULATORS (2026-08-05, closing the "10 of ~28 channels" wiring audit - see
     # `_run_evidence_only_calculators`' own docstring for the FREE/EXPENSIVE classification of
     # every channel this closes and every one it deliberately leaves open). All four read only
@@ -1280,6 +1284,14 @@ def _run_attribute_chip_casters(
     declared treatments and needs no `ImageEvidence` at all - its `Tag` dependency is the same
     seed gap as its siblings, so it shares this function's try/except rather than getting its own.
 
+    PROXY-MARKER CASTER (public issue #952) is the fifth caster wired here:
+    `local_proxy_marker_cast.run_proxy_marker_cast` reads `ImageEvidence.legal_line_proxy_marker_
+    detected`, already extracted at Stage C, and casts the `proxy-marked` no-match-reason tag on a
+    positive reading only. Not an attribute chip in the `attributeChips.ts` sense (its `Tag` seed
+    lives in `reason_tags.seed_no_match_reason_tags`, not `seed_default_tags`/`seed_attribute_tags`
+    - see that module's own docstring) - it shares this function purely because it is the same
+    shape of work: zero-fetch, evidence-only, no dependency on any other calculator's output.
+
     THE CASTERS READ STORED EVIDENCE AND FETCH NOTHING, which is why they can run inside a
     micro-batch at all: the conveyor's fetch budget and the operating envelope's bars are about
     network and host load, and these consume neither. Re-deriving these chips through the only
@@ -1308,6 +1320,7 @@ def _run_attribute_chip_casters(
     from cardpicker.local_bleed_calculator import run_bleed_calculator_cast
     from cardpicker.local_filename_declarations import run_filename_declaration_cast
     from cardpicker.local_layout_class_cast import run_layout_class_cast
+    from cardpicker.local_proxy_marker_cast import run_proxy_marker_cast
 
     try:
         border_result = run_layout_class_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
@@ -1321,12 +1334,16 @@ def _run_attribute_chip_casters(
 
         filename_result = run_filename_declaration_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
         outcome.stage_d_filename_declaration_votes = filename_result.votes_written
+
+        proxy_marker_result = run_proxy_marker_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_proxy_marker_votes = proxy_marker_result.votes_written
     except RuntimeError as exc:
         logger.error(
             "Attribute-chip casters skipped for run_id=%s: %s Stage D's printing votes for this "
             "batch are unaffected and already written. Run `seed_default_tags`/`seed_attribute_tags`"
-            "/`seed_sensitive_tags` to close this - until then the border/frame chip, bleed "
-            "calculator and filename-declaration counters stay at zero on every dispatch.",
+            "/`seed_sensitive_tags`/`seed_no_match_reason_tags` to close this - until then the "
+            "border/frame chip, bleed calculator, filename-declaration and proxy-marker counters "
+            "stay at zero on every dispatch.",
             run_id,
             exc,
         )
