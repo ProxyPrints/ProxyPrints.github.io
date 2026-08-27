@@ -339,7 +339,19 @@ LEGAL_LINE_EXTRACTOR_VERSION = "legal-line-v2"
 # NOT bumped: quality_signals (blur_variance/image_entropy - pixel-statistics math, no OCR) is
 # engine-independent by construction, same reasoning as symbol_region above.
 QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
-ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v1"
+# v1 -> v2 (issue #925): before the `frame_class is None` abstain branch below existed, this
+# extractor's crop-box selection was a two-way expression (`... if frame_class == "modern" else
+# ARTBOX_OLD_CROP_BOX`) with no unclassified branch at all - an unclassifiable frame silently fell
+# through to the OLD box rather than withholding a value. That defect predates this version string
+# and is invisible in `extractor_versions` - every row written under either the old two-way logic
+# or the current three-way-abstain logic carries the same "artbox-phash-v1" tag, so there was no
+# way to tell which of the 8,534 `artbox_frame_class=""` rows with a populated `artbox_phash`
+# (measured 2026-08-27) hold a hash from a box nobody chose for them. Bumping to v2 stales every
+# row currently tagged v1 for this key alone (per-extractor re-extraction re-derives only
+# `artbox_phash`, not the whole row) so the next incremental pass re-runs the CURRENT, correctly-
+# abstaining selector against all of them - see that branch's own comment for why abstaining
+# (withholding `artbox_phash`) is the safe outcome here rather than a guessed region.
+ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v2"
 # NOT bumped: pinline_inset (local_pinline_inset.measure_pinline_inset) is a pure colour-
 # distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
 # quality_signals above.
@@ -1530,20 +1542,18 @@ def compute_card_evidence(
     # unclassifiable frame and a degenerate crop box (see module docstring for why one string
     # covers both here).
     #
-    # STRUCTURAL DEPENDENCY ON THE OCR GROUP (2026-08-22): this extractor's own version string
-    # (ARTBOX_PHASH_EXTRACTOR_VERSION) has never had to change - its crop/hash logic is untouched
-    # - but its INPUT is the OCR group's output, so a change that only affects the OCR group (e.g.
-    # an OCR-engine swap) silently changes what this extractor computes with nothing recording
-    # that it happened. `4ca2368f` bumped `collector_line_ocr`/`artist_ocr`/`collector_line_tsv`
-    # for exactly that reason and missed this one, because the dependency is indirect. Rather than
-    # relying on a human to remember to bump `ARTBOX_PHASH_EXTRACTOR_VERSION` in lockstep with the
-    # OCR group every time (the discipline that already failed once), `_ocr_group_is_stale` is
-    # ORed in directly: whenever the incremental per-extractor pipeline decides the OCR group
-    # needs recomputing, this extractor is swept along with it and reads the OCR group's FRESH
-    # output above rather than carrying forward a value computed against stale OCR facts. A no-op
-    # today (no manifest version has changed), and a no-op for full runs (`_stale` is already
-    # unconditionally `True` there) - this only changes behaviour for a future incremental run
-    # after a future OCR-affecting change.
+    # STRUCTURAL DEPENDENCY ON THE OCR GROUP (2026-08-22): this extractor's INPUT is the OCR
+    # group's output, so a change that only affects the OCR group (e.g. an OCR-engine swap)
+    # silently changes what this extractor computes with nothing recording that it happened.
+    # `4ca2368f` bumped `collector_line_ocr`/`artist_ocr`/`collector_line_tsv` for exactly that
+    # reason and missed this one, because the dependency is indirect. Rather than relying on a
+    # human to remember to bump `ARTBOX_PHASH_EXTRACTOR_VERSION` in lockstep with the OCR group
+    # every time (the discipline that already failed once), `_ocr_group_is_stale` is ORed in
+    # directly: whenever the incremental per-extractor pipeline decides the OCR group needs
+    # recomputing, this extractor is swept along with it and reads the OCR group's FRESH output
+    # above rather than carrying forward a value computed against stale OCR facts. A no-op for
+    # full runs (`_stale` is already unconditionally `True` there) - this only changes behaviour
+    # for a future incremental run after a future OCR-affecting change.
     if _stale("artbox_phash") or _ocr_group_is_stale:
         if image is None:
             skip_reasons["artbox_phash"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
@@ -1553,6 +1563,26 @@ def compute_card_evidence(
             frame_class = classify_frame_style(parsed_a_collector_number, illus_anchor_fired_value)
             fields["artbox_frame_class"] = frame_class or ""
             if frame_class is None:
+                # Abstain rather than default to either crop box (issue #925): `artbox_phash`
+                # seeds `printing_consensus.phash_group_card_ids`, which already treats an absent
+                # hash as a group of ONE (safe under-collapse - the card just isn't grouped with
+                # anything yet, recoverable on a later pass). A hash computed from a guessed
+                # region for a frame this classifier couldn't read is a plausible-looking 64-bit
+                # int either way, so a wrong guess joins the card into a group it does not belong
+                # in, and that false join corrupts the printing-vote pool with no visible symptom.
+                # Withholding the value is strictly safer than guessing.
+                #
+                # CLEARING, NOT JUST WITHHOLDING (issue #925): the classifier ran and its answer
+                # is "this frame has no crop box I can name" - a fact about THIS extraction, not
+                # an absence of one. `persist_evidence` only writes keys present in `fields`, so
+                # leaving these two out would let a hash computed under the old two-way selector
+                # (before this abstain branch existed) survive re-extraction relabelled as current.
+                # Explicitly nulling both says what's actually known: no region was chosen, so no
+                # hash was computed from one, and no stored value should claim otherwise. This is
+                # the opposite of the fetch-failure branch above, where the extractor never ran at
+                # all and a prior value is carried forward rather than erased.
+                fields["artbox_phash"] = None
+                fields["artbox_crop_px"] = None
                 skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
             else:
                 assert isinstance(width, int) and isinstance(height, int)  # see crop_coordinates' own comment above
@@ -1562,6 +1592,11 @@ def compute_card_evidence(
                 if right <= left or bottom <= top:
                     # Same real, non-fabricated "sub-floor" guard symbol_region's own degenerate-crop-
                     # box check exists for - not expected to fire against real fetched images either.
+                    # Same reasoning as the frame_class is None branch above applies here too: the
+                    # box was computed and rejected as degenerate, so this is also a genuine "no
+                    # value" answer rather than a failure to run, and the stored fields must clear.
+                    fields["artbox_phash"] = None
+                    fields["artbox_crop_px"] = None
                     skip_reasons["artbox_phash"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
                 else:
                     fields["artbox_crop_px"] = artbox_crop_px
