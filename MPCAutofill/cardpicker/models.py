@@ -7,6 +7,7 @@ from typing import Any, Optional, Sequence
 
 from django.contrib.auth.models import User
 from django.contrib.postgres.fields import ArrayField
+from django.contrib.postgres.indexes import GinIndex
 from django.db import connection, models, transaction
 from django.utils import dateformat, timezone
 from django.utils.translation import gettext_lazy
@@ -659,6 +660,15 @@ class Card(models.Model):
     # reusing 0 as a sentinel the way CanonicalCard.image_hash does (that field predates this
     # decision; not retrofitted here, out of scope).
     content_phash = models.BigIntegerField(null=True, blank=True, db_index=True)
+    # Position-tagged prefix bands of `content_phash` above (`local_phash.content_phash_bands`'s
+    # own docstring has the full banding proof and encoding), GIN-indexed for the `&&` overlap
+    # query `question_feed._near_duplicate_serving_card_ids` runs to find near-duplicate
+    # candidates without a catalogue-wide popcount scan. A derived value, never independently
+    # authored: always recomputed FROM `content_phash` at the same write site (never set on its
+    # own) - see that function's callers (`local_phash.run_content_phash_backfill`,
+    # `sources.update_database.hash_newly_created_cards`). NULL exactly when `content_phash` is
+    # NULL (not yet computed), same convention.
+    content_phash_bands = ArrayField(models.IntegerField(), null=True, blank=True)
     # md5 checksum substrate (issue #473 PR-1, docs/features/catalog-completion-plan.md's
     # #442-sourced "index Drive checksums" leverage) - the Google Drive API's own `md5Checksum`
     # field on a file listing, copied verbatim from the same folder-listing metadata
@@ -970,6 +980,7 @@ class Card(models.Model):
 
     class Meta:
         ordering = ["-priority"]
+        indexes = [GinIndex(fields=["content_phash_bands"], name="card_content_phash_bands_gin")]
 
 
 class VoteSource(models.TextChoices):

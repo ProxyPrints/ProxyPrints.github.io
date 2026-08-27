@@ -1,9 +1,11 @@
 import uuid
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.conf import settings
 from django.core.cache import caches
 from django.urls import reverse
+from django.utils import timezone
 
 from cardpicker import views
 from cardpicker.artist_consensus import (
@@ -38,6 +40,7 @@ from cardpicker.printing_consensus import (
     resolve_and_persist_printing,
 )
 from cardpicker.question_feed import (
+    NEAR_DUPLICATE_SERVING_RESURFACE,
     _artist_item,
     _border_item,
     _confirm_suggestion_item,
@@ -1420,22 +1423,23 @@ class TestIllustrationVoteAnsweredExclusion:
 
 
 class TestNearDuplicateServingGroups:
-    """SERVING-ONLY near-duplicate widening (`Card.content_phash` Hamming distance) - the fix for
-    a voter repeatedly served questions about what looks like the same card when re-encodes land
-    at distinct md5 checksums. `identity_group_card_ids` (md5 union phash-d0) is the boundary
-    consensus/vote resolution actually pools on and must stay untouched - see the last test."""
+    """SERVING-ONLY near-duplicate widening (`Card.content_phash` Hamming distance, found via the
+    `content_phash_bands` GIN index - never by matching `name`) - the fix for a voter repeatedly
+    served questions about what looks like the same card when re-encodes land at distinct md5
+    checksums, regardless of what the uploader happened to name each copy. `identity_group_
+    card_ids` (md5 union phash-d0) is the boundary consensus/vote resolution actually pools on
+    and must stay untouched - see the last test."""
 
-    def test_near_duplicate_serving_card_ids_widens_within_distance_and_same_name(self, db):
+    def test_near_duplicate_serving_card_ids_widens_within_distance_regardless_of_name(self, db):
         seed = CardFactory(name="Ashaya", content_phash=0)
         near = CardFactory(name="Ashaya", content_phash=0b111)  # Hamming distance 3, <= 4
         far = CardFactory(name="Ashaya", content_phash=0xFF)  # Hamming distance 8, > 4
-        different_name = CardFactory(name="Different Card", content_phash=0b111)  # distance 3, wrong name
+        differently_named_near = CardFactory(name="Different Card", content_phash=0b111)  # distance 3, wrong name
 
         expanded = _near_duplicate_serving_card_ids({seed.pk})
 
-        assert expanded == {seed.pk, near.pk}
+        assert expanded == {seed.pk, near.pk, differently_named_near.pk}
         assert far.pk not in expanded
-        assert different_name.pk not in expanded
 
     def test_near_duplicate_serving_card_ids_ignores_cards_with_no_phash(self, db):
         seed = CardFactory(name="Ashaya", content_phash=None)
@@ -1534,6 +1538,63 @@ class TestNearDuplicateServingGroups:
 
         assert identity_group_card_ids(card_a) == [card_a.pk]
         assert identity_group_card_ids(card_b) == [card_b.pk]
+
+    def test_a_stale_near_duplicate_exclusion_resurfaces_for_the_answering_voter(self, db):
+        printing = CanonicalCardFactory(name="Ashaya")
+        answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        sibling = CardFactory(name="Ashaya", content_phash=0b111, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        vote = CardPrintingTagFactory(card=answered, printing=printing, source=VoteSource.USER, anonymous_id="voter-1")
+        # bypass auto_now_add (same trick migration 0097 uses) to backdate the vote past the
+        # resurfacing window
+        CardPrintingTag.objects.filter(pk=vote.pk).update(
+            created_at=timezone.now() - NEAR_DUPLICATE_SERVING_RESURFACE - timedelta(days=1)
+        )
+
+        answered_ids = _voter_answered_printing_card_ids("voter-1")
+
+        assert answered.pk in answered_ids  # the real answer is unaffected by resurfacing
+        assert sibling.pk not in answered_ids  # the near-duplicate-only widening has aged out
+
+    def test_a_fresh_near_duplicate_exclusion_has_not_resurfaced_yet(self, db):
+        printing = CanonicalCardFactory(name="Ashaya")
+        answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        sibling = CardFactory(name="Ashaya", content_phash=0b111, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        CardPrintingTagFactory(card=answered, printing=printing, source=VoteSource.USER, anonymous_id="voter-1")
+
+        answered_ids = _voter_answered_printing_card_ids("voter-1")
+
+        assert sibling.pk in answered_ids
+
+    def test_a_stale_exclusion_only_resurfaces_for_the_voter_whose_own_vote_aged_out(self, db):
+        printing = CanonicalCardFactory(name="Ashaya")
+        answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        sibling = CardFactory(name="Ashaya", content_phash=0b111, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        vote = CardPrintingTagFactory(card=answered, printing=printing, source=VoteSource.USER, anonymous_id="voter-1")
+        CardPrintingTag.objects.filter(pk=vote.pk).update(
+            created_at=timezone.now() - NEAR_DUPLICATE_SERVING_RESURFACE - timedelta(days=1)
+        )
+
+        # voter-2 never answered anything, so there is no widening to resurface for them at all -
+        # neither card is in their own exclusion set, unaffected by voter-1's resurfaced clock.
+        voter_2_answered_ids = _voter_answered_printing_card_ids("voter-2")
+
+        assert answered.pk not in voter_2_answered_ids
+        assert sibling.pk not in voter_2_answered_ids
+
+    def test_a_resurfaced_sibling_is_actually_served_again(self, db):
+        printing = CanonicalCardFactory(name="Ashaya")
+        answered = CardFactory(name="Ashaya", content_phash=0, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        sibling = CardFactory(name="Ashaya", content_phash=0b111, printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        vote = CardPrintingTagFactory(card=answered, printing=printing, source=VoteSource.USER, anonymous_id="voter-1")
+        CardPrintingTag.objects.filter(pk=vote.pk).update(
+            created_at=timezone.now() - NEAR_DUPLICATE_SERVING_RESURFACE - timedelta(days=1)
+        )
+        _warm_all_lanes()
+
+        item = get_next_question_feed_item("voter-1")
+
+        assert item is not None
+        assert item.card.identifier == sibling.identifier
 
 
 class TestGetNextQuestionFeedItemUsesPools:

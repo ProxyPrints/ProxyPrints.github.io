@@ -212,6 +212,7 @@ def hash_newly_created_cards(created: list[Card]) -> None:
     for card, content_hash in zip(created, hashes):
         if content_hash is not None:
             card.content_phash = content_hash
+            card.content_phash_bands = local_phash.content_phash_bands(content_hash)
             hashed_count += 1
     print(
         f" and done! Hashed {TEXT_BOLD}{hashed_count}{TEXT_END}/{TEXT_BOLD}{len(created)}{TEXT_END} in "

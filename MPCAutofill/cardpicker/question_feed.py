@@ -157,6 +157,7 @@ import hashlib
 import math
 import uuid
 from collections import defaultdict
+from datetime import datetime, timedelta
 from typing import Any, Callable, Hashable, Iterable, Optional, Sequence
 
 from django.conf import settings
@@ -172,6 +173,7 @@ from django.db.models import (
     Value,
     When,
 )
+from django.utils import timezone
 
 from cardpicker import question_feed_pools
 from cardpicker.artist_consensus import get_contested_artist_card_ids
@@ -186,6 +188,7 @@ from cardpicker.local_calculate_verdicts import (
     STAGE_D_FALLBACK_ANONYMOUS_ID,
 )
 from cardpicker.local_fallback import BORDER_COLOR_TO_TAG
+from cardpicker.local_phash import content_phash_bands
 from cardpicker.models import (
     ArtistVoteStatus,
     Card,
@@ -804,23 +807,56 @@ def _first_answerable_illustration_candidate(
 # d<=4 collapses 24.1%, d<=8 collapses 30.3%. The curve is gradual, not a discovered cutoff - d<=4
 # is used below as a reasonable point short of the wider band's diminishing, riskier returns.
 #
-# Performance: restricted to CANDIDATES SHARING THE SEED CARD'S NAME - a near-duplicate of a card
-# shares its name, so this never approaches the whole-catalogue O(n^2) comparison
-# `local_clustering.py`'s own module docstring already rules out for a much larger batch pass;
-# each name's own row count (tens, occasionally low hundreds) bounds the comparison instead.
+# Retrieval: candidates are found via `Card.content_phash_bands`'s GIN-indexed array-overlap
+# query (`local_phash.content_phash_bands`'s own docstring has the banding proof), not by
+# matching the seed's `name` - a near-duplicate does NOT reliably share its seed's name in a
+# catalogue of independently-named custom uploads (measured live: one reported card's 36 rows
+# carry ~36 distinct names, e.g. "(Extended Chase Stone)"/"(Borderless Chase Stone)"/"[SLD]
+# (Scan)"), so the name restriction this replaced was silently leaving most of a card's own
+# near-duplicates ungrouped. `PHASH_BAND_COUNT` (5) > `NEAR_DUPLICATE_SERVING_MAX_DISTANCE` (4)
+# is what makes this exact rather than a heuristic: retrieval by shared band can never miss a
+# true near-duplicate at this distance, it can only return extra candidates the exact popcount
+# check below then discards.
+#
+# Resurfacing (per voter, per cluster): see `NEAR_DUPLICATE_SERVING_RESURFACE` below - a
+# near-duplicate-only exclusion is not permanent for the voter who triggered it.
 # ---------------------------------------------------------------------------------------------
 
 NEAR_DUPLICATE_SERVING_MAX_DISTANCE = 4
 
+# How long a near-duplicate-only widening stays suppressed for the voter whose own vote caused it,
+# before that cluster resurfaces in their feed again. Gated on the ANSWERING voter's own vote
+# timestamp on the seed card (threaded in as `answered_at_by_card_id` below), so this is per
+# voter, per cluster by construction: a different voter who never answered the seed has no entry
+# for it to begin with, and a voter who re-answers the seed resets their own clock rather than
+# leaving the group suppressed for them indefinitely. 30 days: long enough that a voter's own
+# repeat visits within one review pass never resurface a cluster they just answered, short enough
+# that a wrongly-grouped cluster gets an independent second look well within a typical review
+# cycle rather than staying invisible to that voter for good.
+NEAR_DUPLICATE_SERVING_RESURFACE = timedelta(days=30)
 
-def _near_duplicate_serving_card_ids(card_ids: Iterable[int]) -> set[int]:
+
+def _near_duplicate_serving_card_ids(
+    card_ids: Iterable[int], answered_at_by_card_id: Optional[dict[int, datetime]] = None
+) -> set[int]:
     """
     `card_ids` widened to every OTHER card within `NEAR_DUPLICATE_SERVING_MAX_DISTANCE` Hamming
-    distance (on `Card.content_phash`) of any member, restricted to cards sharing that member's
-    own `name` (see this section's own "Performance" note above for why that restriction is what
-    keeps this tractable). At most two queries regardless of how many `card_ids` are passed: one
-    to resolve the seeds' own (name, phash), one to fetch every (pk, phash) row sharing any of
-    those names - the rest is a bounded, in-memory popcount comparison.
+    distance (on `Card.content_phash`) of any member whose own widening hasn't resurfaced yet
+    (see `answered_at_by_card_id` below) - found via `Card.content_phash_bands`'s GIN-indexed
+    overlap query (see this section's own "Retrieval" note above), never a catalogue-wide
+    popcount scan. At most two queries regardless of how many `card_ids` are passed: one to
+    resolve the seeds' own phash, one (array overlap) to fetch every candidate sharing any seed's
+    band - the rest is a bounded, in-memory popcount comparison over that reduced candidate set.
+
+    `answered_at_by_card_id` (this section's own "Resurfacing" note above): a seed id mapping to
+    a timestamp older than `NEAR_DUPLICATE_SERVING_RESURFACE` contributes no widening at all -
+    its near-duplicate siblings stop being suppressed for the voter that timestamp belongs to. A
+    seed with no entry (the default `None` map, or a missing key) always contributes its
+    widening, matching the pre-resurfacing behavior - the only callers that pass real per-voter
+    timestamps are `_voter_answered_printing_card_ids`/`_voter_answered_border_card_ids`, and even
+    there a missing key (an md5-identity sibling this voter never directly voted on, or a border
+    "cannot-tell" abstention) falls back to this same always-suppress default rather than
+    guessing a resurface date for a card with no vote timestamp of its own.
 
     A seed with no `content_phash` contributes nothing (no signal to compare) and matches
     nothing - mirrors `identity_group_expanded_card_ids`'s own "absence is never a shared group"
@@ -829,29 +865,37 @@ def _near_duplicate_serving_card_ids(card_ids: Iterable[int]) -> set[int]:
     ids = set(card_ids)
     if not ids:
         return ids
-    seed_rows = list(
-        Card.objects.filter(pk__in=ids, content_phash__isnull=False).values_list("pk", "name", "content_phash")
-    )
+    seed_rows = list(Card.objects.filter(pk__in=ids, content_phash__isnull=False).values_list("pk", "content_phash"))
     if not seed_rows:
         return ids
-    names = {name for _pk, name, _phash in seed_rows}
-    candidates_by_name: dict[str, list[tuple[int, int]]] = defaultdict(list)
-    for pk, name, phash in Card.objects.filter(name__in=names, content_phash__isnull=False).values_list(
-        "pk", "name", "content_phash"
-    ):
-        if phash is None:  # excluded by the queryset filter above; narrows the field's Optional type for mypy
-            continue
-        candidates_by_name[name].append((pk, phash))
 
-    expanded = set(ids)
-    for seed_id, seed_name, seed_phash in seed_rows:
+    now = timezone.now()
+    active_seeds: list[tuple[int, int]] = []
+    all_seed_bands: set[int] = set()
+    for seed_id, seed_phash in seed_rows:
         if seed_phash is None:  # excluded by the queryset filter above; narrows the field's Optional type for mypy
             continue
-        for candidate_id, candidate_phash in candidates_by_name.get(seed_name, []):
-            if candidate_id == seed_id:
-                continue
+        answered_at = (answered_at_by_card_id or {}).get(seed_id)
+        if answered_at is not None and now - answered_at >= NEAR_DUPLICATE_SERVING_RESURFACE:
+            continue  # this voter's own answer on this seed has aged out - let it resurface
+        active_seeds.append((seed_id, seed_phash))
+        all_seed_bands.update(content_phash_bands(seed_phash))
+    if not active_seeds:
+        return ids
+
+    expanded = set(ids)
+    candidates = (
+        Card.objects.filter(content_phash_bands__overlap=list(all_seed_bands), content_phash__isnull=False)
+        .exclude(pk__in=ids)
+        .values_list("pk", "content_phash")
+    )
+    for candidate_id, candidate_phash in candidates:
+        if candidate_phash is None:  # excluded by the queryset filter above; narrows the field's Optional type for mypy
+            continue
+        for seed_id, seed_phash in active_seeds:
             if (seed_phash ^ candidate_phash).bit_count() <= NEAR_DUPLICATE_SERVING_MAX_DISTANCE:
                 expanded.add(candidate_id)
+                break
     return expanded
 
 
@@ -945,13 +989,23 @@ def _voter_answered_printing_card_ids(anonymous_id: str) -> set[int]:
     itself multiplied the cost by the number of tiers consulted, for an answer that cannot change
     within one request). The tiers keep an optional parameter rather than a required one so a
     direct caller - a test, a shell - can still ask for one tier by `anonymous_id` alone.
+
+    The near-duplicate widening is passed this voter's own vote timestamp per card
+    (`answered_at_by_card_id`, the later of a printing/illustration vote when both exist), so it
+    resurfaces on `NEAR_DUPLICATE_SERVING_RESURFACE`'s own per-voter, per-cluster schedule - see
+    `_near_duplicate_serving_card_ids`'s own docstring.
     """
-    voted_card_ids = set(CardPrintingTag.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True))
-    illustration_voted_card_ids = set(
-        CardIllustrationVote.objects.filter(anonymous_id=anonymous_id).values_list("card_id", flat=True)
+    printing_votes = CardPrintingTag.objects.filter(anonymous_id=anonymous_id).values_list("card_id", "created_at")
+    illustration_votes = CardIllustrationVote.objects.filter(anonymous_id=anonymous_id).values_list(
+        "card_id", "created_at"
     )
-    identity_expanded = identity_group_expanded_card_ids(voted_card_ids | illustration_voted_card_ids)
-    return identity_expanded | _near_duplicate_serving_card_ids(identity_expanded)
+    answered_at_by_card_id: dict[int, datetime] = {}
+    for card_id, created_at in list(printing_votes) + list(illustration_votes):
+        existing = answered_at_by_card_id.get(card_id)
+        if existing is None or created_at > existing:
+            answered_at_by_card_id[card_id] = created_at
+    identity_expanded = identity_group_expanded_card_ids(set(answered_at_by_card_id.keys()))
+    return identity_expanded | _near_duplicate_serving_card_ids(identity_expanded, answered_at_by_card_id)
 
 
 def _voter_answered_artist_card_ids(anonymous_id: str) -> set[int]:
@@ -1023,15 +1077,26 @@ def _voter_answered_border_card_ids(anonymous_id: str) -> set[int]:
     Widened by `_near_duplicate_serving_card_ids` exactly as `_voter_answered_printing_card_ids`
     is (see this module's own "Near-duplicate serving groups" section) - a re-scanned or
     re-encoded copy of a card whose border colour this voter already answered is, for serving
-    purposes, the same "already answered" card, not a fresh border question.
+    purposes, the same "already answered" card, not a fresh border question. That widening is
+    passed this voter's own vote timestamp per card (`answered_at_by_card_id`), so it resurfaces
+    on the same per-voter, per-cluster schedule as the printing axis (`NEAR_DUPLICATE_SERVING_
+    RESURFACE`) - a "cannot-tell" abstention carries no vote timestamp of its own and keeps the
+    unwidened always-suppress default (see `_near_duplicate_serving_card_ids`'s own docstring).
     """
-    voted_card_ids = CardTagVote.objects.filter(
-        anonymous_id=anonymous_id, tag__name__in=_BORDER_COLOR_TAG_NAMES
-    ).values_list("card_id", flat=True)
-    identity_expanded = identity_group_expanded_card_ids(set(voted_card_ids)) | _voter_cannot_tell_card_ids(
-        anonymous_id, TypeEnum.border.value
+    voted_rows = list(
+        CardTagVote.objects.filter(anonymous_id=anonymous_id, tag__name__in=_BORDER_COLOR_TAG_NAMES).values_list(
+            "card_id", "created_at"
+        )
     )
-    return identity_expanded | _near_duplicate_serving_card_ids(identity_expanded)
+    answered_at_by_card_id: dict[int, datetime] = {}
+    for card_id, created_at in voted_rows:
+        existing = answered_at_by_card_id.get(card_id)
+        if existing is None or created_at > existing:
+            answered_at_by_card_id[card_id] = created_at
+    identity_expanded = identity_group_expanded_card_ids(
+        set(answered_at_by_card_id.keys())
+    ) | _voter_cannot_tell_card_ids(anonymous_id, TypeEnum.border.value)
+    return identity_expanded | _near_duplicate_serving_card_ids(identity_expanded, answered_at_by_card_id)
 
 
 def _not_official_art_card_ids() -> set[int]:

@@ -7,6 +7,8 @@ The same URL is already parsed from the weekly bulk-data import into
 cover the local-first/REST-fallback ordering that change adds.
 """
 
+import importlib
+
 import cardpicker.local_phash as module
 from cardpicker.tests.factories import (
     CanonicalCardFactory,
@@ -86,3 +88,19 @@ class TestGetOrComputeCanonicalHashArtCropSourcing:
         monkeypatch.setattr(module, "_fetch_scryfall_art_crop_url", lambda scryfall_id: None)
 
         assert module.get_or_compute_canonical_hash(canonical) is None
+
+
+class TestContentPhashBandsMigrationMatchesLivePhashBands:
+    """`0120_card_content_phash_bands.py`'s own `_content_phash_bands` duplicates this module's
+    `content_phash_bands` rather than importing it (see that migration's own docstring for why:
+    a migration is a dated historical artifact and must not depend on evolving app code). This
+    pins the two to compute identically, so a future edit to either side that silently diverges
+    the band encoding fails here instead of corrupting the retrieval guarantee between cards
+    backfilled by the migration and cards hashed at ingest afterward."""
+
+    def test_migration_and_live_bands_match_across_signed_and_unsigned_hashes(self):
+        migration_module = importlib.import_module("cardpicker.migrations.0120_card_content_phash_bands")
+        sample_hashes = [0, 1, -1, 0xFF, -0xFF, 0x7FFFFFFFFFFFFFFF, -0x8000000000000000, 0x123456789ABCDEF0]
+
+        for phash in sample_hashes:
+            assert migration_module._content_phash_bands(phash) == module.content_phash_bands(phash)
