@@ -144,6 +144,45 @@ class TestGenerateCandidatesForCard:
         assert by_pk[2].matched_signals == frozenset({"treatment"})
         assert by_pk[1].matched_signals == frozenset()
 
+    def test_observed_frame_era_tag_alone_adds_a_treatment_match(self, db):
+        # no filename treatment tag at all - the observed reading is the only thing that
+        # corroborates pk=2's frame era.
+        card = CardFactory(name="Forest", expansion_hint="", canonical_artist_id=None, tags=[])
+        index = _FixedIndex(
+            [
+                CandidatePrinting(pk=1, expansion_code="ust", collector_number="1", frame="2003"),
+                CandidatePrinting(pk=2, expansion_code="csp", collector_number="2", frame="1993"),
+            ]
+        )
+        result = generate_candidates_for_card(card, index, {}, observed_frame_era_tag="Old Border")
+        by_pk = {c.printing_id: c for c in result.candidates}
+        assert by_pk[2].matched_signals == frozenset({"treatment"})
+        assert by_pk[1].matched_signals == frozenset()
+
+    def test_absent_observation_leaves_result_unchanged(self, db):
+        # explicit None (the default) must produce the byte-identical result to calling without
+        # the parameter at all - no evidence available must never behave differently.
+        card = CardFactory(name="Forest", expansion_hint="", canonical_artist_id=None, tags=["Full Art"])
+        index = _FixedIndex(
+            [
+                CandidatePrinting(pk=1, expansion_code="ust", collector_number="1", full_art=False),
+                CandidatePrinting(pk=2, expansion_code="csp", collector_number="2", full_art=True),
+            ]
+        )
+        without_param = generate_candidates_for_card(card, index, {})
+        with_none = generate_candidates_for_card(card, index, {}, observed_frame_era_tag=None)
+        assert without_param == with_none
+
+    def test_observed_and_filename_treatment_tags_agreeing_does_not_double_count(self, db):
+        # the filename already carries "Old Border"; the observed reading agrees. Confidence must
+        # reflect ONE treatment match, not two - they are the same signal, unioned into one set.
+        card = CardFactory(name="Forest", expansion_hint="", canonical_artist_id=None, tags=["Old Border"])
+        index = _FixedIndex([CandidatePrinting(pk=1, expansion_code="ust", collector_number="1", frame="1993")])
+        agreeing = generate_candidates_for_card(card, index, {}, observed_frame_era_tag="Old Border")
+        filename_only = generate_candidates_for_card(card, index, {}, observed_frame_era_tag=None)
+        assert agreeing.candidates[0].confidence == filename_only.candidates[0].confidence
+        assert agreeing.candidates[0].matched_signals == frozenset({"treatment"})
+
     def test_contradiction_two_signals_agree_on_disjoint_candidates_abstains(self, db):
         # expansion_hint agrees only with pk=1; artist agrees only with pk=2 - each signal is
         # individually corroborated, but nothing satisfies both. That is the narrow "cannot both
