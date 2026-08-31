@@ -53,6 +53,7 @@ import imagehash
 from PIL import Image, ImageDraw, ImageFont
 
 from cardpicker import local_ocr
+from cardpicker.local_pinline_inset import measure_pinline_inset
 from cardpicker.models import (
     CanonicalCard,
     Card,
@@ -415,49 +416,132 @@ def classify_border_color(card_image: "Image.Image") -> Optional[str]:
     Bands project via `project_mm_box_to_fractions` (issue #830 defect 1) rather than the old
     fixed-fraction-plus-bleed_class remap - see that function's own docstring for why, and why
     this function no longer takes a `bleed_class` argument (the projection derives its own
-    bleed margin from `card_image` directly)."""
+    bleed margin from `card_image` directly).
+
+    Issue #735: band anchoring re-anchored to the card rectangle measured by
+    `measure_pinline_inset`, so bands sample the card's own border rather than
+    a padding-blinded aspect-ratio derivation.  Tries the card_rect path first;
+    falls back to the legacy aspect-ratio path when card_rect gives no
+    definitive classification (pinline measurement fails, degenerate insets,
+    or card_rect bands land on art rather than border)."""
     import statistics
 
-    samples: dict[str, tuple[tuple[float, float, float], float]] = {}
-    for name, mm_box in _BORDER_SAMPLE_BANDS_MM.items():
-        box = project_mm_box_to_fractions(mm_box, card_image)
-        if box is None:
-            continue
-        sampled = _sample_band(card_image, box)
-        if sampled is not None:
-            samples[name] = sampled
+    def _classify_from_samples(
+        samples: dict[str, tuple[tuple[float, float, float], float]],
+    ) -> Optional[str]:
+        if not samples:
+            return None
 
-    if not samples:
+        side_stds = [samples[name][1] for name in ("left", "right") if name in samples]
+        sides_uniform = bool(side_stds) and statistics.mean(side_stds) < _BORDER_UNIFORMITY_STD_THRESHOLD
+        top_uniform = "top" in samples and samples["top"][1] < _BORDER_UNIFORMITY_STD_THRESHOLD
+
+        if not side_stds and "top" not in samples:
+            return None
+        if not sides_uniform and not top_uniform:
+            return "borderless"
+
+        avg_r = statistics.mean(means[0] for means, _ in samples.values())
+        avg_g = statistics.mean(means[1] for means, _ in samples.values())
+        avg_b = statistics.mean(means[2] for means, _ in samples.values())
+        brightness = (avg_r + avg_g + avg_b) / 3
+        saturation = max(avg_r, avg_g, avg_b) - min(avg_r, avg_g, avg_b)
+
+        if brightness <= _BLACK_MAX_BRIGHTNESS:
+            return "black"
+        if brightness >= _WHITE_MIN_BRIGHTNESS:
+            return "white"
+        if (
+            _SILVER_BRIGHTNESS_RANGE[0] <= brightness <= _SILVER_BRIGHTNESS_RANGE[1]
+            and saturation <= _SILVER_MAX_SATURATION
+        ):
+            return "silver"
         return None
 
-    side_stds = [samples[name][1] for name in ("left", "right") if name in samples]
-    sides_uniform = bool(side_stds) and statistics.mean(side_stds) < _BORDER_UNIFORMITY_STD_THRESHOLD
-    top_uniform = "top" in samples and samples["top"][1] < _BORDER_UNIFORMITY_STD_THRESHOLD
+    def _sample_bands(
+        card_image: "Image.Image",
+        card_rect: Optional[tuple[float, float, float, float]],
+    ) -> dict[str, tuple[tuple[float, float, float], float]]:
+        samples: dict[str, tuple[tuple[float, float, float], float]] = {}
+        for name, mm_box in _BORDER_SAMPLE_BANDS_MM.items():
+            box = project_mm_box_to_fractions(mm_box, card_image, card_rect=card_rect)
+            if box is None:
+                continue
+            sampled = _sample_band(card_image, box)
+            if sampled is not None:
+                samples[name] = sampled
+        return samples
 
-    if not side_stds and "top" not in samples:
-        # neither the sides nor the top sampled at all (only the excluded bottom band did) -
-        # genuinely no signal to judge uniformity from, not a "borderless" finding.
-        return None
-    if not sides_uniform and not top_uniform:
-        # neither region reads as a clean painted border - genuine image content (art, or a
-        # borderless card) at every edge this function is willing to trust.
-        return "borderless"
+    # Issue #735: derive the card rectangle from the measured pinline inset so
+    # band sampling anchors to the card, not to a padding-blinded aspect-ratio
+    # derivation.  Try card_rect first; fall back to legacy when card_rect
+    # produces no definitive classification (e.g. pinline detects border-to-art
+    # transition on a trim-exact image, shifting bands into the art).
+    card_rect: Optional[tuple[float, float, float, float]] = None
+    pinline = measure_pinline_inset(card_image)
+    if pinline is not None and pinline.verdict != "indeterminate":
+        inset_t = pinline.top.inset_frac
+        inset_b = pinline.bottom.inset_frac
+        inset_l = pinline.left.inset_frac
+        inset_r = pinline.right.inset_frac
+        if inset_t is not None and inset_b is not None and inset_l is not None and inset_r is not None:
+            cr_top = inset_t
+            cr_bottom = 1.0 - inset_b
+            cr_left = inset_l
+            cr_right = 1.0 - inset_r
+            if cr_right > cr_left and cr_bottom > cr_top:
+                card_rect = (cr_left, cr_top, cr_right, cr_bottom)
 
-    avg_r = statistics.mean(means[0] for means, _ in samples.values())
-    avg_g = statistics.mean(means[1] for means, _ in samples.values())
-    avg_b = statistics.mean(means[2] for means, _ in samples.values())
-    brightness = (avg_r + avg_g + avg_b) / 3
-    saturation = max(avg_r, avg_g, avg_b) - min(avg_r, avg_g, avg_b)
+    # Path 1: card_rect-anchored sampling (the fix for issue #735)
+    rect_samples = _sample_bands(card_image, card_rect) if card_rect else {}
+    rect_result = _classify_from_samples(rect_samples)
 
-    if brightness <= _BLACK_MAX_BRIGHTNESS:
-        return "black"
-    if brightness >= _WHITE_MIN_BRIGHTNESS:
-        return "white"
-    if (
-        _SILVER_BRIGHTNESS_RANGE[0] <= brightness <= _SILVER_BRIGHTNESS_RANGE[1]
-        and saturation <= _SILVER_MAX_SATURATION
-    ):
-        return "silver"
+    # Path 2: legacy aspect-ratio sampling (baseline, always available)
+    legacy_samples = _sample_bands(card_image, None)
+    legacy_result = _classify_from_samples(legacy_samples)
+
+    # Merge: prefer card_rect when it produces a definitive border classification
+    # (black/white/silver), otherwise fall back to legacy.  This handles:
+    #  - Real images with bleed margins: legacy lands in black bleed margin
+    #    (all-zero), card_rect correctly identifies the actual border colour.
+    #  - Trim-exact images: card_rect may shift bands into the art (returns
+    #    None or "borderless"), legacy correctly identifies the border.
+    if rect_result in ("black", "white", "silver"):
+        return rect_result
+
+    # Silver metallic texture override: card_rect may correctly position bands on a
+    # silver border, but the metallic printing texture pushes per-band std above
+    # _BORDER_UNIFORMITY_STD_THRESHOLD (18.0) even though the border IS uniform in the
+    # intended sense.  If card_rect is available and the side+top band colors are
+    # clearly silver (brightness 140-200, saturation ≤ 40, cool-toned B ≥ R) and max
+    # std is below 55 (distinguishing metallic texture 34-52 from art contamination
+    # 60+), classify as silver.  The max-band brightness check (< white threshold)
+    # and cool-tone check (B ≥ R) exclude off-white/cream borders that land in the
+    # same brightness range.  This fires before the legacy fallback so it doesn't
+    # mask a legitimate card_rect finding with a legacy bleed-margin "black".
+    if card_rect is not None and rect_result in ("borderless", None) and rect_samples:
+        side_top = {k: v for k, v in rect_samples.items() if k in ("left", "right", "top")}
+        if len(side_top) >= 2:
+            avg_r = statistics.mean(m[0] for m, _ in side_top.values())
+            avg_g = statistics.mean(m[1] for m, _ in side_top.values())
+            avg_b = statistics.mean(m[2] for m, _ in side_top.values())
+            br = (avg_r + avg_g + avg_b) / 3
+            sat = max(avg_r, avg_g, avg_b) - min(avg_r, avg_g, avg_b)
+            max_std = max(s for _, s in side_top.values())
+            max_band_br = max((m[0] + m[1] + m[2]) / 3 for m, _ in side_top.values())
+            if (
+                _SILVER_BRIGHTNESS_RANGE[0] <= br <= _SILVER_BRIGHTNESS_RANGE[1]
+                and sat <= 40
+                and max_std < 55
+                and max_band_br < _WHITE_MIN_BRIGHTNESS
+                and avg_b >= avg_r
+            ):
+                return "silver"
+
+    if legacy_result is not None:
+        return legacy_result
+    if rect_result is not None:
+        return rect_result
     return None
 
 
@@ -798,39 +882,65 @@ def _derive_bleed_mm(card_image: "Image.Image") -> Optional[float]:
 
 
 def project_mm_box_to_fractions(
-    mm_box: tuple[float, float, float, float], card_image: "Image.Image"
+    mm_box: tuple[float, float, float, float],
+    card_image: "Image.Image",
+    card_rect: Optional[tuple[float, float, float, float]] = None,
 ) -> Optional[tuple[float, float, float, float]]:
     """Projects a (left, top, right, bottom) box in millimetres - relative to the card's own TRIM
     rectangle's top-left corner, i.e. (0, 0) is the trim corner and negative values reach into
     the bleed margin - onto `card_image`'s own fractional coordinate space, ready for
     `_sample_band`.
 
-    Returns None (refuses) when the bleed margin can't be derived (see `_derive_bleed_mm`) or
-    when the projected region's pixel width or height - computed the same truncating way
-    `_sample_band` itself crops, so this check and the eventual crop always agree - falls below
+    When `card_rect` is provided (the card's trim rectangle as image fractions, typically
+    derived from `pinline_inset_frac_*` via `measure_pinline_inset`), mm coordinates map
+    directly through the measured card rectangle — no aspect-ratio derivation needed, so
+    images with asymmetric canvas padding (issue #735) are handled correctly.
+
+    When `card_rect` is None (the legacy path), falls back to deriving the bleed margin from
+    the image's own aspect ratio via `_derive_bleed_mm`. This path is blind to proportional
+    padding that leaves the aspect ratio unchanged.
+
+    Returns None (refuses) when the card rectangle can't be derived (see above) or when the
+    projected region's pixel width or height - computed the same truncating way `_sample_band`
+    itself crops, so this check and the eventual crop always agree - falls below
     `MIN_USABLE_BAND_PX`. Callers must treat a `None` exactly like `_sample_band`'s own
     zero-area-crop abstention: skip this band, never substitute a smaller box to force a
     reading - a silently-sampled sub-pixel band is the failure this whole mechanism exists to
     prevent (issue #830 defect 1)."""
-    bleed_mm = _derive_bleed_mm(card_image)
-    if bleed_mm is None:
-        return None
     width, height = card_image.size
-    image_width_mm = _CARD_TRIM_WIDTH_MM + 2 * bleed_mm
-    image_height_mm = _CARD_TRIM_HEIGHT_MM + 2 * bleed_mm
-    if image_width_mm <= 0 or image_height_mm <= 0:
-        return None
     left_mm, top_mm, right_mm, bottom_mm = mm_box
-    # Clamped to [0, 1] - same convention `normalize_crop_box._rescale` uses, and for the same
-    # reason: a slightly negative derived bleed margin (an image trimmed a hair tighter than the
-    # exact reference ratio, or floating-point noise on a synthetic test image) can otherwise
-    # push a fraction just past the image's own edge. Passing that straight to `_sample_band`
-    # would crop a small out-of-bounds strip, which PIL pads with BLACK - corrupting a uniform
-    # band's own std dev with a handful of spurious black pixels rather than raising or refusing.
-    left = min(1.0, max(0.0, (left_mm + bleed_mm) / image_width_mm))
-    right = min(1.0, max(0.0, (right_mm + bleed_mm) / image_width_mm))
-    top = min(1.0, max(0.0, (top_mm + bleed_mm) / image_height_mm))
-    bottom = min(1.0, max(0.0, (bottom_mm + bleed_mm) / image_height_mm))
+
+    if card_rect is not None:
+        # Direct path: the card's trim rectangle is known from measurement (issue #735).
+        # Map mm coordinates linearly through the measured card rectangle.
+        cr_left, cr_top, cr_right, cr_bottom = card_rect
+        if cr_right <= cr_left or cr_bottom <= cr_top:
+            return None
+        left = cr_left + (left_mm / _CARD_TRIM_WIDTH_MM) * (cr_right - cr_left)
+        right = cr_left + (right_mm / _CARD_TRIM_WIDTH_MM) * (cr_right - cr_left)
+        top = cr_top + (top_mm / _CARD_TRIM_HEIGHT_MM) * (cr_bottom - cr_top)
+        bottom = cr_top + (bottom_mm / _CARD_TRIM_HEIGHT_MM) * (cr_bottom - cr_top)
+    else:
+        # Legacy path: derive bleed margin from aspect ratio — blind to padding (issue #735).
+        bleed_mm = _derive_bleed_mm(card_image)
+        if bleed_mm is None:
+            return None
+        image_width_mm = _CARD_TRIM_WIDTH_MM + 2 * bleed_mm
+        image_height_mm = _CARD_TRIM_HEIGHT_MM + 2 * bleed_mm
+        if image_width_mm <= 0 or image_height_mm <= 0:
+            return None
+        # Clamped to [0, 1] - same convention `normalize_crop_box._rescale` uses, and for the
+        # same reason: a slightly negative derived bleed margin (an image trimmed a hair tighter
+        # than the exact reference ratio, or floating-point noise on a synthetic test image) can
+        # otherwise push a fraction just past the image's own edge. Passing that straight to
+        # `_sample_band` would crop a small out-of-bounds strip, which PIL pads with BLACK -
+        # corrupting a uniform band's own std dev with a handful of spurious black pixels
+        # rather than raising or refusing.
+        left = min(1.0, max(0.0, (left_mm + bleed_mm) / image_width_mm))
+        right = min(1.0, max(0.0, (right_mm + bleed_mm) / image_width_mm))
+        top = min(1.0, max(0.0, (top_mm + bleed_mm) / image_height_mm))
+        bottom = min(1.0, max(0.0, (bottom_mm + bleed_mm) / image_height_mm))
+
     if int(right * width) - int(left * width) < MIN_USABLE_BAND_PX:
         return None
     if int(bottom * height) - int(top * height) < MIN_USABLE_BAND_PX:
