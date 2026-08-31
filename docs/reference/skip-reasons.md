@@ -287,12 +287,13 @@ Every value here was already a declared constant before the sweep.
 
 `anonymous_id` is `layout-class-cast-v1` (`LAYOUT_CLASS_CAST_ANONYMOUS_ID`).
 
-| Reason                  | Constant                                       | Means                                                                                 | Status            |
-| ----------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------- |
-| `no-evidence`           | `LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON`         | No current `ImageEvidence` row. **Rescannable**.                                      | Live (~61 rows)   |
-| `incomplete-evidence`   | `LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON` | Evidence row present but missing a required extractor key. **Rescannable**.           | Live, no rows yet |
-| `ambiguous`             | `LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON`           | The verdict produced no layout class at all.                                          | Live (~1.5k rows) |
-| `unmapped-layout-class` | `LAYOUT_CLASS_UNMAPPED_SKIP_REASON`            | A layout class WAS read, but it has no tag mapped to it, so there is no vote to cast. | Live, no rows yet |
+| Reason                             | Constant                                              | Means                                                                                                                                                                                                     | Status            |
+| ---------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `no-evidence`                      | `LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON`                | No current `ImageEvidence` row. **Rescannable**.                                                                                                                                                          | Live (~61 rows)   |
+| `incomplete-evidence`              | `LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON`        | Evidence row present but missing a required extractor key. **Rescannable**.                                                                                                                               | Live, no rows yet |
+| `ambiguous`                        | `LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON`                  | The verdict produced no layout class at all.                                                                                                                                                              | Live (~1.5k rows) |
+| `unmapped-layout-class`            | `LAYOUT_CLASS_UNMAPPED_SKIP_REASON`                   | A layout class WAS read, but it has no tag mapped to it, so there is no vote to cast.                                                                                                                     | Live, no rows yet |
+| `borderless-but-art-edge-extended` | `LAYOUT_CLASS_ART_EDGE_EXTEND_BORDERLESS_SKIP_REASON` | The card is frameless AND has extended art — the "borderless" reading is an art-extent observation, not a border-colour claim. Suppresses the Borderless vote so both facts can coexist on the same card. | Live, no rows yet |
 
 ## Attribute-chip caster — `MPCAutofill/cardpicker/local_attribute_chip_cast.py`
 

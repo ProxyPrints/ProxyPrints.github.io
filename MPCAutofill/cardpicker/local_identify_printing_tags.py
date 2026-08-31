@@ -1369,7 +1369,11 @@ def printing_attribute_disagreement(evidence: Any, metadata: Any) -> Optional[st
     layout_class = getattr(evidence, "layout_class", None)
     border_color = getattr(metadata, "border_color", None)
     if layout_class and border_color and layout_class != border_color:
-        return ATTRIBUTE_BORDER_MISMATCH
+        art_edge = getattr(evidence, "art_edge_class", None) or ""
+        if layout_class == "borderless" and art_edge == "extended":
+            pass
+        else:
+            return ATTRIBUTE_BORDER_MISMATCH
 
     if FRAME_CHECK_REQUIRED_EXTRACTOR_KEYS <= (evidence.extractor_versions or {}).keys():
         frame_class = local_fallback.classify_frame_style(
