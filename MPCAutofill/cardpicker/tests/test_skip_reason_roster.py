@@ -78,6 +78,7 @@ EXPECTED_SKIP_REASONS = {
     "no-marker-hit": {"AI_ART_NO_MARKER_HIT_SKIP_REASON", "PROXY_MARKER_NOT_DETECTED_SKIP_REASON"},
     # Layout-class cast — local_layout_class_cast.py
     "unmapped-layout-class": {"LAYOUT_CLASS_UNMAPPED_SKIP_REASON"},
+    "borderless-but-art-edge-extended": {"LAYOUT_CLASS_ART_EDGE_EXTEND_BORDERLESS_SKIP_REASON"},
     # Evidence transfer — evidence_transfer.py
     "transfer-sha256-mismatch": {"EVIDENCE_TRANSFER_SHA256_MISMATCH_SKIP_REASON"},
     "transfer-content-hash-mismatch": {"EVIDENCE_TRANSFER_CONTENT_HASH_MISMATCH_SKIP_REASON"},
