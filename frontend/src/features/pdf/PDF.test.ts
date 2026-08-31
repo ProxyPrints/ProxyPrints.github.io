@@ -332,7 +332,7 @@ describe("createPDFElement - the per-batch element pdf() consumes", () => {
   });
 });
 
-describe("PDFCardCutLines geometry - the bleed-edge guide", () => {
+describe("PDFCardCutLines geometry - the trim-edge guide", () => {
   const ptToMm = (pt: number) => (pt / 72) * 25.4;
 
   // The first <pdf-svg>/<pdf-rect> pair in render order is always the (colIndex 0, rowIndex 0)
@@ -387,7 +387,7 @@ describe("PDFCardCutLines geometry - the bleed-edge guide", () => {
     return layout.slots[0].bleedMM;
   };
 
-  it("tracks the configured bleed edge, not a fixed constant: width follows the real per-edge grant at two different bleed values", () => {
+  it("tracks the configured bleed edge, not a fixed constant: position follows the real per-edge grant at two different bleed values, while size stays fixed at card dimensions", () => {
     // rearFeed's own fit math caps the granted bleed well below the MPC-standard 3.175mm request
     // (BleedGrantedReadout.tsx's whole reason for existing) - 0.2mm/0.4mm stay under that cap on
     // both requests, so the two actually resolve to two different grants rather than both
@@ -401,21 +401,25 @@ describe("PDFCardCutLines geometry - the bleed-edge guide", () => {
 
     for (const props of [smallBleedProps, largeBleedProps]) {
       const bleedMM = grantedBleedMM(props);
-      const expectedWidthMM = CardWidthMM + bleedMM.left + bleedMM.right;
-      const expectedHeightMM = CardHeightMM + bleedMM.top + bleedMM.bottom;
-      const { rectProps } = firstCutLineGuide(props);
-      expect(ptToMm(rectProps.width)).toBeCloseTo(expectedWidthMM, 3);
-      expect(ptToMm(rectProps.height)).toBeCloseTo(expectedHeightMM, 3);
+      const strokePadMM = props.cutLineThicknessMM / 2;
+      const expectedLeftMM = bleedMM.left - strokePadMM;
+      const expectedTopMM = bleedMM.top - strokePadMM;
+      const { svgStyle, rectProps } = firstCutLineGuide(props);
+      expect(svgStyle.left).toBe(`${expectedLeftMM}mm`);
+      expect(svgStyle.top).toBe(`${expectedTopMM}mm`);
+      // The trim rect itself is always exactly card-size, regardless of the granted bleed.
+      expect(ptToMm(rectProps.width)).toBeCloseTo(CardWidthMM, 3);
+      expect(ptToMm(rectProps.height)).toBeCloseTo(CardHeightMM, 3);
     }
 
-    // The two bleed values must actually produce two different guide sizes - otherwise the
-    // above could pass by coincidence (e.g. both silently clamped to the same value).
-    const { rectProps: small } = firstCutLineGuide(smallBleedProps);
-    const { rectProps: large } = firstCutLineGuide(largeBleedProps);
-    expect(ptToMm(large.width)).toBeGreaterThan(ptToMm(small.width));
+    // The two bleed values must actually produce two different guide positions - otherwise the
+    // above could pass by coincidence (e.g. both silently clamped to the same grant).
+    const { svgStyle: small } = firstCutLineGuide(smallBleedProps);
+    const { svgStyle: large } = firstCutLineGuide(largeBleedProps);
+    expect(parseFloat(large.left)).toBeGreaterThan(parseFloat(small.left));
   });
 
-  it("sits outside the printed card face, on the true bleed edge - not straddling the trim line", () => {
+  it("straddles the trim line inside the printed card face - not the outer bleed edge", () => {
     const props = buildFullPDFProps(baseInput);
     const bleedMM = grantedBleedMM(props);
     expect(bleedMM.left).toBeGreaterThan(0); // otherwise this fixture can't distinguish the two anchors
@@ -423,24 +427,47 @@ describe("PDFCardCutLines geometry - the bleed-edge guide", () => {
     const { svgStyle, rectProps } = firstCutLineGuide(props);
     const strokePadMM = props.cutLineThicknessMM / 2;
 
-    // Anchored at the slot's own outer edge (offset 0 minus half the stroke), never at
-    // `bleedMM.left`/`bleedMM.top` - a regression back to the trim-edge anchor would put this at
-    // a positive ~bleedMM.left mm instead.
-    expect(svgStyle.left).toBe(`${-strokePadMM}mm`);
-    expect(svgStyle.top).toBe(`${-strokePadMM}mm`);
-    // The outline spans the full card-plus-bleed box, strictly larger than the bare card.
-    expect(ptToMm(rectProps.width)).toBeGreaterThan(CardWidthMM);
-    expect(ptToMm(rectProps.height)).toBeGreaterThan(CardHeightMM);
+    // Anchored at `bleedMM.left`/`bleedMM.top` (offset 0 minus half the stroke), never at the
+    // slot's own outer edge - a regression to the bleed-edge anchor would put this at a flat
+    // `-strokePadMM` instead, independent of the granted bleed.
+    expect(svgStyle.left).toBe(`${bleedMM.left - strokePadMM}mm`);
+    expect(svgStyle.top).toBe(`${bleedMM.top - strokePadMM}mm`);
+    // The outline traces exactly the bare card, not the larger card-plus-bleed box.
+    expect(ptToMm(rectProps.width)).toBeCloseTo(CardWidthMM, 3);
+    expect(ptToMm(rectProps.height)).toBeCloseTo(CardHeightMM, 3);
   });
 
-  it("a positive offset grows the guide further outward, past the bleed edge", () => {
+  it("a positive offset grows the guide further outward, past the trim edge", () => {
     const props = buildFullPDFProps(
       withSheetSettings(baseInput, { cutLineOffsetMM: 2 })
     );
+    const bleedMM = grantedBleedMM(props);
     const strokePadMM = props.cutLineThicknessMM / 2;
     const { svgStyle } = firstCutLineGuide(props);
-    expect(svgStyle.left).toBe(`${-2 - strokePadMM}mm`);
-    expect(svgStyle.top).toBe(`${-2 - strokePadMM}mm`);
+    expect(svgStyle.left).toBe(`${bleedMM.left - 2 - strokePadMM}mm`);
+    expect(svgStyle.top).toBe(`${bleedMM.top - 2 - strokePadMM}mm`);
+  });
+
+  it("crowded axis: the trim inset shrinks with the granted bleed, but the trim rect itself stays fixed card-size - not the shrunken slot", () => {
+    // A tight page width lets fitAxisWithBleed grant less than the requested bleedEdgeMM on the
+    // column axis while the (unconstrained) row axis still gets the full request - the exact
+    // "one axis full, one axis cropped" scenario a flat-bleedEdgeMM anchor could never represent
+    // (see layout.ts's fitAxisWithBleed).
+    const props = buildFullPDFProps(
+      withSheetSettings(baseInput, { pageSize: "A4", bleedEdgeMM: 3 })
+    );
+    const bleedMM = grantedBleedMM(props);
+    expect(bleedMM.left).toBeGreaterThan(0);
+    expect(bleedMM.left).toBeLessThan(3); // rearFeed spacing crowds the column axis on A4
+
+    const { svgStyle, rectProps } = firstCutLineGuide(props);
+    const strokePadMM = props.cutLineThicknessMM / 2;
+    expect(svgStyle.left).toBe(`${bleedMM.left - strokePadMM}mm`);
+    // The trim rect is always exactly card-size, regardless of how much bleed surrounds it -
+    // this is what distinguishes the fix from the pre-fix outer-edge anchor, whose width/height
+    // grew and shrank with the granted bleed instead of staying fixed.
+    expect(ptToMm(rectProps.width)).toBeCloseTo(CardWidthMM, 3);
+    expect(ptToMm(rectProps.height)).toBeCloseTo(CardHeightMM, 3);
   });
 
   it("defaults to a thin lime hairline, not the old thick 0.6mm stroke", () => {
