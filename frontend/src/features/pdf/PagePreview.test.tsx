@@ -276,6 +276,89 @@ describe("PagePreview", () => {
     expect(cutLine.style.height).toBe(`${CardHeightMM}mm`);
   });
 
+  it("anchors the guide on the slot's own measured bleed, not the nominal granted bleed, when the two differ", () => {
+    // Real catalogue bleed spans ~0.05mm to ~3.95mm, far from the nominal bleedEdgeMM=3 every
+    // other test in this file uses. A card whose own measured bleed is much thinner than that
+    // nominal value must draw its guide close to the image's own edge, not ~3mm inside it.
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            measuredBleedMm: 0.05,
+          },
+        ]}
+        showCutLines={true}
+        maxWidthPx={400}
+      />
+    );
+    const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
+    expect(cutLine.style.left).toBe("0.05mm");
+    expect(cutLine.style.top).toBe("0.05mm");
+    expect(cutLine.style.width).toBe(`${CardWidthMM}mm`);
+    expect(cutLine.style.height).toBe(`${CardHeightMM}mm`);
+  });
+
+  it("falls back to STANDARD_BLEED_MARGIN_MM (not the granted bleedEdgeMM) when measuredBleedMm is null", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={10}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            measuredBleedMm: null,
+          },
+        ]}
+        showCutLines={true}
+        maxWidthPx={400}
+      />
+    );
+    const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
+    expect(cutLine.style.left).toBe("3.175mm");
+    expect(cutLine.style.top).toBe("3.175mm");
+  });
+
+  it("caps the measured-bleed guide inset at the granted per-axis bleed on a crowded axis", () => {
+    // Same tight-page setup as the crowded-axis test above, but this card's own measured bleed
+    // (3.952mm, the catalogue's real observed max) exceeds even the UNCROPPED bleedEdgeMM - the
+    // guide must never draw past whatever room the layout actually granted this slot.
+    render(
+      <PagePreview
+        pageWidthMM={127}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            measuredBleedMm: 3.952,
+          },
+        ]}
+        showCutLines={true}
+        maxWidthPx={400}
+      />
+    );
+    const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
+    const grantedLeftMM = parseFloat(cutLine.style.left);
+    expect(grantedLeftMM).toBeGreaterThan(0);
+    expect(grantedLeftMM).toBeLessThan(3);
+    // The uncropped row axis still caps at the granted 3mm, not the card's 3.952mm measurement.
+    expect(cutLine.style.top).toBe("3mm");
+  });
+
   it("scales the outer wrapper to exactly maxWidthPx regardless of page size", () => {
     render(
       <PagePreview

@@ -10,12 +10,14 @@ from syrupy import SnapshotAssertion
 from django.urls import reverse
 
 from cardpicker import views
+from cardpicker.local_bleed_calculator import BLEED_MARGIN_MM
 from cardpicker.tests.constants import Cards, DummyImportSite, Sources
 from cardpicker.tests.factories import (
     CanonicalArtistFactory,
     CanonicalCardFactory,
     CanonicalExpansionFactory,
     CardFactory,
+    ImageEvidenceFactory,
     SourceFactory,
     TagFactory,
 )
@@ -888,6 +890,34 @@ class TestPostCards:
         response = client.get(reverse(views.post_cards))
         snapshot_response(response, snapshot)
         assert response.status_code == 400
+
+
+class TestPostCardsMeasuredBleedMm:
+    def test_populates_measured_bleed_from_current_evidence(self, client, db):
+        card = CardFactory(identifier="bleed-card", content_phash=99)
+        ImageEvidenceFactory(card=card, content_hash=card.content_phash, bleed_diff_mm=BLEED_MARGIN_MM - 0.5)
+
+        response = client.post(
+            reverse(views.post_cards),
+            {"cardIdentifiers": ["bleed-card"]},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        measured = response.json()["results"]["bleed-card"]["measuredBleedMm"]
+        assert measured == pytest.approx(0.5, abs=0.001)
+
+    def test_null_when_no_current_evidence(self, client, db):
+        CardFactory(identifier="no-evidence-card", content_phash=100)
+
+        response = client.post(
+            reverse(views.post_cards),
+            {"cardIdentifiers": ["no-evidence-card"]},
+            content_type="application/json",
+        )
+
+        assert response.status_code == 200
+        assert response.json()["results"]["no-evidence-card"]["measuredBleedMm"] is None
 
 
 class TestGetSources:

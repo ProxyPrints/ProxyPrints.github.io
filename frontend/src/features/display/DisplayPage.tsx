@@ -2802,6 +2802,7 @@ export function DisplayPage() {
             name: cardDocument?.name ?? `Slot ${entry.slot + 1}`,
             queryText,
             loadState,
+            measuredBleedMm: cardDocument?.measuredBleedMm,
             findCardUrl:
               loadState === "failed"
                 ? buildScryfallReferenceUrl(query)

@@ -481,10 +481,15 @@ def post_cards(request: HttpRequest) -> HttpResponse:
         .filter(identifier__in=cards_request.cardIdentifiers)
     )
     attach_suggested_filter_tags_overlay(cards)
-    results = {
-        card.identifier: card.serialise(include_suggested_printing=True, include_suggested_filter_tags=True)
-        for card in cards
-    }
+    results = {}
+    for card in cards:
+        serialised = card.serialise(include_suggested_printing=True, include_suggested_filter_tags=True)
+        # This request is bounded by CARDS_PAGE_SIZE (never the pool-eligibility scan
+        # `measured_bleed_mm()`'s own docstring warns off) - the /editor cut-guide needs this
+        # card's own measured bleed, not just the single item question_feed._log_served
+        # populates it for.
+        serialised.measuredBleedMm = card.measured_bleed_mm()
+        results[card.identifier] = serialised
     return JsonResponse(CardsResponse(results=results).model_dump())
 
 
