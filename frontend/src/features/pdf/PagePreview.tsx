@@ -26,7 +26,7 @@
  *     the existing name/query-text label (item 1, owner's hands-on review) - never replacing it,
  *     so a slot's own accessible name/query text stays exactly as findable as before.
  *   - E19 (rounded corner-only cut guides): the screen-side guide render swaps the full
- *     dashed-rectangle bleed line for four small corner L-brackets at true scale, matching the
+ *     dashed-rectangle trim line for four small corner L-brackets at true scale, matching the
  *     mockup's redline. PDFGenerator's own fast preview keeps today's full-rectangle
  *     approximation. Both variants take their color/length/thickness/offset from the caller's
  *     own cut-line settings (cutLineColor etc.) rather than a fixed constant, so the screen
@@ -201,7 +201,7 @@ const CustomCardbackDot = styled.span`
 `;
 
 // E19 - the rounded, corner-only cut guide: a small L-bracket (two legs) at each of a card's
-// four bleed corners, replacing the full dashed-rectangle bleed line the screenPresentation sheet
+// four trim corners, replacing the full dashed-rectangle trim line the screenPresentation sheet
 // used to draw. Real mm units, so the legs/stroke scale at true sheet scale automatically via
 // this component's one outer transform: scale(), no cqw container-query trick needed. Color and
 // dimensions come from the caller's own cut-line settings, not a fixed constant - see
@@ -480,6 +480,7 @@ export function PagePreview({
             yMM={slot.yMM + offsetYMM}
             slotWidthMM={slot.widthMM}
             slotHeightMM={slot.heightMM}
+            bleedMM={slot.bleedMM}
             showCutLines={showCutLines}
             cutLineColor={cutLineColor}
             cutLineLengthMM={cutLineLengthMM}
@@ -504,6 +505,13 @@ interface PagePreviewSlotElProps {
   yMM: number;
   slotWidthMM: number;
   slotHeightMM: number;
+  /** The per-edge bleed `computeLayout` actually granted this slot (never more than the
+   * caller's configured `bleedEdgeMM`, and potentially less on a crowded axis - see
+   * layout.ts's `fitAxisWithBleed`). The cut line (the TRUE card edge - see this component's
+   * own module comment) sits at `bleedMM.left`/`bleedMM.top` from the slot's own top-left, not
+   * at a flat `bleedEdgeMM` offset, so it stays correct even when this slot is cropped below
+   * the configured target - this is the "preview mirrors export" contract in practice. */
+  bleedMM: LayoutEdgeBleed;
   showCutLines: boolean;
   cutLineColor: string;
   cutLineLengthMM: number;
@@ -530,6 +538,7 @@ function PagePreviewSlotEl({
   yMM,
   slotWidthMM,
   slotHeightMM,
+  bleedMM,
   showCutLines,
   cutLineColor,
   cutLineLengthMM,
@@ -742,19 +751,20 @@ function PagePreviewSlotEl({
         </div>
       )}
       {showCutLines &&
-        // Anchored on the slot's own outer edge (this element's own box IS the bleed box - see
-        // computeLayout()'s slot.widthMM/heightMM) rather than the trim edge inside it, matching
-        // PDF.tsx's PDFCardCutLines: offset 0 sits exactly on the bleed boundary, a positive
-        // offset grows the guide outward past it.
+        // The cut line marks the TRUE card edge, `bleedMM.left`/`bleedMM.top` in from this
+        // slot's own top-left (not a flat `bleedEdgeMM`, since a crowded axis can grant less -
+        // see layout.ts's fitAxisWithBleed), sized to the fixed CardWidthMM/CardHeightMM card
+        // itself, matching PDF.tsx's PDFCardCutLines: offset 0 sits exactly on the trim
+        // boundary, a positive offset grows the guide outward past it.
         (screenPresentation ? (
           <div
             data-testid="page-preview-cut-line"
             style={{
               position: "absolute",
-              left: -cutLineOffsetMM + "mm",
-              top: -cutLineOffsetMM + "mm",
-              width: slotWidthMM + 2 * cutLineOffsetMM + "mm",
-              height: slotHeightMM + 2 * cutLineOffsetMM + "mm",
+              left: bleedMM.left - cutLineOffsetMM + "mm",
+              top: bleedMM.top - cutLineOffsetMM + "mm",
+              width: CardWidthMM + 2 * cutLineOffsetMM + "mm",
+              height: CardHeightMM + 2 * cutLineOffsetMM + "mm",
               pointerEvents: "none",
             }}
           >
@@ -788,10 +798,10 @@ function PagePreviewSlotEl({
             data-testid="page-preview-cut-line"
             style={{
               position: "absolute",
-              left: -cutLineOffsetMM + "mm",
-              top: -cutLineOffsetMM + "mm",
-              width: slotWidthMM + 2 * cutLineOffsetMM + "mm",
-              height: slotHeightMM + 2 * cutLineOffsetMM + "mm",
+              left: bleedMM.left - cutLineOffsetMM + "mm",
+              top: bleedMM.top - cutLineOffsetMM + "mm",
+              width: CardWidthMM + 2 * cutLineOffsetMM + "mm",
+              height: CardHeightMM + 2 * cutLineOffsetMM + "mm",
               outline: `${cutLineThicknessMM}mm dashed ${cutLineColor}`,
               pointerEvents: "none",
             }}

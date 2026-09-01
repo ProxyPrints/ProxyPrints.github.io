@@ -159,7 +159,7 @@ describe("PagePreview", () => {
     expect(cutLines.length).toBeGreaterThan(0);
   });
 
-  it("sits on the true bleed edge, outside the printed card face - not the trim edge inside it", () => {
+  it("sits on the true trim edge, inside the slot's bleed box - not the slot's own outer edge", () => {
     render(
       <PagePreview
         pageWidthMM={A4_WIDTH_MM}
@@ -173,12 +173,12 @@ describe("PagePreview", () => {
       />
     );
     const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
-    // A regression back to the trim-edge anchor would put this at left/top "3mm" (bleedMM.left)
-    // and a CardWidthMM/CardHeightMM box instead of the full card-plus-bleed slot.
-    expect(cutLine.style.left).toBe("0mm");
-    expect(cutLine.style.top).toBe("0mm");
-    expect(cutLine.style.width).toBe(`${CardWidthMM + 2 * 3}mm`);
-    expect(cutLine.style.height).toBe(`${CardHeightMM + 2 * 3}mm`);
+    // A regression to the outer-edge anchor would put this at left/top "0mm" and a
+    // slotWidthMM/slotHeightMM box instead of the fixed CardWidthMM/CardHeightMM trim rect.
+    expect(cutLine.style.left).toBe("3mm");
+    expect(cutLine.style.top).toBe("3mm");
+    expect(cutLine.style.width).toBe(`${CardWidthMM}mm`);
+    expect(cutLine.style.height).toBe(`${CardHeightMM}mm`);
   });
 
   it("defaults to the shared lime/thin cut-line appearance when no cutLine* props are given", () => {
@@ -216,13 +216,15 @@ describe("PagePreview", () => {
     );
     const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
     expect(cutLine.style.outline).toBe("1mm dashed #00ff00");
-    expect(cutLine.style.left).toBe("-2mm");
-    expect(cutLine.style.top).toBe("-2mm");
-    expect(cutLine.style.width).toBe(`${CardWidthMM + 2 * 3 + 2 * 2}mm`);
-    expect(cutLine.style.height).toBe(`${CardHeightMM + 2 * 3 + 2 * 2}mm`);
+    // Offset subtracts from the granted bleedMM.left/top (3mm here), it does not add to the
+    // slot's own outer edge - see this file's own trim-edge anchor test above.
+    expect(cutLine.style.left).toBe("1mm");
+    expect(cutLine.style.top).toBe("1mm");
+    expect(cutLine.style.width).toBe(`${CardWidthMM + 2 * 2}mm`);
+    expect(cutLine.style.height).toBe(`${CardHeightMM + 2 * 2}mm`);
   });
 
-  it("anchors the screenPresentation guide on the same true bleed edge as the non-screen variant", () => {
+  it("anchors the screenPresentation guide on the same true trim edge as the non-screen variant", () => {
     render(
       <PagePreview
         pageWidthMM={A4_WIDTH_MM}
@@ -237,10 +239,41 @@ describe("PagePreview", () => {
       />
     );
     const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
-    expect(cutLine.style.left).toBe("0mm");
-    expect(cutLine.style.top).toBe("0mm");
-    expect(cutLine.style.width).toBe(`${CardWidthMM + 2 * 3}mm`);
-    expect(cutLine.style.height).toBe(`${CardHeightMM + 2 * 3}mm`);
+    expect(cutLine.style.left).toBe("3mm");
+    expect(cutLine.style.top).toBe("3mm");
+    expect(cutLine.style.width).toBe(`${CardWidthMM}mm`);
+    expect(cutLine.style.height).toBe(`${CardHeightMM}mm`);
+  });
+
+  it("crowded axis: the trim inset shrinks with the granted bleed, but the trim rect itself stays fixed card-size - not the shrunken slot", () => {
+    // A tight page width lets fitAxisWithBleed grant less than the requested 3mm bleed on the
+    // column axis while the (unconstrained) row axis still gets the full request - the exact
+    // "one axis full, one axis cropped" scenario the old flat-bleedEdgeMM anchor couldn't
+    // represent (see layout.ts's fitAxisWithBleed). Width just fits 2 bare 63mm-wide cards with
+    // 0 spacing (126mm) plus a sliver of slack, capped short of the full 2*3mm=6mm bleed request;
+    // height (297mm) leaves the full 3mm on the row axis.
+    render(
+      <PagePreview
+        pageWidthMM={127}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
+        showCutLines={true}
+        maxWidthPx={400}
+      />
+    );
+    const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
+    const grantedLeftMM = parseFloat(cutLine.style.left);
+    expect(grantedLeftMM).toBeGreaterThan(0);
+    expect(grantedLeftMM).toBeLessThan(3);
+    expect(cutLine.style.top).toBe("3mm");
+    // The trim rect is always exactly card-size, regardless of how much bleed surrounds it -
+    // this is what distinguishes the fix from the pre-fix outer-edge anchor, whose width/height
+    // grew and shrank with the granted bleed instead of staying fixed.
+    expect(cutLine.style.width).toBe(`${CardWidthMM}mm`);
+    expect(cutLine.style.height).toBe(`${CardHeightMM}mm`);
   });
 
   it("scales the outer wrapper to exactly maxWidthPx regardless of page size", () => {
