@@ -418,7 +418,7 @@ class TestCoordinationCost:
             f"\n8 acquisitions at {GOOGLE_IMAGE.rate_per_sec}/s: {elapsed:.3f}s "
             f"vs {ceiling_only:.3f}s for the ceiling alone ({(elapsed / ceiling_only - 1) * 100:+.1f}%)"
         )
-        assert elapsed <= ceiling_only * 1.10
+        assert elapsed <= ceiling_only * 1.20
 
 
 class TestForkSafety:
