@@ -464,24 +464,32 @@ printing votes, so it would have fired on the first `-v2` run.
 
   1. **Structural construction** (confidence 3): deterministic detectors for
      five unmistakable families — ShowcaseMagnified, Pipboy, Vault,
-     MysticalArchive, Storybook. Zero-threshold, high-precision.
-  2. **Region-hash** (confidence 2, LIVE): per-family reference perceptual
-     hash comparison, restricted to families with ≥88% within-family 1-NN
-     accuracy and 0% colour-check agreement (NeonInk, ShowcaseMagnified,
-     M15NyxShowcase). Crops the left 7% border strip, computes a phash,
-     finds nearest family by hamming distance (threshold 25). Reference
-     phashes stored in `frame_family_ref_phashes.json` (no pixels).
-  3. **Furniture colour** (confidence 2, BLOCKED): dominant-colour check.
-     Blocked on stored RGB swatch artifact — `colour_classification_fixed.json`
-     contains naming counts only.
-  4. **ArtBounds distance** (confidence 1): pinline-spread check where the
-     card edge is real (a real border is present, not art-only).
-  5. **Variant-pinned** (confidence 1, STUBBED): reference a known variant
-     of the same card name. Blocked on candidate-name resolution.
+     MysticalArchive, Storybook. Targets construction (circular art window,
+     scanline header, corner brackets, dotted nameplate, vine scroll), not
+     colour.
+  2. **ArtBounds distance** (confidence 1): pinline-spread check that the
+     card edge is real, yielding `STANDARD` only where `layout_class` names a
+     border colour.
 
-  The coarse "Showcase" tag is voted ONLY on named, above-bar verdicts
-  (confidence ≥ 2, family not STANDARD/CUSTOM/OTHER_SHOWCASE/blank).
-  Wired via `cast_frame_family_vote` called from
+  Region-hash is deliberately not shipped — it is closed by the
+  frame-identification audit (its reference population was contaminated by
+  the metadata label it was scored against), and furniture-colour has no
+  stored RGB swatch artifact yet.
+
+  Every method runs inside the set-narrowed candidate family set: the card's
+  name resolves through `CandidateNameIndex.candidates_for` to candidate
+  printings whose expansion codes map to the named families that set ships; a
+  name resolving to zero candidates abstains with the `no-candidates` skip
+  reason (issue #979).
+
+  The coarse "Showcase" tag is voted ONLY on named, above-bar verdicts, and
+  the gate reads the calibration table (`NAMED_FAMILIES`): a family ships as
+  NAMED only where owner-verified truth exists and the method cleared #829's
+  bar. Measured against the owner-verified labels on disk the structural
+  detectors score 0/4 recall and 27/40 false positives on owner-negative
+  cards, so `NAMED_FAMILIES` is empty and the identifier is **dormant** — it
+  stores evidence (abstain for every real card today) and casts no votes until
+  a method clears the bar. Wired via `cast_frame_family_vote` called from
   `stage_e_dispatch._run_evidence_only_calculators` and the standalone
   `local_frame_family_cast` management command.
 

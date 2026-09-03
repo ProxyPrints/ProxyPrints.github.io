@@ -1,78 +1,64 @@
 """
-Frame-family identifier - the SHOWCASE-FAMILY channel.
+Frame-family identifier - the SHOWCASE-FAMILY channel (issues #829, #878, #952, #967, #974,
+#968, #979).
 
-Owner-directed design (directive 2026-09-02): identify which frame family a card belongs to by
-inspecting the uploaded image directly, storing per-family detection methods with fallbacks, and
-calibrating against owner-verified labels before wiring any vote.
+WHY THIS EXISTS. The existing `layout_class` distinguishes black/white/silver/borderless but
+cannot name the frame family (Showcase Magnified, Pipboy, Vault, Mystical Archive, Storybook,
+...). The existing `art_edge_class` detects extended art but not which showcase variant
+produced it. Stage D has no way to know whether a card is, say, a Pipboy frame vs. a
+MysticalArchive frame - both are "black-bordered showcase" to the existing classifiers.
+Frame-family identifiers close this gap by storing the family name alongside the evidence,
+giving Stage D (and future consumers) a per-card, per-upload answer.
 
-WHY THIS EXISTS. The existing `layout_class` (classify_border_color) distinguishes black/white/
-silver/borderless but cannot name the frame family (Showcase Magnified, Pipboy, Vault, etc.).
-The existing `art_edge_class` (classify_art_edge_continuity) detects extended art but not which
-showcase variant produced it. Stage D currently has no way to know whether a card is, say,
-a Pipboy frame vs. a MysticalArchive frame - both are "black-bordered showcase" to the existing
-classifiers. Frame-family identifiers close this gap by storing the family name alongside the
-evidence, giving Stage D (and future consumers) a per-card, per-upload answer.
+WHAT SHIPS. `frame_family_class` (a named family, `OTHER_SHOWCASE`, `STANDARD`, `CUSTOM`, or
+blank = abstain), `frame_family_confidence` (0-3), and `frame_family_method` on
+`ImageEvidence`, computed by `classify_frame_family` and wired into Stage C
+(`compute_card_evidence`). The fallback chain, cheapest to costliest:
 
-DETECTION METHODS (fallback chain, cheapest to costliest):
+  1. STRUCTURAL CONSTRUCTION (confidence 3) - deterministic detectors for five visually
+     unmistakable families: ShowcaseMagnified (circular art window), Pipboy (CRT scanline
+     header), Vault (stepped corner brackets), MysticalArchive (dotted parchment nameplate),
+     Storybook (vine-scroll border). These target construction, not colour.
 
-  1. STRUCTURAL CONSTRUCTION - deterministic detectors for five unmistakable families:
-     - ShowcaseMagnified: circular ring window cutting through the frame
-     - Pipboy: CRT terminal / Pip-Boy interface aesthetic
-     - Vault: stepped metallic bracket framing
-     - MysticalArchive: dotted parchment nameplate
-     - Storybook: vine scroll border
-     These are zero-threshold, high-precision detectors that fire on construction rather than
-     colour - confirmed at confidence 3 with 4/4 precision by the fable judge (round2_result).
+  2. ARTBOUNDS DISTANCE (confidence 1) - pinline-spread check that the card edge is real and
+     the frame is a standard bordered frame. Cannot name a showcase family; only ever yields
+     `STANDARD` where `layout_class` names a border colour.
 
-  2. REGION-HASH (LIVE) - per-family reference phash comparison, restricted to
-     REGION_HASH_FAMILIES (NeonInk, ShowcaseMagnified, M15NyxShowcase) where
-     within-family 1-NN accuracy >= 88% AND colour check agreement is 0%.
-     Crops the left 7% border strip, computes a phash, and finds the nearest
-     family in the whitelist by hamming distance (threshold 25).
-     Reference phashes loaded from frame_family_ref_phashes.json.
+  Region-hash and furniture-colour methods are deliberately NOT shipped. Region-hash is
+  closed by the frame-identification audit: its reference population was contaminated by the
+  metadata label it was scored against, and a fixed-fraction crop band (left 7%) is the
+  padding-blind geometry issue #735 records (real cards carry ~6-8% canvas padding, so that
+  strip is often padding, not frame). Furniture-colour has no stored RGB swatch artifact yet.
 
-  3. FURNITURE COLOUR (BLOCKED) - per-family dominant-colour check where it
-     scores (Storybook 85.7%, Fang 66.7%, MysticalArchive 57.1%). Blocked:
-     no stored RGB swatch artifact exists; colour_classification_fixed.json
-     contains naming counts only, not values. Would need a pre-computed
-     swatch RGB JSON derived from refimg/ CardConjurer PNGs.
+CALIBRATION (the gate). A family ships as a NAMED value only where owner-verified truth exists
+for it AND the method clears #829's bar (false positives at or near zero on ordinary frames).
+That judgement lives in `NAMED_FAMILIES` below. As measured against the owner-verified labels
+on disk (frame-groundtruth V2_KEY_SEALED / RECALL_KEY_SEALED, fable-judge FABLE_KEY_SEALED):
+the structural detectors score **0/4 recall** on the four owner-confirmed positives (Storybook,
+Vault, ShowcaseMagnified, Pipboy - one each) and fire spuriously on **27/40** owner-negative
+cards, so **no family clears the bar and `NAMED_FAMILIES` is empty**. The identifier therefore
+ships DORMANT: the schema and framework are in place and the tests prove the detector
+mechanism on synthetic fixtures, but production extraction abstains (no named family is
+supported) and the caster votes nothing until a method clears the bar. That is the honest
+outcome of the calibration, reported in full in the PR body rather than asserted away.
 
-  4. ARTBOUNDS DISTANCE - pinline-spread check where the card edge is real (a real border
-     is present, not art-only).
+SET NARROWING (issue #979 / the audit's own finding). Every method runs inside the
+set-narrowed candidate family set: the card's name resolves through
+`CandidateNameIndex.candidates_for` (imported, never reimplemented) to candidate printings,
+whose expansion codes map through `SET_TO_FRAME_FAMILIES` to the named families that set
+actually ships. A card whose name resolves to zero candidates abstains with the
+`no-candidates` skip reason. Without this the detectors would answer a 48-way question
+production never asks (38 of 52 cohort cards reduce to a single candidate family).
 
-  5. VARIANT-PINNED DIRECT COMPARISON - reference a known variant of the same card name and
-     compare frame treatment. Verifier only, never the primary method.
-
-OUTPUT:
-
-  `frame_family_class`: the named family ("ShowcaseMagnified", "Pipboy", "Vault",
-  "MysticalArchive", "Storybook", "Woodland", "NeonInk", "ShowcasePanel", "Fang",
-  "StorybookWOE", "M15NyxShowcase", "ShowcaseMagnified"), or "OTHER_SHOWCASE" for a family
-  that is identifiable as a showcase variant but not as a specific named family, "STANDARD"
-  for standard frames, "CUSTOM" for custom proxies, or blank-string-as-sentinel (abstain).
-
-  `frame_family_confidence`: 0-3 integer. 3 = structural detector (highest). 2 = region-hash
-  or colour check (high). 1 = artBounds or variant-pinned (moderate). 0 = abstained.
-
-  `frame_family_method`: which detection method produced the verdict. One of:
-  "structural-construction", "region-hash", "furniture-colour", "artbounds-distance",
-  "variant-pinned", "" (abstained).
-
-WIRING. Wired via `cast_frame_family_vote` (this module) called from
-`stage_e_dispatch._run_evidence_only_calculators` and the standalone
-`local_frame_family_cast` management command. The coarse "Showcase" tag is voted ONLY on
-named, above-bar verdicts (confidence >= 2, family != STANDARD/CUSTOM/OTHER_SHOWCASE/blank).
-
-WHAT MUST NOT HAPPEN (directive):
-  - No protected-core edits (local_fallback.py, local_phash.py are untouched)
-  - No committed image bytes (crop pixels exist only in memory)
-  - No "frame_effects" as a label (Scryfall frame_effects describes the depicted printing,
-    not the uploaded image's treatment - see docs/reference/self-referential-reasoning.md)
-  - No reimplemented name resolution (CandidateNameIndex.candidates_for is the existing
-    normaliser, reused via import, not reimplemented)
-
-ISSUES: #829 (negative bar), #878 (evidence-only mandate), #952 (variant-pinned verifier),
-#967/#974 (family labels), #968 (coverage gaps), #979 (dry-run yield measurement).
+WHAT MUST NOT HAPPEN:
+  - No protected-core edits (local_fallback.py, local_phash.py, local_identify_printing_tags.py
+    are untouched; only their public functions are imported).
+  - No committed image bytes - the detectors compute statistics in memory only, nothing is
+    written to disk.
+  - No `frame_effects` as a family label (Scryfall `frame_effects` describes the depicted
+    printing, not the uploaded image's treatment).
+  - No reimplemented name resolution - `CandidateNameIndex.candidates_for` is the existing
+    normaliser, reused via import.
 """
 
 from __future__ import annotations
@@ -80,9 +66,9 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
-from cardpicker.local_identify_printing_tags import generate_run_id
+from cardpicker.local_identify_printing_tags import CandidateNameIndex, generate_run_id
 from cardpicker.models import (
     Card,
     CardScanLog,
@@ -113,17 +99,11 @@ FRAME_FAMILY_PIPBOY = "Pipboy"
 FRAME_FAMILY_VAULT = "Vault"
 FRAME_FAMILY_MYSTICAL_ARCHIVE = "MysticalArchive"
 FRAME_FAMILY_STORYBOOK = "Storybook"
-FRAME_FAMILY_WOODLAND = "Woodland"
-FRAME_FAMILY_NEONINK = "NeonInk"
-FRAME_FAMILY_SHOWCASE_PANEL = "ShowcasePanel"
-FRAME_FAMILY_FANG = "Fang"
-FRAME_FAMILY_STORYBOOK_WOE = "StorybookWOE"
-FRAME_FAMILY_M15_NYX_SHOWCASE = "M15NyxShowcase"
 FRAME_FAMILY_OTHER_SHOWCASE = "OTHER_SHOWCASE"
 FRAME_FAMILY_STANDARD = "STANDARD"
 FRAME_FAMILY_CUSTOM = "CUSTOM"
 
-# All named structural families (fable-judge-confirmed at confidence 3).
+# All named structural families (fable-judge-confirmed as visually unmistakable constructions).
 STRUCTURAL_FAMILIES: frozenset[str] = frozenset(
     {
         FRAME_FAMILY_SHOWCASE_MAGNIFIED,
@@ -135,13 +115,27 @@ STRUCTURAL_FAMILIES: frozenset[str] = frozenset(
 )
 
 # ---------------------------------------------------------------------------
+# CALIBRATION GATE. A family is emitted as a NAMED value only when it is in
+# NAMED_FAMILIES - i.e. owner-verified truth exists for it AND its method
+# cleared #829's bar (false positives at or near zero on ordinary frames).
+#
+# Measured against the owner-verified labels on disk:
+#   - owner-confirmed positives (recall): Storybook 0/1, Vault 0/1,
+#     ShowcaseMagnified 0/1, Pipboy 0/1 (MysticalArchive has no owner "Y";
+#     its two owner labels are HELD and CLOSE). n = 1 per family.
+#   - owner-negative pool (false positives): 27/40 - the detectors fire on
+#     ordinary/custom frames far more often than zero. MysticalArchive 22,
+#     Pipboy 5.
+# No family clears the bar, so this set is empty and production extraction
+# abstains. Populated only when a future calibration clears a family.
+# ---------------------------------------------------------------------------
+NAMED_FAMILIES: frozenset[str] = frozenset()
+
+# ---------------------------------------------------------------------------
 # Detection method tags stored in frame_family_method.
 # ---------------------------------------------------------------------------
 METHOD_STRUCTURAL_CONSTRUCTION = "structural-construction"
-METHOD_REGION_HASH = "region-hash"
-METHOD_FURNITURE_COLOUR = "furniture-colour"
 METHOD_ARTBOUNDS_DISTANCE = "artbounds-distance"
-METHOD_VARIANT_PINNED = "variant-pinned"
 
 # ---------------------------------------------------------------------------
 # Confidence levels.
@@ -154,6 +148,9 @@ CONFIDENCE_STRUCTURAL = 3
 # ---------------------------------------------------------------------------
 # Skip-reason vocabulary (docs/reference/skip-reasons.md declaration convention).
 # ---------------------------------------------------------------------------
+# issue #979: the card's name resolved to zero candidate printings, so there is no set to
+# narrow the candidate families by - the detector cannot answer and abstains.
+FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON = "no-candidates"
 FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON = "no-evidence"
 FRAME_FAMILY_NO_READING_SKIP_REASON = "no-reading"
 FRAME_FAMILY_AMBIGUOUS_SKIP_REASON = "ambiguous"
@@ -161,6 +158,7 @@ FRAME_FAMILY_AMBIGUOUS_SKIP_REASON = "ambiguous"
 # Rescannable = transient "nothing to look at YET" states a later pass can change.
 FRAME_FAMILY_RESCANNABLE_SKIP_REASONS: frozenset[str] = frozenset(
     {
+        FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON,
         FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON,
         FRAME_FAMILY_NO_READING_SKIP_REASON,
     }
@@ -169,238 +167,92 @@ FRAME_FAMILY_RESCANNABLE_SKIP_REASONS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 # Caster identity (the anonymous_id stamped on CardTagVote/CardScanLog rows).
 # ---------------------------------------------------------------------------
-FRAME_FAMILY_ANONYMOUS_ID = "local-frame-family"
+FRAME_FAMILY_ANONYMOUS_ID = "frame-family-v1"
 FRAME_FAMILY_TAG_NAME = "Showcase"
 FRAME_FAMILY_VOTE_CONFIDENCE = 0.5
 
 # ---------------------------------------------------------------------------
-# Structural detection thresholds (deterministic, zero-threshold for named families).
-# These are pixel-ratio / shape checks, not colour thresholds - they fire on
-# construction, not palette, which is why precision is high on ordinary frames.
+# SET -> FRAME FAMILIES (set narrowing, issue #979 / the audit's own finding).
+#
+# Single-template alternate-frame sets and the named family each ships, from
+# the Scryfall frame_effects x expansion population table
+# (pipeline-artifacts/frame-coverage-combined/report.md Part 2) - the
+# definitional source for which family a set's showcase treatment is. Only the
+# five structural families a detector can NAME are listed; every other set is
+# deliberately absent, so a card from an unlisted set can never carry a named
+# family verdict (it falls through to abstain / OTHER_SHOWCASE). Expansion
+# codes are lowercased, matching CandidatePrinting.expansion_code.
+# ---------------------------------------------------------------------------
+SET_TO_FRAME_FAMILIES: dict[str, frozenset[str]] = {
+    "mkm": frozenset({FRAME_FAMILY_SHOWCASE_MAGNIFIED}),  # Karlov Manor showcase
+    "pip": frozenset({FRAME_FAMILY_PIPBOY}),  # Fallout Pip-Boy
+    "big": frozenset({FRAME_FAMILY_VAULT}),  # Big Score
+    "sta": frozenset({FRAME_FAMILY_MYSTICAL_ARCHIVE}),  # Strixhaven Mystical Archive
+    "soa": frozenset({FRAME_FAMILY_MYSTICAL_ARCHIVE}),  # Mystical Archive (SOA)
+    "eld": frozenset({FRAME_FAMILY_STORYBOOK}),  # Throne of Eldraine storybook
+}
+
+
+def candidate_frame_families(name: str, index: CandidateNameIndex) -> frozenset[str]:
+    """The named frame families this card's name can resolve to, narrowed by set.
+
+    Resolves the name through `CandidateNameIndex.candidates_for` (unmodified), maps each
+    candidate's expansion code through `SET_TO_FRAME_FAMILIES`, and returns the union as a
+    frozenset. An empty result means the name resolved to zero candidates (issue #979) OR to
+    candidates whose sets ship no named family - either way the detector must abstain rather
+    than guess.
+    """
+    families: set[str] = set()
+    for candidate in index.candidates_for(name):
+        families |= SET_TO_FRAME_FAMILIES.get(candidate.expansion_code, frozenset())
+    return frozenset(families)
+
+
+def build_candidate_frame_families_lookup() -> Callable[[str], frozenset[str]]:
+    """A `name -> frozenset[family]` callable backed by the shared cached CandidateNameIndex.
+
+    Mirrors `collector_line_artist.build_name_artist_lookup`'s shape: the index is built once
+    (via `local_calculate_verdicts._get_cached_candidate_name_index`, the single cached entry
+    point every batch-reachable caller must use) and only the resolved frozenset crosses the
+    process-pool boundary. Called on the parent/worker's own driver loop, never inside a compute
+    worker.
+    """
+    from cardpicker.local_calculate_verdicts import _get_cached_candidate_name_index
+
+    index = _get_cached_candidate_name_index()
+
+    def lookup(name: str) -> frozenset[str]:
+        return candidate_frame_families(name, index)
+
+    return lookup
+
+
+# ---------------------------------------------------------------------------
+# Structural detection thresholds (deterministic, shape/construction checks).
+# These are pixel-geometry checks, not colour thresholds - they fire on
+# construction, not palette.
 # ---------------------------------------------------------------------------
 
-# Circular ring window: ShowcaseMagnified has a distinctive circular art window
-# whose diameter is > 60% of the card width.  Standard frames have rectangular
-# art windows.  We detect this by measuring the ratio of the inscribed circle's
-# area to the total art-box area.
-_MAGNIFIED_RING_AREA_RATIO_MIN = 0.85
+# Circular art window: ShowcaseMagnified has a circular art window whose content fills the
+# art box's vertical center (full width) and tapers to nothing at its top and bottom edges.
+# A rectangular art window fills the top and bottom rows too.
+_MAGNIFIED_MIDDLE_FILL_MIN = 0.8
+_MAGNIFIED_EDGE_FILL_MAX = 0.25
+# Minimum luminance contrast between art-box content and background before a shape can be read.
+_MAGNIFIED_MIN_CONTRAST = 30
 
-# CRT terminal / Pipboy: the Pipboy frame has a distinctive green-tinted scanline
-# pattern in the header region.  We detect this by measuring the horizontal
-# frequency of intensity transitions in the top 15% of the card.
+# CRT terminal / Pipboy: the header (top 15%) carries high-frequency horizontal scanlines.
+# Scanlines are horizontal stripes, so the alternation is in the VERTICAL direction.
 _PIPBOY_SCANLINE_FREQ_MIN = 0.3
 
-# Vault: stepped metallic brackets in the corners.  We detect this by looking for
-# L-shaped brightness gradients in the four corners.
+# Vault: stepped metallic brackets produce L-shaped brightness gradients in the corners.
 _VAULT_CORNER_GRADIENT_MIN = 0.15
 
-# MysticalArchive: dotted parchment nameplate in the type-line region.  We detect
-# this by measuring the density of small bright spots in the type-line band.
+# MysticalArchive: dotted parchment nameplate in the type-line region.
 _MYSTICAL_ARCHIVE_DOT_DENSITY_MIN = 0.1
 
-# Storybook: vine scroll border pattern.  We detect this by measuring the
-# irregularity (stddev of edge brightness) along the card border.
+# Storybook: vine-scroll border irregularity along the card edge.
 _STORYBOOK_BORDER_IRREGULARITY_MIN = 0.2
-
-
-# ---------------------------------------------------------------------------
-# Region-hash thresholds (from coverage report and audit).
-# ---------------------------------------------------------------------------
-REGION_HASH_CONSISTENCY_MIN = 0.88  # 88% within-family consistency
-REGION_HASH_COLOUR_CHECK_MAX = 0.0  # colour check must be 0% for region-hash to fire
-
-
-# ---------------------------------------------------------------------------
-# Furniture colour thresholds (from coverage report).
-# ---------------------------------------------------------------------------
-FURNITURE_COLOUR_MIN_SCORE = 0.5  # minimum colour-check score to fire
-
-
-# ---------------------------------------------------------------------------
-# ArtBounds distance threshold.
-# ---------------------------------------------------------------------------
-ARTBOUNDS_PINLINE_SPREAD_MIN = 0.02  # minimum pinline spread to confirm real border
-
-
-# ---------------------------------------------------------------------------
-# Helpers: image analysis primitives.
-# ---------------------------------------------------------------------------
-
-
-def _mean_rgb_over_region(
-    image: Any,
-    left: float,
-    top: float,
-    right: float,
-    bottom: float,
-) -> Optional[tuple[float, float, float]]:
-    """Mean (R, G, B) over a fractional region of `image`, or None on degenerate input."""
-    width, height = image.size
-    x0, y0 = int(left * width), int(top * height)
-    x1, y1 = int(right * width), int(bottom * height)
-    if x1 <= x0 or y1 <= y0:
-        return None
-    crop = image.crop((x0, y0, x1, y1))
-    pixels = list(crop.getdata())
-    n = len(pixels)
-    if n == 0:
-        return None
-    r_sum = sum(p[0] for p in pixels)
-    g_sum = sum(p[1] for p in pixels)
-    b_sum = sum(p[2] for p in pixels)
-    return (r_sum / n, g_sum / n, b_sum / n)
-
-
-def _euclidean_rgb_distance(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
-    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
-
-
-def _brightness(position: tuple[float, float, float]) -> float:
-    """Perceived brightness (0-255) from an (R, G, B) tuple."""
-    return 0.299 * position[0] + 0.587 * position[1] + 0.114 * position[2]
-
-
-def _image_region_phash(image: Any, left: float, top: float, right: float, bottom: float) -> Optional[int]:
-    """Perceptual hash of a fractional region, or None on degenerate input."""
-    width, height = image.size
-    x0, y0 = int(left * width), int(top * height)
-    x1, y1 = int(right * width), int(bottom * height)
-    if x1 <= x0 or y1 <= y0:
-        return None
-    region = image.crop((x0, y0, x1, y1)).convert("L")
-    import imagehash
-
-    from cardpicker.utils import twos_complement
-
-    return twos_complement(str(imagehash.phash(region)), 64)
-
-
-# ---------------------------------------------------------------------------
-# Region-hash detection: per-family reference phash comparison.
-# ---------------------------------------------------------------------------
-#
-# The harvest pass (frame-coverage-combined) computed phashes from real card
-# images using frame+pinline+border regions (alpha>25 on 630x880 canvas).
-# Reference phashes are stored in frame_family_ref_phashes.json (no pixels,
-# only hex strings).  At runtime, we crop the same border region from the
-# uploaded image, compute its phash, and find the nearest reference family.
-#
-# Families qualify for region-hash when their within-family 1-NN accuracy
-# is >= 88% on held-out images (nn_classification.json) AND the colour
-# check agreement is 0% (meaning colour is unreliable for this family).
-# From the coverage data, these are: NeonInk (100%), ShowcaseMagnified
-# (92.3%), M15NyxShowcase (100%).  Woodland and StorybookWOE have good
-# 1-NN accuracy but non-zero colour check, so they use furniture-colour
-# instead.  All families in the reference set are checked; the threshold
-# filtering happens via the hamming distance gate.
-# ---------------------------------------------------------------------------
-
-# Left border strip crop: captures the frame pattern without the art window.
-# The art window typically starts at ~7% from the left edge (see
-# _detect_showcase_magnified's art_left = 0.07), so this strip is
-# purely frame/border/pinline content.
-_FRAME_HASH_CROP_LEFT = 0.0
-_FRAME_HASH_CROP_TOP = 0.0
-_FRAME_HASH_CROP_RIGHT = 0.07
-_FRAME_HASH_CROP_BOTTOM = 1.0
-
-# Maximum hamming distance for a region-hash match.  The coverage data
-# shows within-family distances ranging from 0-40 (mean ~18-32 depending
-# on family), with between-family distances generally > 25.  A threshold
-# of 25 balances recall against false positives on ordinary frames.
-_FRAME_HASH_DISTANCE_MAX = 25
-
-# Only search within families that qualify: ≥88% 1-NN accuracy on held-out
-# images AND 0% colour check agreement (meaning colour is unreliable).
-# From nn_classification.json: NeonInk (100%), ShowcaseMagnified (92.3%),
-# M15NyxShowcase (100%).  Other families either have working colour checks
-# or lack sufficient reference images.
-REGION_HASH_FAMILIES: frozenset[str] = frozenset(
-    {
-        "NeonInk",
-        "ShowcaseMagnified",
-        "M15NyxShowcase",
-    }
-)
-
-# Lazy-loaded reference phashes: family -> list of int phashes.
-# Populated on first call to _detect_region_hash.
-_ref_phashes_by_family: Optional[dict[str, list[int]]] = None
-
-
-def _load_ref_phashes() -> dict[str, list[int]]:
-    """Load reference phashes from the JSON artifact and convert to ints.
-
-    The artifact (frame_family_ref_phashes.json) contains only hex strings -
-    no pixels, no image data - satisfying the directive to store abstractions
-    only.  This function is called once and cached in _ref_phashes_by_family.
-    """
-    import json
-    from pathlib import Path
-
-    json_path = Path(__file__).parent / "frame_family_ref_phashes.json"
-    with open(json_path) as f:
-        raw = json.load(f)
-
-    from cardpicker.utils import twos_complement
-
-    result: dict[str, list[int]] = {}
-    for family, hex_list in raw.items():
-        result[family] = [twos_complement(h, 64) for h in hex_list]
-    return result
-
-
-def _hamming_distance(a: int, b: int) -> int:
-    """Hamming distance between two 64-bit phashes stored as signed ints."""
-    return (a ^ b).bit_count()
-
-
-def _detect_region_hash(image: Any) -> Optional[FrameFamilyResult]:
-    """Detect frame family by perceptual hash comparison against references.
-
-    Crops the left border strip from the uploaded image, computes a phash,
-    and finds the nearest family in the reference set.  Returns a result
-    with confidence CONFIDENCE_HIGH (2) when the best match is within
-    _FRAME_HASH_DISTANCE_MAX hamming distance, or None otherwise.
-
-    This method covers families where the colour check is unreliable
-    (agreement 0%) but the frame texture is consistent enough for
-    1-NN classification (within-family consistency >= 88%).
-    """
-    global _ref_phashes_by_family
-    if _ref_phashes_by_family is None:
-        _ref_phashes_by_family = _load_ref_phashes()
-
-    image_phash = _image_region_phash(
-        image,
-        _FRAME_HASH_CROP_LEFT,
-        _FRAME_HASH_CROP_TOP,
-        _FRAME_HASH_CROP_RIGHT,
-        _FRAME_HASH_CROP_BOTTOM,
-    )
-    if image_phash is None:
-        return None
-
-    best_family: Optional[str] = None
-    best_distance: int = _FRAME_HASH_DISTANCE_MAX + 1
-
-    for family, ref_hashes in _ref_phashes_by_family.items():
-        if family not in REGION_HASH_FAMILIES:
-            continue
-        for ref_hash in ref_hashes:
-            dist = _hamming_distance(image_phash, ref_hash)
-            if dist < best_distance:
-                best_distance = dist
-                best_family = family
-
-    if best_family is None or best_distance > _FRAME_HASH_DISTANCE_MAX:
-        return None
-
-    return FrameFamilyResult(
-        family_class=best_family,
-        confidence=CONFIDENCE_HIGH,
-        method=METHOD_REGION_HASH,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -409,50 +261,50 @@ def _detect_region_hash(image: Any) -> Optional[FrameFamilyResult]:
 
 
 def _detect_showcase_magnified(image: Any) -> bool:
-    """Detect the circular ring window of ShowcaseMagnified frames.
+    """Detect the circular art window of ShowcaseMagnified frames.
 
-    ShowcaseMagnified has a distinctive circular art window.  We detect this
-    by measuring how much the content width varies across rows: a circle has
-    content widest at the center and narrower at the edges, while a rectangle
-    has uniform content width.  The fill-ratio (avg / max content width)
-    for a circle is ~pi/4 (~0.785); for a full rectangle it is 1.0.
+    A circular window's content (everything brighter than the art box's mid-luminance) fills
+    the art box's vertical center at full width and tapers to nothing at the top and bottom
+    edges, where a rectangular art window keeps full-width content edge to edge. The test
+    reads the center row (must be ~full width) and the top/bottom rows (must be ~empty).
     """
     width, height = image.size
     art_left = int(0.07 * width)
     art_top = int(0.10 * height)
     art_right = int(0.93 * width)
     art_bottom = int(0.85 * height)
-
     art_region = image.crop((art_left, art_top, art_right, art_bottom)).convert("L")
-    art_w, art_h = art_region.size
-    if art_w <= 0 or art_h <= 0:
+    aw, ah = art_region.size
+    if aw <= 0 or ah <= 0:
         return False
 
     pixels = list(art_region.getdata())
-    sorted_px = sorted(pixels)
-    median = sorted_px[len(sorted_px) // 2]
+    lo, hi = min(pixels), max(pixels)
+    if hi - lo < _MAGNIFIED_MIN_CONTRAST:
+        return False
+    threshold = (lo + hi) // 2
 
     row_widths = []
-    for y in range(art_h):
-        row_start = y * art_w
-        row = pixels[row_start : row_start + art_w]
-        row_widths.append(sum(1 for p in row if p > median))
+    for y in range(ah):
+        row = pixels[y * aw : (y + 1) * aw]
+        row_widths.append(sum(1 for p in row if p > threshold))
 
-    max_width = max(row_widths)
-    if max_width <= 0:
-        return False
-
-    avg_width = sum(row_widths) / len(row_widths)
-    fill_ratio = avg_width / max_width
-    return fill_ratio < _MAGNIFIED_RING_AREA_RATIO_MIN
+    middle_fill = row_widths[ah // 2] / aw
+    top_fill = row_widths[0] / aw
+    bottom_fill = row_widths[ah - 1] / aw
+    return (
+        middle_fill > _MAGNIFIED_MIDDLE_FILL_MIN
+        and top_fill < _MAGNIFIED_EDGE_FILL_MAX
+        and bottom_fill < _MAGNIFIED_EDGE_FILL_MAX
+    )
 
 
 def _detect_pipboy(image: Any) -> bool:
-    """Detect the CRT terminal / Pipboy frame aesthetic.
+    """Detect the CRT scanline pattern of Pipboy frames.
 
-    Pipboy frames have a distinctive green-tinted scanline pattern in the header
-    region.  We detect this by measuring the horizontal frequency of intensity
-    transitions in the top 15% of the card.
+    The Pipboy header (top 15%) carries high-frequency horizontal scanlines - alternating
+    bright/dark horizontal stripes - so the intensity alternation is in the vertical
+    direction. The test samples one column and counts vertical zero-crossings.
     """
     width, height = image.size
     header_bottom = int(0.15 * height)
@@ -460,38 +312,30 @@ def _detect_pipboy(image: Any) -> bool:
         return False
     header = image.crop((0, 0, width, header_bottom)).convert("L")
     pixels = list(header.getdata())
-    if len(pixels) < 10:
+    col_x = width // 2
+    col = [pixels[y * width + col_x] for y in range(header_bottom)]
+    if len(col) < 3:
         return False
-    # Count zero-crossings (intensity transitions) across the middle row
-    mid_row_start = (header_bottom // 2) * width
-    mid_row = pixels[mid_row_start : mid_row_start + width]
-    if len(mid_row) < 3:
-        return False
-    transitions = sum(
-        1
-        for i in range(1, len(mid_row))
-        if (mid_row[i] - mid_row[i - 1]) * (mid_row[i - 1] - mid_row[max(0, i - 2)]) < 0
-    )
-    freq = transitions / len(mid_row)
+    transitions = sum(1 for i in range(2, len(col)) if (col[i] - col[i - 1]) * (col[i - 1] - col[i - 2]) < 0)
+    freq = transitions / len(col)
     return freq > _PIPBOY_SCANLINE_FREQ_MIN
 
 
 def _detect_vault(image: Any) -> bool:
     """Detect the stepped metallic bracket framing of Vault frames.
 
-    Vault frames have L-shaped brightness gradients in the four corners - a
-    distinctive stepped bracket pattern.  We detect this by measuring the
-    brightness gradient in each corner region.
+    Vault frames carry L-shaped brightness gradients in the four corners - a distinctive
+    stepped bracket pattern. The test measures the brightness gradient in each corner region.
     """
     width, height = image.size
     corner_size = int(0.08 * min(width, height))
     if corner_size <= 0:
         return False
     corners = [
-        (0, 0, corner_size, corner_size),  # top-left
-        (width - corner_size, 0, width, corner_size),  # top-right
-        (0, height - corner_size, corner_size, height),  # bottom-left
-        (width - corner_size, height - corner_size, width, height),  # bottom-right
+        (0, 0, corner_size, corner_size),
+        (width - corner_size, 0, width, corner_size),
+        (0, height - corner_size, corner_size, height),
+        (width - corner_size, height - corner_size, width, height),
     ]
     gradients = []
     for x0, y0, x1, y1 in corners:
@@ -516,9 +360,9 @@ def _detect_vault(image: Any) -> bool:
 def _detect_mystical_archive(image: Any) -> bool:
     """Detect the dotted parchment nameplate of MysticalArchive frames.
 
-    MysticalArchive frames have a distinctive dotted parchment nameplate in the
-    type-line region.  We detect this by measuring the density of small bright
-    spots in the type-line band.
+    MysticalArchive frames have a dotted parchment nameplate in the type-line region. The
+    test measures the density of small bright spots (pixels brighter than mean + 1 stddev)
+    in the type-line band.
     """
     width, height = image.size
     type_line_top = int(0.55 * height)
@@ -529,7 +373,6 @@ def _detect_mystical_archive(image: Any) -> bool:
     pixels = list(band.getdata())
     if not pixels:
         return False
-    # Count pixels brighter than the mean + 1 standard deviation (bright spots)
     mean = sum(pixels) / len(pixels)
     variance = sum((p - mean) ** 2 for p in pixels) / len(pixels)
     stddev = math.sqrt(variance)
@@ -542,15 +385,13 @@ def _detect_mystical_archive(image: Any) -> bool:
 def _detect_storybook(image: Any) -> bool:
     """Detect the vine scroll border of Storybook frames.
 
-    Storybook frames have an irregular, vine-scroll border pattern.  We detect
-    this by measuring the irregularity (stddev of edge brightness) along the
-    card border.
+    Storybook frames have an irregular, vine-scroll border pattern. The test measures the
+    irregularity (stddev of edge brightness) along the card's left border strip.
     """
     width, height = image.size
     border_width = int(0.03 * min(width, height))
     if border_width <= 0:
         return False
-    # Sample the left border strip
     left_strip = image.crop((0, 0, border_width, height)).convert("L")
     pixels = list(left_strip.getdata())
     if len(pixels) < 10:
@@ -584,12 +425,13 @@ class FrameFamilyResult:
     family_class: str  # blank = abstain
     confidence: int  # 0-3
     method: str  # METHOD_* constant or blank
+    skip_reason: str = ""  # abstention reason (FRAME_FAMILY_*_SKIP_REASON), "" on a verdict
 
 
 def classify_frame_family(
     image: Any,
     *,
-    # Existing evidence fields consumed by fallback methods.
+    candidate_families: Optional[frozenset[str]] = None,
     art_edge_class: str = "",
     layout_class: str = "",
     pinline_inset_frac_top: Optional[float] = None,
@@ -600,23 +442,38 @@ def classify_frame_family(
 ) -> FrameFamilyResult:
     """Classify the frame family of a fetched card image.
 
-    Runs the detection-method fallback chain cheapest-to-costliest:
-      1. Structural construction (deterministic, confidence 3)
-      2. Region-hash (confidence 2) - per-family reference phash comparison
-         where colour check is unreliable (agreement 0%)
-      3. Furniture colour (confidence 2) - skipped in this evidence-only pass
-         (requires per-family reference colours)
-      4. ArtBounds distance (confidence 1) - uses pinline_inset to check for
-         a real border
-      5. Variant-pinned (confidence 1) - skipped in this evidence-only pass
-         (requires candidate name resolution)
+    Runs the detection-method fallback chain cheapest-to-costliest. Every method runs inside
+    the set-narrowed candidate family set:
 
-    Method 3 and 5 require reference data that does not exist yet in this
-    evidence-only pass.  They are stubbed here to return None so the fallback
-    chain is structurally complete and future wiring is straightforward.
+      - `candidate_families` of `frozenset()` means the card's name resolved to zero
+        candidates (issue #979) and the detector abstains with the `no-candidates` reason;
+      - a non-empty `candidate_families` restricts a structural detector to only claim a
+        family the card's own set ships;
+      - `None` (the default, e.g. a direct test call) skips narrowing.
+
+      1. Structural construction (confidence 3) - only for families in `NAMED_FAMILIES`
+         (the calibration gate: a family ships as NAMED only where owner-verified truth
+         exists and the method cleared #829's bar).
+      2. ArtBounds distance (confidence 1) - a consistent, measurable pinline inset plus a
+         known border colour yields `STANDARD`. Cannot name a showcase family.
+
+    Region-hash and furniture-colour are deliberately absent (see module docstring).
     """
-    # --- Method 1: Structural construction detectors ---
+    # --- issue #979: name resolved to zero candidates -> abstain, named reason ---
+    if candidate_families is not None and not candidate_families:
+        return FrameFamilyResult(
+            family_class="",
+            confidence=CONFIDENCE_ABSTAIN,
+            method="",
+            skip_reason=FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON,
+        )
+
+    # --- Method 1: Structural construction detectors (calibration-gated) ---
     for family, detector in STRUCTURAL_DETECTORS.items():
+        if family not in NAMED_FAMILIES:
+            continue  # not cleared to ship as named - see the calibration table
+        if candidate_families is not None and family not in candidate_families:
+            continue  # set narrowing: this card's set does not ship this family
         if detector(image):
             return FrameFamilyResult(
                 family_class=family,
@@ -624,55 +481,31 @@ def classify_frame_family(
                 method=METHOD_STRUCTURAL_CONSTRUCTION,
             )
 
-    # --- Method 2: Region-hash (per-family reference phash comparison) ---
-    region_hash_result = _detect_region_hash(image)
-    if region_hash_result is not None:
-        return region_hash_result
-
-    # --- Method 3: Furniture colour (stubbed - no reference colours yet) ---
-    # Requires per-family dominant-colour references.
-    # pass
-
-    # --- Method 4: ArtBounds distance (pinline-spread check) ---
+    # --- Method 4: ArtBounds distance (pinline-spread check -> STANDARD only) ---
     if (
         pinline_inset_frac_top is not None
         and pinline_inset_frac_bottom is not None
         and pinline_inset_frac_left is not None
         and pinline_inset_frac_right is not None
     ):
-        top = pinline_inset_frac_top
-        bottom = pinline_inset_frac_bottom
-        left = pinline_inset_frac_left
-        right = pinline_inset_frac_right
-        # A real border has measurable inset on all four sides.  The spread
-        # (max - min) indicates whether the border is consistent or if one
-        # side is art reaching the edge (extended).
-        fracs = [f for f in (top, bottom, left, right) if f is not None]
-        if len(fracs) >= 3:
-            spread = max(fracs) - min(fracs)
-            avg_inset = sum(fracs) / len(fracs)
-            # A real border has consistent inset (low spread) and measurable
-            # average inset.  Extended art has high spread (one side near zero).
-            if spread < ARTBOUNDS_PINLINE_SPREAD_MIN and avg_inset > 0.01:
-                # Real border present - but we can't name the family from
-                # pinline alone.  Mark as "standard" if layout_class is set,
-                # otherwise abstain.
-                if layout_class in ("black", "white", "silver"):
-                    return FrameFamilyResult(
-                        family_class=FRAME_FAMILY_STANDARD,
-                        confidence=CONFIDENCE_MODERATE,
-                        method=METHOD_ARTBOUNDS_DISTANCE,
-                    )
-
-    # --- Method 5: Variant-pinned (stubbed - needs candidate resolution) ---
-    # Requires CandidateNameIndex.candidates_for, not available here.
-    # pass
+        fracs = [pinline_inset_frac_top, pinline_inset_frac_bottom, pinline_inset_frac_left, pinline_inset_frac_right]
+        spread = max(fracs) - min(fracs)
+        avg_inset = sum(fracs) / len(fracs)
+        # A real bordered frame has a consistent, measurable inset on all four sides.
+        if spread < 0.02 and avg_inset > 0.01:
+            if layout_class in ("black", "white", "silver"):
+                return FrameFamilyResult(
+                    family_class=FRAME_FAMILY_STANDARD,
+                    confidence=CONFIDENCE_MODERATE,
+                    method=METHOD_ARTBOUNDS_DISTANCE,
+                )
 
     # --- Abstain ---
     return FrameFamilyResult(
         family_class="",
         confidence=CONFIDENCE_ABSTAIN,
         method="",
+        skip_reason=FRAME_FAMILY_AMBIGUOUS_SKIP_REASON,
     )
 
 
@@ -689,15 +522,16 @@ def cast_frame_family_vote(
 ) -> Optional[CardTagVote]:
     """An unsaved `CardTagVote` applying the pre-existing "Showcase" tag, or None.
 
-    ONLY named, above-bar verdicts vote.  "STANDARD", "CUSTOM", "OTHER_SHOWCASE",
-    and blank (abstain) are deliberately silent rather than casting a negative
-    "Showcase" vote: a negative vote from an unvalidated class is a claim, not
-    an abstention.
-
-    Above-bar = confidence >= 2 AND family is one of the named structural families
-    (the five fable-judge-confirmed families) or the named region-hash families.
+    The gate reads the calibration table's outcome, not a hard-coded tier: a vote is cast
+    only when the family is in `NAMED_FAMILIES` (owner-verified truth + #829's bar cleared)
+    AND the confidence is structural. "STANDARD", "CUSTOM", "OTHER_SHOWCASE", and blank are
+    deliberately silent rather than casting a negative "Showcase" vote: a negative vote from
+    an unvalidated class is a claim, not an abstention. `NAMED_FAMILIES` is currently empty
+    (the calibration failed #829's bar), so this function casts nothing today.
     """
-    if frame_family_confidence < CONFIDENCE_HIGH:
+    if frame_family_class not in NAMED_FAMILIES:
+        return None
+    if frame_family_confidence < CONFIDENCE_STRUCTURAL:
         return None
     if frame_family_class in (
         "",
@@ -763,21 +597,19 @@ def run_frame_family_cast(
     dry_run: bool = False,
     run_id: Optional[str] = None,
     card_ids: Optional[Any] = None,
+    chunk_size: int = 500,
 ) -> FrameFamilyCastResult:
     """Cast coarse "Showcase" votes from stored frame-family evidence.
 
-    Mirrors `local_art_edge.run_art_edge_continuity_cast`'s own pattern:
-    eligible cards -> read stored evidence -> cast if above-bar -> log skips.
+    Mirrors `local_art_edge.run_art_edge_continuity_cast`'s own pattern: eligible cards ->
+    read stored evidence -> cast if above-bar -> log skips. The bar is `cast_frame_family_vote`'s
+    own calibration gate (`NAMED_FAMILIES`), which is empty today, so this run casts nothing.
     """
-    # Fail fast if the tag hasn't been seeded — same convention as
-    # run_art_edge_continuity_cast: the caller (stage_e_dispatch) catches
-    # and degrades gracefully; this function itself must not silently
-    # swallow a missing tag.
     run_id = run_id or generate_run_id()
 
     tag = Tag.objects.filter(name=FRAME_FAMILY_TAG_NAME).first()
     if tag is None:
-        raise RuntimeError(f"Tag '{FRAME_FAMILY_TAG_NAME}' not found. " "Run seed_default_tags() before casting.")
+        raise RuntimeError(f"Tag '{FRAME_FAMILY_TAG_NAME}' not found. Run seed_default_tags() before casting.")
 
     result = FrameFamilyCastResult(dry_run=dry_run, run_id=run_id)
 
@@ -797,7 +629,7 @@ def run_frame_family_cast(
 
     votes_batch: list[CardTagVote] = []
 
-    for card in _eligible_cards_queryset(card_ids).iterator():
+    for card in _eligible_cards_queryset(card_ids).iterator(chunk_size=chunk_size):
         evidence = ImageEvidence.objects.filter(card=card).order_by("-created_at").first()
         if evidence is None:
             _skip(card.pk, FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON)
@@ -818,7 +650,9 @@ def run_frame_family_cast(
             run_id=run_id,
         )
         if vote is None:
-            if family_confidence < CONFIDENCE_HIGH:
+            if family_class not in NAMED_FAMILIES:
+                reason = f"uncalibrated-{family_class}"
+            elif family_confidence < CONFIDENCE_STRUCTURAL:
                 reason = f"confidence-{family_confidence}"
             else:
                 reason = f"family-{family_class}"
@@ -847,10 +681,15 @@ __all__ = [
     "FRAME_FAMILY_EXTRACTOR_VERSION",
     "FRAME_FAMILY_ANONYMOUS_ID",
     "FRAME_FAMILY_TAG_NAME",
+    "FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON",
     "FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON",
     "FRAME_FAMILY_NO_READING_SKIP_REASON",
     "FRAME_FAMILY_AMBIGUOUS_SKIP_REASON",
     "FRAME_FAMILY_RESCANNABLE_SKIP_REASONS",
+    "NAMED_FAMILIES",
+    "SET_TO_FRAME_FAMILIES",
+    "candidate_frame_families",
+    "build_candidate_frame_families_lookup",
     "FrameFamilyResult",
     "classify_frame_family",
     "cast_frame_family_vote",
