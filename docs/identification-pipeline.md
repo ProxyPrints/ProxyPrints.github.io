@@ -455,6 +455,36 @@ printing votes, so it would have fired on the first `-v2` run.
 
 ## Parallel detectors (same evidence, never gate identification)
 
+- **Frame-family identifiers** (`local_frame_family.classify_frame_family`):
+  names which frame family a card belongs to by inspecting the uploaded
+  image directly. Produces `frame_family_class` (named family or
+  `OTHER_SHOWCASE`/`STANDARD`/`CUSTOM`/blank), `frame_family_confidence`
+  (0–3), and `frame_family_method` on `ImageEvidence`. A fallback chain
+  from cheapest to costliest:
+
+  1. **Structural construction** (confidence 3): deterministic detectors for
+     five unmistakable families — ShowcaseMagnified, Pipboy, Vault,
+     MysticalArchive, Storybook. Zero-threshold, high-precision.
+  2. **Region-hash** (confidence 2, LIVE): per-family reference perceptual
+     hash comparison, restricted to families with ≥88% within-family 1-NN
+     accuracy and 0% colour-check agreement (NeonInk, ShowcaseMagnified,
+     M15NyxShowcase). Crops the left 7% border strip, computes a phash,
+     finds nearest family by hamming distance (threshold 25). Reference
+     phashes stored in `frame_family_ref_phashes.json` (no pixels).
+  3. **Furniture colour** (confidence 2, BLOCKED): dominant-colour check.
+     Blocked on stored RGB swatch artifact — `colour_classification_fixed.json`
+     contains naming counts only.
+  4. **ArtBounds distance** (confidence 1): pinline-spread check where the
+     card edge is real (a real border is present, not art-only).
+  5. **Variant-pinned** (confidence 1, STUBBED): reference a known variant
+     of the same card name. Blocked on candidate-name resolution.
+
+  The coarse "Showcase" tag is voted ONLY on named, above-bar verdicts
+  (confidence ≥ 2, family not STANDARD/CUSTOM/OTHER_SHOWCASE/blank).
+  Wired via `cast_frame_family_vote` called from
+  `stage_e_dispatch._run_evidence_only_calculators` and the standalone
+  `local_frame_family_cast` management command.
+
 - **AI-art detector**: generator names in the OCR text → "AI-Generated" tag
   votes (ordinary consensus since #292). Detect-and-tag only.
 - **"Marked as proxy"** (#291, planned): marker presence → tag; **absence** →
