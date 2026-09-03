@@ -755,24 +755,25 @@ def _compute_one_card(
         image = Image.open(BytesIO(image_bytes))
 
     profile_dict: Optional[dict[str, float]] = {} if profile else None
-    result = compute_card_evidence(
-        card_id,
-        content_hash,
-        image,
-        fetch_latency_ms,
-        profile=profile_dict,
-        short_circuit=short_circuit,
-        known_set_codes=known_set_codes,
-        artist_lexicon=_WORKER_ARTIST_LEXICON,
-        printing_artist_lookup=_WORKER_PRINTING_ARTIST_LOOKUP,
-        card_artist_names=card_artist_names,
-        modern_artist_lexicon=_WORKER_MODERN_ARTIST_LEXICON,
-        md5_checksum=md5_checksum,
-        sha256_checksum=sha256_checksum,
-        stale_extractor_keys=stale_extractor_keys,
-        stored_evidence_fields=stored_evidence_fields,
-        stored_extractor_versions=stored_extractor_versions,
-    )
+    compute_kwargs: dict[str, Any] = {
+        "fetch_latency_ms": fetch_latency_ms,
+        "profile": profile_dict,
+        "short_circuit": short_circuit,
+        "known_set_codes": known_set_codes,
+        "artist_lexicon": _WORKER_ARTIST_LEXICON,
+        "printing_artist_lookup": _WORKER_PRINTING_ARTIST_LOOKUP,
+        "card_artist_names": card_artist_names,
+        "modern_artist_lexicon": _WORKER_MODERN_ARTIST_LEXICON,
+        "md5_checksum": md5_checksum,
+        "sha256_checksum": sha256_checksum,
+        "stale_extractor_keys": stale_extractor_keys,
+        "stored_evidence_fields": stored_evidence_fields,
+        "stored_extractor_versions": stored_extractor_versions,
+    }
+    # Empty set -> omit the kwarg -> None default (skip narrowing); non-empty -> narrow.
+    if candidate_frame_families:
+        compute_kwargs["candidate_frame_families"] = candidate_frame_families
+    result = compute_card_evidence(card_id, content_hash, image, **compute_kwargs)
     if not dry_run:
         persist_evidence(result, run_id=run_id)
     if profile_dict is not None and wall_started_at is not None:
