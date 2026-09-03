@@ -860,24 +860,25 @@ def _stage_c_compute_one_card(
 
     try:
         image = Image.open(BytesIO(image_bytes))
-        result = compute_card_evidence(
-            card_id,
-            content_hash,
-            image,
-            fetch_latency_ms=fetch_latency_ms,
-            short_circuit=_compute_pool_short_circuit,
-            known_set_codes=_compute_pool_lexicon,
-            artist_lexicon=_compute_pool_artist_lexicon,
-            printing_artist_lookup=_compute_pool_printing_artist_lookup,
-            card_artist_names=_compute_pool_name_artist_lookup(card_name),
-            modern_artist_lexicon=_compute_pool_modern_artist_lexicon,
-            md5_checksum=md5_checksum,
-            sha256_checksum=sha256_checksum,
-            stale_extractor_keys=stale_extractor_keys,
-            stored_evidence_fields=stored_evidence_fields,
-            stored_extractor_versions=stored_extractor_versions,
-            candidate_frame_families=_compute_pool_candidate_frame_families_lookup(card_name),
-        )
+        compute_kwargs: dict[str, Any] = {
+            "fetch_latency_ms": fetch_latency_ms,
+            "short_circuit": _compute_pool_short_circuit,
+            "known_set_codes": _compute_pool_lexicon,
+            "artist_lexicon": _compute_pool_artist_lexicon,
+            "printing_artist_lookup": _compute_pool_printing_artist_lookup,
+            "card_artist_names": _compute_pool_name_artist_lookup(card_name),
+            "modern_artist_lexicon": _compute_pool_modern_artist_lexicon,
+            "md5_checksum": md5_checksum,
+            "sha256_checksum": sha256_checksum,
+            "stale_extractor_keys": stale_extractor_keys,
+            "stored_evidence_fields": stored_evidence_fields,
+            "stored_extractor_versions": stored_extractor_versions,
+        }
+        # Empty set -> omit the kwarg -> None default (skip narrowing); non-empty -> narrow.
+        candidate_frame_families = _compute_pool_candidate_frame_families_lookup(card_name)
+        if candidate_frame_families:
+            compute_kwargs["candidate_frame_families"] = candidate_frame_families
+        result = compute_card_evidence(card_id, content_hash, image, **compute_kwargs)
         if not dry_run:
             with suppress_evidence_change_echo():
                 persist_evidence(result, run_id=run_id)
