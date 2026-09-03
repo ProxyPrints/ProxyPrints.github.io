@@ -167,6 +167,11 @@ EXPECTED_SKIP_REASONS = {
     # vocabulary. Appended at the end, same positional-stability reasoning as the two entries
     # above.
     "no-reading": {"ART_EDGE_NO_READING_SKIP_REASON", "FRAME_FAMILY_NO_READING_SKIP_REASON"},
+    # Frame-family caster — local_frame_family.py (frame-family-v1). "no-candidates" is new to
+    # the roster: the card's name resolved to zero candidate printings (issue #979), so there is
+    # no set to narrow the candidate families by. Appended after the art-edge entries, same
+    # positional-stability reasoning as every entry above.
+    "no-candidates": {"FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON"},
     "framed": {"ART_EDGE_FRAMED_SKIP_REASON"},
     "mixed": {"ART_EDGE_MIXED_SKIP_REASON"},
     # Filename-declaration caster — local_filename_declarations.py

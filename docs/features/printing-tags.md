@@ -2942,7 +2942,7 @@ inside `stage_e_dispatch._run_attribute_chip_casters`, and
 | appropriate-bleed                                                                                     | `local_bleed_calculator`      | `bleed-calculator-cast-v1`     |
 | Extended, Showcase, Full Art, Etched, Old Border, Future Frame, Black/White/Silver Border, Borderless | `local_filename_declarations` | `filename-declaration-cast-v1` |
 | Extended                                                                                              | `local_art_edge`              | `art-edge-continuity-v1`       |
-| Showcase (named above-bar frame-family verdicts only)                                                 | `local_frame_family`          | `frame-family-cast-v1`         |
+| Showcase (named above-bar frame-family verdicts only)                                                 | `local_frame_family`          | `frame-family-v1`              |
 
 The old single-signal bleed caster (`bleed-edge-cast-v1`, same module as
 frame style, NEW 2026-07-30) is **RETIRED 2026-08-15**: it is the SOLE

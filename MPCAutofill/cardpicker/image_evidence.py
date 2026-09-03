@@ -270,7 +270,6 @@ from cardpicker.local_fallback import (
     extract_artist_name,
     normalize_crop_box,
 )
-from cardpicker.local_frame_family import FRAME_FAMILY_EXTRACTOR_VERSION as _FF_VERSION
 from cardpicker.local_frame_family import classify_frame_family
 from cardpicker.local_image_quality import (
     compute_blur_variance,
@@ -889,6 +888,7 @@ def compute_card_evidence(
     stale_extractor_keys: Optional[frozenset[str]] = None,
     stored_evidence_fields: Optional[dict[str, Any]] = None,
     stored_extractor_versions: Optional[dict[str, str]] = None,
+    candidate_frame_families: Optional[frozenset[str]] = None,
 ) -> ExtractionResult:
     """
     Compute-only continuation of `fetch_and_compute_card_evidence_for_tests` above - everything that function does
@@ -1114,6 +1114,13 @@ def compute_card_evidence(
     will misreport as "voted" for a run that only ever carried it forward. The whole-catalogue,
     not-run-id-scoped report is unaffected. Not fixed here - see the perf/per-extractor-
     reextraction PR body for why this is an accepted, disclosed tradeoff rather than a silent one.
+
+    `candidate_frame_families` (frame-family identifiers): the set-narrowed frame families the
+    card's name resolves to (issue #979), resolved by the caller via
+    `local_frame_family.candidate_frame_families(name, CandidateNameIndex(...))` and passed
+    through explicitly - never queried here. `None` (the default, e.g. a direct test call) skips
+    narrowing; `frozenset()` means the name resolved to zero candidates and the frame_family
+    extractor abstains with the `no-candidates` skip reason.
     """
     if short_circuit is None:
         short_circuit = _short_circuit_enabled_by_env()
@@ -1714,18 +1721,19 @@ def compute_card_evidence(
                     fields["pinline_inset_verdict"] = pinline_inset.verdict
         extractor_versions["pinline_inset"] = PINLINE_INSET_EXTRACTOR_VERSION
 
-    # frame_family (directive 2026-09-02, issues #829/#878/#952/#967/#974): per-card frame-family
-    # identification.  Runs after pinline_inset because the artBounds-distance fallback reads
-    # pinline_inset_frac_* fields computed above.  Structural detectors (confidence 3) fire on
-    # construction, not colour - zero threshold on ordinary frames.  Methods 2 (region-hash),
-    # 3 (furniture-colour), and 5 (variant-pinned) are stubbed and return abstain until their
-    # reference data is wired in a future pass.
+    # frame_family (issues #829/#878/#952/#967/#974/#968/#979): per-card frame-family
+    # identification. Runs after pinline_inset because the artBounds-distance fallback reads the
+    # pinline_inset_frac_* fields computed above. The structural detectors (confidence 3) fire on
+    # construction, not colour, and are gated by `NAMED_FAMILIES` (see local_frame_family) - empty
+    # today because calibration failed #829's bar, so production extraction abstains. Region-hash
+    # and furniture-colour are not shipped (see local_frame_family's module docstring).
     if _stale("frame_family"):
         if image is None:
             skip_reasons["frame_family"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
         else:
             ff_result = classify_frame_family(
                 image,
+                candidate_families=candidate_frame_families,
                 art_edge_class=fields.get("art_edge_class", ""),
                 layout_class=fields.get("layout_class", ""),
                 pinline_inset_frac_top=fields.get("pinline_inset_frac_top"),
@@ -1738,8 +1746,8 @@ def compute_card_evidence(
             fields["frame_family_confidence"] = ff_result.confidence
             fields["frame_family_method"] = ff_result.method
             if not ff_result.family_class:
-                skip_reasons["frame_family"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
-        extractor_versions["frame_family"] = _FF_VERSION
+                skip_reasons["frame_family"] = ff_result.skip_reason or EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        extractor_versions["frame_family"] = FRAME_FAMILY_EXTRACTOR_VERSION
 
     if profile is not None:
         profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000

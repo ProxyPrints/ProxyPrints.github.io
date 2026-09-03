@@ -5,6 +5,11 @@ Structural detectors are tested against real PIL images with precisely
 controlled per-region characteristics, matching `test_local_art_edge.py`'s
 own approach of real geometry + real pixels rather than stubbed samplers.
 
+The calibration gate (`NAMED_FAMILIES`) is empty by default, so the fallback
+chain abstains and the caster votes nothing in production. Tests that need a
+family to ship as NAMED monkeypatch `NAMED_FAMILIES` to enable it - the
+mechanism is proven, the production gate is separately asserted to be shut.
+
 No network, no OCR, no Django DB except where a Tag row is genuinely needed
 (vote casting).
 """
@@ -18,12 +23,13 @@ import cardpicker.local_frame_family as mod
 from cardpicker.default_tags import seed_default_tags
 from cardpicker.local_frame_family import (
     CONFIDENCE_ABSTAIN,
-    CONFIDENCE_HIGH,
     CONFIDENCE_MODERATE,
     CONFIDENCE_STRUCTURAL,
+    FRAME_FAMILY_AMBIGUOUS_SKIP_REASON,
     FRAME_FAMILY_ANONYMOUS_ID,
     FRAME_FAMILY_CUSTOM,
     FRAME_FAMILY_MYSTICAL_ARCHIVE,
+    FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON,
     FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON,
     FRAME_FAMILY_NO_READING_SKIP_REASON,
     FRAME_FAMILY_OTHER_SHOWCASE,
@@ -36,6 +42,7 @@ from cardpicker.local_frame_family import (
     METHOD_ARTBOUNDS_DISTANCE,
     METHOD_STRUCTURAL_CONSTRUCTION,
     FrameFamilyResult,
+    candidate_frame_families,
     cast_frame_family_vote,
     classify_frame_family,
     run_frame_family_cast,
@@ -58,8 +65,8 @@ def _blank_card(width=750, height=1050, fill=(40, 30, 20)):
 
 
 def _showcase_magnified_card():
-    """A card with a circular art window, mimicking ShowcaseMagnified's
-    circular ring: the fill-ratio (avg/max content width) will be ~pi/4."""
+    """A card with a circular art window, mimicking ShowcaseMagnified's circular ring: the
+    art box's vertical center is full-width content and its top/bottom rows are empty."""
     width, height = _IMAGE_SIZE
     img = Image.new("RGB", (width, height), (40, 30, 20))
     draw = ImageDraw.Draw(img)
@@ -79,10 +86,9 @@ def _showcase_magnified_card():
 
 def _pipboy_card():
     """A card with a high-frequency alternating pattern in the header region,
-    mimicking the CRT scanline aesthetic."""
+    mimicking the CRT scanline aesthetic (horizontal stripes -> vertical alternation)."""
     width, height = _IMAGE_SIZE
     img = Image.new("RGB", (width, height), (40, 30, 20))
-    # Fill the header (top 15%) with alternating bright/dark horizontal lines.
     header_bottom = int(0.15 * height)
     for y in range(header_bottom):
         brightness = 200 if y % 2 == 0 else 20
@@ -97,25 +103,21 @@ def _vault_card():
     width, height = _IMAGE_SIZE
     img = Image.new("RGB", (width, height), (40, 30, 20))
     corner_size = int(0.08 * min(width, height))
-    # Top-left corner: bright-to-dark L-shape
     for y in range(corner_size):
         for x in range(corner_size):
             dist = (x + y) / (2 * corner_size)
             val = int(255 * (1 - dist))
             img.putpixel((x, y), (val, val, val))
-    # Top-right corner
     for y in range(corner_size):
         for x in range(width - corner_size, width):
             dist = ((width - 1 - x) + y) / (2 * corner_size)
             val = int(255 * (1 - dist))
             img.putpixel((x, y), (val, val, val))
-    # Bottom-left corner
     for y in range(height - corner_size, height):
         for x in range(corner_size):
             dist = (x + (height - 1 - y)) / (2 * corner_size)
             val = int(255 * (1 - dist))
             img.putpixel((x, y), (val, val, val))
-    # Bottom-right corner
     for y in range(height - corner_size, height):
         for x in range(width - corner_size, width):
             dist = ((width - 1 - x) + (height - 1 - y)) / (2 * corner_size)
@@ -125,17 +127,15 @@ def _vault_card():
 
 
 def _mystical_archive_card():
-    """A card with many small bright spots in the type-line region (55-65%
-    of height), mimicking the dotted parchment nameplate."""
+    """A card with many small bright spots in the type-line region (55-65% of height),
+    mimicking the dotted parchment nameplate."""
     width, height = _IMAGE_SIZE
     img = Image.new("RGB", (width, height), (40, 30, 20))
     type_top = int(0.55 * height)
     type_bottom = int(0.65 * height)
-    # Fill the type-line band with a dark base and sprinkle bright dots.
     for y in range(type_top, type_bottom):
         for x in range(width):
             img.putpixel((x, y), (30, 25, 15))
-    # Sprinkle bright spots at ~20% density (well above the 0.1 threshold).
     rng = random.Random(42)
     for _ in range(int(width * (type_bottom - type_top) * 0.20)):
         x = rng.randint(0, width - 1)
@@ -150,7 +150,6 @@ def _storybook_card():
     width, height = _IMAGE_SIZE
     img = Image.new("RGB", (width, height), (40, 30, 20))
     border_width = max(int(0.03 * min(width, height)), 3)
-    # Fill the left border with highly variable brightness.
     rng = random.Random(42)
     for y in range(height):
         for x in range(border_width):
@@ -170,11 +169,9 @@ class TestStructuralDetectors:
         assert mod._detect_showcase_magnified(img) is True
 
     def test_showcase_magnified_detector_rejects_full_width_art(self):
-        """A full-width rectangular art window has ratio near 1.0, above the threshold."""
         width, height = _IMAGE_SIZE
         img = Image.new("RGB", (width, height), (40, 30, 20))
         draw = ImageDraw.Draw(img)
-        # Full-width art region.
         draw.rectangle(
             [int(0.07 * width), int(0.10 * height), int(0.93 * width), int(0.85 * height)],
             fill=(120, 90, 60),
@@ -220,51 +217,76 @@ class TestStructuralDetectors:
 
 
 class TestClassifyFrameFamily:
-    def test_structural_showcase_magnified(self):
-        img = _showcase_magnified_card()
-        result = classify_frame_family(img)
+    def _enable_all(self, monkeypatch):
+        monkeypatch.setattr(mod, "NAMED_FAMILIES", mod.STRUCTURAL_FAMILIES)
+
+    def test_structural_showcase_magnified(self, monkeypatch):
+        self._enable_all(monkeypatch)
+        result = classify_frame_family(_showcase_magnified_card())
         assert result.family_class == FRAME_FAMILY_SHOWCASE_MAGNIFIED
         assert result.confidence == CONFIDENCE_STRUCTURAL
         assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
 
-    def test_structural_pipboy(self):
-        img = _pipboy_card()
-        result = classify_frame_family(img)
+    def test_structural_pipboy(self, monkeypatch):
+        self._enable_all(monkeypatch)
+        result = classify_frame_family(_pipboy_card())
         assert result.family_class == FRAME_FAMILY_PIPBOY
         assert result.confidence == CONFIDENCE_STRUCTURAL
         assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
 
-    def test_structural_vault(self):
-        img = _vault_card()
-        result = classify_frame_family(img)
+    def test_structural_vault(self, monkeypatch):
+        self._enable_all(monkeypatch)
+        result = classify_frame_family(_vault_card())
         assert result.family_class == FRAME_FAMILY_VAULT
         assert result.confidence == CONFIDENCE_STRUCTURAL
         assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
 
-    def test_structural_mystical_archive(self):
-        img = _mystical_archive_card()
-        result = classify_frame_family(img)
+    def test_structural_mystical_archive(self, monkeypatch):
+        self._enable_all(monkeypatch)
+        result = classify_frame_family(_mystical_archive_card())
         assert result.family_class == FRAME_FAMILY_MYSTICAL_ARCHIVE
         assert result.confidence == CONFIDENCE_STRUCTURAL
         assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
 
-    def test_structural_storybook(self):
-        img = _storybook_card()
-        result = classify_frame_family(img)
+    def test_structural_storybook(self, monkeypatch):
+        self._enable_all(monkeypatch)
+        result = classify_frame_family(_storybook_card())
         assert result.family_class == FRAME_FAMILY_STORYBOOK
         assert result.confidence == CONFIDENCE_STRUCTURAL
         assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
 
-    def test_abstains_on_blank_card(self):
-        img = _blank_card()
-        result = classify_frame_family(img)
+    def test_abstains_when_no_family_calibrated(self):
+        """With NAMED_FAMILIES empty (the shipped calibration state) the structural detectors
+        are gated off and the chain abstains, even on a synthetic positive."""
+        result = classify_frame_family(_showcase_magnified_card())
+        assert result.family_class == ""
+        assert result.confidence == CONFIDENCE_ABSTAIN
+        assert result.method == ""
+        assert result.skip_reason == FRAME_FAMILY_AMBIGUOUS_SKIP_REASON
+
+    def test_zero_candidates_abstains_with_no_candidates_reason(self, monkeypatch):
+        """issue #979: a name resolving to zero candidates abstains with a named skip reason."""
+        self._enable_all(monkeypatch)
+        result = classify_frame_family(_showcase_magnified_card(), candidate_families=frozenset())
+        assert result.family_class == ""
+        assert result.skip_reason == FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON
+
+    def test_set_narrowing_blocks_family_not_in_candidate_set(self, monkeypatch):
+        """A structural detector fires, but the family is not in the card's own candidate set,
+        so the chain does not claim it."""
+        self._enable_all(monkeypatch)
+        result = classify_frame_family(_pipboy_card(), candidate_families=frozenset({FRAME_FAMILY_VAULT}))
+        assert result.family_class == ""
+        assert result.skip_reason == FRAME_FAMILY_AMBIGUOUS_SKIP_REASON
+
+    def test_abstains_on_blank_card(self, monkeypatch):
+        self._enable_all(monkeypatch)
+        result = classify_frame_family(_blank_card())
         assert result.family_class == ""
         assert result.confidence == CONFIDENCE_ABSTAIN
         assert result.method == ""
 
     def test_artbounds_distance_fires_on_consistent_pinline(self):
-        """When pinline inset fractions are consistent and layout_class is set,
-        method 4 fires and returns STANDARD with CONFIDENCE_MODERATE."""
         img = _blank_card()
         result = classify_frame_family(
             img,
@@ -279,8 +301,6 @@ class TestClassifyFrameFamily:
         assert result.method == METHOD_ARTBOUNDS_DISTANCE
 
     def test_artbounds_distance_abstains_without_layout_class(self):
-        """ArtBounds fires but layout_class is blank, so we abstain rather than
-        guessing a family name."""
         img = _blank_card()
         result = classify_frame_family(
             img,
@@ -293,8 +313,8 @@ class TestClassifyFrameFamily:
         assert result.family_class == ""
         assert result.confidence == CONFIDENCE_ABSTAIN
 
-    def test_structural_detector_takes_priority_over_artbounds(self):
-        """If both structural and artBounds fire, structural wins (it runs first)."""
+    def test_structural_detector_takes_priority_over_artbounds(self, monkeypatch):
+        self._enable_all(monkeypatch)
         img = _pipboy_card()
         result = classify_frame_family(
             img,
@@ -310,13 +330,50 @@ class TestClassifyFrameFamily:
 
 
 # ---------------------------------------------------------------------------
+# Tests for candidate_frame_families (set narrowing).
+# ---------------------------------------------------------------------------
+
+
+class _FakeIndex:
+    def __init__(self, by_name):
+        self._by_name = by_name
+
+    def candidates_for(self, name):
+        return self._by_name.get(name, [])
+
+
+class _FakeCandidate:
+    def __init__(self, expansion_code):
+        self.expansion_code = expansion_code
+
+
+class TestCandidateFrameFamilies:
+    def test_maps_set_codes_to_families(self):
+        index = _FakeIndex({"foo": [_FakeCandidate("mkm"), _FakeCandidate("eld")]})
+        assert candidate_frame_families("foo", index) == frozenset(
+            {FRAME_FAMILY_SHOWCASE_MAGNIFIED, FRAME_FAMILY_STORYBOOK}
+        )
+
+    def test_empty_for_unknown_name(self):
+        index = _FakeIndex({})
+        assert candidate_frame_families("unknown", index) == frozenset()
+
+    def test_empty_for_sets_without_named_family(self):
+        index = _FakeIndex({"foo": [_FakeCandidate("znr")]})
+        assert candidate_frame_families("foo", index) == frozenset()
+
+
+# ---------------------------------------------------------------------------
 # Tests for cast_frame_family_vote.
 # ---------------------------------------------------------------------------
 
 
 class TestCastFrameFamilyVote:
-    def test_above_bar_vote(self, db):
-        """Named family with confidence >= 2 produces a CardTagVote."""
+    def _enable(self, monkeypatch, families):
+        monkeypatch.setattr(mod, "NAMED_FAMILIES", frozenset(families))
+
+    def test_above_bar_vote(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
         seed_default_tags()
         card = CardFactory()
         vote = cast_frame_family_vote(card, FRAME_FAMILY_SHOWCASE_MAGNIFIED, CONFIDENCE_STRUCTURAL)
@@ -328,28 +385,35 @@ class TestCastFrameFamilyVote:
         assert vote.source == VoteSource.OCR
         assert vote.confidence == mod.FRAME_FAMILY_VOTE_CONFIDENCE
 
-    @pytest.mark.parametrize("confidence", [0, 1])
-    def test_below_bar_confidence_abstains(self, db, confidence):
+    def test_uncalibrated_family_abstains(self, db):
+        """The shipped calibration state (NAMED_FAMILIES empty) casts nothing."""
         seed_default_tags()
-        vote = cast_frame_family_vote(CardFactory(), FRAME_FAMILY_SHOWCASE_MAGNIFIED, confidence)
+        vote = cast_frame_family_vote(CardFactory(), FRAME_FAMILY_SHOWCASE_MAGNIFIED, CONFIDENCE_STRUCTURAL)
+        assert vote is None
+
+    def test_below_bar_confidence_abstains(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
+        seed_default_tags()
+        vote = cast_frame_family_vote(CardFactory(), FRAME_FAMILY_SHOWCASE_MAGNIFIED, CONFIDENCE_MODERATE)
         assert vote is None
 
     @pytest.mark.parametrize(
         "family_class",
         ["", FRAME_FAMILY_STANDARD, FRAME_FAMILY_CUSTOM, FRAME_FAMILY_OTHER_SHOWCASE],
     )
-    def test_non_named_family_abstains(self, db, family_class):
+    def test_non_named_family_abstains(self, db, monkeypatch, family_class):
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
         seed_default_tags()
-        vote = cast_frame_family_vote(CardFactory(), family_class, CONFIDENCE_HIGH)
+        vote = cast_frame_family_vote(CardFactory(), family_class, CONFIDENCE_STRUCTURAL)
         assert vote is None
 
-    def test_unseeded_tag_degrades_to_no_vote(self, db):
-        """If the 'Showcase' tag hasn't been seeded, no vote is cast."""
+    def test_unseeded_tag_degrades_to_no_vote(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
         vote = cast_frame_family_vote(CardFactory(), FRAME_FAMILY_SHOWCASE_MAGNIFIED, CONFIDENCE_STRUCTURAL)
         assert vote is None
 
-    def test_its_identity_is_its_own(self, db):
-        """The anonymous_id must be distinct from other casters."""
+    def test_its_identity_is_its_own(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_VAULT])
         seed_default_tags()
         vote = cast_frame_family_vote(CardFactory(), FRAME_FAMILY_VAULT, CONFIDENCE_STRUCTURAL)
         assert vote is not None
@@ -368,7 +432,11 @@ def _evidence(card, **overrides):
 
 
 class TestRunFrameFamilyCast:
-    def test_structural_reading_casts_a_vote(self, db):
+    def _enable(self, monkeypatch, families):
+        monkeypatch.setattr(mod, "NAMED_FAMILIES", frozenset(families))
+
+    def test_structural_reading_casts_a_vote(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
         seed_default_tags()
         card = CardFactory(content_phash=1)
         _evidence(
@@ -383,7 +451,21 @@ class TestRunFrameFamilyCast:
         vote = CardTagVote.objects.get(card=card, anonymous_id=FRAME_FAMILY_ANONYMOUS_ID)
         assert vote.tag.name == FRAME_FAMILY_TAG_NAME
 
-    def test_dry_run_counts_without_writing(self, db):
+    def test_uncalibrated_reading_abstains(self, db):
+        """Shipped calibration state: no family is NAMED, so a stored named reading casts nothing."""
+        seed_default_tags()
+        card = CardFactory(content_phash=1)
+        _evidence(
+            card, frame_family_class=FRAME_FAMILY_SHOWCASE_MAGNIFIED, frame_family_confidence=CONFIDENCE_STRUCTURAL
+        )
+
+        result = run_frame_family_cast(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.skip_counts == {f"uncalibrated-{FRAME_FAMILY_SHOWCASE_MAGNIFIED}": 1}
+
+    def test_dry_run_counts_without_writing(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
         seed_default_tags()
         card = CardFactory(content_phash=1)
         _evidence(
@@ -419,14 +501,15 @@ class TestRunFrameFamilyCast:
     def test_standard_family_abstains(self, db):
         seed_default_tags()
         card = CardFactory(content_phash=1)
-        _evidence(card, frame_family_class=FRAME_FAMILY_STANDARD, frame_family_confidence=CONFIDENCE_HIGH)
+        _evidence(card, frame_family_class=FRAME_FAMILY_STANDARD, frame_family_confidence=CONFIDENCE_STRUCTURAL)
 
         result = run_frame_family_cast(dry_run=False)
 
         assert result.votes_written == 0
-        assert result.skip_counts == {f"family-{FRAME_FAMILY_STANDARD}": 1}
+        assert result.skip_counts == {f"uncalibrated-{FRAME_FAMILY_STANDARD}": 1}
 
-    def test_low_confidence_abstains(self, db):
+    def test_low_confidence_abstains(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
         seed_default_tags()
         card = CardFactory(content_phash=1)
         _evidence(card, frame_family_class=FRAME_FAMILY_SHOWCASE_MAGNIFIED, frame_family_confidence=CONFIDENCE_MODERATE)
@@ -436,8 +519,8 @@ class TestRunFrameFamilyCast:
         assert result.votes_written == 0
         assert result.skip_counts == {"confidence-1": 1}
 
-    def test_idempotence(self, db):
-        """A second run over the same card casts nothing new."""
+    def test_idempotence(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
         seed_default_tags()
         card = CardFactory(content_phash=1)
         _evidence(
@@ -451,21 +534,20 @@ class TestRunFrameFamilyCast:
         assert second.cards_considered == 0
         assert second.votes_written == 0
 
-    def test_rescannable_skip_allows_rescan(self, db):
-        """A card that was skipped with a rescannable reason IS eligible on the next run."""
+    def test_rescannable_skip_allows_rescan(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_PIPBOY])
         seed_default_tags()
         card = CardFactory(content_phash=1)
-        # First run: no evidence → rescannable skip.
         _no_ev_result = run_frame_family_cast(dry_run=False)
         assert _no_ev_result.skip_counts.get(FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON, 0) == 1
 
-        # Second run: now evidence exists with a named family.
         _evidence(card, frame_family_class=FRAME_FAMILY_PIPBOY, frame_family_confidence=CONFIDENCE_STRUCTURAL)
         second = run_frame_family_cast(dry_run=False)
 
         assert second.votes_written == 1
 
-    def test_card_ids_scopes_to_provided_list(self, db):
+    def test_card_ids_scopes_to_provided_list(self, db, monkeypatch):
+        self._enable(monkeypatch, [FRAME_FAMILY_VAULT])
         seed_default_tags()
         in_scope = CardFactory(content_phash=1)
         out_of_scope = CardFactory(content_phash=2)
@@ -479,7 +561,6 @@ class TestRunFrameFamilyCast:
         assert not CardTagVote.objects.filter(card=out_of_scope, anonymous_id=FRAME_FAMILY_ANONYMOUS_ID).exists()
 
     def test_unseeded_tag_raises(self, db):
-        """A MISSING TAG SEED must raise for a direct caller."""
         CardFactory(content_phash=1)
         with pytest.raises(RuntimeError):
             run_frame_family_cast(dry_run=False)

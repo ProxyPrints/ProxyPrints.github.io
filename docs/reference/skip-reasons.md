@@ -361,21 +361,26 @@ why an unvalidated class abstains rather than casting a negative).
 
 ## Frame-family caster — `MPCAutofill/cardpicker/local_frame_family.py`
 
-`anonymous_id` is `local-frame-family` (`FRAME_FAMILY_ANONYMOUS_ID`) — casts
-the coarse "Showcase" tag on named, above-bar frame-family verdicts (directives
-2026-09-02, issues #829/#878/#952/#967/#974/#968/#979). Reads
-`ImageEvidence.frame_family_class` and `frame_family_confidence`, populated at
-Stage C by `classify_frame_family`. The five structural families
-(ShowcaseMagnified, Pipboy, Vault, MysticalArchive, Storybook) are
-fable-judge-confirmed at confidence 3 with 4/4 precision. Region-hash and
-furniture-colour families are stubbed in this evidence-only pass. Above-bar =
-confidence >= 2 AND family is not STANDARD/CUSTOM/OTHER_SHOWCASE/blank.
+`anonymous_id` is `frame-family-v1` (`FRAME_FAMILY_ANONYMOUS_ID`) — casts the
+coarse "Showcase" tag on named, above-bar frame-family verdicts (issues #829,
+#878, #952, #967, #974, #968, #979). Reads `ImageEvidence.frame_family_class`
+and `frame_family_confidence`, populated at Stage C by `classify_frame_family`.
+The gate reads the calibration table (`NAMED_FAMILIES`): a family is cast only
+where owner-verified truth exists for it and its method cleared #829's bar
+(false positives at or near zero on ordinary frames). Measured against the
+owner-verified labels on disk the structural detectors score 0/4 recall on the
+four owner-confirmed positives and fire spuriously on 27/40 owner-negative
+cards, so `NAMED_FAMILIES` is empty and **this caster is dormant — it casts no
+votes today** until a method clears the bar. Region-hash is closed by the
+frame-identification audit and not shipped; furniture-colour has no stored
+swatch artifact yet.
 
-| Reason        | Constant                               | Means                                                                                                                         | Status            |
-| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `no-evidence` | `FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON` | No current `ImageEvidence` row. **Rescannable**.                                                                              | Live, no rows yet |
-| `no-reading`  | `FRAME_FAMILY_NO_READING_SKIP_REASON`  | `frame_family_class` is blank — the extractor abstained or hasn't produced a reading. **Rescannable**.                        | Live, no rows yet |
-| `ambiguous`   | `FRAME_FAMILY_AMBIGUOUS_SKIP_REASON`   | The classifier ran but could not commit to a single family. Deliberately shares its string with the Stage C extractor reason. | Live, no rows yet |
+| Reason          | Constant                                 | Means                                                                                                                                       | Status            |
+| --------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `no-evidence`   | `FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON`   | No current `ImageEvidence` row. **Rescannable**.                                                                                            | Live, no rows yet |
+| `no-reading`    | `FRAME_FAMILY_NO_READING_SKIP_REASON`    | `frame_family_class` is blank — the extractor abstained or hasn't produced a reading. **Rescannable**.                                      | Live, no rows yet |
+| `ambiguous`     | `FRAME_FAMILY_AMBIGUOUS_SKIP_REASON`     | The classifier ran but could not commit to a single family. Deliberately shares its string with the Stage C extractor reason.               | Live, no rows yet |
+| `no-candidates` | `FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON` | The card's name resolved to zero candidate printings (issue #979), so there is no set to narrow the candidate families by. **Rescannable**. | Live, no rows yet |
 
 ## Proxy-marker caster — `MPCAutofill/cardpicker/local_proxy_marker_cast.py`
 
