@@ -2925,14 +2925,15 @@ was already in place before this change.
 
 ### Who actually casts the attribute chips (2026-07-30, updated 2026-08-19)
 
-**This replaces the pilot as the answer.** Five channels — covering border
-colour, frame style, bleed edge, uploader-declared filename treatments, and
-extended-art continuity — are cast by **evidence-reading casters that fetch
-no images**, wired into the streaming conveyor through two different
-dispatch steps: the first four rows below run inside
-`stage_e_dispatch._run_attribute_chip_casters`, and `art-edge-continuity-v1`
-runs inside the separate `stage_e_dispatch._run_evidence_only_calculators`
-— both are called from `_run_stage_d`:
+**This replaces the pilot as the answer.** Six channels — covering border
+colour, frame style, bleed edge, uploader-declared filename treatments,
+extended-art continuity, and frame-family identifiers — are cast by
+**evidence-reading casters that fetch no images**, wired into the streaming
+conveyor through two different dispatch steps: the first four rows below run
+inside `stage_e_dispatch._run_attribute_chip_casters`, and
+`art-edge-continuity-v1` and `frame-family-v1` run inside the separate
+`stage_e_dispatch._run_evidence_only_calculators` — both are called from
+`_run_stage_d`:
 
 | chip family                                                                                           | module                        | identity                       |
 | ----------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------ |
@@ -2941,6 +2942,7 @@ runs inside the separate `stage_e_dispatch._run_evidence_only_calculators`
 | appropriate-bleed                                                                                     | `local_bleed_calculator`      | `bleed-calculator-cast-v1`     |
 | Extended, Showcase, Full Art, Etched, Old Border, Future Frame, Black/White/Silver Border, Borderless | `local_filename_declarations` | `filename-declaration-cast-v1` |
 | Extended                                                                                              | `local_art_edge`              | `art-edge-continuity-v1`       |
+| Showcase (named above-bar frame-family verdicts only)                                                 | `local_frame_family`          | `frame-family-cast-v1`         |
 
 The old single-signal bleed caster (`bleed-edge-cast-v1`, same module as
 frame style, NEW 2026-07-30) is **RETIRED 2026-08-15**: it is the SOLE

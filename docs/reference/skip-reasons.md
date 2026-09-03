@@ -359,6 +359,24 @@ why an unvalidated class abstains rather than casting a negative).
 | `framed`      | `ART_EDGE_FRAMED_SKIP_REASON`      | A reading was stored, and it is `framed` — a real border survives beside the art.                                                                               | Live, no rows yet (~161k eligible) |
 | `mixed`       | `ART_EDGE_MIXED_SKIP_REASON`       | A reading was stored, and it is `mixed` — the test strip matched exactly one of the two references, the classifier's least-confident outcome.                   | Live, no rows yet (~37k eligible)  |
 
+## Frame-family caster — `MPCAutofill/cardpicker/local_frame_family.py`
+
+`anonymous_id` is `local-frame-family` (`FRAME_FAMILY_ANONYMOUS_ID`) — casts
+the coarse "Showcase" tag on named, above-bar frame-family verdicts (directives
+2026-09-02, issues #829/#878/#952/#967/#974/#968/#979). Reads
+`ImageEvidence.frame_family_class` and `frame_family_confidence`, populated at
+Stage C by `classify_frame_family`. The five structural families
+(ShowcaseMagnified, Pipboy, Vault, MysticalArchive, Storybook) are
+fable-judge-confirmed at confidence 3 with 4/4 precision. Region-hash and
+furniture-colour families are stubbed in this evidence-only pass. Above-bar =
+confidence >= 2 AND family is not STANDARD/CUSTOM/OTHER_SHOWCASE/blank.
+
+| Reason        | Constant                               | Means                                                                                                                         | Status            |
+| ------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `no-evidence` | `FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON` | No current `ImageEvidence` row. **Rescannable**.                                                                              | Live, no rows yet |
+| `no-reading`  | `FRAME_FAMILY_NO_READING_SKIP_REASON`  | `frame_family_class` is blank — the extractor abstained or hasn't produced a reading. **Rescannable**.                        | Live, no rows yet |
+| `ambiguous`   | `FRAME_FAMILY_AMBIGUOUS_SKIP_REASON`   | The classifier ran but could not commit to a single family. Deliberately shares its string with the Stage C extractor reason. | Live, no rows yet |
+
 ## Proxy-marker caster — `MPCAutofill/cardpicker/local_proxy_marker_cast.py`
 
 `anonymous_id` is `proxy-marker-cast-v1` (`PROXY_MARKER_CAST_ANONYMOUS_ID`, public issue #952) —

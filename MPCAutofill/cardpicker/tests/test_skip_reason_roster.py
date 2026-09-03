@@ -106,6 +106,7 @@ EXPECTED_SKIP_REASONS = {
         "BLEED_CALC_NO_EVIDENCE_SKIP_REASON",
         "ART_EDGE_NO_EVIDENCE_SKIP_REASON",
         "PROXY_MARKER_NO_EVIDENCE_SKIP_REASON",
+        "FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON",
     },
     "eliminated": {
         "FALLBACK_ELIMINATED_SKIP_REASON",
@@ -120,6 +121,7 @@ EXPECTED_SKIP_REASONS = {
         "LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON",
         "CHIP_ABSTAINED_SKIP_REASON",
         "BLEED_CALC_AMBIGUOUS_SKIP_REASON",
+        "FRAME_FAMILY_AMBIGUOUS_SKIP_REASON",
     },
     "no-text": {
         "EXTRACTOR_NO_TEXT_SKIP_REASON",
@@ -164,7 +166,7 @@ EXPECTED_SKIP_REASONS = {
     # values (an unvalidated non-'extended' reading), not shared with any other calculator's
     # vocabulary. Appended at the end, same positional-stability reasoning as the two entries
     # above.
-    "no-reading": {"ART_EDGE_NO_READING_SKIP_REASON"},
+    "no-reading": {"ART_EDGE_NO_READING_SKIP_REASON", "FRAME_FAMILY_NO_READING_SKIP_REASON"},
     "framed": {"ART_EDGE_FRAMED_SKIP_REASON"},
     "mixed": {"ART_EDGE_MIXED_SKIP_REASON"},
     # Filename-declaration caster — local_filename_declarations.py

@@ -3018,6 +3018,26 @@ class ImageEvidence(models.Model):
     # for "not yet computed", same convention as the per-edge calls above.
     pinline_inset_verdict = models.CharField(max_length=16, blank=True, default="")
 
+    # frame_family (directive 2026-09-02, issues #829/#878/#952/#967/#974/#968/#979):
+    # per-card frame-family identification stored alongside evidence.  Detection methods run
+    # cheapest-to-costliest: structural construction (deterministic, confidence 3), region-hash
+    # (confidence 2, stubbed), furniture colour (confidence 2, stubbed), artBounds distance
+    # (confidence 1), variant-pinned (confidence 1, stubbed).  A family ships as a NAMED value
+    # only where owner-verified truth exists and the method clears #829's bar on negatives;
+    # otherwise it ships as OTHER_SHOWCASE capability.
+    #
+    # frame_family_class: the named family, or "OTHER_SHOWCASE"/"STANDARD"/"CUSTOM", or
+    # blank-string-as-sentinel (abstain).  Same blank-vs-null convention as bleed_class/
+    # layout_class above: blank means "not yet computed or abstained", not "null".
+    frame_family_class = models.CharField(max_length=32, blank=True, default="")
+    # frame_family_confidence: 0-3 integer.  3 = structural detector, 2 = region-hash or
+    # colour check, 1 = artBounds or variant-pinned, 0 = abstained.
+    frame_family_confidence = models.IntegerField(default=0)
+    # frame_family_method: which detection method produced the verdict.  One of:
+    # "structural-construction", "region-hash", "furniture-colour", "artbounds-distance",
+    # "variant-pinned", or blank (abstained).
+    frame_family_method = models.CharField(max_length=32, blank=True, default="")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

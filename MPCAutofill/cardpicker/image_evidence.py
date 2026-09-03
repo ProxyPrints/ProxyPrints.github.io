@@ -270,6 +270,8 @@ from cardpicker.local_fallback import (
     extract_artist_name,
     normalize_crop_box,
 )
+from cardpicker.local_frame_family import FRAME_FAMILY_EXTRACTOR_VERSION as _FF_VERSION
+from cardpicker.local_frame_family import classify_frame_family
 from cardpicker.local_image_quality import (
     compute_blur_variance,
     compute_entropy,
@@ -356,6 +358,7 @@ ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v2"
 # distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
 # quality_signals above.
 PINLINE_INSET_EXTRACTOR_VERSION = "pinline-inset-v1"
+FRAME_FAMILY_EXTRACTOR_VERSION = "frame-family-v1"
 
 # PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction): which `ImageEvidence`
 # columns each extractor OWNS - the set `compute_card_evidence`'s carry-forward path copies from a
@@ -409,6 +412,7 @@ EXTRACTOR_OWNED_FIELDS: dict[str, tuple[str, ...]] = {
         "pinline_inset_call_right",
         "pinline_inset_verdict",
     ),
+    "frame_family": ("frame_family_class", "frame_family_confidence", "frame_family_method"),
 }
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
@@ -1710,6 +1714,33 @@ def compute_card_evidence(
                     fields["pinline_inset_verdict"] = pinline_inset.verdict
         extractor_versions["pinline_inset"] = PINLINE_INSET_EXTRACTOR_VERSION
 
+    # frame_family (directive 2026-09-02, issues #829/#878/#952/#967/#974): per-card frame-family
+    # identification.  Runs after pinline_inset because the artBounds-distance fallback reads
+    # pinline_inset_frac_* fields computed above.  Structural detectors (confidence 3) fire on
+    # construction, not colour - zero threshold on ordinary frames.  Methods 2 (region-hash),
+    # 3 (furniture-colour), and 5 (variant-pinned) are stubbed and return abstain until their
+    # reference data is wired in a future pass.
+    if _stale("frame_family"):
+        if image is None:
+            skip_reasons["frame_family"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            ff_result = classify_frame_family(
+                image,
+                art_edge_class=fields.get("art_edge_class", ""),
+                layout_class=fields.get("layout_class", ""),
+                pinline_inset_frac_top=fields.get("pinline_inset_frac_top"),
+                pinline_inset_frac_bottom=fields.get("pinline_inset_frac_bottom"),
+                pinline_inset_frac_left=fields.get("pinline_inset_frac_left"),
+                pinline_inset_frac_right=fields.get("pinline_inset_frac_right"),
+                art_crop_px=fields.get("art_crop_px"),
+            )
+            fields["frame_family_class"] = ff_result.family_class
+            fields["frame_family_confidence"] = ff_result.confidence
+            fields["frame_family_method"] = ff_result.method
+            if not ff_result.family_class:
+                skip_reasons["frame_family"] = EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        extractor_versions["frame_family"] = _FF_VERSION
+
     if profile is not None:
         profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000
         profile["other_ms"] = (
@@ -1947,4 +1978,5 @@ __all__ = [
     "ARTBOX_MODERN_CROP_BOX",
     "ARTBOX_OLD_CROP_BOX",
     "PINLINE_INSET_EXTRACTOR_VERSION",
+    "FRAME_FAMILY_EXTRACTOR_VERSION",
 ]
