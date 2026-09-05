@@ -16,6 +16,7 @@ from cardpicker.local_fallback import (
     BORDER_COLOR_TO_TAG,
 )
 from cardpicker.local_layout_class_cast import (
+    LAYOUT_CLASS_ART_EDGE_EXTEND_BORDERLESS_SKIP_REASON,
     LAYOUT_CLASS_CAST_ANONYMOUS_ID,
     _eligible_cards_queryset,
     calculate_layout_class_verdict,
@@ -92,6 +93,36 @@ class TestCalculateLayoutClassVerdict:
 
         verdict = calculate_layout_class_verdict(card.pk, evidence)
 
+        assert verdict.tag_name == "Borderless"
+
+    def test_borderless_with_extended_art_edge_is_suppressed(self, db):
+        card = CardFactory(name="Extended Art Card")
+        evidence = _evidence(card, layout_class="borderless", art_edge_class="extended")
+
+        verdict = calculate_layout_class_verdict(card.pk, evidence)
+
+        assert verdict.is_hit is False
+        assert verdict.tag_name is None
+        assert verdict.skip_reason == LAYOUT_CLASS_ART_EDGE_EXTEND_BORDERLESS_SKIP_REASON
+        assert verdict.layout_class == "borderless"
+
+    def test_borderless_without_extended_art_edge_still_casts(self, db):
+        card = CardFactory(name="Genuinely Frameless")
+        evidence = _evidence(card, layout_class="borderless", art_edge_class="framed")
+
+        verdict = calculate_layout_class_verdict(card.pk, evidence)
+
+        assert verdict.is_hit is True
+        assert verdict.tag_name == "Borderless"
+        assert verdict.skip_reason is None
+
+    def test_borderless_with_blank_art_edge_still_casts(self, db):
+        card = CardFactory(name="No Art Edge Data")
+        evidence = _evidence(card, layout_class="borderless", art_edge_class="")
+
+        verdict = calculate_layout_class_verdict(card.pk, evidence)
+
+        assert verdict.is_hit is True
         assert verdict.tag_name == "Borderless"
 
     def test_unmapped_layout_class_value_is_a_defensive_non_hit(self, db):
@@ -322,6 +353,42 @@ class TestRunLayoutClassCast:
         assert result.votes_written == 1
         assert CardTagVote.objects.filter(card=card, anonymous_id=LAYOUT_CLASS_CAST_ANONYMOUS_ID).count() == 1
         assert CardTagVote.objects.filter(card=card).count() == 2
+
+    def test_borderless_extended_art_row_skips_with_correct_skip_reason(self, db):
+        _seed_tags()
+        card = CardFactory(name="Extended Art Borderless", content_phash=42)
+        _evidence(card, layout_class="borderless", art_edge_class="extended")
+
+        result = run_layout_class_cast(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.cards_considered == 1
+        assert result.skip_counts.get("borderless-but-art-edge-extended") == 1
+        assert CardTagVote.objects.filter(card=card).count() == 0
+        log = CardScanLog.objects.get(card=card)
+        assert log.skip_reason == "borderless-but-art-edge-extended"
+
+    def test_borderless_framed_art_row_still_casts_borderless(self, db):
+        _seed_tags()
+        card = CardFactory(name="Framed Borderless", content_phash=42)
+        _evidence(card, layout_class="borderless", art_edge_class="framed")
+
+        result = run_layout_class_cast(dry_run=False)
+
+        assert result.votes_written == 1
+        assert result.votes_by_class == {"borderless": 1}
+        vote = CardTagVote.objects.get(card=card)
+        assert vote.tag.name == "Borderless"
+
+    def test_extended_art_with_black_border_casts_black_border(self, db):
+        _seed_tags()
+        card = CardFactory(name="Black Border Extended", content_phash=42)
+        _evidence(card, layout_class="black", art_edge_class="extended")
+
+        result = run_layout_class_cast(dry_run=False)
+
+        assert result.votes_written == 1
+        assert result.votes_by_class == {"black": 1}
 
 
 class TestPurgeWriteAtomicity:

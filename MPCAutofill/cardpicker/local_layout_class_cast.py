@@ -125,6 +125,13 @@ LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON = "incomplete-evidence"
 LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON = "ambiguous"
 # A layout class WAS read, but it has no CardTagVote tag mapped to it.
 LAYOUT_CLASS_UNMAPPED_SKIP_REASON = "unmapped-layout-class"
+# When `layout_class == "borderless"` but the independent art-extent axis
+# (`art_edge_class`) says the art reaches the edge ("extended"), the
+# "borderless" reading is an art-extent observation misrecorded as border
+# colour.  The border-colour axis is unevaluated → cast nothing.
+# See issue #967 and the `printing_attribute_disagreement` guard in
+# `local_identify_printing_tags.py` (same suppression, consumer side).
+LAYOUT_CLASS_ART_EDGE_EXTEND_BORDERLESS_SKIP_REASON = "borderless-but-art-edge-extended"
 
 LAYOUT_CLASS_RESCANNABLE_SKIP_REASONS = frozenset(
     {LAYOUT_CLASS_NO_EVIDENCE_SKIP_REASON, LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON}
@@ -136,12 +143,14 @@ class LayoutClassVerdict:
     """Pure result of reading one card's current ImageEvidence.layout_class - no DB write has
     happened yet (mirrors AiArtVerdict's own compute/persist split). `layout_class` is the raw
     stored value ("" for no confident reading); `tag_name`/`confidence` are populated only when
-    it maps onto a known attribute-chip tag (see `is_hit`)."""
+    it maps onto a known attribute-chip tag (see `is_hit`). `skip_reason` is populated when the
+    verdict was deliberately suppressed rather than genuinely ambiguous or unmapped."""
 
     card_id: int
     layout_class: str = ""
     tag_name: Optional[str] = None
     confidence: Optional[float] = None
+    skip_reason: Optional[str] = None
 
     @property
     def is_hit(self) -> bool:
@@ -155,10 +164,14 @@ def calculate_layout_class_verdict(card_id: int, evidence: ImageEvidence) -> Lay
     layout_class = evidence.layout_class or ""
     if not layout_class:
         return LayoutClassVerdict(card_id=card_id, layout_class="")
+    if layout_class == "borderless" and (evidence.art_edge_class or "") == "extended":
+        return LayoutClassVerdict(
+            card_id=card_id,
+            layout_class=layout_class,
+            skip_reason=LAYOUT_CLASS_ART_EDGE_EXTEND_BORDERLESS_SKIP_REASON,
+        )
     tag_name = BORDER_COLOR_TO_TAG.get(layout_class)
     if tag_name is None:
-        # Defensive only - classify_border_color's own closed value space (module docstring)
-        # never actually produces a string outside BORDER_COLOR_TO_TAG's four keys today.
         return LayoutClassVerdict(card_id=card_id, layout_class=layout_class)
     return LayoutClassVerdict(
         card_id=card_id,
@@ -313,7 +326,7 @@ def run_layout_class_cast(
         verdict = calculate_layout_class_verdict(card.pk, evidence)
 
         if not verdict.is_hit:
-            skip_reason = (
+            skip_reason = verdict.skip_reason or (
                 LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON if not verdict.layout_class else LAYOUT_CLASS_UNMAPPED_SKIP_REASON
             )
             result.skip_counts[skip_reason] = result.skip_counts.get(skip_reason, 0) + 1
@@ -384,6 +397,7 @@ __all__ = [
     "LAYOUT_CLASS_INCOMPLETE_EVIDENCE_SKIP_REASON",
     "LAYOUT_CLASS_AMBIGUOUS_SKIP_REASON",
     "LAYOUT_CLASS_UNMAPPED_SKIP_REASON",
+    "LAYOUT_CLASS_ART_EDGE_EXTEND_BORDERLESS_SKIP_REASON",
     "LayoutClassVerdict",
     "calculate_layout_class_verdict",
     "LayoutClassCastResult",

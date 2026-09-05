@@ -1543,6 +1543,71 @@ def _extracted(card, layout_class="black", illus_anchor_fired=True, collector_nu
     )
 
 
+class TestPrintingAttributeDisagreementArtEdgeGuard:
+    """Issue #967: when `layout_class == "borderless"` and `art_edge_class == "extended"`,
+    the "borderless" reading is an art-extent observation, not a border-colour claim.
+    `printing_attribute_disagreement` must not report a mismatch in this case."""
+
+    def test_borderless_extended_does_not_report_border_mismatch(self, db):
+        from cardpicker.local_identify_printing_tags import (
+            printing_attribute_disagreement,
+        )
+
+        card = CardFactory(name="Extended Art")
+        evidence = _extracted(card, layout_class="borderless", illus_anchor_fired=False, collector_number="")
+        evidence.art_edge_class = "extended"
+        evidence.save(update_fields=["art_edge_class"])
+
+        printing = CanonicalCardFactory(name="Extended Art")
+        metadata = CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+
+        assert printing_attribute_disagreement(evidence, metadata) is None
+
+    def test_borderless_framed_still_reports_border_mismatch(self, db):
+        from cardpicker.local_identify_printing_tags import (
+            printing_attribute_disagreement,
+        )
+
+        card = CardFactory(name="Framed Card")
+        evidence = _extracted(card, layout_class="borderless", illus_anchor_fired=False, collector_number="")
+        evidence.art_edge_class = "framed"
+        evidence.save(update_fields=["art_edge_class"])
+
+        printing = CanonicalCardFactory(name="Framed Card")
+        metadata = CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+
+        assert printing_attribute_disagreement(evidence, metadata) == "border-mismatch"
+
+    def test_borderless_with_no_art_edge_data_still_reports_mismatch(self, db):
+        from cardpicker.local_identify_printing_tags import (
+            printing_attribute_disagreement,
+        )
+
+        card = CardFactory(name="No Art Edge Data")
+        evidence = _extracted(card, layout_class="borderless", illus_anchor_fired=False, collector_number="")
+        # art_edge_class left as the default "" from _extracted
+
+        printing = CanonicalCardFactory(name="No Art Edge Data")
+        metadata = CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="black")
+
+        assert printing_attribute_disagreement(evidence, metadata) == "border-mismatch"
+
+    def test_borderless_extended_with_matching_border_color_returns_none(self, db):
+        from cardpicker.local_identify_printing_tags import (
+            printing_attribute_disagreement,
+        )
+
+        card = CardFactory(name="Matching Extended")
+        evidence = _extracted(card, layout_class="borderless", illus_anchor_fired=False, collector_number="")
+        evidence.art_edge_class = "extended"
+        evidence.save(update_fields=["art_edge_class"])
+
+        printing = CanonicalCardFactory(name="Matching Extended")
+        metadata = CanonicalPrintingMetadataFactory(canonical_card=printing, border_color="borderless")
+
+        assert printing_attribute_disagreement(evidence, metadata) is None
+
+
 class TestNameFrequencyElimination:
     """Fast-follow (2026-07-16): run_name_frequency_elimination's SAFE 1:1 gate - exactly one
     uncovered printing AND exactly one unresolved-eligible card for that name - not just "one
