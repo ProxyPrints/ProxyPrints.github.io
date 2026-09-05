@@ -314,7 +314,7 @@ class TestCandidateFrameFamilies:
         assert result.name_resolved is False
 
     def test_empty_families_resolvable_for_sets_without_family(self):
-        index = _FakeIndex({"foo": [_FakeCandidate("znr")]})
+        index = _FakeIndex({"foo": [_FakeCandidate("mmq")]})
         result = candidate_frame_families("foo", index)
         assert result.families == frozenset()
         assert result.name_resolved is True
