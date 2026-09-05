@@ -522,13 +522,16 @@ def cast_border_attribute_vote(
 #
 # Classification (question B) reuses signals the pipeline already extracts, no new image
 # processing:
+#   - the "Illus." anchor fired (2a) -> "old" (retro frame, pre-2003 - no collector line printed
+#     on the card face at all, just a centred artist credit). Tested FIRST. A proxy render
+#     carries a collector line whatever era it imitates (the generator pastes one on every
+#     template), so this is the one signal that actually discriminates era - and it is the ONLY
+#     signal that fires on an old-frame render, so a both-fire card is always old.
 #   - pass 1 (OCR) extracted a plausible collector number, with or without a set code (2015/M15
 #     prints a full "set collector" strip; 2003-2014 prints just a brush-glyph + number, no set
 #     code - both are post-2003 "modern" frame families, and this taxonomy only distinguishes
 #     old/modern/future, not the finer 2003-vs-2015 split, so both collapse to the same tag) ->
-#     "modern"
-#   - the "Illus." anchor fired (2a) instead -> "old" (retro frame, pre-2003 - no collector
-#     line printed on the card face at all, just a centred artist credit)
+#     "modern". Tested SECOND, so a collector line only wins when the illus anchor did not fire.
 #   - neither -> abstain (None), counted
 # ---------------------------------------------------------------------------------------------
 
@@ -552,10 +555,13 @@ FRAME_VALUE_TO_CLASS: dict[str, str] = {
 
 
 def classify_frame_style(parsed_a_collector_number: bool, illus_anchor_fired: bool) -> Optional[str]:
-    if parsed_a_collector_number:
-        return "modern"
+    # Illus. anchor first: a proxy render carries a collector line whatever era it imitates, so a
+    # parsed collector number does not discriminate era on its own. The illus anchor is the one
+    # signal that fires only on an old-frame render, so it wins when both fire.
     if illus_anchor_fired:
         return "old"
+    if parsed_a_collector_number:
+        return "modern"
     return None
 
 

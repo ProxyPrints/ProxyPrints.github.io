@@ -140,6 +140,74 @@ class TestCalculateAttributeChipVerdict:
         assert not hasattr(verdict, "bleed_tag_name")
 
 
+class TestNormalFrameReading:
+    """The NORMAL derived value: era reads modern AND art edge is `framed` AND not borderless. It
+    is computed at cast time from three stored signals, never persisted, so no migration or
+    extractor version bump accompanies it (see `calculate_attribute_chip_verdict`'s NORMAL note)."""
+
+    def test_modern_framed_non_borderless_reads_normal(self, db):
+        card = CardFactory(content_phash=1)
+        verdict = calculate_attribute_chip_verdict(
+            card.pk,
+            _evidence(card, collector_line_collector_number="123", art_edge_class="framed", layout_class="black"),
+        )
+
+        assert verdict.frame_class == "modern"
+        assert verdict.normal_frame is True
+
+    def test_modern_extended_art_is_not_normal(self, db):
+        card = CardFactory(content_phash=1)
+        verdict = calculate_attribute_chip_verdict(
+            card.pk,
+            _evidence(card, collector_line_collector_number="123", art_edge_class="extended", layout_class="black"),
+        )
+
+        assert verdict.frame_class == "modern"
+        assert verdict.normal_frame is False
+
+    def test_modern_borderless_is_not_normal(self, db):
+        card = CardFactory(content_phash=1)
+        verdict = calculate_attribute_chip_verdict(
+            card.pk,
+            _evidence(card, collector_line_collector_number="123", art_edge_class="framed", layout_class="borderless"),
+        )
+
+        assert verdict.frame_class == "modern"
+        assert verdict.normal_frame is False
+
+    def test_old_frame_has_no_normal_reading(self, db):
+        # an old frame is a different axis (retro), not a "non-normal modern" frame - the reading
+        # applies only where the era reads modern, so it abstains (None) rather than saying False.
+        card = CardFactory(content_phash=1)
+        verdict = calculate_attribute_chip_verdict(
+            card.pk,
+            _evidence(card, illus_anchor_fired=True, art_edge_class="framed", layout_class="black"),
+        )
+
+        assert verdict.frame_class == "old"
+        assert verdict.normal_frame is None
+
+    def test_abstained_frame_has_no_normal_reading(self, db):
+        # neither signal fired -> frame chip abstains -> there is no era basis for a normal reading.
+        card = CardFactory(content_phash=1)
+        verdict = calculate_attribute_chip_verdict(card.pk, _evidence(card))
+
+        assert verdict.frame_class is None
+        assert verdict.normal_frame is None
+
+    def test_missing_layout_class_is_not_a_borderless_reading(self, db):
+        # the "" sentinel for layout_class means "not yet computed", which must NOT read False the
+        # way a computed `borderless` does - a missing border reading is an unknown, not a non-normal.
+        card = CardFactory(content_phash=1)
+        verdict = calculate_attribute_chip_verdict(
+            card.pk,
+            _evidence(card, collector_line_collector_number="123", art_edge_class="framed", layout_class=""),
+        )
+
+        assert verdict.frame_class == "modern"
+        assert verdict.normal_frame is True  # framed + not-"borderless"; layout's "" is not "borderless"
+
+
 class TestRunAttributeChipCast:
     def test_a_write_run_casts_frame_style_only_and_never_the_retired_bleed_identity(self, db):
         """THE RETIREMENT, END TO END. The frame chip votes with its shared confidence and
