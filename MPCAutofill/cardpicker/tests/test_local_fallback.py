@@ -412,11 +412,11 @@ class TestClassifyFrameStyle:
     def test_illus_anchor_without_collector_number_is_old(self):
         assert classify_frame_style(parsed_a_collector_number=False, illus_anchor_fired=True) == "old"
 
-    def test_collector_number_takes_priority_over_illus_anchor(self):
-        # shouldn't both fire in practice (a modern frame has no "Illus." line), but if they
-        # somehow do, the more specific/reliable signal (an actual parsed collector number)
-        # wins
-        assert classify_frame_style(parsed_a_collector_number=True, illus_anchor_fired=True) == "modern"
+    def test_illus_anchor_takes_priority_over_collector_number(self):
+        # both signals firing is not an anomaly - a proxy render carries a collector line whatever
+        # era it imitates, so the collector number does not discriminate era on its own. The Illus.
+        # anchor is the one signal that fires only on an old-frame render, so it wins.
+        assert classify_frame_style(parsed_a_collector_number=True, illus_anchor_fired=True) == "old"
 
     def test_neither_signal_abstains(self):
         assert classify_frame_style(parsed_a_collector_number=False, illus_anchor_fired=False) is None

@@ -351,7 +351,14 @@ QUALITY_SIGNALS_EXTRACTOR_VERSION = "quality-signals-v1"
 # `artbox_phash`, not the whole row) so the next incremental pass re-runs the CURRENT, correctly-
 # abstaining selector against all of them - see that branch's own comment for why abstaining
 # (withholding `artbox_phash`) is the safe outcome here rather than a guessed region.
-ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v2"
+# v2 -> v3 (frame-era precedence, 2026-09-05): `classify_frame_style`'s precedence was reversed so
+# the Illus. anchor is tested BEFORE the collector number. That changes the STORED meaning of
+# `artbox_frame_class` for the population where both signals fire (~6,334 rows) - those rows read
+# "modern" under the old order and "old" under the new one, so `artbox_phash` (which is computed
+# from the crop box chosen by `artbox_frame_class`) differs for them too. Bumping to v3 stales
+# every row tagged v2 for this key alone so the next incremental pass re-runs this extractor
+# against the corrected precedence rather than carrying forward a hash from the wrong crop box.
+ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v3"
 # NOT bumped: pinline_inset (local_pinline_inset.measure_pinline_inset) is a pure colour-
 # distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
 # quality_signals above.

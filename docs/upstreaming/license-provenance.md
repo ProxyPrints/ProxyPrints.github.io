@@ -471,6 +471,63 @@ was asked for and ruled on separately.
     change of any shape to any file on this list needs its own ruling and
     its own entry in this log** — including the next skip-reason one.
 
+**2026-09-05 — `MPCAutofill/cardpicker/local_fallback.py`: reverse
+`classify_frame_style`'s signal precedence (Illus. anchor before collector
+number).**
+
+The third entry in this log, and asked for and ruled on separately from the
+two 2026-07-29 naming-only entries above — those two were provably inert
+(no stored value changed); this one changes stored readings, and is logged
+here for exactly that reason, not waved through as a continuation.
+
+- **What changed.** `classify_frame_style(parsed_a_collector_number, illus_anchor_fired)` tested the parsed collector number first, so a card
+  where BOTH signals fired read `"modern"`. It now tests the Illus. anchor
+  first — the anchor returning `"old"` whenever it fires, and the collector
+  number returning `"modern"` only when the anchor did not. The function's
+  own "Classification (question B)" comment block was revised to say so.
+- **Why.** A proxy render carries a collector line whatever era it
+  imitates (the template generator pastes a collector strip onto every
+  output), so a parsed collector number does not discriminate era on its
+  own. The Illus. anchor is the one signal that fires only on an old-frame
+  render (a pre-2003 retro frame prints no collector line, just a centred
+  artist credit), so testing the collector number first overruled the one
+  signal that actually discriminates. Measured against 30 owner eye labels:
+  with the shipped order the era reading agreed on 20/27 decided (74.1%,
+  modern 9/9 but old only 11/21, with 7 misread modern and 3 abstaining —
+  every error a both-fire card); with the anchor first it agrees 27/27.
+  Corroborated at population scale by an independent signal (retro words in
+  proxy makers' own filenames): the both-fire population carries them at
+  10.03% vs 0.71% for the collector-only population, an odds ratio of 15.7.
+- **Who authorised it.** The owner, ruling on 2026-09-05 on a request that
+  named this file, this function and the two-line reordering.
+- **Effect: stored readings DO change — and it is proved, not asserted.**
+  Unlike the two naming-only entries above (whose string VALUES were
+  untouched), this reordering changes what `classify_frame_style` returns
+  for the both-fire population — and because `image_evidence.py`'s
+  artbox extractor stores `classify_frame_style`'s output as
+  `artbox_frame_class` (from which `artbox_phash`'s crop box is chosen),
+  the change is persisted, not merely recomputed at cast time.
+  `ARTBOX_PHASH_EXTRACTOR_VERSION` is bumped `artbox-phash-v2` ->
+  `artbox-phash-v3` (and the `MANIFEST_EXTRACTOR_CURRENT_VERSIONS` map in
+  lockstep) so pre- and post-change rows stay distinguishable — the absence
+  of that bump is the defect that made issue #957's 44,445 rows unusable.
+  Measured on production current evidence (2026-09-05, read-only): **6,334
+  of 234,777** rows have both signals firing, and those are the only rows
+  whose reading changes. Derived Old Border readings go 8,846 -> 15,180
+  (Modern Border 150,785 -> 144,451; the 75,146 abstentions are untouched).
+  No remediation of the already-stored rows is in scope here (see #957).
+- **SCOPE OF THIS EXCEPTION — read this before citing it.** It permits
+  **reversing the precedence of the two signals in `classify_frame_style` —
+  and, as the routine consequence the request named alongside it, bumping
+  the extractor version for anything whose stored meaning that reversal
+  changes**, and that is its entire reach. It does not un-protect the file:
+  the next edit of any other shape to any protected-core file — including
+  sampling geometry in `classify_border_color` (issue #735, untouched), the
+  `pinline_inset_verdict` consumer (issue #877, untouched), or another edit
+  to `local_fallback.py` itself — needs its own ruling and its own entry
+  in this log. `local_fallback.py` stays in `PROTECTED_CORE_FILES` and in
+  §2's list above.
+
 ## 3. Absorption protocol
 
 For the day the "permitted zone" (everything outside protected core) ever
