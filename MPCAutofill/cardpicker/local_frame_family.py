@@ -13,48 +13,54 @@ giving Stage D (and future consumers) a per-card, per-upload answer.
 WHAT SHIPS. `frame_family_class` (a named family, `OTHER_SHOWCASE`, `STANDARD`, `CUSTOM`, or
 blank = abstain), `frame_family_confidence` (0-3), and `frame_family_method` on
 `ImageEvidence`, computed by `classify_frame_family` and wired into Stage C
-(`compute_card_evidence`). The fallback chain, cheapest to costliest:
+(`compute_card_evidence`).
 
-  1. STRUCTURAL CONSTRUCTION (confidence 3) - deterministic detectors for five visually
-     unmistakable families: ShowcaseMagnified (circular art window), Pipboy (CRT scanline
-     header), Vault (stepped corner brackets), MysticalArchive (dotted parchment nameplate),
-     Storybook (vine-scroll border). These target construction, not colour.
-
-  2. ARTBOUNDS DISTANCE (confidence 1) - pinline-spread check that the card edge is real and
-     the frame is a standard bordered frame. Cannot name a showcase family; only ever yields
-     `STANDARD` where `layout_class` names a border colour.
-
-  Region-hash and furniture-colour methods are deliberately NOT shipped. Region-hash is
-  closed by the frame-identification audit: its reference population was contaminated by the
-  metadata label it was scored against, and a fixed-fraction crop band (left 7%) is the
-  padding-blind geometry issue #735 records (real cards carry ~6-8% canvas padding, so that
-  strip is often padding, not frame). Furniture-colour has no stored RGB swatch artifact yet.
-
-CALIBRATION (the gate). A family ships as a NAMED value only where owner-verified truth exists
-for it AND the method clears #829's bar (false positives at or near zero on ordinary frames).
-That judgement lives in `NAMED_FAMILIES` below. As measured against the owner-verified labels
-on disk (frame-groundtruth V2_KEY_SEALED / RECALL_KEY_SEALED, fable-judge FABLE_KEY_SEALED):
-the structural detectors score **0/4 recall** on the four owner-confirmed positives (Storybook,
-Vault, ShowcaseMagnified, Pipboy - one each) and fire spuriously on **27/40** owner-negative
-cards, so **no family clears the bar and `NAMED_FAMILIES` is empty**. The identifier therefore
-ships DORMANT: the schema and framework are in place and the tests prove the detector
-mechanism on synthetic fixtures, but production extraction abstains (no named family is
-supported) and the caster votes nothing until a method clears the bar. That is the honest
-outcome of the calibration, reported in full in the PR body rather than asserted away.
-
-SET NARROWING (issue #979 / the audit's own finding). Every method runs inside the
-set-narrowed candidate family set: the card's name resolves through
+THE POPULATION SOURCE IS SET NARROWING, NOT A DETECTOR. The card's name resolves through
 `CandidateNameIndex.candidates_for` (imported, never reimplemented) to candidate printings,
-whose expansion codes map through `SET_TO_FRAME_FAMILIES` to the named families that set
-actually ships. A card whose name resolves to zero candidates abstains with the
-`no-candidates` skip reason. Without this the detectors would answer a 48-way question
-production never asks (38 of 52 cohort cards reduce to a single candidate family).
+whose expansion codes map through `SET_TO_FRAME_FAMILIES` to the alternate-frame families
+that set actually ships. The verdict is then, by candidate-set size:
+
+  - exactly one candidate family   -> that family (a proposal for a human, never a
+    confirmation);
+  - two or more candidate families -> `OTHER_SHOWCASE` (the pick-list case);
+  - zero candidates (issue #979)   -> abstain with the `no-candidates` reason (adventure and
+    split front-face names resolve to nothing - this is NOT `CUSTOM`);
+  - resolvable but no alternate-frame family, and the card reads as a normal frame ->
+    `STANDARD` (only written where the set could not possibly ship an alternate family).
+
+`STANDARD` never overrides a non-empty candidate set: showcase families' cards read as framed
+constantly (Storybook, Vault, Pipboy all have framed art), so a normal-frame reading on a card
+with a live candidate is a property of the render, not evidence against the family. The
+normal-frame reading rides on the `normal_frame` chip (#981) - a boolean computed at the
+population site from the stored `art_edge_class`/`artbox_frame_class`/`layout_class` fields -
+and does not write this field.
+
+CONFIDENCE. The vocabulary is 0 abstain / 1 moderate / 2 high / 3 structural. A set-narrowed
+verdict is unverified by pixels, so it sits at `CONFIDENCE_MODERATE` (1) for every row - the
+lowest non-abstain level. The candidate-set size (a queue-ordering signal) is deliberately NOT
+persisted: the field holds a verdict, and a persisted count would need a full re-extraction to
+revise. `CUSTOM` is a vocabulary value with no writer yet: it needs a positive criterion nobody
+has written, and "no candidates" cannot mean "custom".
+
+THE STRUCTURAL DETECTORS STAY DORMANT. Five hand-written detectors (ShowcaseMagnified, Pipboy,
+Vault, MysticalArchive, Storybook) remain in the module but are not called by
+`classify_frame_family`. Measured against the owner-verified labels on disk (frame-groundtruth
+V2_KEY_SEALED / RECALL_KEY_SEALED, fable-judge FABLE_KEY_SEALED): the structural detectors score
+0/4 recall on the four owner-confirmed positives and fire spuriously on 27/40 owner-negative
+cards, so no family clears #829's bar and `NAMED_FAMILIES` stays empty. A future measurement
+that clears the bar re-wires them. The caster (`cast_frame_family_vote`) votes nothing: it reads
+`NAMED_FAMILIES`, which is empty.
+
+PROVENANCE OF `SET_TO_FRAME_FAMILIES`. The set->family junction is harvested from the
+CardConjurer pack registry (45 alternate-frame families keyed by `set_code`), the same junction
+the frame-identification narrowing registry records. 44 of the 45 families carry a `set_code`;
+`JapanShowcase` has none and is therefore unreachable by set narrowing (excluded from the
+junction). Expansion codes are lowercased, matching `CandidatePrinting.expansion_code`.
 
 WHAT MUST NOT HAPPEN:
   - No protected-core edits (local_fallback.py, local_phash.py, local_identify_printing_tags.py
     are untouched; only their public functions are imported).
-  - No committed image bytes - the detectors compute statistics in memory only, nothing is
-    written to disk.
+  - No committed image bytes.
   - No `frame_effects` as a family label (Scryfall `frame_effects` describes the depicted
     printing, not the uploaded image's treatment).
   - No reimplemented name resolution - `CandidateNameIndex.candidates_for` is the existing
@@ -134,8 +140,11 @@ NAMED_FAMILIES: frozenset[str] = frozenset()
 # ---------------------------------------------------------------------------
 # Detection method tags stored in frame_family_method.
 # ---------------------------------------------------------------------------
+# `set-narrowing` is the only method the shipped `classify_frame_family` writes.
+# `structural-construction` is retained because the dormant detectors will emit it once one
+# clears #829's bar and is re-wired back into the classifier.
+METHOD_SET_NARROWING = "set-narrowing"
 METHOD_STRUCTURAL_CONSTRUCTION = "structural-construction"
-METHOD_ARTBOUNDS_DISTANCE = "artbounds-distance"
 
 # ---------------------------------------------------------------------------
 # Confidence levels.
@@ -174,46 +183,83 @@ FRAME_FAMILY_VOTE_CONFIDENCE = 0.5
 # ---------------------------------------------------------------------------
 # SET -> FRAME FAMILIES (set narrowing, issue #979 / the audit's own finding).
 #
-# Single-template alternate-frame sets and the named family each ships, from
-# the Scryfall frame_effects x expansion population table
-# (pipeline-artifacts/frame-coverage-combined/report.md Part 2) - the
-# definitional source for which family a set's showcase treatment is. Only the
-# five structural families a detector can NAME are listed; every other set is
-# deliberately absent, so a card from an unlisted set can never carry a named
-# family verdict (it falls through to abstain / OTHER_SHOWCASE). Expansion
-# codes are lowercased, matching CandidatePrinting.expansion_code.
+# The set->family junction, harvested from the CardConjurer pack registry: every
+# alternate-frame family the packs define, keyed by the expansion code it ships
+# in. Expansion codes are lowercased, matching `CandidatePrinting.expansion_code`.
+# The full registry holds 45 families; `JapanShowcase` carries no `set_code` and
+# is therefore unreachable by set narrowing (excluded here). Multi-template sets
+# (e.g. `sta` -> MysticalArchive + MysticalArchiveJP + MysticalArchiveJPEN) map
+# to every family the set ships, so a single-candidate resolution is a genuine
+# single-family answer and a multi-candidate resolution is a real pick-list.
 # ---------------------------------------------------------------------------
 SET_TO_FRAME_FAMILIES: dict[str, frozenset[str]] = {
-    "mkm": frozenset({FRAME_FAMILY_SHOWCASE_MAGNIFIED}),  # Karlov Manor showcase
-    "pip": frozenset({FRAME_FAMILY_PIPBOY}),  # Fallout Pip-Boy
-    "big": frozenset({FRAME_FAMILY_VAULT}),  # Big Score
-    "sta": frozenset({FRAME_FAMILY_MYSTICAL_ARCHIVE}),  # Strixhaven Mystical Archive
-    "soa": frozenset({FRAME_FAMILY_MYSTICAL_ARCHIVE}),  # Mystical Archive (SOA)
-    "eld": frozenset({FRAME_FAMILY_STORYBOOK}),  # Throne of Eldraine storybook
+    "afr": frozenset({"DNDSourcebook"}),
+    "big": frozenset({"Vault"}),
+    "blb": frozenset({"Woodland"}),
+    "cmr": frozenset({"CommanderLegends"}),
+    "dbl": frozenset({"DoubleFeature", "DoubleFeatureTransform"}),
+    "ecl": frozenset({"FableECL"}),
+    "eld": frozenset({"Storybook"}),
+    "eos": frozenset({"BorderlessStellarSights", "PosterStellarSights"}),
+    "khm": frozenset({"Kaldheim-2", "KaldheimNonleg"}),
+    "ltr": frozenset({"Ring", "Scroll"}),
+    "mh2": frozenset({"MH2"}),
+    "mid": frozenset({"Equinox", "EquinoxBack", "EquinoxFront", "EternalNight"}),
+    "mkm": frozenset({"ShowcaseMagnified"}),
+    "mul": frozenset({"Crystal", "StorybookMUL"}),
+    "neo": frozenset({"NeoNeon", "NeoNinja", "NeoSamurai"}),
+    "one": frozenset({"OilSlick"}),
+    "otj": frozenset({"Wanted"}),
+    "pip": frozenset({"Pipboy"}),
+    "snc": frozenset({"SNCArtDeco", "SNCSkyscraper"}),
+    "soa": frozenset({"MysticalArchiveSOA"}),
+    "spm": frozenset({"ShowcasePanel"}),
+    "sta": frozenset({"MysticalArchive", "MysticalArchiveJP", "MysticalArchiveJPEN"}),
+    "tdm": frozenset({"Draconic", "Ghostfire"}),
+    "thb": frozenset({"M15NyxShowcase"}),
+    "tla": frozenset({"NeonInk"}),
+    "tmt": frozenset({"PixelTMT", "SewerTMT"}),
+    "vow": frozenset({"Fang"}),
+    "woe": frozenset({"StorybookWOE"}),
+    "znr": frozenset({"ZendikarRising"}),
 }
 
 
-def candidate_frame_families(name: str, index: CandidateNameIndex) -> frozenset[str]:
-    """The named frame families this card's name can resolve to, narrowed by set.
+@dataclass(frozen=True)
+class FrameFamilyCandidates:
+    """A name's set-narrowed candidate frame families plus whether the name resolved at all.
+
+    `families` is the union of every alternate-frame family the name's candidate printings ship,
+    via `SET_TO_FRAME_FAMILIES`. `name_resolved` is False only when
+    `CandidateNameIndex.candidates_for` returned zero candidates (issue #979) - the signal
+    `classify_frame_family` uses to distinguish "no candidates" from "resolvable but no
+    alternate-frame family in any candidate's set".
+    """
+
+    families: frozenset[str]
+    name_resolved: bool
+
+
+def candidate_frame_families(name: str, index: CandidateNameIndex) -> FrameFamilyCandidates:
+    """The set-narrowed candidate frame families a name can resolve to.
 
     Resolves the name through `CandidateNameIndex.candidates_for` (unmodified), maps each
-    candidate's expansion code through `SET_TO_FRAME_FAMILIES`, and returns the union as a
-    frozenset. An empty result means the name resolved to zero candidates (issue #979) OR to
-    candidates whose sets ship no named family - either way the detector must abstain rather
-    than guess.
+    candidate's expansion code through `SET_TO_FRAME_FAMILIES`, and returns the union plus
+    whether the name resolved to any candidate at all (False = issue #979).
     """
+    candidates = index.candidates_for(name)
     families: set[str] = set()
-    for candidate in index.candidates_for(name):
+    for candidate in candidates:
         families |= SET_TO_FRAME_FAMILIES.get(candidate.expansion_code, frozenset())
-    return frozenset(families)
+    return FrameFamilyCandidates(families=frozenset(families), name_resolved=bool(candidates))
 
 
-def build_candidate_frame_families_lookup() -> Callable[[str], frozenset[str]]:
-    """A `name -> frozenset[family]` callable backed by the shared cached CandidateNameIndex.
+def build_candidate_frame_families_lookup() -> Callable[[str], FrameFamilyCandidates]:
+    """A `name -> FrameFamilyCandidates` callable backed by the shared cached CandidateNameIndex.
 
     Mirrors `collector_line_artist.build_name_artist_lookup`'s shape: the index is built once
     (via `local_calculate_verdicts._get_cached_candidate_name_index`, the single cached entry
-    point every batch-reachable caller must use) and only the resolved frozenset crosses the
+    point every batch-reachable caller must use) and only the resolved dataclass crosses the
     process-pool boundary. Called on the parent/worker's own driver loop, never inside a compute
     worker.
     """
@@ -221,7 +267,7 @@ def build_candidate_frame_families_lookup() -> Callable[[str], frozenset[str]]:
 
     index = _get_cached_candidate_name_index()
 
-    def lookup(name: str) -> frozenset[str]:
+    def lookup(name: str) -> FrameFamilyCandidates:
         return candidate_frame_families(name, index)
 
     return lookup
@@ -429,38 +475,51 @@ class FrameFamilyResult:
 
 
 def classify_frame_family(
-    image: Any,
     *,
-    candidate_families: Optional[frozenset[str]] = None,
-    art_edge_class: str = "",
-    layout_class: str = "",
-    pinline_inset_frac_top: Optional[float] = None,
-    pinline_inset_frac_bottom: Optional[float] = None,
-    pinline_inset_frac_left: Optional[float] = None,
-    pinline_inset_frac_right: Optional[float] = None,
-    art_crop_px: Optional[list[int]] = None,
+    candidates: Optional[FrameFamilyCandidates] = None,
+    normal_frame: bool = False,
 ) -> FrameFamilyResult:
-    """Classify the frame family of a fetched card image.
+    """Classify a card's frame family by set narrowing (metadata, not pixels).
 
-    Runs the detection-method fallback chain cheapest-to-costliest. Every method runs inside
-    the set-narrowed candidate family set:
+    The verdict is produced entirely from the set-narrowed candidate families - no detector
+    runs (the structural detectors are dormant; see the module docstring). The outcomes, by
+    candidate-set size:
 
-      - `candidate_families` of `frozenset()` means the card's name resolved to zero
-        candidates (issue #979) and the detector abstains with the `no-candidates` reason;
-      - a non-empty `candidate_families` restricts a structural detector to only claim a
-        family the card's own set ships;
-      - `None` (the default, e.g. a direct test call) skips narrowing.
+      - exactly one candidate family -> that family (a proposal for a human, never a
+        confirmation);
+      - two or more -> `OTHER_SHOWCASE` (the pick-list case);
+      - zero candidates (issue #979) -> abstain with the `no-candidates` reason;
+      - resolvable but no alternate-frame family and `normal_frame` -> `STANDARD`.
 
-      1. Structural construction (confidence 3) - only for families in `NAMED_FAMILIES`
-         (the calibration gate: a family ships as NAMED only where owner-verified truth
-         exists and the method cleared #829's bar).
-      2. ArtBounds distance (confidence 1) - a consistent, measurable pinline inset plus a
-         known border colour yields `STANDARD`. Cannot name a showcase family.
-
-    Region-hash and furniture-colour are deliberately absent (see module docstring).
+    `candidates` is the resolver output (`FrameFamilyCandidates`). `None` (the default, e.g. a
+    direct test call) skips narrowing and abstains. `normal_frame` is the #981 chip - a boolean
+    computed at the population site from `art_edge_class == "framed"` AND
+    `artbox_frame_class == "modern"` AND `layout_class != "borderless"` - and `STANDARD` is
+    written only when there is no candidate family to override.
     """
-    # --- issue #979: name resolved to zero candidates -> abstain, named reason ---
-    if candidate_families is not None and not candidate_families:
+    if candidates is None:
+        return FrameFamilyResult(
+            family_class="",
+            confidence=CONFIDENCE_ABSTAIN,
+            method="",
+            skip_reason=FRAME_FAMILY_AMBIGUOUS_SKIP_REASON,
+        )
+
+    if len(candidates.families) == 1:
+        return FrameFamilyResult(
+            family_class=next(iter(candidates.families)),
+            confidence=CONFIDENCE_MODERATE,
+            method=METHOD_SET_NARROWING,
+        )
+
+    if len(candidates.families) >= 2:
+        return FrameFamilyResult(
+            family_class=FRAME_FAMILY_OTHER_SHOWCASE,
+            confidence=CONFIDENCE_MODERATE,
+            method=METHOD_SET_NARROWING,
+        )
+
+    if not candidates.name_resolved:
         return FrameFamilyResult(
             family_class="",
             confidence=CONFIDENCE_ABSTAIN,
@@ -468,39 +527,13 @@ def classify_frame_family(
             skip_reason=FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON,
         )
 
-    # --- Method 1: Structural construction detectors (calibration-gated) ---
-    for family, detector in STRUCTURAL_DETECTORS.items():
-        if family not in NAMED_FAMILIES:
-            continue  # not cleared to ship as named - see the calibration table
-        if candidate_families is not None and family not in candidate_families:
-            continue  # set narrowing: this card's set does not ship this family
-        if detector(image):
-            return FrameFamilyResult(
-                family_class=family,
-                confidence=CONFIDENCE_STRUCTURAL,
-                method=METHOD_STRUCTURAL_CONSTRUCTION,
-            )
+    if normal_frame:
+        return FrameFamilyResult(
+            family_class=FRAME_FAMILY_STANDARD,
+            confidence=CONFIDENCE_MODERATE,
+            method=METHOD_SET_NARROWING,
+        )
 
-    # --- Method 4: ArtBounds distance (pinline-spread check -> STANDARD only) ---
-    if (
-        pinline_inset_frac_top is not None
-        and pinline_inset_frac_bottom is not None
-        and pinline_inset_frac_left is not None
-        and pinline_inset_frac_right is not None
-    ):
-        fracs = [pinline_inset_frac_top, pinline_inset_frac_bottom, pinline_inset_frac_left, pinline_inset_frac_right]
-        spread = max(fracs) - min(fracs)
-        avg_inset = sum(fracs) / len(fracs)
-        # A real bordered frame has a consistent, measurable inset on all four sides.
-        if spread < 0.02 and avg_inset > 0.01:
-            if layout_class in ("black", "white", "silver"):
-                return FrameFamilyResult(
-                    family_class=FRAME_FAMILY_STANDARD,
-                    confidence=CONFIDENCE_MODERATE,
-                    method=METHOD_ARTBOUNDS_DISTANCE,
-                )
-
-    # --- Abstain ---
     return FrameFamilyResult(
         family_class="",
         confidence=CONFIDENCE_ABSTAIN,
@@ -688,8 +721,10 @@ __all__ = [
     "FRAME_FAMILY_RESCANNABLE_SKIP_REASONS",
     "NAMED_FAMILIES",
     "SET_TO_FRAME_FAMILIES",
+    "METHOD_SET_NARROWING",
     "candidate_frame_families",
     "build_candidate_frame_families_lookup",
+    "FrameFamilyCandidates",
     "FrameFamilyResult",
     "classify_frame_family",
     "cast_frame_family_vote",

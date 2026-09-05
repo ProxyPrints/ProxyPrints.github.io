@@ -270,7 +270,7 @@ from cardpicker.local_fallback import (
     extract_artist_name,
     normalize_crop_box,
 )
-from cardpicker.local_frame_family import classify_frame_family
+from cardpicker.local_frame_family import FrameFamilyCandidates, classify_frame_family
 from cardpicker.local_image_quality import (
     compute_blur_variance,
     compute_entropy,
@@ -895,7 +895,7 @@ def compute_card_evidence(
     stale_extractor_keys: Optional[frozenset[str]] = None,
     stored_evidence_fields: Optional[dict[str, Any]] = None,
     stored_extractor_versions: Optional[dict[str, str]] = None,
-    candidate_frame_families: Optional[frozenset[str]] = None,
+    candidate_frame_families: Optional[FrameFamilyCandidates] = None,
 ) -> ExtractionResult:
     """
     Compute-only continuation of `fetch_and_compute_card_evidence_for_tests` above - everything that function does
@@ -1122,11 +1122,13 @@ def compute_card_evidence(
     not-run-id-scoped report is unaffected. Not fixed here - see the perf/per-extractor-
     reextraction PR body for why this is an accepted, disclosed tradeoff rather than a silent one.
 
-    `candidate_frame_families` (frame-family identifiers): the set-narrowed frame families the
-    card's name resolves to (issue #979), resolved by the caller via
+    `candidate_frame_families` (frame-family identifiers): the set-narrowed candidate families
+    the card's name resolves to (issue #979), resolved by the caller via
     `local_frame_family.candidate_frame_families(name, CandidateNameIndex(...))` and passed
-    through explicitly - never queried here. `None` (the default, e.g. a direct test call) skips
-    narrowing; `frozenset()` means the name resolved to zero candidates and the frame_family
+    through explicitly - never queried here. It is a `FrameFamilyCandidates` carrying both the
+    candidate `families` frozenset and whether the name resolved to any candidate at all.
+    `None` (the default, e.g. a direct test call) skips narrowing; a resolution whose
+    `name_resolved` is False means the name resolved to zero candidates and the frame_family
     extractor abstains with the `no-candidates` skip reason.
     """
     if short_circuit is None:
@@ -1728,26 +1730,23 @@ def compute_card_evidence(
                     fields["pinline_inset_verdict"] = pinline_inset.verdict
         extractor_versions["pinline_inset"] = PINLINE_INSET_EXTRACTOR_VERSION
 
-    # frame_family (issues #829/#878/#952/#967/#974/#968/#979): per-card frame-family
-    # identification. Runs after pinline_inset because the artBounds-distance fallback reads the
-    # pinline_inset_frac_* fields computed above. The structural detectors (confidence 3) fire on
-    # construction, not colour, and are gated by `NAMED_FAMILIES` (see local_frame_family) - empty
-    # today because calibration failed #829's bar, so production extraction abstains. Region-hash
-    # and furniture-colour are not shipped (see local_frame_family's module docstring).
+    # frame_family (issues #829/#878/#952/#967/#974/#968/#979/#980): per-card frame-family
+    # identification by set narrowing (metadata, not pixels). Runs after artbox_phash and
+    # layout_class because it reads their output to compute the normal_frame chip (#981).
     if _stale("frame_family"):
         if image is None:
             skip_reasons["frame_family"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
         else:
+            # normal_frame (#981): a framed, modern-layout card with no borderless treatment.
+            # STANDARD is written only when there is no candidate family to override.
+            normal_frame = (
+                fields.get("art_edge_class", "") == "framed"
+                and fields.get("artbox_frame_class", "") == "modern"
+                and fields.get("layout_class", "") not in ("borderless", "")
+            )
             ff_result = classify_frame_family(
-                image,
-                candidate_families=candidate_frame_families,
-                art_edge_class=fields.get("art_edge_class", ""),
-                layout_class=fields.get("layout_class", ""),
-                pinline_inset_frac_top=fields.get("pinline_inset_frac_top"),
-                pinline_inset_frac_bottom=fields.get("pinline_inset_frac_bottom"),
-                pinline_inset_frac_left=fields.get("pinline_inset_frac_left"),
-                pinline_inset_frac_right=fields.get("pinline_inset_frac_right"),
-                art_crop_px=fields.get("art_crop_px"),
+                candidates=candidate_frame_families,
+                normal_frame=normal_frame,
             )
             fields["frame_family_class"] = ff_result.family_class
             fields["frame_family_confidence"] = ff_result.confidence

@@ -5,10 +5,8 @@ Structural detectors are tested against real PIL images with precisely
 controlled per-region characteristics, matching `test_local_art_edge.py`'s
 own approach of real geometry + real pixels rather than stubbed samplers.
 
-The calibration gate (`NAMED_FAMILIES`) is empty by default, so the fallback
-chain abstains and the caster votes nothing in production. Tests that need a
-family to ship as NAMED monkeypatch `NAMED_FAMILIES` to enable it - the
-mechanism is proven, the production gate is separately asserted to be shut.
+The set-narrowing classifier (`classify_frame_family`) is tested against
+`FrameFamilyCandidates` inputs - no images needed, just data.
 
 No network, no OCR, no Django DB except where a Tag row is genuinely needed
 (vote casting).
@@ -39,8 +37,8 @@ from cardpicker.local_frame_family import (
     FRAME_FAMILY_STORYBOOK,
     FRAME_FAMILY_TAG_NAME,
     FRAME_FAMILY_VAULT,
-    METHOD_ARTBOUNDS_DISTANCE,
-    METHOD_STRUCTURAL_CONSTRUCTION,
+    METHOD_SET_NARROWING,
+    FrameFamilyCandidates,
     FrameFamilyResult,
     candidate_frame_families,
     cast_frame_family_vote,
@@ -212,121 +210,75 @@ class TestStructuralDetectors:
 
 
 # ---------------------------------------------------------------------------
-# Tests for classify_frame_family (the full fallback chain).
+# Tests for classify_frame_family (the set-narrowing classifier).
 # ---------------------------------------------------------------------------
 
 
 class TestClassifyFrameFamily:
-    def _enable_all(self, monkeypatch):
-        monkeypatch.setattr(mod, "NAMED_FAMILIES", mod.STRUCTURAL_FAMILIES)
-
-    def test_structural_showcase_magnified(self, monkeypatch):
-        self._enable_all(monkeypatch)
-        result = classify_frame_family(_showcase_magnified_card())
-        assert result.family_class == FRAME_FAMILY_SHOWCASE_MAGNIFIED
-        assert result.confidence == CONFIDENCE_STRUCTURAL
-        assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
-
-    def test_structural_pipboy(self, monkeypatch):
-        self._enable_all(monkeypatch)
-        result = classify_frame_family(_pipboy_card())
-        assert result.family_class == FRAME_FAMILY_PIPBOY
-        assert result.confidence == CONFIDENCE_STRUCTURAL
-        assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
-
-    def test_structural_vault(self, monkeypatch):
-        self._enable_all(monkeypatch)
-        result = classify_frame_family(_vault_card())
-        assert result.family_class == FRAME_FAMILY_VAULT
-        assert result.confidence == CONFIDENCE_STRUCTURAL
-        assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
-
-    def test_structural_mystical_archive(self, monkeypatch):
-        self._enable_all(monkeypatch)
-        result = classify_frame_family(_mystical_archive_card())
-        assert result.family_class == FRAME_FAMILY_MYSTICAL_ARCHIVE
-        assert result.confidence == CONFIDENCE_STRUCTURAL
-        assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
-
-    def test_structural_storybook(self, monkeypatch):
-        self._enable_all(monkeypatch)
-        result = classify_frame_family(_storybook_card())
-        assert result.family_class == FRAME_FAMILY_STORYBOOK
-        assert result.confidence == CONFIDENCE_STRUCTURAL
-        assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
-
-    def test_abstains_when_no_family_calibrated(self):
-        """With NAMED_FAMILIES empty (the shipped calibration state) the structural detectors
-        are gated off and the chain abstains, even on a synthetic positive."""
-        result = classify_frame_family(_showcase_magnified_card())
+    def test_none_candidates_abstains(self):
+        result = classify_frame_family()
         assert result.family_class == ""
         assert result.confidence == CONFIDENCE_ABSTAIN
         assert result.method == ""
         assert result.skip_reason == FRAME_FAMILY_AMBIGUOUS_SKIP_REASON
 
-    def test_zero_candidates_abstains_with_no_candidates_reason(self, monkeypatch):
-        """issue #979: a name resolving to zero candidates abstains with a named skip reason."""
-        self._enable_all(monkeypatch)
-        result = classify_frame_family(_showcase_magnified_card(), candidate_families=frozenset())
+    def test_single_candidate_returns_that_family(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates)
+        assert result.family_class == "Pipboy"
+        assert result.confidence == CONFIDENCE_MODERATE
+        assert result.method == METHOD_SET_NARROWING
+        assert result.skip_reason == ""
+
+    def test_multiple_candidates_returns_other_showcase(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy", "Vault"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates)
+        assert result.family_class == FRAME_FAMILY_OTHER_SHOWCASE
+        assert result.confidence == CONFIDENCE_MODERATE
+        assert result.method == METHOD_SET_NARROWING
+        assert result.skip_reason == ""
+
+    def test_zero_candidates_name_resolved_abstains(self):
+        candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=False)
+        result = classify_frame_family(candidates=candidates)
         assert result.family_class == ""
+        assert result.confidence == CONFIDENCE_ABSTAIN
+        assert result.method == ""
         assert result.skip_reason == FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON
 
-    def test_set_narrowing_blocks_family_not_in_candidate_set(self, monkeypatch):
-        """A structural detector fires, but the family is not in the card's own candidate set,
-        so the chain does not claim it."""
-        self._enable_all(monkeypatch)
-        result = classify_frame_family(_pipboy_card(), candidate_families=frozenset({FRAME_FAMILY_VAULT}))
-        assert result.family_class == ""
-        assert result.skip_reason == FRAME_FAMILY_AMBIGUOUS_SKIP_REASON
+    def test_zero_candidates_name_resolved_not_custom(self):
+        candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=False)
+        result = classify_frame_family(candidates=candidates)
+        assert result.family_class != FRAME_FAMILY_CUSTOM
 
-    def test_abstains_on_blank_card(self, monkeypatch):
-        self._enable_all(monkeypatch)
-        result = classify_frame_family(_blank_card())
-        assert result.family_class == ""
-        assert result.confidence == CONFIDENCE_ABSTAIN
-        assert result.method == ""
-
-    def test_artbounds_distance_fires_on_consistent_pinline(self):
-        img = _blank_card()
-        result = classify_frame_family(
-            img,
-            pinline_inset_frac_top=0.05,
-            pinline_inset_frac_bottom=0.06,
-            pinline_inset_frac_left=0.055,
-            pinline_inset_frac_right=0.045,
-            layout_class="black",
-        )
+    def test_normal_frame_writes_standard(self):
+        candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=True)
+        result = classify_frame_family(candidates=candidates, normal_frame=True)
         assert result.family_class == FRAME_FAMILY_STANDARD
         assert result.confidence == CONFIDENCE_MODERATE
-        assert result.method == METHOD_ARTBOUNDS_DISTANCE
+        assert result.method == METHOD_SET_NARROWING
 
-    def test_artbounds_distance_abstains_without_layout_class(self):
-        img = _blank_card()
-        result = classify_frame_family(
-            img,
-            pinline_inset_frac_top=0.05,
-            pinline_inset_frac_bottom=0.06,
-            pinline_inset_frac_left=0.055,
-            pinline_inset_frac_right=0.045,
-            layout_class="",
-        )
+    def test_standard_not_written_when_candidates_exist(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates, normal_frame=True)
+        assert result.family_class == "Pipboy"
+        assert result.family_class != FRAME_FAMILY_STANDARD
+
+    def test_normal_frame_false_no_candidates_abstains(self):
+        candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=True)
+        result = classify_frame_family(candidates=candidates, normal_frame=False)
         assert result.family_class == ""
         assert result.confidence == CONFIDENCE_ABSTAIN
+        assert result.skip_reason == FRAME_FAMILY_AMBIGUOUS_SKIP_REASON
 
-    def test_structural_detector_takes_priority_over_artbounds(self, monkeypatch):
-        self._enable_all(monkeypatch)
-        img = _pipboy_card()
-        result = classify_frame_family(
-            img,
-            pinline_inset_frac_top=0.05,
-            pinline_inset_frac_bottom=0.06,
-            pinline_inset_frac_left=0.055,
-            pinline_inset_frac_right=0.045,
-            layout_class="black",
+    def test_three_candidates_returns_other_showcase(self):
+        candidates = FrameFamilyCandidates(
+            families=frozenset({"MysticalArchive", "MysticalArchiveJP", "MysticalArchiveJPEN"}),
+            name_resolved=True,
         )
-        assert result.family_class == FRAME_FAMILY_PIPBOY
-        assert result.confidence == CONFIDENCE_STRUCTURAL
-        assert result.method == METHOD_STRUCTURAL_CONSTRUCTION
+        result = classify_frame_family(candidates=candidates)
+        assert result.family_class == FRAME_FAMILY_OTHER_SHOWCASE
+        assert result.confidence == CONFIDENCE_MODERATE
 
 
 # ---------------------------------------------------------------------------
@@ -350,17 +302,40 @@ class _FakeCandidate:
 class TestCandidateFrameFamilies:
     def test_maps_set_codes_to_families(self):
         index = _FakeIndex({"foo": [_FakeCandidate("mkm"), _FakeCandidate("eld")]})
-        assert candidate_frame_families("foo", index) == frozenset(
-            {FRAME_FAMILY_SHOWCASE_MAGNIFIED, FRAME_FAMILY_STORYBOOK}
-        )
+        result = candidate_frame_families("foo", index)
+        assert isinstance(result, FrameFamilyCandidates)
+        assert result.families == frozenset({FRAME_FAMILY_SHOWCASE_MAGNIFIED, FRAME_FAMILY_STORYBOOK})
+        assert result.name_resolved is True
 
     def test_empty_for_unknown_name(self):
         index = _FakeIndex({})
-        assert candidate_frame_families("unknown", index) == frozenset()
+        result = candidate_frame_families("unknown", index)
+        assert result.families == frozenset()
+        assert result.name_resolved is False
 
-    def test_empty_for_sets_without_named_family(self):
+    def test_empty_families_resolvable_for_sets_without_family(self):
         index = _FakeIndex({"foo": [_FakeCandidate("znr")]})
-        assert candidate_frame_families("foo", index) == frozenset()
+        result = candidate_frame_families("foo", index)
+        assert result.families == frozenset()
+        assert result.name_resolved is True
+
+    def test_single_candidate_single_family(self):
+        index = _FakeIndex({"foo": [_FakeCandidate("pip")]})
+        result = candidate_frame_families("foo", index)
+        assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
+        assert result.name_resolved is True
+
+    def test_multi_template_set_maps_all_families(self):
+        index = _FakeIndex({"foo": [_FakeCandidate("sta")]})
+        result = candidate_frame_families("foo", index)
+        assert result.families == frozenset(
+            {
+                FRAME_FAMILY_MYSTICAL_ARCHIVE,
+                "MysticalArchiveJP",
+                "MysticalArchiveJPEN",
+            }
+        )
+        assert result.name_resolved is True
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +361,6 @@ class TestCastFrameFamilyVote:
         assert vote.confidence == mod.FRAME_FAMILY_VOTE_CONFIDENCE
 
     def test_uncalibrated_family_abstains(self, db):
-        """The shipped calibration state (NAMED_FAMILIES empty) casts nothing."""
         seed_default_tags()
         vote = cast_frame_family_vote(CardFactory(), FRAME_FAMILY_SHOWCASE_MAGNIFIED, CONFIDENCE_STRUCTURAL)
         assert vote is None
@@ -452,7 +426,6 @@ class TestRunFrameFamilyCast:
         assert vote.tag.name == FRAME_FAMILY_TAG_NAME
 
     def test_uncalibrated_reading_abstains(self, db):
-        """Shipped calibration state: no family is NAMED, so a stored named reading casts nothing."""
         seed_default_tags()
         card = CardFactory(content_phash=1)
         _evidence(
