@@ -188,6 +188,27 @@ class TestClassifyBorderColor:
         img = self._image_with_sparse_text_bands(noisy_bands=("bottom",))
         assert classify_border_color(img) == "black"
 
+    def test_asymmetric_padding_around_black_border_reads_black(self):
+        """issue #735: a card image with ASYMMETRIC white canvas padding on a non-standard
+        canvas (850x1000, aspect ratio 0.85 — far from trim 0.716 and bleed 0.735).  The
+        non-standard aspect ratio causes _derive_bleed_mm to return None, which activates
+        the card_rect gate in classify_border_color.  The card's own border is black.
+        Without re-anchoring, band sampling would land in the white padding and return None
+        (no bands sample successfully).  With the fix, bands are projected through the
+        measured card rectangle and correctly read 'black'."""
+        canvas_w, canvas_h = 850, 1000
+        img = Image.new("RGB", (canvas_w, canvas_h), (250, 250, 250))
+        card_l, card_t = 100, 50
+        card_r, card_b = 750, 950
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([card_l, card_t, card_r, card_b], fill=(5, 5, 5))
+        border_px = 25
+        draw.rectangle(
+            [card_l + border_px, card_t + border_px, card_r - border_px, card_b - border_px],
+            fill=(120, 80, 200),
+        )
+        assert classify_border_color(img) == "black"
+
 
 class TestProjectMmBoxToFractions:
     """issue #830 defect 1: the mm-relative band projection. `_BORDER_SAMPLE_BANDS_MM`'s own
@@ -222,6 +243,32 @@ class TestProjectMmBoxToFractions:
         img = self._trim_exact_image(250)
         degenerate_top_band = (7.2275, 0.0, 55.7725, 0.001)
         assert project_mm_box_to_fractions(degenerate_top_band, img) is None
+
+    def test_card_rect_maps_band_through_measured_rectangle(self):
+        """issue #735: when card_rect is provided, mm coordinates map linearly through the
+        measured card rectangle rather than through an aspect-ratio derivation. A 750x1050
+        image with card_rect=(0.10, 0.08, 0.90, 0.92) should place the left band at 10%
+        + left_mm/63*80% of the width."""
+        img = Image.new("RGB", (750, 1050), (5, 5, 5))
+        card_rect = (0.10, 0.08, 0.90, 0.92)
+        mm_box = _BORDER_SAMPLE_BANDS_MM["left"]
+        box = project_mm_box_to_fractions(mm_box, img, card_rect=card_rect)
+        assert box is not None
+        cr_left, cr_top, cr_right, cr_bottom = card_rect
+        expected_left = cr_left + (mm_box[0] / 63.0) * (cr_right - cr_left)
+        expected_right = cr_left + (mm_box[2] / 63.0) * (cr_right - cr_left)
+        assert abs(box[0] - expected_left) < 1e-9
+        assert abs(box[2] - expected_right) < 1e-9
+
+    def test_card_rect_none_falls_back_to_bleed_derivation(self):
+        img = self._trim_exact_image(250)
+        box_with_rect = project_mm_box_to_fractions(_BORDER_SAMPLE_BANDS_MM["top"], img, card_rect=None)
+        assert box_with_rect is not None
+
+    def test_card_rect_degenerate_returns_none(self):
+        img = Image.new("RGB", (750, 1050), (5, 5, 5))
+        degenerate_rect = (0.5, 0.5, 0.3, 0.9)
+        assert project_mm_box_to_fractions(_BORDER_SAMPLE_BANDS_MM["top"], img, card_rect=degenerate_rect) is None
 
 
 class TestFilterByBorderColor:

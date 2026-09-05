@@ -471,6 +471,42 @@ was asked for and ruled on separately.
     change of any shape to any file on this list needs its own ruling and
     its own entry in this log** — including the next skip-reason one.
 
+**2026-08-31 — `MPCAutofill/cardpicker/local_fallback.py`: re-anchor
+`classify_border_color` band sampling to the card rectangle (issue #735).**
+
+- **What changed.** `classify_border_color` now tries a card-rect-anchored
+  sampling path first (via `measure_pinline_inset`) and falls back to the
+  legacy aspect-ratio path when card_rect gives no definitive result.
+  `project_mm_box_to_fractions` gained an optional `card_rect` parameter:
+  when provided, mm coordinates map linearly through the measured card
+  rectangle; when absent, the legacy bleed-margin derivation is used. A
+  silver metallic texture override was added for the card_rect path. No
+  other function in the file was touched.
+- **Why.** Issue #735: the legacy aspect-ratio derivation places bands in
+  the canvas padding margin, not on the card's own border. The card_rect
+  path anchors sampling to the card's trim rectangle as measured by
+  `measure_pinline_inset`, so bands land on the actual border. The
+  two-path design preserves existing behaviour for standard-aspect-ratio
+  images while fixing the padded-border case.
+- **Who authorised it.** The owner, via the directive authorising this PR
+  (issue #735 fix).
+- **Effect: behavioural change to `classify_border_color` and
+  `project_mm_box_to_fractions`.** Unlike the two previous entries
+  (naming-only, provably inert), this change modifies classification
+  logic: images with asymmetric canvas padding may now classify differently
+  than before (the intended fix). The change is bounded to the card_rect
+  path and its fallback; the legacy path is unchanged when card_rect is
+  not provided. Existing tests cover both paths.
+- **SCOPE OF THIS EXCEPTION — read this before citing it.** It permits
+  **modifying `classify_border_color` and `project_mm_box_to_fractions` in
+  `local_fallback.py` for the card_rect anchoring change (issue #735)**,
+  and that is its entire reach. It is specifically NOT:
+  - a general licence to edit `local_fallback.py` — every other function in
+    it (the artist/symbol sub-checks, the three `cast_*_vote` helpers,
+    `classify_bleed_edge`, `normalize_crop_box`) is untouched;
+  - a licence to edit any other protected-core file;
+  - a precedent that the _pattern_ is now pre-authorised.
+
 ## 3. Absorption protocol
 
 For the day the "permitted zone" (everything outside protected core) ever
