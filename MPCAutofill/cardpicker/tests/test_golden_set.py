@@ -68,6 +68,14 @@ EXTRACTORS_WITHOUT_GOLDEN_EXPECTATIONS = {
     # needs prod DB/image access this change was scoped to read-only. Closing it is a follow-up,
     # not a design decision.
     "art_edge",
+    # PROVISIONAL. frame_family (PR #980) ships DORMANT: calibration against the owner-verified
+    # labels on disk measured recall 0/4 and 27/40 false positives, so no method cleared issue
+    # #829's bar and NAMED_FAMILIES is empty. Its only production output is abstain (confidence 0)
+    # or STANDARD via the artBounds-distance fallback (confidence 1) - neither is owner-verified
+    # truth for the 30 golden cards, so there is nothing stable to pin yet. Closing it needs the
+    # same real 30-card host-venv run against prod images the artbox_phash/pinline_inset/art_edge
+    # waivers above defer.
+    "frame_family",
 }
 
 # GOLDEN_EXPECTATIONS keys that are not themselves `extractor_versions` keys. `bleed_diff_mm` is

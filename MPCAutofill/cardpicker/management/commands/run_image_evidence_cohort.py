@@ -319,6 +319,7 @@ MANIFEST_EXTRACTOR_KEYS = frozenset(
         "legal_line",
         "quality_signals",
         "pinline_inset",
+        "frame_family",
     }
 )
 
@@ -346,6 +347,7 @@ MANIFEST_EXTRACTOR_CURRENT_VERSIONS: dict[str, str] = {
     "legal_line": "legal-line-v2",
     "quality_signals": "quality-signals-v1",
     "pinline_inset": "pinline-inset-v1",
+    "frame_family": "frame-family-v1",
 }
 
 
@@ -679,6 +681,7 @@ def _compute_one_card(
     stale_extractor_keys: Optional[frozenset[str]] = None,
     stored_evidence_fields: Optional[dict[str, Any]] = None,
     stored_extractor_versions: Optional[dict[str, Any]] = None,
+    candidate_frame_families: Optional[frozenset[str]] = None,
 ) -> tuple[int, str, Optional[dict[str, float]], bool]:
     """Module-level (picklable) compute-only work unit for the process pool - takes plain,
     already-fetched data (never a `Card`/`Image` instance re-fetched or re-decoded elsewhere), and
@@ -752,24 +755,25 @@ def _compute_one_card(
         image = Image.open(BytesIO(image_bytes))
 
     profile_dict: Optional[dict[str, float]] = {} if profile else None
-    result = compute_card_evidence(
-        card_id,
-        content_hash,
-        image,
-        fetch_latency_ms,
-        profile=profile_dict,
-        short_circuit=short_circuit,
-        known_set_codes=known_set_codes,
-        artist_lexicon=_WORKER_ARTIST_LEXICON,
-        printing_artist_lookup=_WORKER_PRINTING_ARTIST_LOOKUP,
-        card_artist_names=card_artist_names,
-        modern_artist_lexicon=_WORKER_MODERN_ARTIST_LEXICON,
-        md5_checksum=md5_checksum,
-        sha256_checksum=sha256_checksum,
-        stale_extractor_keys=stale_extractor_keys,
-        stored_evidence_fields=stored_evidence_fields,
-        stored_extractor_versions=stored_extractor_versions,
-    )
+    compute_kwargs: dict[str, Any] = {
+        "fetch_latency_ms": fetch_latency_ms,
+        "profile": profile_dict,
+        "short_circuit": short_circuit,
+        "known_set_codes": known_set_codes,
+        "artist_lexicon": _WORKER_ARTIST_LEXICON,
+        "printing_artist_lookup": _WORKER_PRINTING_ARTIST_LOOKUP,
+        "card_artist_names": card_artist_names,
+        "modern_artist_lexicon": _WORKER_MODERN_ARTIST_LEXICON,
+        "md5_checksum": md5_checksum,
+        "sha256_checksum": sha256_checksum,
+        "stale_extractor_keys": stale_extractor_keys,
+        "stored_evidence_fields": stored_evidence_fields,
+        "stored_extractor_versions": stored_extractor_versions,
+    }
+    # Empty set -> omit the kwarg -> None default (skip narrowing); non-empty -> narrow.
+    if candidate_frame_families:
+        compute_kwargs["candidate_frame_families"] = candidate_frame_families
+    result = compute_card_evidence(card_id, content_hash, image, **compute_kwargs)
     if not dry_run:
         persist_evidence(result, run_id=run_id)
     if profile_dict is not None and wall_started_at is not None:
@@ -893,6 +897,7 @@ def _run_cohort(
     artist_lexicon: Optional[ArtistLexicon] = None,
     name_artist_lookup: Optional[NameArtistLookup] = None,
     modern_artist_lexicon: Optional[LexiconIndex] = None,
+    candidate_frame_families_lookup: Optional[Any] = None,
 ) -> tuple[int, int, bool, int, bool, Optional[float]]:
     """
     The decoupled fetch/compute driver itself. Two concurrent executors:
@@ -1021,6 +1026,12 @@ def _run_cohort(
                 # single-threaded driver loop costs nothing against the pool's own throughput.
                 card_artist_names = () if name_artist_lookup is None else name_artist_lookup(fetch_result.card_name)
 
+                candidate_ff = (
+                    None
+                    if candidate_frame_families_lookup is None
+                    else candidate_frame_families_lookup(fetch_result.card_name)
+                )
+
                 compute_future = compute_pool.submit(
                     _compute_one_card,
                     fetch_result.card_id,
@@ -1038,6 +1049,7 @@ def _run_cohort(
                     fetch_result.stale_extractor_keys,
                     fetch_result.stored_evidence_fields,
                     fetch_result.stored_extractor_versions,
+                    candidate_ff,
                 )
                 pending[compute_future] = fetch_result.card_id
             _submit_more_fetch()
@@ -1379,6 +1391,11 @@ class Command(BaseCommand):
             # `run_join_key_calculator` already practise.
             artist_lexicon = load_artist_lexicon()
             name_artist_lookup = build_name_artist_lookup()
+            from cardpicker.local_frame_family import (
+                build_candidate_frame_families_lookup,
+            )
+
+            candidate_frame_families_lookup = build_candidate_frame_families_lookup()
             # ARTIST-CROP FALLBACK (2026-08-04): same "query once, pass through explicitly"
             # convention as the two lookups immediately above - see `compute_card_evidence`'s own
             # `modern_artist_lexicon` docstring paragraph.
@@ -1411,6 +1428,7 @@ class Command(BaseCommand):
                     artist_lexicon=artist_lexicon,
                     name_artist_lookup=name_artist_lookup,
                     modern_artist_lexicon=modern_artist_lexicon,
+                    candidate_frame_families_lookup=candidate_frame_families_lookup,
                 )
             finally:
                 if profile_file is not None:

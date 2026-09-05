@@ -331,6 +331,12 @@ class DispatchOutcome:
     # above. Casts the pre-existing "Extended" attribute chip only on an `extended` reading;
     # `framed`/`mixed` abstain (see `cast_art_edge_continuity_vote`'s own docstring).
     stage_d_art_edge_votes: int = 0
+    # `frame-family-v1`/`cardpicker.local_frame_family.run_frame_family_cast`). Reads the
+    # already-stored `ImageEvidence.frame_family_class` and casts the pre-existing "Showcase" chip
+    # only on a named, above-bar verdict. The gate reads the calibration table (`NAMED_FAMILIES`),
+    # which is empty today (the structural detectors fail #829's bar), so this casts nothing until
+    # a method clears the bar.
+    stage_d_frame_family_votes: int = 0
     # Stream B (md5 verdict-transfer gate): how many cards in this batch had their Stage D verdict
     # satisfied via propagation from a same-md5 sibling's existing CardPrintingTag row instead of
     # running through the four calculators and three chips. Zero when the gate found nothing to
@@ -728,6 +734,7 @@ _compute_pool_artist_lexicon: Any = None
 _compute_pool_printing_artist_lookup: Any = None
 _compute_pool_name_artist_lookup: Any = None
 _compute_pool_modern_artist_lexicon: Any = None
+_compute_pool_candidate_frame_families_lookup: Any = None
 
 
 def _stage_c_compute_worker_init(
@@ -798,6 +805,7 @@ def _stage_c_compute_worker_init(
     global _compute_pool_lexicon, _compute_pool_artist_lexicon
     global _compute_pool_printing_artist_lookup, _compute_pool_name_artist_lookup
     global _compute_pool_modern_artist_lexicon
+    global _compute_pool_candidate_frame_families_lookup
 
     _compute_pool_short_circuit = short_circuit
     _compute_pool_lexicon = _known_set_codes()
@@ -805,6 +813,9 @@ def _stage_c_compute_worker_init(
     _compute_pool_printing_artist_lookup = _build_printing()
     _compute_pool_name_artist_lookup = _build_name()
     _compute_pool_modern_artist_lexicon = _load_modern_artist()
+    from cardpicker.local_frame_family import build_candidate_frame_families_lookup
+
+    _compute_pool_candidate_frame_families_lookup = build_candidate_frame_families_lookup()
 
 
 def _stage_c_compute_one_card(
@@ -849,23 +860,25 @@ def _stage_c_compute_one_card(
 
     try:
         image = Image.open(BytesIO(image_bytes))
-        result = compute_card_evidence(
-            card_id,
-            content_hash,
-            image,
-            fetch_latency_ms=fetch_latency_ms,
-            short_circuit=_compute_pool_short_circuit,
-            known_set_codes=_compute_pool_lexicon,
-            artist_lexicon=_compute_pool_artist_lexicon,
-            printing_artist_lookup=_compute_pool_printing_artist_lookup,
-            card_artist_names=_compute_pool_name_artist_lookup(card_name),
-            modern_artist_lexicon=_compute_pool_modern_artist_lexicon,
-            md5_checksum=md5_checksum,
-            sha256_checksum=sha256_checksum,
-            stale_extractor_keys=stale_extractor_keys,
-            stored_evidence_fields=stored_evidence_fields,
-            stored_extractor_versions=stored_extractor_versions,
-        )
+        compute_kwargs: dict[str, Any] = {
+            "fetch_latency_ms": fetch_latency_ms,
+            "short_circuit": _compute_pool_short_circuit,
+            "known_set_codes": _compute_pool_lexicon,
+            "artist_lexicon": _compute_pool_artist_lexicon,
+            "printing_artist_lookup": _compute_pool_printing_artist_lookup,
+            "card_artist_names": _compute_pool_name_artist_lookup(card_name),
+            "modern_artist_lexicon": _compute_pool_modern_artist_lexicon,
+            "md5_checksum": md5_checksum,
+            "sha256_checksum": sha256_checksum,
+            "stale_extractor_keys": stale_extractor_keys,
+            "stored_evidence_fields": stored_evidence_fields,
+            "stored_extractor_versions": stored_extractor_versions,
+        }
+        # Empty set -> omit the kwarg -> None default (skip narrowing); non-empty -> narrow.
+        candidate_frame_families = _compute_pool_candidate_frame_families_lookup(card_name)
+        if candidate_frame_families:
+            compute_kwargs["candidate_frame_families"] = candidate_frame_families
+        result = compute_card_evidence(card_id, content_hash, image, **compute_kwargs)
         if not dry_run:
             with suppress_evidence_change_echo():
                 persist_evidence(result, run_id=run_id)
@@ -1372,6 +1385,12 @@ def _run_evidence_only_calculators(
     `local_art_edge.cast_art_edge_continuity_vote`'s own docstring for the numbers and
     `docs/pipeline-fidelity-gate.md`'s calculator roster for the full measurement).
 
+    A SIXTH CHANNEL WIRED HERE (frame-family identifiers): `frame-family-v1`
+    (`local_frame_family.run_frame_family_cast`) - reads the already-stored
+    `ImageEvidence.frame_family_class` and casts the pre-existing "Showcase" chip on a named,
+    above-bar verdict. The gate reads the calibration table (`NAMED_FAMILIES`), empty today, so
+    it casts nothing until a method clears #829's bar.
+
     WHY THESE FIVE AND NOT THE OTHER FIVE UNWIRED IDENTITIES the same audit found (`docs/
     pipeline-fidelity-gate.md`'s roster has the full accounting): every one of these five reads
     ONLY data this pass has already stored - `ImageEvidence` OCR/pixel-derived fields,
@@ -1427,6 +1446,7 @@ def _run_evidence_only_calculators(
     """
     from cardpicker.local_art_edge import run_art_edge_continuity_cast
     from cardpicker.local_detect_ai_art import run_ai_art_detector
+    from cardpicker.local_frame_family import run_frame_family_cast
     from cardpicker.local_lands_identify import run_lands_identify
     from cardpicker.local_residual_classify import (
         run_d0_sibling_artist_propagation,
@@ -1454,6 +1474,18 @@ def _run_evidence_only_calculators(
             "this batch are unaffected and already written. Run `seed_default_tags`/"
             "`seed_attribute_tags` to close this - until then stage_d_art_edge_votes stays at "
             "zero on every dispatch.",
+            run_id,
+            exc,
+        )
+
+    try:
+        frame_family_result = run_frame_family_cast(run_id=run_id, dry_run=dry_run, card_ids=card_ids)
+        outcome.stage_d_frame_family_votes = frame_family_result.votes_written
+    except RuntimeError as exc:
+        logger.error(
+            "Frame-family caster skipped for run_id=%s: %s Stage D's printing votes for this "
+            "batch are unaffected and already written. Run `seed_default_tags` to close this - "
+            "until then stage_d_frame_family_votes stays at zero on every dispatch.",
             run_id,
             exc,
         )
