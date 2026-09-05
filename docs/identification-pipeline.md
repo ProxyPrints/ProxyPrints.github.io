@@ -456,40 +456,38 @@ printing votes, so it would have fired on the first `-v2` run.
 ## Parallel detectors (same evidence, never gate identification)
 
 - **Frame-family identifiers** (`local_frame_family.classify_frame_family`):
-  names which frame family a card belongs to by inspecting the uploaded
-  image directly. Produces `frame_family_class` (named family or
+  names which frame family a card belongs to by **set narrowing** (metadata,
+  not pixels). Produces `frame_family_class` (named family or
   `OTHER_SHOWCASE`/`STANDARD`/`CUSTOM`/blank), `frame_family_confidence`
-  (0–3), and `frame_family_method` on `ImageEvidence`. A fallback chain
-  from cheapest to costliest:
+  (0–3), and `frame_family_method` on `ImageEvidence`.
 
-  1. **Structural construction** (confidence 3): deterministic detectors for
-     five unmistakable families — ShowcaseMagnified, Pipboy, Vault,
-     MysticalArchive, Storybook. Targets construction (circular art window,
-     scanline header, corner brackets, dotted nameplate, vine scroll), not
-     colour.
-  2. **ArtBounds distance** (confidence 1): pinline-spread check that the
-     card edge is real, yielding `STANDARD` only where `layout_class` names a
-     border colour.
+  The population source is `SET_TO_FRAME_FAMILIES` (29 sets, harvested from
+  the CardConjurer pack registry). The card's name resolves through
+  `CandidateNameIndex.candidates_for` to candidate printings, whose expansion
+  codes map to the alternate-frame families that set ships. The verdict, by
+  candidate-set size:
 
-  Region-hash is deliberately not shipped — it is closed by the
-  frame-identification audit (its reference population was contaminated by
-  the metadata label it was scored against), and furniture-colour has no
-  stored RGB swatch artifact yet.
+  | Candidate families                                            | Verdict                                      | Confidence   |
+  | ------------------------------------------------------------- | -------------------------------------------- | ------------ |
+  | Exactly one                                                   | that family (a proposal, never confirmation) | 1 (moderate) |
+  | Two or more                                                   | `OTHER_SHOWCASE` (pick-list)                 | 1 (moderate) |
+  | Zero (name resolves to nothing, #979)                         | abstain, `no-candidates` reason              | 0            |
+  | Zero (resolvable, no alternate-frame family) + `normal_frame` | `STANDARD`                                   | 1 (moderate) |
 
-  Every method runs inside the set-narrowed candidate family set: the card's
-  name resolves through `CandidateNameIndex.candidates_for` to candidate
-  printings whose expansion codes map to the named families that set ships; a
-  name resolving to zero candidates abstains with the `no-candidates` skip
-  reason (issue #979).
+  `STANDARD` never overrides a non-empty candidate set: showcase families'
+  cards read as framed constantly, so a normal-frame reading on a card with a
+  live candidate is a property of the render, not evidence against the family.
+  The `normal_frame` chip (#981) is computed at the population site from
+  `art_edge_class == "framed"` AND `artbox_frame_class == "modern"` AND
+  `layout_class != "borderless"`.
 
-  The coarse "Showcase" tag is voted ONLY on named, above-bar verdicts, and
-  the gate reads the calibration table (`NAMED_FAMILIES`): a family ships as
-  NAMED only where owner-verified truth exists and the method cleared #829's
-  bar. Measured against the owner-verified labels on disk the structural
-  detectors score 0/4 recall and 27/40 false positives on owner-negative
-  cards, so `NAMED_FAMILIES` is empty and the identifier is **dormant** — it
-  stores evidence (abstain for every real card today) and casts no votes until
-  a method clears the bar. Wired via `cast_frame_family_vote` called from
+  The five structural detectors (ShowcaseMagnified, Pipboy, Vault,
+  MysticalArchive, Storybook) remain in the module but are dormant — not
+  called by `classify_frame_family`. Measured against owner-verified labels
+  they score 0/4 recall and 27/40 false positives, so `NAMED_FAMILIES` stays
+  empty. The caster (`cast_frame_family_vote`) votes nothing.
+
+  Wired via `cast_frame_family_vote` called from
   `stage_e_dispatch._run_evidence_only_calculators` and the standalone
   `local_frame_family_cast` management command.
 
