@@ -874,9 +874,9 @@ def _stage_c_compute_one_card(
             "stored_evidence_fields": stored_evidence_fields,
             "stored_extractor_versions": stored_extractor_versions,
         }
-        # Empty set -> omit the kwarg -> None default (skip narrowing); non-empty -> narrow.
+        # Pass whenever the lookup produced one, so the callee can tell "unresolved" from "not narrowed".
         candidate_frame_families = _compute_pool_candidate_frame_families_lookup(card_name)
-        if candidate_frame_families:
+        if candidate_frame_families is not None:
             compute_kwargs["candidate_frame_families"] = candidate_frame_families
         result = compute_card_evidence(card_id, content_hash, image, **compute_kwargs)
         if not dry_run:
