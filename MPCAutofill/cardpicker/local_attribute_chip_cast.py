@@ -137,6 +137,7 @@ class AttributeChipVerdict:
     frame_class: Optional[str] = None
     frame_tag_name: Optional[str] = None
     frame_skip_reason: Optional[str] = None
+    normal_frame: Optional[bool] = None
 
 
 def calculate_attribute_chip_verdict(card_id: int, evidence: ImageEvidence) -> AttributeChipVerdict:
@@ -150,10 +151,21 @@ def calculate_attribute_chip_verdict(card_id: int, evidence: ImageEvidence) -> A
     `illus_anchor_fired` is nullable; it is passed as `bool(...)` only AFTER the `artist_ocr` gate
     has confirmed the extractor ran, so a `None` reaching here means the extractor ran and found no
     anchor - a real negative, not an absence.
+
+    NORMAL. A derived reading - whether the render is a normal modern frame (art edge is `framed`,
+    not borderless full-art), computed at cast time from three already-stored signals rather than
+    persisted: `classify_frame_style`'s era reading + `art_edge_class` + `layout_class`. True when
+    `frame_class == "modern"` AND `art_edge_class == "framed"` AND `layout_class != "borderless"`;
+    False when the era reads modern but the frame is extended-art or borderless; None when the era
+    reading is not modern (an old frame is a different axis, not a non-normal one) or the frame
+    chip was not attempted (skip reason set). The `layout_class == ""` sentinel excludes a
+    not-yet-computed border reading from the `borderless` branch, so a missing layout never reads
+    False.
     """
     frame_class: Optional[str] = None
     frame_tag_name: Optional[str] = None
     frame_skip_reason: Optional[str] = None
+    normal_frame: Optional[bool] = None
     if any(key not in evidence.extractor_versions for key in FRAME_REQUIRED_EXTRACTOR_KEYS):
         frame_skip_reason = CHIP_INCOMPLETE_EVIDENCE_SKIP_REASON
     else:
@@ -168,11 +180,15 @@ def calculate_attribute_chip_verdict(card_id: int, evidence: ImageEvidence) -> A
             if frame_tag_name is None:
                 frame_skip_reason = CHIP_UNMAPPED_SKIP_REASON
 
+    if frame_class == "modern" and not frame_skip_reason:
+        normal_frame = evidence.art_edge_class == "framed" and evidence.layout_class != "borderless"
+
     return AttributeChipVerdict(
         card_id=card_id,
         frame_class=frame_class,
         frame_tag_name=frame_tag_name,
         frame_skip_reason=frame_skip_reason,
+        normal_frame=normal_frame,
     )
 
 

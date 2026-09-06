@@ -1740,7 +1740,11 @@ class TestNameFrequencyElimination:
         CanonicalPrintingMetadataFactory(canonical_card=uncovered_printing, border_color="black")
         CardFactory(canonical_card=covered_printing)
         card = CardFactory(name="Forest")
-        _extracted(card, layout_class="black")
+        # illus_anchor_fired=False: the printing's metadata is frame="2015" (modern), so the card's
+        # own evidence must read modern for the frame half to AGREE. The `_extracted` default is
+        # a both-fire combo (illus anchor + collector number), which now reads "old" and would
+        # (correctly) contradict a 2015 printing - see classify_frame_style's precedence.
+        _extracted(card, layout_class="black", illus_anchor_fired=False)
 
         result = run_name_frequency_elimination(dry_run=False)
 
