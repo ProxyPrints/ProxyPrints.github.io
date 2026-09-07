@@ -45,6 +45,7 @@ import {
   DEFAULT_CUT_LINE_THICKNESS_MM,
 } from "@/common/constants";
 import { useLongPress } from "@/common/useLongPress";
+import { STANDARD_BLEED_MARGIN_MM } from "@/features/pdf/bleedNormalize";
 import {
   computeLayout,
   LayoutEdgeBleed,
@@ -322,6 +323,12 @@ export interface PagePreviewSlotContent {
    * as a small indicator dot on the `⟲` flip button (same gating as the flip button itself: card-
    * holding cells only). `undefined`/`false` renders no dot, same as before this round. */
   hasCustomCardback?: boolean;
+  /** This slot's own card's measured bleed margin in millimetres (Card.measuredBleedMm from the
+   * backend) - the cut guide's own inset is drawn from this, not a nominal constant, so it tracks
+   * where this specific image's trim edge actually is. `undefined`/`null` (a card with no current
+   * bleed measurement, an empty slot, or a card whose two measurement methods disagreed past a
+   * 2 mm gate and the backend abstained) falls back to STANDARD_BLEED_MARGIN_MM. */
+  measuredBleedMm?: number | null;
 }
 
 export interface PagePreviewProps {
@@ -508,9 +515,9 @@ interface PagePreviewSlotElProps {
   /** The per-edge bleed `computeLayout` actually granted this slot (never more than the
    * caller's configured `bleedEdgeMM`, and potentially less on a crowded axis - see
    * layout.ts's `fitAxisWithBleed`). The cut line (the TRUE card edge - see this component's
-   * own module comment) sits at `bleedMM.left`/`bleedMM.top` from the slot's own top-left, not
-   * at a flat `bleedEdgeMM` offset, so it stays correct even when this slot is cropped below
-   * the configured target - this is the "preview mirrors export" contract in practice. */
+   * own module comment) is capped at this value, so it never draws past the room the layout
+   * granted even when `content.measuredBleedMm` calls for more - see the `guideLeftMM`/
+   * `guideTopMM` computation below for the full inset resolution. */
   bleedMM: LayoutEdgeBleed;
   showCutLines: boolean;
   cutLineColor: string;
@@ -578,6 +585,28 @@ function PagePreviewSlotEl({
     );
   };
 
+  // Guide position: always at the slot's granted bleed boundary (bleedMM), matching the
+  // exporter's cut-line position. The image is CSS-transformed so its trim edge lands here.
+  const guideLeftMM = bleedMM.left;
+  const guideTopMM = bleedMM.top;
+
+  // Preview/export parity: scale the image about its centre so its trim rectangle lands on
+  // the slot's trim rectangle (bleedMM from each slot edge).
+  //
+  // objectFit:contain fills the slot by scaling image natural size (trim + 2*measuredBleed)
+  // to slot size (trim + 2*grantedBleed). The CSS transform then restores the image to
+  // natural size, which shifts the trim edge to exactly grantedBleed from the slot edge.
+  // Combined scale is always 1.0 — the transform only repositions, never enlarges.
+  //
+  // Falls back to STANDARD_BLEED_MARGIN_MM when measuredBleedMm is null/undefined, which
+  // collapses the scale to 1.0 when the configured bleed matches the standard convention
+  // (the common case) — load-bearing, not defensive.
+  const measuredOrStandardMM =
+    content?.measuredBleedMm ?? STANDARD_BLEED_MARGIN_MM;
+  const scaleX = (CardWidthMM + 2 * measuredOrStandardMM) / slotWidthMM;
+  const scaleY = (CardHeightMM + 2 * measuredOrStandardMM) / slotHeightMM;
+  const imgTransform = `scale(${scaleX}, ${scaleY})`;
+
   return (
     <div
       data-testid="page-preview-slot"
@@ -630,12 +659,11 @@ function PagePreviewSlotEl({
           style={{
             width: "100%",
             height: "100%",
-            objectFit: "cover",
+            objectFit: "contain",
             display: "block",
             pointerEvents: "none",
-            // E20 - the img's own box, pre-paint (impl note from the spec: set it on the
-            // slot container AND the img itself - the flash is the img's own box, not just
-            // its parent's).
+            transform: imgTransform,
+            transformOrigin: "center center",
             backgroundColor: screenPresentation ? SCREEN_SLOT_BG : undefined,
           }}
         />
@@ -751,18 +779,18 @@ function PagePreviewSlotEl({
         </div>
       )}
       {showCutLines &&
-        // The cut line marks the TRUE card edge, `bleedMM.left`/`bleedMM.top` in from this
-        // slot's own top-left (not a flat `bleedEdgeMM`, since a crowded axis can grant less -
-        // see layout.ts's fitAxisWithBleed), sized to the fixed CardWidthMM/CardHeightMM card
-        // itself, matching PDF.tsx's PDFCardCutLines: offset 0 sits exactly on the trim
-        // boundary, a positive offset grows the guide outward past it.
+        // The cut line marks the TRUE card edge, `guideLeftMM`/`guideTopMM` in from this slot's
+        // own top-left (this card's own measured bleed, capped by whatever the page layout
+        // granted - see the `guideLeftMM`/`guideTopMM` comment above), sized to the fixed
+        // CardWidthMM/CardHeightMM card itself, matching PDF.tsx's PDFCardCutLines: offset 0
+        // sits exactly on the trim boundary, a positive offset grows the guide outward past it.
         (screenPresentation ? (
           <div
             data-testid="page-preview-cut-line"
             style={{
               position: "absolute",
-              left: bleedMM.left - cutLineOffsetMM + "mm",
-              top: bleedMM.top - cutLineOffsetMM + "mm",
+              left: guideLeftMM - cutLineOffsetMM + "mm",
+              top: guideTopMM - cutLineOffsetMM + "mm",
               width: CardWidthMM + 2 * cutLineOffsetMM + "mm",
               height: CardHeightMM + 2 * cutLineOffsetMM + "mm",
               pointerEvents: "none",
@@ -798,8 +826,8 @@ function PagePreviewSlotEl({
             data-testid="page-preview-cut-line"
             style={{
               position: "absolute",
-              left: bleedMM.left - cutLineOffsetMM + "mm",
-              top: bleedMM.top - cutLineOffsetMM + "mm",
+              left: guideLeftMM - cutLineOffsetMM + "mm",
+              top: guideTopMM - cutLineOffsetMM + "mm",
               width: CardWidthMM + 2 * cutLineOffsetMM + "mm",
               height: CardHeightMM + 2 * cutLineOffsetMM + "mm",
               outline: `${cutLineThicknessMM}mm dashed ${cutLineColor}`,

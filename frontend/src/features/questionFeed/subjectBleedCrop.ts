@@ -2,10 +2,12 @@
  * Crop fractions for the What's That Card subject scan (QuestionFeed.tsx's `heroImageSrc`/
  * `subjectImageSrc`), so the voter judges the card as it would be cut rather than the raw scan
  * with whatever bleed surround the source included. Reads the SAME per-card measured bleed the
- * backend's bleed calculator already computes (`Card.measuredBleedMm`, `local_bleed_calculator.
- * py`'s Method A) rather than re-measuring anything client-side - falls back to
- * `STANDARD_BLEED_MARGIN_MM`, the same profile-default bleed `/display`'s own margin profiles
- * already assume, only when this card has no measured value yet.
+ * backend's bleed calculator already computes (`Card.measuredBleedMm`, whichever method answered
+ * for that card — Method A where only an aspect-ratio measurement exists, Method B where both
+ * methods agree within a 2 mm gate, `None` where they disagree) rather than re-measuring
+ * anything client-side - falls back to `STANDARD_BLEED_MARGIN_MM`, the same profile-default
+ * bleed `/display`'s own margin profiles already assume, which also covers the abstain case
+ * (a card whose two bleed methods disagree, falling back to the standard convention).
  *
  * THE MATH: a card image carrying `b` mm of bleed on every edge has its own pixel aspect ratio
  * fixed at `(CardWidthMM + 2b) : (CardHeightMM + 2b)` - Method A's own closed-form reading of

@@ -192,9 +192,19 @@ rescale (a real per-edge pixel crop isn't available for that path - unchanged li
 configured target.
 
 **Preview (`PagePreview.tsx`)**: reads `computeLayout`'s own `slot.widthMM`/`heightMM`/`bleedMM`
-directly (previously assumed a flat `CardSize + 2*bleedEdgeMM` for every slot) - same
+directly (previously assumed a flat `CardWidthMM + 2*bleedEdgeMM` for every slot) - same
 `computeLayout()` call the exporter uses, so slot sizes and cut-line positions agree with the PDF
 by construction, not by parallel maintenance.
+
+**Preview/export cut-line parity**: `PagePreview.tsx` positions the cut guide at
+`bleedMM.left`/`bleedMM.top` (the slot's granted bleed), while the image is
+CSS-transformed so its trim rectangle lands at that same boundary. The transform
+uses `measuredBleedMm` (the card's own measured bleed margin) as a refinement:
+`scaleX = (CardWidthMM + 2 * measuredOrStandardMM) / slotWidthMM` when
+`measuredBleedMm` is available, falling back to `STANDARD_BLEED_MARGIN_MM`
+(3.175 mm) when it is null. The result is that the preview's cut lines mark the
+same physical boundary the PDF export targets - the card's trim edge at the
+configured bleed - without any per-card canvas work in the preview path.
 
 **Trailing-edge / bordered-profile warning (`marginProfiles.ts` + `MarginProfileControl.tsx`)**:
 `maxBleedForFourColumns`'s FORMULA is unchanged (it already computed exactly the per-edge bleed

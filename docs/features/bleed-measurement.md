@@ -102,5 +102,16 @@ The following locations read `measured_bleed_mm()` or the serialised
   schema carries both `measuredBleedMm` (nullable float) and
   `bleedProvenance` (the four-value enum above). These are the fields the
   frontend reads.
+- `DisplayPage.tsx` (frontend) — passes `cardDocument.measuredBleedMm`
+  into the page layout that `PagePreview.tsx` renders.
+- `PagePreview.tsx` (frontend) — reads `measuredBleedMm` to CSS-transform
+  the preview image so its trim rectangle lands at the slot's granted bleed
+  boundary (`bleedMM`), achieving preview/export parity without pixel-level
+  normalization.
+- `subjectBleedCrop.ts` (frontend), reached from `QuestionFeed.tsx` at two
+  call sites — the What's That Card subject crop, which falls back to the
+  standard bleed when the value is null (including the abstained case).
+- The PDF export path (`bleedNormalize.ts` / `bleedExtension.ts`) measures
+  its own per-pixel bleed in the PDF worker and never reads this field.
 - No other backend consumers currently call `measured_bleed_mm()` directly;
-  the question feed's `_log_served` is the sole attachment point.
+  the question feed's `_log_served` is the sole backend attachment point.
