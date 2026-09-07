@@ -775,29 +775,69 @@ class Card(models.Model):
 
         return get_suggested_filter_tags_overlay([self.pk]).get(self.pk, [])
 
-    def measured_bleed_mm(self) -> Optional[float]:
-        """
-        This card's own measured bleed margin in millimetres - Method A (aspect-ratio-derived)
-        from `local_bleed_calculator`'s own formula (`BLEED_MARGIN_MM - bleed_diff_mm`), reading
-        the SAME `ImageEvidence.bleed_diff_mm` Stage C already persists (no re-fetch, no
-        re-classification). Deliberately Method A alone, not the calculator's full two-method
-        cross-check: Method A measures the DISPLAYED image's own pixel aspect ratio, exactly what
-        a symmetric edge crop of that same image needs, whereas Method B's per-edge pinline
-        reading answers a different geometric question (trim-to-pinline distance) a single
-        symmetric crop has no use for. `None` whenever no current `ImageEvidence` row has
-        completed the `geometry_bleed` extractor for this card (`local_bleed_calculator.
-        REQUIRED_EXTRACTOR_KEYS`) - callers fall back to the profile default bleed in that case,
-        never a guess.
+    def _compute_bleed_measurement(self) -> tuple[Optional[float], str]:
+        """Cross-checked bleed measurement: Method B where present and agreeing with Method A
+        inside the 2mm gate; Method A otherwise; abstains (returns `(None, "abstained")`) where
+        both are present and disagree beyond the gate. Reuses `calculate_bleed_verdict`'s own
+        two-method cross-check and its `METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM` constant -
+        not re-implemented here. Returns `(None, "no-evidence")` when no current `ImageEvidence`
+        row has completed the `geometry_bleed` extractor.
+
+        Both `measured_bleed_mm()` and `_bleed_provenance()` call this once; the single
+        `current_evidence_queryset` lookup is the expensive part (DB hit), and calling
+        `calculate_bleed_verdict` twice on the same in-memory evidence is negligible.
         """
         from cardpicker.image_evidence import (
             current_evidence_queryset,  # local import - avoids a models<->image_evidence cycle
         )
-        from cardpicker.local_bleed_calculator import BLEED_MARGIN_MM
+        from cardpicker.local_bleed_calculator import (
+            BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON,
+            calculate_bleed_verdict,
+        )
 
         evidence = current_evidence_queryset(self).order_by("-updated_at").first()
         if evidence is None or evidence.bleed_diff_mm is None:
-            return None
-        return round(BLEED_MARGIN_MM - evidence.bleed_diff_mm, 4)
+            return None, "no-evidence"
+        verdict = calculate_bleed_verdict(self, evidence)
+        if verdict.method_a_mm is None and verdict.method_b_mean_mm is None:
+            return None, "no-evidence"
+        if (
+            verdict.method_a_mm is not None
+            and verdict.method_b_mean_mm is not None
+            and verdict.skip_reason == BLEED_CALC_METHOD_DISAGREEMENT_SKIP_REASON
+        ):
+            return None, "abstained"
+        if verdict.method_b_mean_mm is not None:
+            return verdict.method_b_mean_mm, "method-b"
+        return verdict.method_a_mm, "method-a"
+
+    def measured_bleed_mm(self) -> Optional[float]:
+        """This card's cross-checked measured bleed margin in millimetres. Method B (pinline-ruler,
+        per-edge) where present and agreeing with Method A (aspect-ratio-derived) inside the 2mm
+        gate; Method A alone otherwise; `None` when both are present and disagree beyond the gate
+        (abstain) or when no current `ImageEvidence` row has completed the `geometry_bleed`
+        extractor. Reuses `calculate_bleed_verdict`'s own two-method cross-check and its threshold
+        constant -- not re-implemented here.
+
+        Callers that need to distinguish a real per-card measurement from a constant or an
+        abstention should also read `_bleed_provenance()` (or the serialised `bleedProvenance`
+        field on the card schema) for the method that answered.
+        """
+        value, _ = self._compute_bleed_measurement()
+        return value
+
+    def _bleed_provenance(self) -> str:
+        """Which method answered `measured_bleed_mm()` for this card: `"method-a"` (aspect-ratio-
+        derived, a function of image dimensions alone), `"method-b"` (pinline-ruler, per-edge
+        measurement), `"abstained"` (both present, disagreed beyond the gate), or `"no-evidence"`
+        (no current `ImageEvidence` row with completed geometry_bleed extractor).
+
+        Exposed on the serialised card schema as `bleedProvenance` -- the field #978 needs to
+        draw a cut line from this value with confidence that it came from a real per-card
+        measurement rather than one of Method A's three dominant constants.
+        """
+        _, provenance = self._compute_bleed_measurement()
+        return provenance
 
     def _serialise_tag_vote_statuses(self) -> dict[str, SerialisedTagVoteDisplayStatus]:
         """

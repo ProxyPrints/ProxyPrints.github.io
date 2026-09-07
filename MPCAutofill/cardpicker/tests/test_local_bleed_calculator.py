@@ -110,12 +110,16 @@ class TestCalculateBleedVerdictMethodA:
 
 
 class TestCalculateBleedVerdictMethodBAndGate:
-    def _black_2003_card_with_pinline(self, db, top_extra_mm: float = 0.0):
+    def _black_2003_card_with_pinline(self, db, top_extra_mm: float = 0.0, content_phash: int | None = None):
         """A trim-exact card whose pinline sits exactly `top_extra_mm` beyond where the
         black_2003 calibration constants predict on every edge - `top_extra_mm=0` reproduces
         the true zero-bleed geometry exactly (agrees with Method A); a positive value simulates
         a thicker-than-calibrated printed border (Method B overestimates bleed, Method A does
-        not - the module docstring's own disagreement mechanism)."""
+        not - the module docstring's own disagreement mechanism).
+
+        `content_phash` must be set when the caller needs `current_evidence_queryset` to find
+        the evidence row (e.g. `Card.measured_bleed_mm()`); the existing verdict-only tests
+        pass evidence directly and don't need it."""
         scale_px_per_mm = 10.0
         width, height = 630, 880  # exactly 63mm x 88mm at 10px/mm - trim-exact aspect ratio
         top_const, bottom_const, left_const, right_const = 2.962, 2.962, 2.960, 2.960
@@ -130,7 +134,10 @@ class TestCalculateBleedVerdictMethodBAndGate:
 
         canonical_card = CanonicalCardFactory()
         CanonicalPrintingMetadataFactory(canonical_card=canonical_card, border_color="black", frame="2003")
-        card = CardFactory(name="Pinline Card", canonical_card=canonical_card)
+        card_kwargs: dict = dict(name="Pinline Card", canonical_card=canonical_card)
+        if content_phash is not None:
+            card_kwargs["content_phash"] = content_phash
+        card = CardFactory(**card_kwargs)
         evidence = ImageEvidenceFactory(
             card=card,
             content_hash=card.content_phash or 0,
@@ -255,9 +262,9 @@ class TestRunBleedCalculatorCast:
 
 
 class TestCardMeasuredBleedMm:
-    """Card.measured_bleed_mm() - the WTC reference-image crop's own read of Method A, via the
-    same `_trim_exact_evidence`/`_standard_bleed_evidence` fixtures the verdict tests above use,
-    so this can't silently drift from what `calculate_bleed_verdict`'s own method_a_mm reads."""
+    """Card.measured_bleed_mm() - now routes the A+B cross-check via `calculate_bleed_verdict`,
+    so it can return Method B where present and agreeing, abstains where they disagree past
+    the gate, and falls back to Method A otherwise."""
 
     def test_trim_exact_card_reads_near_zero_bleed(self, db):
         card = CardFactory(name="Trimmed Upload", content_phash=1)
@@ -275,3 +282,61 @@ class TestCardMeasuredBleedMm:
         card = CardFactory(name="No Evidence", content_phash=3)
 
         assert card.measured_bleed_mm() is None
+
+
+class TestCardMeasuredBleedMmProvenance:
+    """Cross-checked `measured_bleed_mm()` and `_bleed_provenance()` together, covering all four
+    branches: method-b (preferred when agreeing with A), method-a (A-only fallback), abstained
+    (both disagree past gate), and no-evidence (no evidence row). Uses the same fixtures as
+    `TestCalculateBleedVerdictMethodBAndGate` to stay grounded to real verdict behaviour."""
+
+    def test_method_b_preferred_when_agreeing(self, db):
+        """Black 2003 with calibrated pinline: both methods agree on ~0mm bleed. measured_bleed_mm
+        should return Method B's value (method_b_mean_mm), and provenance should be 'method-b'."""
+        card, evidence = TestCalculateBleedVerdictMethodBAndGate()._black_2003_card_with_pinline(
+            db, top_extra_mm=0.0, content_phash=99
+        )
+
+        result = card.measured_bleed_mm()
+        provenance = card._bleed_provenance()
+
+        assert result is not None
+        assert result == pytest.approx(0.0, abs=0.1)
+        assert provenance == "method-b"
+
+    def test_method_a_fallback_when_b_absent(self, db):
+        """Standard-bleed card with only geometry_bleed evidence (no pinline fields): Method A is
+        the only source, so measured_bleed_mm returns A and provenance is 'method-a'."""
+        card = CardFactory(name="Standard Upload", content_phash=20)
+        _standard_bleed_evidence(card)
+
+        result = card.measured_bleed_mm()
+        provenance = card._bleed_provenance()
+
+        assert result == pytest.approx(BLEED_MARGIN_MM, abs=0.1)
+        assert provenance == "method-a"
+
+    def test_abstained_when_methods_disagree_past_gate(self, db):
+        """Black 2003 with a thick border pushing Method B ~4mm past Method A: both methods present,
+        disagree past METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM. measured_bleed_mm should return
+        None and provenance should be 'abstained'."""
+        card, evidence = TestCalculateBleedVerdictMethodBAndGate()._black_2003_card_with_pinline(
+            db, top_extra_mm=4.0, content_phash=101
+        )
+
+        result = card.measured_bleed_mm()
+        provenance = card._bleed_provenance()
+
+        assert result is None
+        assert provenance == "abstained"
+
+    def test_no_evidence_returns_none_and_no_evidence(self, db):
+        """Card with no ImageEvidence row at all: measured_bleed_mm returns None, provenance
+        reports 'no-evidence'."""
+        card = CardFactory(name="No Evidence Card", content_phash=21)
+
+        result = card.measured_bleed_mm()
+        provenance = card._bleed_provenance()
+
+        assert result is None
+        assert provenance == "no-evidence"

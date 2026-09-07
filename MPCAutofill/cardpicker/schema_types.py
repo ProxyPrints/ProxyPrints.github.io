@@ -164,6 +164,23 @@ class PrintingCandidate(BaseModel):
         return result
 
 
+class BleedProvenance(str, Enum):
+    """Which method answered measuredBleedMm: "method-a" (aspect-ratio-derived, a function of
+    image dimensions alone), "method-b" (pinline-ruler, per-edge measurement from calibrated
+    frame-class constants), "abstained" (both methods present and disagreed beyond the 2mm
+    gate - a human should look), or "no-evidence" (no current ImageEvidence row with
+    completed geometry_bleed extractor). Populated only alongside measuredBleedMm for the
+    single item the question feed serves. A consumer that reads measuredBleedMm should check
+    this field to distinguish a real per-card measurement from one of Method A's three
+    dominant constants.
+    """
+
+    abstained = "abstained"
+    methoda = "method-a"
+    methodb = "method-b"
+    noevidence = "no-evidence"
+
+
 class CanonicalArtistClass(BaseModel):
     name: str
 
@@ -290,6 +307,16 @@ class Card(BaseModel):
     sourceName: str
     sourceVerbose: str
     tags: List[str]
+    bleedProvenance: Optional[BleedProvenance] = None
+    """Which method answered measuredBleedMm: "method-a" (aspect-ratio-derived, a function of
+    image dimensions alone), "method-b" (pinline-ruler, per-edge measurement from calibrated
+    frame-class constants), "abstained" (both methods present and disagreed beyond the 2mm
+    gate - a human should look), or "no-evidence" (no current ImageEvidence row with
+    completed geometry_bleed extractor). Populated only alongside measuredBleedMm for the
+    single item the question feed serves. A consumer that reads measuredBleedMm should check
+    this field to distinguish a real per-card measurement from one of Method A's three
+    dominant constants.
+    """
     canonicalArtist: Optional[CanonicalArtistClass] = None
     canonicalArtistIsFromVoteOnly: Optional[bool] = None
     """True only when canonicalArtist was supplied by artist-vote consensus alone, with no
@@ -313,18 +340,17 @@ class Card(BaseModel):
     cross-referencing a separately-fetched name list.
     """
     measuredBleedMm: Optional[float] = None
-    """This card's own measured bleed margin in millimetres, Method A (aspect-ratio-derived)
-    from cardpicker.local_bleed_calculator - the same closed-form reading of this image's own
-    pixel aspect ratio already used for the appropriate-bleed machine vote
-    (Card.measured_bleed_mm(), BLEED_MARGIN_MM - ImageEvidence.bleed_diff_mm). null whenever
-    no current ImageEvidence row has completed the geometry_bleed extractor for this card.
-    Populated only for the single item the question feed actually serves
+    """This card's cross-checked measured bleed margin in millimetres. Method B (pinline-ruler,
+    per-edge) where present and agreeing with Method A (aspect-ratio-derived) inside the 2mm
+    gate; Method A alone otherwise; null when both are present and disagree beyond the gate
+    (abstain) or when no current ImageEvidence row has completed the geometry_bleed
+    extractor. Populated only for the single item the question feed actually serves
     (question_feed._log_served attaches it post-serialise, after the served card is already
     chosen - never computed while scanning pool-eligibility candidates, so it costs nothing
     anywhere else Card.serialise() is called) - every other response leaves this null. A
     consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend)
     / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already
-    assumes.
+    assumes. See bleedProvenance for which method answered.
     """
     sourceExternalLink: Optional[str] = None
     sourceType: Optional[SourceType] = None
@@ -389,6 +415,7 @@ class Card(BaseModel):
         sourceName = from_str(obj.get("sourceName"))
         sourceVerbose = from_str(obj.get("sourceVerbose"))
         tags = from_list(from_str, obj.get("tags"))
+        bleedProvenance = from_union([BleedProvenance, from_none], obj.get("bleedProvenance"))
         canonicalArtist = from_union([from_none, CanonicalArtistClass.from_dict], obj.get("canonicalArtist"))
         canonicalArtistIsFromVoteOnly = from_union([from_bool, from_none], obj.get("canonicalArtistIsFromVoteOnly"))
         canonicalArtistSource = from_union([from_none, from_str], obj.get("canonicalArtistSource"))
@@ -429,6 +456,7 @@ class Card(BaseModel):
             sourceName,
             sourceVerbose,
             tags,
+            bleedProvenance,
             canonicalArtist,
             canonicalArtistIsFromVoteOnly,
             canonicalArtistSource,
@@ -464,6 +492,10 @@ class Card(BaseModel):
         result["sourceName"] = from_str(self.sourceName)
         result["sourceVerbose"] = from_str(self.sourceVerbose)
         result["tags"] = from_list(from_str, self.tags)
+        if self.bleedProvenance is not None:
+            result["bleedProvenance"] = from_union(
+                [lambda x: to_enum(BleedProvenance, x), from_none], self.bleedProvenance
+            )
         if self.canonicalArtist is not None:
             result["canonicalArtist"] = from_union(
                 [from_none, lambda x: to_class(CanonicalArtistClass, x)], self.canonicalArtist
@@ -3708,6 +3740,14 @@ def ArtistVoteTallyEntryfromdict(s: Any) -> ArtistVoteTallyEntry:
 
 def ArtistVoteTallyEntrytodict(x: ArtistVoteTallyEntry) -> Any:
     return to_class(ArtistVoteTallyEntry, x)
+
+
+def BleedProvenancefromdict(s: Any) -> BleedProvenance:
+    return BleedProvenance(s)
+
+
+def BleedProvenancetodict(x: BleedProvenance) -> Any:
+    return to_enum(BleedProvenance, x)
 
 
 def Campaignfromdict(s: Any) -> Optional[CampaignClass]:
