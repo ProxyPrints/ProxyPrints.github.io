@@ -276,10 +276,10 @@ describe("PagePreview", () => {
     expect(cutLine.style.height).toBe(`${CardHeightMM}mm`);
   });
 
-  it("anchors the guide on the slot's own measured bleed, not the nominal granted bleed, when the two differ", () => {
+  it("guide always anchors on the slot's granted bleed (bleedMM), not the measured bleed - the image is CSS-transformed instead", () => {
     // Real catalogue bleed spans ~0.05mm to ~3.95mm, far from the nominal bleedEdgeMM=3 every
-    // other test in this file uses. A card whose own measured bleed is much thinner than that
-    // nominal value must draw its guide close to the image's own edge, not ~3mm inside it.
+    // other test in this file uses. The guide always sits at bleedMM (the exporter's cut-line
+    // position). The <img> is CSS-transformed so its trim edge lands at the same boundary.
     render(
       <PagePreview
         pageWidthMM={A4_WIDTH_MM}
@@ -299,18 +299,18 @@ describe("PagePreview", () => {
       />
     );
     const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
-    expect(cutLine.style.left).toBe("0.05mm");
-    expect(cutLine.style.top).toBe("0.05mm");
+    expect(cutLine.style.left).toBe("3mm");
+    expect(cutLine.style.top).toBe("3mm");
     expect(cutLine.style.width).toBe(`${CardWidthMM}mm`);
     expect(cutLine.style.height).toBe(`${CardHeightMM}mm`);
   });
 
-  it("falls back to STANDARD_BLEED_MARGIN_MM (not the granted bleedEdgeMM) when measuredBleedMm is null", () => {
+  it("guide sits at the granted bleed even when measuredBleedMm is null (image transform falls back to STANDARD_BLEED_MARGIN_MM)", () => {
     render(
       <PagePreview
         pageWidthMM={A4_WIDTH_MM}
         pageHeightMM={A4_HEIGHT_MM}
-        bleedEdgeMM={10}
+        bleedEdgeMM={2}
         margins={zeroMargins}
         spacing={zeroSpacing}
         slots={[
@@ -325,14 +325,11 @@ describe("PagePreview", () => {
       />
     );
     const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
-    expect(cutLine.style.left).toBe("3.175mm");
-    expect(cutLine.style.top).toBe("3.175mm");
+    expect(cutLine.style.left).toBe("2mm");
+    expect(cutLine.style.top).toBe("2mm");
   });
 
-  it("caps the measured-bleed guide inset at the granted per-axis bleed on a crowded axis", () => {
-    // Same tight-page setup as the crowded-axis test above, but this card's own measured bleed
-    // (3.952mm, the catalogue's real observed max) exceeds even the UNCROPPED bleedEdgeMM - the
-    // guide must never draw past whatever room the layout actually granted this slot.
+  it("crowded axis: the guide sits at the granted (smaller) bleed, matching the layout's actual room", () => {
     render(
       <PagePreview
         pageWidthMM={127}
@@ -355,8 +352,87 @@ describe("PagePreview", () => {
     const grantedLeftMM = parseFloat(cutLine.style.left);
     expect(grantedLeftMM).toBeGreaterThan(0);
     expect(grantedLeftMM).toBeLessThan(3);
-    // The uncropped row axis still caps at the granted 3mm, not the card's 3.952mm measurement.
     expect(cutLine.style.top).toBe("3mm");
+  });
+
+  it("CSS-transforms the image so its trim edge lands at bleedMM when measuredBleedMm differs from granted bleed", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            measuredBleedMm: 0.05,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const img = screen.getByRole("img");
+    const slotWidthMM = CardWidthMM + 2 * 3;
+    const slotHeightMM = CardHeightMM + 2 * 3;
+    const expectedScaleX = (CardWidthMM + 2 * 0.05) / slotWidthMM;
+    const expectedScaleY = (CardHeightMM + 2 * 0.05) / slotHeightMM;
+    expect(img).toHaveStyle({
+      transform: `scale(${expectedScaleX}, ${expectedScaleY})`,
+      transformOrigin: "center center",
+      objectFit: "contain",
+    });
+  });
+
+  it("image transform collapses to near-identity when measuredBleedMm matches the standard convention and bleedEdgeMM equals it", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3.175}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+            measuredBleedMm: 3.175,
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const img = screen.getByRole("img");
+    expect(img).toHaveStyle({
+      transform: "scale(1, 1)",
+    });
+  });
+
+  it("falls back to STANDARD_BLEED_MARGIN_MM for the image transform when measuredBleedMm is undefined", () => {
+    render(
+      <PagePreview
+        pageWidthMM={A4_WIDTH_MM}
+        pageHeightMM={A4_HEIGHT_MM}
+        bleedEdgeMM={3.175}
+        margins={zeroMargins}
+        spacing={zeroSpacing}
+        slots={[
+          {
+            imageUrl: "https://example.com/1.png",
+            name: "Card 1",
+          },
+        ]}
+        showCutLines={false}
+        maxWidthPx={400}
+      />
+    );
+    const img = screen.getByRole("img");
+    expect(img).toHaveStyle({
+      transform: "scale(1, 1)",
+    });
   });
 
   it("scales the outer wrapper to exactly maxWidthPx regardless of page size", () => {

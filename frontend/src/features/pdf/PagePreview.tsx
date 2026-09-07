@@ -584,14 +584,27 @@ function PagePreviewSlotEl({
     );
   };
 
-  // The guide's own inset: this card's measured bleed (falling back to the standard bleed
-  // convention when unmeasured), capped by whatever bleed the page layout actually granted this
-  // slot - a crowded axis's granted room can be less than the card's own real bleed, and the
-  // slot box itself never shows more than that.
+  // Guide position: always at the slot's granted bleed boundary (bleedMM), matching the
+  // exporter's cut-line position. The image is CSS-transformed so its trim edge lands here.
+  const guideLeftMM = bleedMM.left;
+  const guideTopMM = bleedMM.top;
+
+  // Preview/export parity: scale the image about its centre so its trim rectangle lands on
+  // the slot's trim rectangle (bleedMM from each slot edge).
+  //
+  // objectFit:contain fills the slot by scaling image natural size (trim + 2*measuredBleed)
+  // to slot size (trim + 2*grantedBleed). The CSS transform then restores the image to
+  // natural size, which shifts the trim edge to exactly grantedBleed from the slot edge.
+  // Combined scale is always 1.0 — the transform only repositions, never enlarges.
+  //
+  // Falls back to STANDARD_BLEED_MARGIN_MM when measuredBleedMm is null/undefined, which
+  // collapses the scale to 1.0 when the configured bleed matches the standard convention
+  // (the common case) — load-bearing, not defensive.
   const measuredOrStandardMM =
     content?.measuredBleedMm ?? STANDARD_BLEED_MARGIN_MM;
-  const guideLeftMM = Math.min(measuredOrStandardMM, bleedMM.left);
-  const guideTopMM = Math.min(measuredOrStandardMM, bleedMM.top);
+  const scaleX = (CardWidthMM + 2 * measuredOrStandardMM) / slotWidthMM;
+  const scaleY = (CardHeightMM + 2 * measuredOrStandardMM) / slotHeightMM;
+  const imgTransform = `scale(${scaleX}, ${scaleY})`;
 
   return (
     <div
@@ -645,12 +658,11 @@ function PagePreviewSlotEl({
           style={{
             width: "100%",
             height: "100%",
-            objectFit: "cover",
+            objectFit: "contain",
             display: "block",
             pointerEvents: "none",
-            // E20 - the img's own box, pre-paint (impl note from the spec: set it on the
-            // slot container AND the img itself - the flash is the img's own box, not just
-            // its parent's).
+            transform: imgTransform,
+            transformOrigin: "center center",
             backgroundColor: screenPresentation ? SCREEN_SLOT_BG : undefined,
           }}
         />

@@ -53,3 +53,15 @@ over-bleed); some older scans and borderless cards show larger deviations.
 This field measures the image's geometric bleed from its pixel dimensions
 alone — not whether the art fills the bleed region, not a content-aware crop
 analysis. It is a pure aspect-ratio calculation with no image-content analysis.
+
+## Consumers
+
+- **`bleed_diff_mm`** (backend) — the raw field, written by Stage C.
+- **`measuredBleedMm`** (frontend, `PagePreview.tsx`) — the card's measured
+  bleed margin (mm per edge), served as `Card.measuredBleedMm` from the
+  backend API. Used to CSS-transform the preview image so its trim rectangle
+  lands at the slot's granted bleed boundary (`bleedMM`), achieving
+  preview/export parity without pixel-level normalization.
+- **`normalizeCardBleed`** (frontend, `bleedExtension.ts`) — the export-time
+  per-side bleed synthesis. Reads the same measurement to build a per-side
+  crop/extend plan, then draws the normalized result to a canvas.
