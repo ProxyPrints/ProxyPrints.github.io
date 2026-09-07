@@ -783,9 +783,10 @@ class Card(models.Model):
         not re-implemented here. Returns `(None, "no-evidence")` when no current `ImageEvidence`
         row has completed the `geometry_bleed` extractor.
 
-        Both `measured_bleed_mm()` and `_bleed_provenance()` call this once; the single
-        `current_evidence_queryset` lookup is the expensive part (DB hit), and calling
-        `calculate_bleed_verdict` twice on the same in-memory evidence is negligible.
+        The `current_evidence_queryset` DB hit is the expensive part. Callers that need both
+        the value and the provenance string should call this method once and unpack both,
+        rather than calling `measured_bleed_mm()` and `_bleed_provenance()` separately —
+        each of those delegates here and would re-execute the lookup.
         """
         from cardpicker.image_evidence import (
             current_evidence_queryset,  # local import - avoids a models<->image_evidence cycle

@@ -1725,8 +1725,9 @@ def _log_served(anonymous_id: str, item: QuestionFeedItem, pool: str, origin_rea
         Card.objects.filter(identifier=item.card.identifier).only("id", "content_phash", "md5_checksum").first()
     )
     if served_card is not None:
-        item.card.measuredBleedMm = served_card.measured_bleed_mm()
-        item.card.bleedProvenance = BleedProvenance(served_card._bleed_provenance())
+        measured_bleed, provenance = served_card._compute_bleed_measurement()
+        item.card.measuredBleedMm = measured_bleed
+        item.card.bleedProvenance = BleedProvenance(provenance)
     return item
 
 
