@@ -1,0 +1,6 @@
+{
+  "title": "Bleed Provenance",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "string",
+  "enum": ["method-a", "method-b", "abstained", "no-evidence"]
+}

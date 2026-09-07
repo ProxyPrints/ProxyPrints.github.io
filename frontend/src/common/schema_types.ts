@@ -2,10 +2,11 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistAutocompleteResult, ArtistVoteTallyEntry, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PilotRunHistoryEntry, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SkipReasonEngineCount, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistAutocompleteRequest, ArtistAutocompleteResponse, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, ArtistExternalLinksResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, CastImplicitVoteRequest, CatalogStatsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, RetractImplicitVoteRequest, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitArtistWriteInVoteRequest, SubmitArtistWriteInVoteResponse, SubmitIllustrationRejectionRequest, SubmitIllustrationRejectionResponse, SubmitIllustrationVoteRequest, SubmitIllustrationVoteResponse, SubmitPrintingTagRequest, SubmitQuestionAbstentionRequest, SubmitQuestionAbstentionResponse, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistAutocompleteResult, ArtistVoteTallyEntry, BleedProvenance, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PilotRunHistoryEntry, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SkipReasonEngineCount, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistAutocompleteRequest, ArtistAutocompleteResponse, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, ArtistExternalLinksResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, CastImplicitVoteRequest, CatalogStatsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, RetractImplicitVoteRequest, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitArtistWriteInVoteRequest, SubmitArtistWriteInVoteResponse, SubmitIllustrationRejectionRequest, SubmitIllustrationRejectionResponse, SubmitIllustrationVoteRequest, SubmitIllustrationVoteResponse, SubmitPrintingTagRequest, SubmitQuestionAbstentionRequest, SubmitQuestionAbstentionResponse, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistAutocompleteResult = Convert.toArtistAutocompleteResult(json);
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
+//   const bleedProvenance = Convert.toBleedProvenance(json);
 //   const campaign = Convert.toCampaign(json);
 //   const canonicalArtist = Convert.toCanonicalArtist(json);
 //   const canonicalCard = Convert.toCanonicalCard(json);
@@ -189,6 +190,17 @@ export interface PrintingCandidate {
 }
 
 export interface Card {
+  /**
+   * Which method answered measuredBleedMm: "method-a" (aspect-ratio-derived, a function of
+   * image dimensions alone), "method-b" (pinline-ruler, per-edge measurement from calibrated
+   * frame-class constants), "abstained" (both methods present and disagreed beyond the 2mm
+   * gate - a human should look), or "no-evidence" (no current ImageEvidence row with
+   * completed geometry_bleed extractor). Populated only alongside measuredBleedMm for the
+   * single item the question feed serves. A consumer that reads measuredBleedMm should check
+   * this field to distinguish a real per-card measurement from one of Method A's three
+   * dominant constants.
+   */
+  bleedProvenance?: BleedProvenance;
   canonicalArtist?: CanonicalArtist | null;
   /**
    * True only when canonicalArtist was supplied by artist-vote consensus alone, with no
@@ -228,18 +240,17 @@ export interface Card {
    */
   layout?: null | string;
   /**
-   * This card's own measured bleed margin in millimetres, Method A (aspect-ratio-derived)
-   * from cardpicker.local_bleed_calculator - the same closed-form reading of this image's own
-   * pixel aspect ratio already used for the appropriate-bleed machine vote
-   * (Card.measured_bleed_mm(), BLEED_MARGIN_MM - ImageEvidence.bleed_diff_mm). null whenever
-   * no current ImageEvidence row has completed the geometry_bleed extractor for this card.
-   * Populated only for the single item the question feed actually serves
+   * This card's cross-checked measured bleed margin in millimetres. Method B (pinline-ruler,
+   * per-edge) where present and agreeing with Method A (aspect-ratio-derived) inside the 2mm
+   * gate; Method A alone otherwise; null when both are present and disagree beyond the gate
+   * (abstain) or when no current ImageEvidence row has completed the geometry_bleed
+   * extractor. Populated only for the single item the question feed actually serves
    * (question_feed._log_served attaches it post-serialise, after the served card is already
    * chosen - never computed while scanning pool-eligibility candidates, so it costs nothing
    * anywhere else Card.serialise() is called) - every other response leaves this null. A
    * consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend)
    * / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already
-   * assumes.
+   * assumes. See bleedProvenance for which method answered.
    */
   measuredBleedMm?: number | null;
   mediumThumbnailUrl: string;
@@ -304,6 +315,23 @@ export interface Card {
    * today.
    */
   tagVoteStatuses?: { [key: string]: TagVoteDisplayStatus };
+}
+
+/**
+ * Which method answered measuredBleedMm: "method-a" (aspect-ratio-derived, a function of
+ * image dimensions alone), "method-b" (pinline-ruler, per-edge measurement from calibrated
+ * frame-class constants), "abstained" (both methods present and disagreed beyond the 2mm
+ * gate - a human should look), or "no-evidence" (no current ImageEvidence row with
+ * completed geometry_bleed extractor). Populated only alongside measuredBleedMm for the
+ * single item the question feed serves. A consumer that reads measuredBleedMm should check
+ * this field to distinguish a real per-card measurement from one of Method A's three
+ * dominant constants.
+ */
+export enum BleedProvenance {
+  Abstained = "abstained",
+  MethodA = "method-a",
+  MethodB = "method-b",
+  NoEvidence = "no-evidence",
 }
 
 export interface CanonicalArtist {
@@ -1426,6 +1454,14 @@ export class Convert {
     value: ArtistVoteTallyEntry
   ): string {
     return JSON.stringify(uncast(value, r("ArtistVoteTallyEntry")), null, 2);
+  }
+
+  public static toBleedProvenance(json: string): BleedProvenance {
+    return cast(JSON.parse(json), r("BleedProvenance"));
+  }
+
+  public static bleedProvenanceToJson(value: BleedProvenance): string {
+    return JSON.stringify(uncast(value, r("BleedProvenance")), null, 2);
   }
 
   public static toCampaign(json: string): Campaign | null {
@@ -3168,6 +3204,11 @@ const typeMap: any = {
   Card: o(
     [
       {
+        json: "bleedProvenance",
+        js: "bleedProvenance",
+        typ: u(undefined, r("BleedProvenance")),
+      },
+      {
         json: "canonicalArtist",
         js: "canonicalArtist",
         typ: u(undefined, u(r("CanonicalArtist"), null)),
@@ -4391,6 +4432,7 @@ const typeMap: any = {
     false
   ),
   Game: ["MTG"],
+  BleedProvenance: ["abstained", "method-a", "method-b", "no-evidence"],
   CardType: ["CARD", "CARDBACK", "TOKEN"],
   PrintingTagStatus: ["no_match", "resolved", "unresolved"],
   SourceType: ["AWS S3", "Google Drive", "Local File"],

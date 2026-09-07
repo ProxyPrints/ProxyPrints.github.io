@@ -113,8 +113,12 @@
       "type": ["number", "null"]
     },
     "measuredBleedMm": {
-      "description": "This card's own measured bleed margin in millimetres, Method A (aspect-ratio-derived) from cardpicker.local_bleed_calculator - the same closed-form reading of this image's own pixel aspect ratio already used for the appropriate-bleed machine vote (Card.measured_bleed_mm(), BLEED_MARGIN_MM - ImageEvidence.bleed_diff_mm). null whenever no current ImageEvidence row has completed the geometry_bleed extractor for this card. Populated only for the single item the question feed actually serves (question_feed._log_served attaches it post-serialise, after the served card is already chosen - never computed while scanning pool-eligibility candidates, so it costs nothing anywhere else Card.serialise() is called) - every other response leaves this null. A consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend) / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already assumes.",
+      "description": "This card's cross-checked measured bleed margin in millimetres. Method B (pinline-ruler, per-edge) where present and agreeing with Method A (aspect-ratio-derived) inside the 2mm gate; Method A alone otherwise; null when both are present and disagree beyond the gate (abstain) or when no current ImageEvidence row has completed the geometry_bleed extractor. Populated only for the single item the question feed actually serves (question_feed._log_served attaches it post-serialise, after the served card is already chosen - never computed while scanning pool-eligibility candidates, so it costs nothing anywhere else Card.serialise() is called) - every other response leaves this null. A consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend) / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already assumes. See bleedProvenance for which method answered.",
       "type": ["number", "null"]
+    },
+    "bleedProvenance": {
+      "description": "Which method answered measuredBleedMm: \"method-a\" (aspect-ratio-derived, a function of image dimensions alone), \"method-b\" (pinline-ruler, per-edge measurement from calibrated frame-class constants), \"abstained\" (both methods present and disagreed beyond the 2mm gate - a human should look), or \"no-evidence\" (no current ImageEvidence row with completed geometry_bleed extractor). Populated only alongside measuredBleedMm for the single item the question feed serves. A consumer that reads measuredBleedMm should check this field to distinguish a real per-card measurement from one of Method A's three dominant constants.",
+      "$ref": "./BleedProvenance.json"
     }
   },
   "required": [
