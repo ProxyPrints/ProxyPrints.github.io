@@ -326,7 +326,8 @@ export interface PagePreviewSlotContent {
   /** This slot's own card's measured bleed margin in millimetres (Card.measuredBleedMm from the
    * backend) - the cut guide's own inset is drawn from this, not a nominal constant, so it tracks
    * where this specific image's trim edge actually is. `undefined`/`null` (a card with no current
-   * bleed measurement, or an empty slot) falls back to STANDARD_BLEED_MARGIN_MM. */
+   * bleed measurement, an empty slot, or a card whose two measurement methods disagreed past a
+   * 2 mm gate and the backend abstained) falls back to STANDARD_BLEED_MARGIN_MM. */
   measuredBleedMm?: number | null;
 }
 
