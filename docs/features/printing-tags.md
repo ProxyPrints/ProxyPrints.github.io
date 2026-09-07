@@ -3920,6 +3920,24 @@ implied by this OCR fix and was not built.
   docstring for the full mapping/anonymous-id/confidence-tier rationale -
   not duplicated here.
 
+  **Two independent axes (issue #967).** `ImageEvidence.layout_class` and
+  `ImageEvidence.art_edge_class` are stored and evaluated independently — a
+  single card can carry both a border-colour class (`black`, `white`,
+  `borderless`, etc.) and an art-extent class (`framed`, `extended`) at the
+  same time. The old code conflated "no frame detected" with "art extends to
+  the edge": when `classify_border_color` returned `borderless`, the caster
+  would unconditionally vote the `Borderless` tag even when the card genuinely
+  has a black border and extended art. The fix is a cross-axis guard:
+  when `layout_class == "borderless"` and `art_edge_class == "extended"`, the
+  caster suppresses the `Borderless` vote (recorded as skip reason
+  `borderless-but-art-edge-extended` in `CardScanLog`) so both facts coexist.
+  The `printing_attribute_disagreement` check in
+  `local_identify_printing_tags.py` carries the same guard — a black-bordered
+  extended-art card no longer triggers a false border-mismatch against
+  `CanonicalPrintingMetadata.border_color`. Consumers treat the two axes as
+  independent signals: border colour for chip filtering, art extent for
+  continuity and print-quality assessment.
+
 ## Known gaps (Stage 8 era, historical)
 
 - The Stage 7 layout (starburst/card/chip-ring composition) was hand-tuned

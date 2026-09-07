@@ -44,6 +44,25 @@ name is already merged into `card.tags`/`expansion_hint`/`canonical_artist_id` b
 `Card` row exists. A separate folder-path-scanning signal here would be re-parsing information
 this module's own inputs already carry.
 
+OBSERVED FRAME ERA (issue #967's sibling channel, frame era only): the treatment signal above
+compared `card.tags` - filename/folder tokens - against a candidate's OWN metadata, but never
+what pixel/OCR evidence actually observed about the fetched image. `generate_candidates_for_card`
+now also accepts `observed_frame_era_tag`, the same "Old Border"/"Modern Border" tag name
+`local_attribute_chip_cast.calculate_attribute_chip_verdict` derives from a card's stored
+`ImageEvidence` (via `local_fallback.classify_frame_style` - PROTECTED CORE, called unmodified) -
+`select_candidates` computes it per card and passes it in, so this module stays DB-free. It is
+UNIONED into `card_tag_set` rather than treated as its own signal (owner-ruled default (a) over a
+fourth `observed_treatment` signal (b)): an observed reading can only ADD a match, never trigger
+this module's contradiction rule, and an observed tag that already agrees with a filename tag
+collapses into the same set entry rather than double-counting. Measured on the only population
+where both readings exist today (13 cards ever carry a filename frame-era tag; 10 also have a
+current observed reading): 6/10 disagree - re-skinning an old printing into a modern-style proxy
+render is the common case here too (see `local_fallback.py`'s own "three questions about a card's
+frame" note), which is precisely why (b) is not implemented: a fourth signal would turn most of
+that population into contradiction-abstentions over a difference that is normal, not evidence of
+a wrong printing match. Border colour and art-edge remain out of scope for this channel - see
+`_candidate_treatment_tags`'s own docstring.
+
 CONTRADICTION, DEFINED NARROWLY (the owner's "cannot both be true" test, not "failed to agree"):
 a single signal that agrees with none of the name-matched candidates is NOT a contradiction - it
 is discarded (no boost, no narrowing) and the rest of the candidate generation proceeds
@@ -80,6 +99,8 @@ from cardpicker.deductive_backfill import (
     DEDUCTIVE_BACKFILL_ANONYMOUS_ID,
     verify_zero_resolutions,
 )
+from cardpicker.image_evidence import current_evidence_queryset
+from cardpicker.local_attribute_chip_cast import calculate_attribute_chip_verdict
 from cardpicker.local_calculate_verdicts import _get_cached_candidate_name_index
 from cardpicker.local_identify_printing_tags import (
     PHASH_MAX_CANDIDATES,
@@ -193,12 +214,20 @@ def _candidate_treatment_tags(candidate: CandidatePrinting) -> frozenset[str]:
 
 
 def generate_candidates_for_card(
-    card: Card, index: CandidateNameIndex, artist_name_by_pk: dict[int, str]
+    card: Card,
+    index: CandidateNameIndex,
+    artist_name_by_pk: dict[int, str],
+    observed_frame_era_tag: Optional[str] = None,
 ) -> CardCandidateResult:
-    """The candidate generator itself - pure and DB-free beyond what `index`/`artist_name_by_pk`
-    already carry, so it's directly unit-testable against hand-built `CandidatePrinting`s. See
-    this module's own docstring for the signal list, the confidence formula, and the
-    contradiction rule."""
+    """The candidate generator itself - pure and DB-free beyond what `index`/`artist_name_by_pk`/
+    `observed_frame_era_tag` already carry, so it's directly unit-testable against hand-built
+    `CandidatePrinting`s. See this module's own docstring for the signal list, the confidence
+    formula, and the contradiction rule.
+
+    `observed_frame_era_tag`: the "Old Border"/"Modern Border" tag `select_candidates` derived
+    from this card's own stored `ImageEvidence` (see module docstring's "OBSERVED FRAME ERA"
+    section) - `None` when no observation is available, which leaves the treatment signal exactly
+    as it was before this parameter existed."""
     base_candidates = index.candidates_for(card.name)
     if not base_candidates:
         return CardCandidateResult(card_id=card.pk, abstain_reason="no-name-match")
@@ -220,6 +249,8 @@ def generate_candidates_for_card(
                 signal_matches["artist"] = matches
 
     card_tag_set = set(card.tags)
+    if observed_frame_era_tag:
+        card_tag_set.add(observed_frame_era_tag)
     if card_tag_set:
         matches = [c for c in base_candidates if _candidate_treatment_tags(c) & card_tag_set]
         if matches:
@@ -277,6 +308,22 @@ def _eligible_base_queryset(card_ids: Optional[Iterable[int]] = None) -> "QueryS
     return queryset
 
 
+def _observed_frame_era_tag_for_card(card: Card) -> Optional[str]:
+    """The per-card DB lookup `generate_candidates_for_card` itself never does (see module
+    docstring's "OBSERVED FRAME ERA" section) - `None` whenever there's no stable hash yet, no
+    CURRENT `ImageEvidence` row (`image_evidence.current_evidence_queryset`, the shared currency
+    definition), or the frame chip calculator itself abstains (missing extractors, or neither
+    signal fired). `local_attribute_chip_cast.calculate_attribute_chip_verdict` is called
+    unmodified - it already gates on `FRAME_REQUIRED_EXTRACTOR_KEYS` and maps to the exact
+    "Old Border"/"Modern Border" tag names this module's own `_FRAME_ERA_TAGS` uses."""
+    if card.content_phash is None:
+        return None
+    evidence = current_evidence_queryset(card).order_by("-updated_at").first()
+    if evidence is None:
+        return None
+    return calculate_attribute_chip_verdict(card.pk, evidence).frame_tag_name
+
+
 def select_candidates(
     index: "CandidateNameIndex | None" = None, card_ids: Optional[Iterable[int]] = None
 ) -> Iterable[CardCandidateResult]:
@@ -288,10 +335,11 @@ def select_candidates(
     artist_name_by_pk = dict(CanonicalArtist.objects.values_list("pk", "name"))
     for card in (
         _eligible_base_queryset(card_ids=card_ids)
-        .only("pk", "name", "expansion_hint", "canonical_artist_id", "tags")
+        .only("pk", "name", "expansion_hint", "canonical_artist_id", "tags", "content_phash", "md5_checksum")
         .iterator(chunk_size=2000)
     ):
-        yield generate_candidates_for_card(card, index, artist_name_by_pk)
+        observed_frame_era_tag = _observed_frame_era_tag_for_card(card)
+        yield generate_candidates_for_card(card, index, artist_name_by_pk, observed_frame_era_tag)
 
 
 def generate_run_id() -> str:

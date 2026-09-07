@@ -217,6 +217,7 @@ from cardpicker.printing_consensus import (
 )
 from cardpicker.reason_tags import NOT_OFFICIAL_ART_REASON_TAGS
 from cardpicker.schema_types import (
+    BleedProvenance,
     PrintingCandidate,
     QuestionFeedCounts,
     QuestionFeedItem,
@@ -1700,18 +1701,23 @@ _REMAINDER_LANE_ORDER: tuple[str, str, str] = (
 def _log_served(anonymous_id: str, item: QuestionFeedItem, pool: str, origin_reason: str) -> QuestionFeedItem:
     """Records one served-question row (see `QuestionFeedServedLog`'s own docstring for why -
     the data brief's SOUNDNESS NOTE bias-conditioning record), attaches the served card's own
-    measured bleed (see below), and returns `item`, so every `get_next_question_feed_item`
-    return path can stay a simple one-liner.
+    measured bleed and its provenance (see below), and returns `item`, so every
+    `get_next_question_feed_item` return path can stay a simple one-liner.
 
-    `measuredBleedMm` is resolved HERE rather than threaded through every item-builder
-    (`_confirm_suggestion_item`/`_identify_printing_item`/`_artist_item`/`_tag_item`/
-    `_border_item`/`_illustration_item`) deliberately: those builders also run, unattached to
-    any response, during pool eligibility scanning (`question_feed_pools.py`'s
+    `measuredBleedMm` and `bleedProvenance` are resolved HERE rather than threaded through every
+    item-builder (`_confirm_suggestion_item`/`_identify_printing_item`/`_artist_item`/
+    `_tag_item`/`_border_item`/`_illustration_item`) deliberately: those builders also run,
+    unattached to any response, during pool eligibility scanning (`question_feed_pools.py`'s
     `_build_pool_contested`/`_build_pool_cold`), where computing this per candidate would add an
     `ImageEvidence` query per scanned card for a value nothing there ever reads. `_log_served` is
     the one place every branch of `get_next_question_feed_item` already converges before
     returning to the view, so this is the one lookup per actually-served item, never per
-    candidate considered."""
+    candidate considered.
+
+    `bleedProvenance` records which method answered (`"method-a"`, `"method-b"`,
+    `"abstained"`, or `"no-evidence"`) -- the field #978 needs to draw a cut line from this
+    value with confidence that it came from a real per-card measurement rather than one of
+    Method A's three dominant constants."""
     QuestionFeedServedLog.objects.create(
         anonymous_id=anonymous_id, pool=pool, question_type=item.type.value, origin_reason=origin_reason
     )
@@ -1719,7 +1725,9 @@ def _log_served(anonymous_id: str, item: QuestionFeedItem, pool: str, origin_rea
         Card.objects.filter(identifier=item.card.identifier).only("id", "content_phash", "md5_checksum").first()
     )
     if served_card is not None:
-        item.card.measuredBleedMm = served_card.measured_bleed_mm()
+        measured_bleed, provenance = served_card._compute_bleed_measurement()
+        item.card.measuredBleedMm = measured_bleed
+        item.card.bleedProvenance = BleedProvenance(provenance)
     return item
 
 
