@@ -3060,22 +3060,27 @@ class ImageEvidence(models.Model):
     pinline_inset_verdict = models.CharField(max_length=16, blank=True, default="")
 
     # frame_family (issues #829/#878/#952/#967/#974/#968/#979): per-card frame-family
-    # identification stored alongside evidence. The detection chain is structural construction
-    # (deterministic, confidence 3) then artBounds distance (confidence 1). Region-hash is
-    # closed by the frame-identification audit and not shipped; furniture-colour and
-    # variant-pinned are not wired (no reference swatches / reference renders yet). A family
-    # ships as a NAMED value only where owner-verified truth exists and the method cleared
-    # #829's bar on negatives; otherwise it ships as OTHER_SHOWCASE capability.
+    # identification stored alongside evidence.  The shipped classifier uses set-narrowing
+    # (metadata, not pixels) to narrow the candidate families, then the border-table tie-break
+    # when a multi-candidate set collapses to one family.  Structural construction is dormant
+    # (#829's bar) and writes only if NAMED_FAMILIES is ever populated; artBounds distance was
+    # retracted.  Region-hash is closed by the frame-identification audit and not shipped;
+    # furniture-colour and variant-pinned are not wired (no reference swatches / reference
+    # renders yet).  A family ships as a NAMED value only where owner-verified truth exists and
+    # the method cleared #829's bar on negatives; otherwise it ships as OTHER_SHOWCASE
+    # capability.
     #
     # frame_family_class: the named family, or "OTHER_SHOWCASE"/"STANDARD"/"CUSTOM", or
     # blank-string-as-sentinel (abstain).  Same blank-vs-null convention as bleed_class/
     # layout_class above: blank means "not yet computed or abstained", not "null".
     frame_family_class = models.CharField(max_length=32, blank=True, default="")
-    # frame_family_confidence: 0-3 integer.  3 = structural detector, 1 = artBounds distance,
-    # 0 = abstained.
+    # frame_family_confidence: 0-3 integer.  2 = high (single candidate or tie-break), 1 =
+    # moderate (multi-candidate pick-list), 0 = abstained.
     frame_family_confidence = models.IntegerField(default=0)
     # frame_family_method: which detection method produced the verdict.  One of:
-    # "structural-construction", "artbounds-distance", or blank (abstained).
+    # "set-narrowing" (single-candidate), "border-table-tiebreak" (multi-candidate collapse),
+    # "structural-construction" (dormant, only if NAMED_FAMILIES is populated), or blank
+    # (abstained).
     frame_family_method = models.CharField(max_length=32, blank=True, default="")
     # frame_family_candidate_families: sorted list of candidate family names when the
     # verdict is OTHER_SHOWCASE (multi-candidate). Persisted so the review UI can present
