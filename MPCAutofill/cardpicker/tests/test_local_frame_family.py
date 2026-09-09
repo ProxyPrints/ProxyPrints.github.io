@@ -304,7 +304,7 @@ class TestCandidateFrameFamilies:
         index = _FakeIndex({"foo": [_FakeCandidate("mkm"), _FakeCandidate("eld")]})
         result = candidate_frame_families("foo", index)
         assert isinstance(result, FrameFamilyCandidates)
-        assert result.families == frozenset({FRAME_FAMILY_SHOWCASE_MAGNIFIED, FRAME_FAMILY_STORYBOOK})
+        assert result.families == frozenset({"Dossier", FRAME_FAMILY_SHOWCASE_MAGNIFIED, FRAME_FAMILY_STORYBOOK})
         assert result.name_resolved is True
 
     def test_empty_for_unknown_name(self):

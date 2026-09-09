@@ -52,10 +52,12 @@ that clears the bar re-wires them. The caster (`cast_frame_family_vote`) votes n
 `NAMED_FAMILIES`, which is empty.
 
 PROVENANCE OF `SET_TO_FRAME_FAMILIES`. The set->family junction is harvested from the
-CardConjurer pack registry (45 alternate-frame families keyed by `set_code`), the same junction
-the frame-identification narrowing registry records. 44 of the 45 families carry a `set_code`;
-`JapanShowcase` has none and is therefore unreachable by set narrowing (excluded from the
-junction). Expansion codes are lowercased, matching `CandidatePrinting.expansion_code`.
+CardConjurer pack registry (65 alternate-frame families across 38 sets, keyed by `set_code`),
+the same junction the frame-identification narrowing registry records. 64 of the 65 families
+carry a `set_code`; `JapanShowcase` has none and is therefore unreachable by set narrowing
+(excluded from the junction). M21's pack template has bbox_status "NO_MASKS_AT_ALL" but its
+set code exists in production and the family is reachable by name resolution. Expansion codes
+are lowercased, matching `CandidatePrinting.expansion_code`.
 
 WHAT MUST NOT HAPPEN:
   - No protected-core edits (local_fallback.py, local_phash.py, local_identify_printing_tags.py
@@ -183,44 +185,66 @@ FRAME_FAMILY_VOTE_CONFIDENCE = 0.5
 # ---------------------------------------------------------------------------
 # SET -> FRAME FAMILIES (set narrowing, issue #979 / the audit's own finding).
 #
-# The set->family junction, harvested from the CardConjurer pack registry: every
-# alternate-frame family the packs define, keyed by the expansion code it ships
-# in. Expansion codes are lowercased, matching `CandidatePrinting.expansion_code`.
-# The full registry holds 45 families; `JapanShowcase` carries no `set_code` and
-# is therefore unreachable by set narrowing (excluded here). Multi-template sets
-# (e.g. `sta` -> MysticalArchive + MysticalArchiveJP + MysticalArchiveJPEN) map
-# to every family the set ships, so a single-candidate resolution is a genuine
-# single-family answer and a multi-candidate resolution is a real pick-list.
+# PROVENANCE. Derived from the CardConjurer pack registry harvested inventory
+# (proxyprints-orchestration/frame-identification/scripts/
+# frame_coverage_combined__build_registry.py `style_to_code` dict), which
+# maps every alternate-frame family to its expansion code. Each set code was
+# verified against production CanonicalExpansion codes before inclusion.
+#
+# 65 families across 38 sets. JapanShowcase carries no set_code and is
+# therefore unreachable by set narrowing (excluded). M21's pack template has
+# bbox_status "NO_MASKS_AT_ALL" (no geometry data) but its set code exists in
+# production and the family is reachable by name resolution, so it is included.
+#
+# Multi-template sets (e.g. `sta` -> MysticalArchive + MysticalArchiveJP +
+# MysticalArchiveJPEN) map to every family the set ships: a single-candidate
+# resolution is a genuine single-family answer and a multi-candidate resolution
+# is a real pick-list.
+#
+# Six sets were previously under-listed (missing families that shipped with
+# those sets): afr (+DNDModule), blb (+BloomburrowBorderless), mkm (+Dossier),
+# mul (+IxalanCoin, +Tarkir, +Ravnica), snc (+SNCGilded), tla (+Elemental).
+# Adding these families REDUCES the named count and increases correctness,
+# because cards that were confidently wrong-named now correctly get a pick-list.
 # ---------------------------------------------------------------------------
 SET_TO_FRAME_FAMILIES: dict[str, frozenset[str]] = {
-    "afr": frozenset({"DNDSourcebook"}),
+    "afr": frozenset({"DNDModule", "DNDSourcebook"}),
+    "acr": frozenset({"FCA", "MemoryCorridor"}),
     "big": frozenset({"Vault"}),
-    "blb": frozenset({"Woodland"}),
+    "blb": frozenset({"BloomburrowBorderless", "Woodland"}),
     "cmr": frozenset({"CommanderLegends"}),
     "dbl": frozenset({"DoubleFeature", "DoubleFeatureTransform"}),
+    "dsk": frozenset({"Paranormal"}),
+    "dmu": frozenset({"DMUStainedGlass"}),
     "ecl": frozenset({"FableECL"}),
     "eld": frozenset({"Storybook"}),
     "eos": frozenset({"BorderlessStellarSights", "PosterStellarSights"}),
     "khm": frozenset({"Kaldheim-2", "KaldheimNonleg"}),
+    "lci": frozenset({"IxalanLegends1", "IxalanLegends2", "IxalanLegends3"}),
     "ltr": frozenset({"Ring", "Scroll"}),
+    "m21": frozenset({"M21"}),
+    "mat": frozenset({"ShatteredGlass"}),
     "mh2": frozenset({"MH2"}),
     "mid": frozenset({"Equinox", "EquinoxBack", "EquinoxFront", "EternalNight"}),
-    "mkm": frozenset({"ShowcaseMagnified"}),
-    "mul": frozenset({"Crystal", "StorybookMUL"}),
+    "mkm": frozenset({"Dossier", "ShowcaseMagnified"}),
+    "mul": frozenset({"Crystal", "IxalanCoin", "Ravnica", "StorybookMUL", "Tarkir"}),
     "neo": frozenset({"NeoNeon", "NeoNinja", "NeoSamurai"}),
     "one": frozenset({"OilSlick"}),
+    "otp": frozenset({"BreakingNews"}),
     "otj": frozenset({"Wanted"}),
     "pip": frozenset({"Pipboy"}),
-    "snc": frozenset({"SNCArtDeco", "SNCSkyscraper"}),
+    "snc": frozenset({"SNCArtDeco", "SNCGilded", "SNCSkyscraper"}),
     "soa": frozenset({"MysticalArchiveSOA"}),
     "spm": frozenset({"ShowcasePanel"}),
     "sta": frozenset({"MysticalArchive", "MysticalArchiveJP", "MysticalArchiveJPEN"}),
     "tdm": frozenset({"Draconic", "Ghostfire"}),
     "thb": frozenset({"M15NyxShowcase"}),
-    "tla": frozenset({"NeonInk"}),
+    "tla": frozenset({"Elemental", "NeonInk"}),
     "tmt": frozenset({"PixelTMT", "SewerTMT"}),
     "vow": frozenset({"Fang"}),
+    "who": frozenset({"TARDIS"}),
     "woe": frozenset({"StorybookWOE"}),
+    "wot": frozenset({"EnchantingTales"}),
     "znr": frozenset({"ZendikarRising"}),
 }
 
