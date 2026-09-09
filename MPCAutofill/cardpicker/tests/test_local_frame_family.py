@@ -37,6 +37,7 @@ from cardpicker.local_frame_family import (
     FRAME_FAMILY_STORYBOOK,
     FRAME_FAMILY_TAG_NAME,
     FRAME_FAMILY_VAULT,
+    METHOD_BORDER_TABLE_TIEBREAK,
     METHOD_SET_NARROWING,
     FrameFamilyCandidates,
     FrameFamilyResult,
@@ -292,12 +293,14 @@ class TestClassifyFrameFamily:
         result = classify_frame_family(candidates=candidates, card_border_reading="black")
         assert result.family_class == "Pipboy"
         assert result.confidence == CONFIDENCE_HIGH
+        assert result.method == METHOD_BORDER_TABLE_TIEBREAK
 
     def test_border_tie_breaking_art_to_edge_card_narrows_to_art_families(self):
         candidates = FrameFamilyCandidates(families=frozenset({"Pipboy", "Crystal"}), name_resolved=True)
         result = classify_frame_family(candidates=candidates, card_border_reading="borderless")
         assert result.family_class == "Crystal"
         assert result.confidence == CONFIDENCE_HIGH
+        assert result.method == METHOD_BORDER_TABLE_TIEBREAK
 
     def test_border_tie_breaking_no_reading_returns_other_showcase(self):
         candidates = FrameFamilyCandidates(families=frozenset({"Pipboy", "Crystal"}), name_resolved=True)
@@ -310,6 +313,14 @@ class TestClassifyFrameFamily:
         result = classify_frame_family(candidates=candidates, card_border_reading="borderless")
         assert result.family_class == "Pipboy"
         assert result.confidence == CONFIDENCE_HIGH
+        assert result.method == METHOD_SET_NARROWING
+
+    def test_border_tie_breaking_non_collapse_returns_other_showcase(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy", "Vault"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates, card_border_reading="black")
+        assert result.family_class == FRAME_FAMILY_OTHER_SHOWCASE
+        assert result.confidence == CONFIDENCE_MODERATE
+        assert result.method == METHOD_SET_NARROWING
 
 
 class _FakeIndex:
