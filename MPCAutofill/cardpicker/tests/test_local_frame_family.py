@@ -237,6 +237,13 @@ class TestClassifyFrameFamily:
         assert result.confidence == CONFIDENCE_MODERATE
         assert result.method == METHOD_SET_NARROWING
         assert result.skip_reason == ""
+        assert result.candidate_families == ("Pipboy", "Vault")
+
+    def test_single_candidate_has_empty_candidate_families(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates)
+        assert result.family_class == "Pipboy"
+        assert result.candidate_families == ()
 
     def test_zero_candidates_name_resolved_abstains(self):
         candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=False)

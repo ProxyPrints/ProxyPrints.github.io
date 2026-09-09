@@ -496,6 +496,7 @@ class FrameFamilyResult:
     confidence: int  # 0-3
     method: str  # METHOD_* constant or blank
     skip_reason: str = ""  # abstention reason (FRAME_FAMILY_*_SKIP_REASON), "" on a verdict
+    candidate_families: tuple[str, ...] = ()  # sorted candidate families for OTHER_SHOWCASE pick-list
 
 
 def classify_frame_family(
@@ -541,6 +542,7 @@ def classify_frame_family(
             family_class=FRAME_FAMILY_OTHER_SHOWCASE,
             confidence=CONFIDENCE_MODERATE,
             method=METHOD_SET_NARROWING,
+            candidate_families=tuple(sorted(candidates.families)),
         )
 
     if not candidates.name_resolved:

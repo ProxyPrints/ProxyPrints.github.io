@@ -3077,6 +3077,11 @@ class ImageEvidence(models.Model):
     # frame_family_method: which detection method produced the verdict.  One of:
     # "structural-construction", "artbounds-distance", or blank (abstained).
     frame_family_method = models.CharField(max_length=32, blank=True, default="")
+    # frame_family_candidate_families: sorted list of candidate family names when the
+    # verdict is OTHER_SHOWCASE (multi-candidate). Persisted so the review UI can present
+    # a pick-list instead of a dead bucket. Empty list for single-candidate, STANDARD,
+    # CUSTOM, and abstentions.
+    frame_family_candidate_families = models.JSONField(default=list, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

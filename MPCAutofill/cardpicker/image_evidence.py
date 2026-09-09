@@ -418,7 +418,12 @@ EXTRACTOR_OWNED_FIELDS: dict[str, tuple[str, ...]] = {
         "pinline_inset_call_right",
         "pinline_inset_verdict",
     ),
-    "frame_family": ("frame_family_class", "frame_family_confidence", "frame_family_method"),
+    "frame_family": (
+        "frame_family_class",
+        "frame_family_confidence",
+        "frame_family_method",
+        "frame_family_candidate_families",
+    ),
 }
 
 # Bit width for the perceptual-hash int representation - matches local_phash.py's own private
@@ -1751,6 +1756,7 @@ def compute_card_evidence(
             fields["frame_family_class"] = ff_result.family_class
             fields["frame_family_confidence"] = ff_result.confidence
             fields["frame_family_method"] = ff_result.method
+            fields["frame_family_candidate_families"] = list(ff_result.candidate_families)
             if not ff_result.family_class:
                 skip_reasons["frame_family"] = ff_result.skip_reason or EXTRACTOR_AMBIGUOUS_SKIP_REASON
         extractor_versions["frame_family"] = FRAME_FAMILY_EXTRACTOR_VERSION
