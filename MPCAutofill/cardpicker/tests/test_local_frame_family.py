@@ -21,6 +21,7 @@ import cardpicker.local_frame_family as mod
 from cardpicker.default_tags import seed_default_tags
 from cardpicker.local_frame_family import (
     CONFIDENCE_ABSTAIN,
+    CONFIDENCE_HIGH,
     CONFIDENCE_MODERATE,
     CONFIDENCE_STRUCTURAL,
     FRAME_FAMILY_AMBIGUOUS_SKIP_REASON,
@@ -226,7 +227,7 @@ class TestClassifyFrameFamily:
         candidates = FrameFamilyCandidates(families=frozenset({"Pipboy"}), name_resolved=True)
         result = classify_frame_family(candidates=candidates)
         assert result.family_class == "Pipboy"
-        assert result.confidence == CONFIDENCE_MODERATE
+        assert result.confidence == CONFIDENCE_HIGH
         assert result.method == METHOD_SET_NARROWING
         assert result.skip_reason == ""
 

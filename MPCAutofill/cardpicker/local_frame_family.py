@@ -35,12 +35,14 @@ normal-frame reading rides on the `normal_frame` chip (#981) - a boolean compute
 population site from the stored `art_edge_class`/`artbox_frame_class`/`layout_class` fields -
 and does not write this field.
 
-CONFIDENCE. The vocabulary is 0 abstain / 1 moderate / 2 high / 3 structural. A set-narrowed
-verdict is unverified by pixels, so it sits at `CONFIDENCE_MODERATE` (1) for every row - the
-lowest non-abstain level. The candidate-set size (a queue-ordering signal) is deliberately NOT
-persisted: the field holds a verdict, and a persisted count would need a full re-extraction to
-revise. `CUSTOM` is a vocabulary value with no writer yet: it needs a positive criterion nobody
-has written, and "no candidates" cannot mean "custom".
+CONFIDENCE. The vocabulary is 0 abstain / 1 moderate / 2 high / 3 structural. Confidence now
+reflects how far narrowing actually got — the candidate-set size, which is the number of taps a
+human needs. A single-candidate named verdict is the strongest case (`CONFIDENCE_HIGH`), a
+multi-candidate `OTHER_SHOWCASE` pick-list is weaker (`CONFIDENCE_MODERATE`), and `STANDARD`
+from the `normal_frame` chip is weaker still (`CONFIDENCE_MODERATE`). The candidate-set size
+is the honest signal: fewer candidates = less human work = higher confidence. `CUSTOM` is a
+vocabulary value with no writer yet: it needs a positive criterion nobody has written, and "no
+candidates" cannot mean "custom".
 
 THE STRUCTURAL DETECTORS STAY DORMANT. Five hand-written detectors (ShowcaseMagnified, Pipboy,
 Vault, MysticalArchive, Storybook) remain in the module but are not called by
@@ -533,7 +535,7 @@ def classify_frame_family(
     if len(candidates.families) == 1:
         return FrameFamilyResult(
             family_class=next(iter(candidates.families)),
-            confidence=CONFIDENCE_MODERATE,
+            confidence=CONFIDENCE_HIGH,
             method=METHOD_SET_NARROWING,
         )
 
