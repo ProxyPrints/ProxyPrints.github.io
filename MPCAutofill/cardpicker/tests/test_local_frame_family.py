@@ -245,17 +245,18 @@ class TestClassifyFrameFamily:
         assert result.family_class == "Pipboy"
         assert result.candidate_families == ()
 
-    def test_zero_candidates_name_resolved_returns_custom(self):
+    def test_zero_candidates_abstains_with_no_candidates_reason(self):
         candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=False)
         result = classify_frame_family(candidates=candidates)
-        assert result.family_class == FRAME_FAMILY_CUSTOM
+        assert result.family_class == ""
         assert result.confidence == CONFIDENCE_ABSTAIN
         assert result.method == METHOD_SET_NARROWING
+        assert result.skip_reason == mod.FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON
 
-    def test_zero_candidates_name_resolved_is_custom(self):
+    def test_zero_candidates_is_not_custom(self):
         candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=False)
         result = classify_frame_family(candidates=candidates)
-        assert result.family_class == FRAME_FAMILY_CUSTOM
+        assert result.family_class != FRAME_FAMILY_CUSTOM
 
     def test_normal_frame_writes_standard(self):
         candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=True)
