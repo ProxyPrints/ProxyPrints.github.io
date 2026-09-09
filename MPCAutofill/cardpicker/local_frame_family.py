@@ -515,7 +515,7 @@ def classify_frame_family(
       - exactly one candidate family -> that family (a proposal for a human, never a
         confirmation);
       - two or more -> `OTHER_SHOWCASE` (the pick-list case);
-      - zero candidates (issue #979) -> abstain with the `no-candidates` reason;
+      - zero candidates (issue #979) -> `CUSTOM` (name resolved to nothing, genuinely custom);
       - resolvable but no alternate-frame family and `normal_frame` -> `STANDARD`.
 
     `candidates` is the resolver output (`FrameFamilyCandidates`). `None` (the default, e.g. a
@@ -549,10 +549,9 @@ def classify_frame_family(
 
     if not candidates.name_resolved:
         return FrameFamilyResult(
-            family_class="",
+            family_class=FRAME_FAMILY_CUSTOM,
             confidence=CONFIDENCE_ABSTAIN,
-            method="",
-            skip_reason=FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON,
+            method=METHOD_SET_NARROWING,
         )
 
     if normal_frame:
