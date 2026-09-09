@@ -286,10 +286,29 @@ class TestClassifyFrameFamily:
         assert result.family_class == FRAME_FAMILY_OTHER_SHOWCASE
         assert result.confidence == CONFIDENCE_MODERATE
 
+    def test_border_tie_breaking_bordered_card_narrows_to_bordered_families(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy", "Crystal"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates, card_border_reading="black")
+        assert result.family_class == "Pipboy"
+        assert result.confidence == CONFIDENCE_HIGH
 
-# ---------------------------------------------------------------------------
-# Tests for candidate_frame_families (set narrowing).
-# ---------------------------------------------------------------------------
+    def test_border_tie_breaking_art_to_edge_card_narrows_to_art_families(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy", "Crystal"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates, card_border_reading="borderless")
+        assert result.family_class == "Crystal"
+        assert result.confidence == CONFIDENCE_HIGH
+
+    def test_border_tie_breaking_no_reading_returns_other_showcase(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy", "Crystal"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates)
+        assert result.family_class == FRAME_FAMILY_OTHER_SHOWCASE
+        assert result.confidence == CONFIDENCE_MODERATE
+
+    def test_border_tie_breaking_single_candidate_not_affected(self):
+        candidates = FrameFamilyCandidates(families=frozenset({"Pipboy"}), name_resolved=True)
+        result = classify_frame_family(candidates=candidates, card_border_reading="borderless")
+        assert result.family_class == "Pipboy"
+        assert result.confidence == CONFIDENCE_HIGH
 
 
 class _FakeIndex:

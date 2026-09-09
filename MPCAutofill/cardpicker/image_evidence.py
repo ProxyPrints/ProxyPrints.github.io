@@ -1752,6 +1752,7 @@ def compute_card_evidence(
             ff_result = classify_frame_family(
                 candidates=candidate_frame_families,
                 normal_frame=normal_frame,
+                card_border_reading=fields.get("layout_class", ""),
             )
             fields["frame_family_class"] = ff_result.family_class
             fields["frame_family_confidence"] = ff_result.confidence

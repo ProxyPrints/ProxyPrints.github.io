@@ -73,9 +73,11 @@ WHAT MUST NOT HAPPEN:
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from cardpicker.local_identify_printing_tags import CandidateNameIndex, generate_run_id
@@ -183,6 +185,21 @@ FRAME_FAMILY_RESCANNABLE_SKIP_REASONS: frozenset[str] = frozenset(
 FRAME_FAMILY_ANONYMOUS_ID = "frame-family-v1"
 FRAME_FAMILY_TAG_NAME = "Showcase"
 FRAME_FAMILY_VOTE_CONFIDENCE = 0.5
+
+# ---------------------------------------------------------------------------
+# Border table (owner-labelled, from orchestration repo).
+# Maps family name -> {"border": "BORDERED"|"ART_TO_EDGE", "source": ...}.
+# Used ONLY for tie-breaking within a multi-candidate OTHER_SHOWCASE set:
+# where surviving candidates disagree on border type, the card's own stored
+# border reading drops the ones that disagree. Never eliminates from a
+# single-candidate set, never used as a global eliminator.
+# ---------------------------------------------------------------------------
+_BORDER_TABLE_PATH = Path(__file__).parent / "family_border_table.json"
+FAMILY_BORDER_TABLE: dict[str, str] = {k: v["border"] for k, v in json.loads(_BORDER_TABLE_PATH.read_text()).items()}
+# Card border readings that map to "BORDERED" in the border table.
+_BORDERED_READINGS: frozenset[str] = frozenset({"black", "white", "silver"})
+# Card border readings that map to "ART_TO_EDGE" in the border table.
+_ART_TO_EDGE_READINGS: frozenset[str] = frozenset({"borderless"})
 
 # ---------------------------------------------------------------------------
 # SET -> FRAME FAMILIES (set narrowing, issue #979 / the audit's own finding).
@@ -505,6 +522,7 @@ def classify_frame_family(
     *,
     candidates: Optional[FrameFamilyCandidates] = None,
     normal_frame: bool = False,
+    card_border_reading: str = "",
 ) -> FrameFamilyResult:
     """Classify a card's frame family by set narrowing (metadata, not pixels).
 
@@ -540,11 +558,28 @@ def classify_frame_family(
         )
 
     if len(candidates.families) >= 2:
+        narrowed = candidates.families
+        if card_border_reading and card_border_reading in _BORDERED_READINGS:
+            bordered = {f for f in candidates.families if FAMILY_BORDER_TABLE.get(f) == "BORDERED"}
+            art = {f for f in candidates.families if FAMILY_BORDER_TABLE.get(f) == "ART_TO_EDGE"}
+            if bordered and art:
+                narrowed = frozenset(bordered)
+        elif card_border_reading and card_border_reading in _ART_TO_EDGE_READINGS:
+            bordered = {f for f in candidates.families if FAMILY_BORDER_TABLE.get(f) == "BORDERED"}
+            art = {f for f in candidates.families if FAMILY_BORDER_TABLE.get(f) == "ART_TO_EDGE"}
+            if bordered and art:
+                narrowed = frozenset(art)
+        if len(narrowed) == 1:
+            return FrameFamilyResult(
+                family_class=next(iter(narrowed)),
+                confidence=CONFIDENCE_HIGH,
+                method=METHOD_SET_NARROWING,
+            )
         return FrameFamilyResult(
             family_class=FRAME_FAMILY_OTHER_SHOWCASE,
             confidence=CONFIDENCE_MODERATE,
             method=METHOD_SET_NARROWING,
-            candidate_families=tuple(sorted(candidates.families)),
+            candidate_families=tuple(sorted(narrowed)),
         )
 
     if not candidates.name_resolved:

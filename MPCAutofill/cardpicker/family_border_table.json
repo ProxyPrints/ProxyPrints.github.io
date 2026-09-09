@@ -1,0 +1,254 @@
+{
+  "BloomburrowBorderless": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "BorderlessStellarSights": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "BreakingNews": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "CommanderLegends": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "Crystal": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "DMUStainedGlass": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "DNDModule": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "DNDSourcebook": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "Dossier": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "DoubleFeature": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "DoubleFeatureTransform": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "Draconic": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "Elemental": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "EnchantingTales": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "Equinox": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "EquinoxBack": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "EquinoxFront": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "EternalNight": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "FableECL": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "Fang": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "Ghostfire": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "IxalanCoin": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "IxalanLegends1": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "IxalanLegends2": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "IxalanLegends3": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "JapanShowcase": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "Kaldheim-2": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "KaldheimNonleg": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "M15NyxShowcase": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "M21": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "MH2": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "MemoryCorridor": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "MysticalArchive": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "MysticalArchiveJP": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "MysticalArchiveJPEN": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "MysticalArchiveSOA": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "NeoNeon": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "NeoNinja": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "NeoSamurai": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "NeonInk": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "OilSlick": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "Paranormal": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "Pipboy": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "PixelTMT": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "PosterStellarSights": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "Ravnica": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "Ring": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "SNCArtDeco": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "SNCGilded": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "SNCSkyscraper": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "Scroll": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "SewerTMT": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "ShowcaseMagnified": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "ShowcasePanel": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "Storybook": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "StorybookMUL": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "StorybookWOE": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "TARDIS": {
+    "border": "ART_TO_EDGE",
+    "source": "owner, direct"
+  },
+  "Tarkir": {
+    "border": "BORDERED",
+    "source": "owner, direct"
+  },
+  "Vault": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "Wanted": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "Woodland": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  },
+  "ZendikarRising": {
+    "border": "BORDERED",
+    "source": "owner notes, elimination rule"
+  }
+}
