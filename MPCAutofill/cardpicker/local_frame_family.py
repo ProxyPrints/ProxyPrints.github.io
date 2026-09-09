@@ -146,10 +146,13 @@ NAMED_FAMILIES: frozenset[str] = frozenset()
 # ---------------------------------------------------------------------------
 # Detection method tags stored in frame_family_method.
 # ---------------------------------------------------------------------------
-# `set-narrowing` is the only method the shipped `classify_frame_family` writes.
-# `structural-construction` is retained because the dormant detectors will emit it once one
-# clears #829's bar and is re-wired back into the classifier.
+# `set-narrowing` is the only method the shipped `classify_frame_family` writes for
+# single-candidate verdicts.  `border-table-tiebreak` is returned when a multi-candidate set
+# collapses to one family through the FAMILY_BORDER_TABLE.  `structural-construction` is
+# retained because the dormant detectors will emit it once one clears #829's bar and is
+# re-wired back into the classifier.
 METHOD_SET_NARROWING = "set-narrowing"
+METHOD_BORDER_TABLE_TIEBREAK = "border-table-tiebreak"
 METHOD_STRUCTURAL_CONSTRUCTION = "structural-construction"
 
 # ---------------------------------------------------------------------------
@@ -574,7 +577,7 @@ def classify_frame_family(
             return FrameFamilyResult(
                 family_class=next(iter(narrowed)),
                 confidence=CONFIDENCE_HIGH,
-                method=METHOD_SET_NARROWING,
+                method=METHOD_BORDER_TABLE_TIEBREAK,
             )
         return FrameFamilyResult(
             family_class=FRAME_FAMILY_OTHER_SHOWCASE,
