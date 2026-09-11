@@ -541,9 +541,38 @@ class TypeEnum(str, Enum):
     artist = "artist"
     border = "border"
     confirmsuggestion = "confirm_suggestion"
+    framefamily = "frame_family"
     identifyprinting = "identify_printing"
     illustration = "illustration"
     tag = "tag"
+
+
+class FrameFamilyCandidate(BaseModel):
+    """One candidate frame family in a frame-family question's pick-list.
+
+    `name` is the Tag.name (e.g. "Pipboy") the frontend casts a CardTagVote against.
+    `displayName` is the human-readable label (e.g. "Pipboy") for the UI.
+    `confidence` is the net polarity (-1..+1) for the fill overlay.
+    """
+
+    name: str
+    displayName: str
+    confidence: float
+
+    @staticmethod
+    def from_dict(obj: Any) -> "FrameFamilyCandidate":
+        assert isinstance(obj, dict)
+        name = from_str(obj.get("name"))
+        displayName = from_str(obj.get("displayName"))
+        confidence = from_float(obj.get("confidence"))
+        return FrameFamilyCandidate(name, displayName, confidence)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["name"] = from_str(self.name)
+        result["displayName"] = from_str(self.displayName)
+        result["confidence"] = to_float(self.confidence)
+        return result
 
 
 class QuestionFeedItem(BaseModel):
@@ -551,8 +580,12 @@ class QuestionFeedItem(BaseModel):
     type: TypeEnum
     candidates: Optional[List[PrintingCandidate]] = None
     confidentlyKnownArtistName: Optional[str] = None
+    familyCandidates: Optional[List[FrameFamilyCandidate]] = None
+    familyConfidence: Optional[float] = None
     illustrationCandidates: Optional[List[PrintingCandidate]] = None
     isAnotherCopy: Optional[bool] = None
+    proposedFamilyDisplayName: Optional[str] = None
+    proposedFamilyName: Optional[str] = None
     scryfallIllustrationUrl: Optional[str] = None
     suggestedPrinting: Optional[PrintingCandidate] = None
     tagConfidence: Optional[Dict[str, float]] = None
@@ -565,10 +598,16 @@ class QuestionFeedItem(BaseModel):
         type = TypeEnum(obj.get("type"))
         candidates = from_union([lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("candidates"))
         confidentlyKnownArtistName = from_union([from_none, from_str], obj.get("confidentlyKnownArtistName"))
+        familyCandidates = from_union(
+            [lambda x: from_list(FrameFamilyCandidate.from_dict, x), from_none], obj.get("familyCandidates")
+        )
+        familyConfidence = from_union([from_none, from_float], obj.get("familyConfidence"))
         illustrationCandidates = from_union(
             [lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("illustrationCandidates")
         )
         isAnotherCopy = from_union([from_bool, from_none], obj.get("isAnotherCopy"))
+        proposedFamilyDisplayName = from_union([from_none, from_str], obj.get("proposedFamilyDisplayName"))
+        proposedFamilyName = from_union([from_none, from_str], obj.get("proposedFamilyName"))
         scryfallIllustrationUrl = from_union([from_none, from_str], obj.get("scryfallIllustrationUrl"))
         suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
         tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
@@ -578,8 +617,12 @@ class QuestionFeedItem(BaseModel):
             type,
             candidates,
             confidentlyKnownArtistName,
+            familyCandidates,
+            familyConfidence,
             illustrationCandidates,
             isAnotherCopy,
+            proposedFamilyDisplayName,
+            proposedFamilyName,
             scryfallIllustrationUrl,
             suggestedPrinting,
             tagConfidence,
@@ -596,6 +639,12 @@ class QuestionFeedItem(BaseModel):
             )
         if self.confidentlyKnownArtistName is not None:
             result["confidentlyKnownArtistName"] = from_union([from_none, from_str], self.confidentlyKnownArtistName)
+        if self.familyCandidates is not None:
+            result["familyCandidates"] = from_union(
+                [lambda x: from_list(lambda x: to_class(FrameFamilyCandidate, x), x), from_none], self.familyCandidates
+            )
+        if self.familyConfidence is not None:
+            result["familyConfidence"] = from_union([from_none, from_float], self.familyConfidence)
         if self.illustrationCandidates is not None:
             result["illustrationCandidates"] = from_union(
                 [lambda x: from_list(lambda x: to_class(PrintingCandidate, x), x), from_none],
@@ -603,6 +652,10 @@ class QuestionFeedItem(BaseModel):
             )
         if self.isAnotherCopy is not None:
             result["isAnotherCopy"] = from_union([from_bool, from_none], self.isAnotherCopy)
+        if self.proposedFamilyDisplayName is not None:
+            result["proposedFamilyDisplayName"] = from_union([from_none, from_str], self.proposedFamilyDisplayName)
+        if self.proposedFamilyName is not None:
+            result["proposedFamilyName"] = from_union([from_none, from_str], self.proposedFamilyName)
         if self.scryfallIllustrationUrl is not None:
             result["scryfallIllustrationUrl"] = from_union([from_none, from_str], self.scryfallIllustrationUrl)
         if self.suggestedPrinting is not None:

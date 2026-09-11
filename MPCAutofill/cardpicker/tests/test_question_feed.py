@@ -19,6 +19,11 @@ from cardpicker.local_calculate_verdicts import (
     JOIN_KEY_UNKNOWN_SET_CODE_SKIP_REASON,
     STAGE_D_FALLBACK_ANONYMOUS_ID,
 )
+from cardpicker.local_frame_family import (
+    FRAME_FAMILY_CUSTOM,
+    FRAME_FAMILY_OTHER_SHOWCASE,
+    FRAME_FAMILY_STANDARD,
+)
 from cardpicker.models import (
     ArtistVoteStatus,
     CardPrintingTag,
@@ -45,6 +50,7 @@ from cardpicker.question_feed import (
     _border_item,
     _confirm_suggestion_item,
     _evidence_justifies_confirmation,
+    _frame_family_item,
     _identify_printing_item,
     _illustration_item,
     _likely_resolve_item,
@@ -1820,6 +1826,130 @@ class TestConfirmSuggestionMissingIllustrationTableDegrades:
 
         assert item is not None
         assert item.suggestedPrinting.identifier == str(printing.identifier)
+
+
+class TestFrameFamilyItem:
+    """`_frame_family_item` (the frame-family question type): asks which alternate-frame
+    family a card belongs to, returning a pick-list of candidate families resolved to their
+    seeded ``Tag.name`` and display name.  Each candidate tap casts through the existing
+    ``CardTagVote`` path.  Returns ``None`` for blank/STANDARD/CUSTOM/abstained evidence,
+    empty candidate lists, or when no candidate family tags have been seeded yet."""
+
+    def test_returns_none_when_no_image_evidence(self, db):
+        card = CardFactory()
+
+        assert _frame_family_item(card) is None
+
+    def test_returns_none_when_frame_family_class_is_blank(self, db):
+        card = CardFactory()
+        ImageEvidenceFactory(card=card, frame_family_class="", frame_family_confidence=0.0)
+
+        assert _frame_family_item(card) is None
+
+    def test_returns_none_when_frame_family_class_is_standard(self, db):
+        card = CardFactory()
+        ImageEvidenceFactory(card=card, frame_family_class=FRAME_FAMILY_STANDARD, frame_family_confidence=0.95)
+
+        assert _frame_family_item(card) is None
+
+    def test_returns_none_when_frame_family_class_is_custom(self, db):
+        card = CardFactory()
+        ImageEvidenceFactory(card=card, frame_family_class=FRAME_FAMILY_CUSTOM, frame_family_confidence=0.80)
+
+        assert _frame_family_item(card) is None
+
+    def test_returns_none_when_other_showcase_but_empty_candidate_list(self, db):
+        card = CardFactory()
+        ImageEvidenceFactory(
+            card=card,
+            frame_family_class=FRAME_FAMILY_OTHER_SHOWCASE,
+            frame_family_confidence=0.75,
+            frame_family_candidate_families=[],
+        )
+
+        assert _frame_family_item(card) is None
+
+    def test_returns_none_when_no_candidate_tags_seeded(self, db):
+        card = CardFactory()
+        ImageEvidenceFactory(
+            card=card,
+            frame_family_class=FRAME_FAMILY_OTHER_SHOWCASE,
+            frame_family_confidence=0.75,
+            frame_family_candidate_families=["ShowcaseAnime", "ShowcaseRetro"],
+        )
+
+        assert _frame_family_item(card) is None
+
+    def test_returns_item_for_named_family_with_seeded_tag(self, db):
+        card = CardFactory()
+        TagFactory(name="ShowcaseAnime")
+        ImageEvidenceFactory(
+            card=card,
+            frame_family_class="ShowcaseAnime",
+            frame_family_confidence=2,
+            frame_family_candidate_families=["ShowcaseAnime"],
+        )
+
+        item = _frame_family_item(card)
+
+        assert item is not None
+        assert item.type == TypeEnum.framefamily
+        assert item.proposedFamilyName == "ShowcaseAnime"
+        assert item.proposedFamilyDisplayName == "Showcase Anime"
+        assert len(item.familyCandidates) == 1
+        assert item.familyCandidates[0].name == "ShowcaseAnime"
+        assert item.familyConfidence == 2.0
+
+    def test_returns_item_for_other_showcase_with_seeded_candidates(self, db):
+        card = CardFactory()
+        TagFactory(name="ShowcaseAnime")
+        TagFactory(name="ShowcaseRetro")
+        ImageEvidenceFactory(
+            card=card,
+            frame_family_class=FRAME_FAMILY_OTHER_SHOWCASE,
+            frame_family_confidence=0.70,
+            frame_family_candidate_families=["ShowcaseAnime", "ShowcaseRetro"],
+        )
+
+        item = _frame_family_item(card)
+
+        assert item is not None
+        assert item.type == TypeEnum.framefamily
+        assert len(item.familyCandidates) == 2
+        candidate_names = [c.name for c in item.familyCandidates]
+        assert "ShowcaseAnime" in candidate_names
+        assert "ShowcaseRetro" in candidate_names
+
+    def test_returns_none_when_only_some_candidates_seeded(self, db):
+        card = CardFactory()
+        TagFactory(name="ShowcaseAnime")
+        ImageEvidenceFactory(
+            card=card,
+            frame_family_class=FRAME_FAMILY_OTHER_SHOWCASE,
+            frame_family_confidence=0.70,
+            frame_family_candidate_families=["ShowcaseAnime", "UnseededFamily"],
+        )
+
+        item = _frame_family_item(card)
+
+        assert item is not None
+        assert len(item.familyCandidates) == 1
+        assert item.familyCandidates[0].name == "ShowcaseAnime"
+
+    def test_candidate_confidence_comes_from_tag_net_polarity(self, db):
+        card = CardFactory()
+        TagFactory(name="ShowcaseAnime")
+        ImageEvidenceFactory(
+            card=card,
+            frame_family_class="ShowcaseAnime",
+            frame_family_confidence=0.92,
+            frame_family_candidate_families=["ShowcaseAnime"],
+        )
+
+        item = _frame_family_item(card)
+
+        assert item is not None
+        assert item.familyCandidates[0].confidence == 0.0
 
 
 class TestLikelyResolveRouting:

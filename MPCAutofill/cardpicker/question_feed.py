@@ -200,6 +200,7 @@ from cardpicker.models import (
     CardTagVote,
     HiddenCard,
     IllustrationVoteStatus,
+    ImageEvidence,
     PrintingTagStatus,
     QuestionFeedServedLog,
     QuestionFeedServedPool,
@@ -218,6 +219,7 @@ from cardpicker.printing_consensus import (
 from cardpicker.reason_tags import NOT_OFFICIAL_ART_REASON_TAGS
 from cardpicker.schema_types import (
     BleedProvenance,
+    FrameFamilyCandidate,
     PrintingCandidate,
     QuestionFeedCounts,
     QuestionFeedItem,
@@ -537,6 +539,76 @@ def _illustration_item(card: Card) -> Optional[QuestionFeedItem]:
         card=card.serialise(),
         illustrationCandidates=unique_candidates,
         tagConfidence=_tag_confidence(card),
+    )
+
+
+def _frame_family_item(card: Card) -> Optional[QuestionFeedItem]:
+    """The frame-family question: asks which alternate-frame family this card belongs to.
+
+    Reads the card's stored ``ImageEvidence.frame_family_class`` / ``frame_family_confidence``
+    / ``frame_family_candidate_families`` and builds a pick-list of candidate families, each
+    resolved to its seeded ``Tag.name`` and display name.  Each tap casts through the existing
+    ``CardTagVote`` path (``useTagVoting``/``APISubmitTagVote``).
+
+    Returns ``None`` when the card has no evidence, or when ``frame_family_class`` is blank,
+    ``STANDARD``, ``CUSTOM``, or empty (abstained).  Also returns ``None`` when the class is
+    ``OTHER_SHOWCASE`` but the persisted candidate list is empty (no narrowing result), or when
+    none of the candidate family tags have been seeded yet.
+
+    The proposed family is always the first element of the sorted candidate list — the one
+    with the fewest alternatives (cheapest tap).  The frontend uses ``familyCandidates`` to
+    render the full pick-list and ``proposedFamilyName`` / ``proposedFamilyDisplayName`` for
+    the heading.
+    """
+    from cardpicker.frame_family_tags import _pascal_to_display
+    from cardpicker.local_frame_family import (
+        FRAME_FAMILY_CUSTOM,
+        FRAME_FAMILY_OTHER_SHOWCASE,
+        FRAME_FAMILY_STANDARD,
+    )
+
+    evidence = ImageEvidence.objects.filter(card=card).order_by("-created_at").first()
+    if evidence is None:
+        return None
+
+    family_class = evidence.frame_family_class
+    if not family_class or family_class in (FRAME_FAMILY_STANDARD, FRAME_FAMILY_CUSTOM):
+        return None
+
+    if family_class == FRAME_FAMILY_OTHER_SHOWCASE:
+        candidate_names: list[str] = list(evidence.frame_family_candidate_families or [])
+        if not candidate_names:
+            return None
+    else:
+        candidate_names = [family_class]
+
+    tags_by_name = {tag.name: tag for tag in Tag.objects.filter(name__in=candidate_names)}
+
+    family_candidates: list[FrameFamilyCandidate] = []
+    for name in candidate_names:
+        tag = tags_by_name.get(name)
+        if tag is None:
+            continue  # not seeded yet — skip rather than 500
+        confidence = get_tag_net_polarity(card, tag)
+        family_candidates.append(
+            FrameFamilyCandidate(
+                name=name,
+                displayName=_pascal_to_display(name),
+                confidence=confidence,
+            )
+        )
+
+    if not family_candidates:
+        return None
+
+    proposed = family_candidates[0]
+    return QuestionFeedItem(
+        type=TypeEnum.framefamily,
+        card=card.serialise(),
+        proposedFamilyName=proposed.name,
+        proposedFamilyDisplayName=proposed.displayName,
+        familyCandidates=family_candidates,
+        familyConfidence=float(evidence.frame_family_confidence),
     )
 
 
@@ -1796,6 +1868,11 @@ def _pool_cold_result(
         if item is None:
             return None
         return item, reason or "tier_4_fresh_illustration"
+    if kind == question_feed_pools.KIND_FRAME_FAMILY:
+        item = _frame_family_item(card)
+        if item is None:
+            return None
+        return item, reason or "tier_4_fresh_frame_family"
     if kind == question_feed_pools.KIND_PRINTING:
         # See `_pool_contested_result`'s identical guard for why this defensive re-check exists
         # alongside `_build_pool_cold`'s own warm-time gate.
