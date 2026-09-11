@@ -203,8 +203,7 @@ function findColorBounds(
   return maxX < minX ? null : { minX, minY, maxX, maxY };
 }
 
-const isBlue = (r: number, g: number, b: number) =>
-  b > 180 && r < 60 && g < 60;
+const isBlue = (r: number, g: number, b: number) => b > 180 && r < 60 && g < 60;
 
 test.describe("PagePreview - image scale matches object-fit (preview/export parity)", () => {
   // Real catalogue bleed measurements span roughly 0.05mm-3.95mm; DisplayPage's own default
