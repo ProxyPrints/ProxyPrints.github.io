@@ -593,10 +593,18 @@ function PagePreviewSlotEl({
   // Preview/export parity: scale the image about its centre so its trim rectangle lands on
   // the slot's trim rectangle (bleedMM from each slot edge).
   //
-  // objectFit:contain fills the slot by scaling image natural size (trim + 2*measuredBleed)
-  // to slot size (trim + 2*grantedBleed). The CSS transform then restores the image to
-  // natural size, which shifts the trim edge to exactly grantedBleed from the slot edge.
-  // Combined scale is always 1.0 — the transform only repositions, never enlarges.
+  // objectFit:fill stretches the image's natural size (trim + 2*measuredBleed) to exactly
+  // fill the slot box (trim + 2*grantedBleed) on each axis independently, discarding the
+  // image's own aspect ratio. The CSS transform then scales that stretched box back down by
+  // the per-axis inverse ratio, restoring the image to its natural size - which lands its
+  // trim edge exactly grantedBleed from the slot edge on BOTH axes. Combined per-axis scale
+  // is always 1.0 — the transform only repositions, never enlarges.
+  //
+  // Must be `fill`, not `contain`: `contain` scales uniformly (preserving aspect, letterboxing
+  // whichever axis doesn't bind), so this same non-uniform correction only cancels on the axis
+  // `contain` already fit to and leaves the letterboxed axis under/over-corrected. `fill`'s
+  // per-axis stretch is what a per-axis correction requires, and stays exact even when a
+  // card's real per-edge bleed isn't perfectly symmetric.
   //
   // Falls back to STANDARD_BLEED_MARGIN_MM when measuredBleedMm is null/undefined, which
   // collapses the scale to 1.0 when the configured bleed matches the standard convention
@@ -659,7 +667,7 @@ function PagePreviewSlotEl({
           style={{
             width: "100%",
             height: "100%",
-            objectFit: "contain",
+            objectFit: "fill",
             display: "block",
             pointerEvents: "none",
             transform: imgTransform,
