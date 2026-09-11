@@ -332,8 +332,19 @@ class _FakeIndex:
 
 
 class _FakeCandidate:
-    def __init__(self, expansion_code):
+    def __init__(
+        self,
+        expansion_code,
+        frame_effects=None,
+        border_color="",
+        full_art=False,
+        layout="normal",
+    ):
         self.expansion_code = expansion_code
+        self.frame_effects = frame_effects or []
+        self.border_color = border_color
+        self.full_art = full_art
+        self.layout = layout
 
 
 class TestCandidateFrameFamilies:
@@ -372,6 +383,68 @@ class TestCandidateFrameFamilies:
                 "MysticalArchiveJPEN",
             }
         )
+        assert result.name_resolved is True
+
+    # Step 3: frame narrowing — if NO non-exempt candidate carries a marker,
+    # the family set is emptied so the classifier falls through to STANDARD/abstain.
+
+    def test_narrowing_returns_empty_when_no_candidate_has_marker(self):
+        """A card from a multi-family set (pip → Pipboy) but none of its candidate
+        printings carries an alternate-frame marker → families cleared."""
+        index = _FakeIndex({"foo": [_FakeCandidate("pip", layout="normal", full_art=False)]})
+        result = candidate_frame_families("foo", index)
+        assert result.families == frozenset()
+        assert result.name_resolved is True
+
+    def test_narrowing_preserves_families_when_candidate_has_marker(self):
+        """A candidate with a marker keeps its set's families."""
+        index = _FakeIndex({"foo": [_FakeCandidate("pip", frame_effects=["showcase"])]})
+        result = candidate_frame_families("foo", index)
+        assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
+        assert result.name_resolved is True
+
+    def test_exempt_set_bypasses_narrowing(self):
+        """If ALL of a set's printings in the index have 0% marker coverage,
+        the set is exempt and its families are kept even without a marker."""
+        index = _FakeIndex({"foo": [_FakeCandidate("pip", layout="normal", full_art=False)]})
+        result = candidate_frame_families("foo", index)
+        # pip is the only set with any printings in this index;
+        # it has 0% marker coverage → exempt → families preserved
+        assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
+        assert result.name_resolved is True
+
+    def test_narrowing_mixes_exempt_and_non_exempt(self):
+        """Two candidates from different sets: one exempt (0% markers across its printings),
+        one non-exempt (some printing has a marker). Only the non-exempt candidate's
+        marker status governs narrowing."""
+        index = _FakeIndex(
+            {
+                "foo": [
+                    _FakeCandidate("pip", layout="normal", full_art=False),
+                    _FakeCandidate("eld", layout="normal", full_art=False),
+                ],
+                "bar": [
+                    _FakeCandidate("eld", frame_effects=["showcase"]),
+                ],
+            }
+        )
+        result = candidate_frame_families("foo", index)
+        # pip is exempt (only printing, no marker); eld is NOT exempt
+        # (bar has a showcase printing for eld), but foo's eld printing has no marker.
+        # All non-exempt candidates (foo's eld) lack marker → families cleared.
+        assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
+        assert result.name_resolved is True
+
+    def test_marker_borderless_counts(self):
+        index = _FakeIndex({"foo": [_FakeCandidate("pip", border_color="borderless")]})
+        result = candidate_frame_families("foo", index)
+        assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
+        assert result.name_resolved is True
+
+    def test_marker_non_normal_layout_counts(self):
+        index = _FakeIndex({"foo": [_FakeCandidate("pip", layout="transform")]})
+        result = candidate_frame_families("foo", index)
+        assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
         assert result.name_resolved is True
 
 
