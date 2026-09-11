@@ -424,17 +424,20 @@ class CandidateNameIndex:
 
         # issue #979: adventure and split cards are stored as "Front // Back" in Scryfall,
         # but users upload only the front face (e.g. "Valki, God of Lies" not
-        # "Valki, God of Lies // Tibalt, the Fiend-Blooded"). Build a front-face index:
-        # for every canonical name containing "//", key to_searchable(front_part) to the
-        # set of DISTINCT normalised full names it belongs to. Accept only when exactly
-        # one distinct full name collapses to that front face - the same unambiguous-only
-        # discipline _deconcatenated_candidates already uses.
+        # "Valki, God of Lies // Tibalt, the Fiend-Blooded"). Build a front-face index
+        # using the RAW name (to_searchable strips "//" as punctuation, so we must split
+        # before normalising). For every canonical name containing "//", key
+        # to_searchable(front_part) to the set of DISTINCT normalised full names it belongs
+        # to. Accept only when exactly one distinct full name collapses to that front face.
         by_front: dict[str, set[str]] = collections.defaultdict(set)
-        for normalised_name in self._by_name:
-            if "//" in normalised_name:
-                front_part = normalised_name.split("//")[0].strip()
+        for pk, name, *_ in rows:
+            if "//" in name:
+                front_part = name.split("//")[0].strip()
                 if front_part:
-                    by_front[to_searchable(front_part)].add(normalised_name)
+                    front_key = to_searchable(front_part)
+                    normalised_full = to_searchable(name)
+                    if normalised_full in self._by_name:
+                        by_front[front_key].add(normalised_full)
         self._by_front = {k: list(v) for k, v in by_front.items() if len(v) == 1}
 
     def candidates_for(self, name: str) -> list[CandidatePrinting]:
