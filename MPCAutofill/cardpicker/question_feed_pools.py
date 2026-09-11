@@ -163,6 +163,7 @@ KIND_PRINTING = "printing"
 KIND_ARTIST = "artist"
 KIND_TAG = "tag"
 KIND_ILLUSTRATION = "illustration"
+KIND_FRAME_FAMILY = "frame_family"
 
 CACHE_KEY_PREFIX = "question-feed-pool-v1"
 # `None` (persist until the next warm overwrites it) - same convention as
@@ -347,7 +348,7 @@ def _iter_by_kind_precedence(entries: list[PoolEntry]) -> Iterator[PoolEntry]:
     # `question_feed._tier_4_fresh`'s own illustration-before-printing order (the cheapest
     # answerable question wins the remainder waterfall) - a contested-pool draw simply has no
     # illustration entries to yield here.
-    for kind in (KIND_ILLUSTRATION, KIND_PRINTING, KIND_ARTIST, KIND_TAG):
+    for kind in (KIND_ILLUSTRATION, KIND_FRAME_FAMILY, KIND_PRINTING, KIND_ARTIST, KIND_TAG):
         yield from _iter_windowed_from_random_offset([entry for entry in entries if entry.kind == kind])
 
 
@@ -615,6 +616,40 @@ def _build_pool_cold() -> list[PoolEntry]:
         )
         for pk, _ in illustration_rows
     ]
+
+    # Frame-family entries: cards whose ImageEvidence carries a named family or OTHER_SHOWCASE
+    # verdict — the cheapest question type (single candidate = one tap).  Sampled after
+    # illustration because both share the same "fresh, unanswered" population and illustration
+    # is cheaper to answer (art grid, no name knowledge needed).
+    from cardpicker.local_frame_family import FRAME_FAMILY_CUSTOM, FRAME_FAMILY_STANDARD
+    from cardpicker.question_feed import _frame_family_item
+
+    frame_family_candidates = (
+        Card.objects.filter(
+            image_evidence__frame_family_class__isnull=False,
+        )
+        .exclude(
+            image_evidence__frame_family_class__in=["", FRAME_FAMILY_STANDARD, FRAME_FAMILY_CUSTOM],
+        )
+        .distinct()
+    )
+    frame_family_rows: list[tuple[int, Any]] = []
+    for card in _sample_across_pk_strata(frame_family_candidates, chunk_size=_pool_sample_chunk_size(limit)):
+        if _frame_family_item(card) is None:
+            continue
+        frame_family_rows.append((card.pk, card.date_created))
+        if len(frame_family_rows) >= limit:
+            break
+    frame_family_rows.sort(key=lambda row: row[1], reverse=True)
+    entries.extend(
+        PoolEntry(
+            kind=KIND_FRAME_FAMILY,
+            card_id=pk,
+            reason="tier_4_fresh_frame_family",
+            score=_precomputed_information_gain_score(KIND_FRAME_FAMILY, pk),
+        )
+        for pk, _ in frame_family_rows
+    )
 
     # Full `Card` objects, not `.values_list(...)`, for the same reason `_build_pool_contested`'s
     # printing branch switched: the candidate-emptiness gate below needs `card.name`.
@@ -939,6 +974,13 @@ def draw_cold_entry(
             if card is None:
                 continue
             return KIND_ILLUSTRATION, card, None, entry.reason
+        if entry.kind == KIND_FRAME_FAMILY:
+            if entry.card_id in answered_card_ids:
+                continue
+            card = Card.objects.filter(pk=entry.card_id).first()
+            if card is None:
+                continue
+            return KIND_FRAME_FAMILY, card, None, entry.reason
         if entry.kind == KIND_PRINTING:
             if entry.card_id in answered_card_ids or entry.card_id in contested_card_id_set:
                 continue
@@ -976,6 +1018,7 @@ __all__ = [
     "KIND_ARTIST",
     "KIND_TAG",
     "KIND_ILLUSTRATION",
+    "KIND_FRAME_FAMILY",
     "PoolEntry",
     "warm_pool_cache",
     "warm_pool_images",
