@@ -206,6 +206,7 @@ def _stub_compute_card_evidence_ok(**field_overrides: Any):
         stale_extractor_keys=None,
         stored_evidence_fields=None,
         stored_extractor_versions=None,
+        candidate_frame_families=None,
     ):
         fields = {
             "fetch_ok": True,
@@ -995,6 +996,7 @@ class TestForceStageCReextract:
             stale_extractor_keys=None,
             stored_evidence_fields=None,
             stored_extractor_versions=None,
+            candidate_frame_families=None,
         ):
             observed_short_circuit.append(short_circuit)
             return _stub_compute_card_evidence_ok()(
@@ -2239,6 +2241,7 @@ class TestDecoupledFetchAhead:
             stale_extractor_keys: Any = None,
             stored_evidence_fields: Any = None,
             stored_extractor_versions: Any = None,
+            candidate_frame_families: Any = None,
         ) -> Any:
             compute_calls["n"] += 1
             if compute_calls["n"] == 3:
@@ -2361,6 +2364,7 @@ class TestPooledStageC:
             stale_extractor_keys: Any = None,
             stored_evidence_fields: Any = None,
             stored_extractor_versions: Any = None,
+            candidate_frame_families: Any = None,
         ) -> Any:
             compute_calls["n"] += 1
             if compute_calls["n"] == 3:

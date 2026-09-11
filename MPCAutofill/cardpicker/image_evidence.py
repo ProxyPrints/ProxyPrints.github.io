@@ -270,6 +270,7 @@ from cardpicker.local_fallback import (
     extract_artist_name,
     normalize_crop_box,
 )
+from cardpicker.local_frame_family import FrameFamilyCandidates, classify_frame_family
 from cardpicker.local_image_quality import (
     compute_blur_variance,
     compute_entropy,
@@ -363,6 +364,7 @@ ARTBOX_PHASH_EXTRACTOR_VERSION = "artbox-phash-v3"
 # distance scan, no OCR - engine-independent by construction, same reasoning as symbol_region/
 # quality_signals above.
 PINLINE_INSET_EXTRACTOR_VERSION = "pinline-inset-v1"
+FRAME_FAMILY_EXTRACTOR_VERSION = "frame-family-v1"
 
 # PER-EXTRACTOR RE-EXTRACTION (2026-08-19, perf/per-extractor-reextraction): which `ImageEvidence`
 # columns each extractor OWNS - the set `compute_card_evidence`'s carry-forward path copies from a
@@ -415,6 +417,12 @@ EXTRACTOR_OWNED_FIELDS: dict[str, tuple[str, ...]] = {
         "pinline_inset_call_left",
         "pinline_inset_call_right",
         "pinline_inset_verdict",
+    ),
+    "frame_family": (
+        "frame_family_class",
+        "frame_family_confidence",
+        "frame_family_method",
+        "frame_family_candidate_families",
     ),
 }
 
@@ -892,6 +900,7 @@ def compute_card_evidence(
     stale_extractor_keys: Optional[frozenset[str]] = None,
     stored_evidence_fields: Optional[dict[str, Any]] = None,
     stored_extractor_versions: Optional[dict[str, str]] = None,
+    candidate_frame_families: Optional[FrameFamilyCandidates] = None,
 ) -> ExtractionResult:
     """
     Compute-only continuation of `fetch_and_compute_card_evidence_for_tests` above - everything that function does
@@ -1117,6 +1126,15 @@ def compute_card_evidence(
     will misreport as "voted" for a run that only ever carried it forward. The whole-catalogue,
     not-run-id-scoped report is unaffected. Not fixed here - see the perf/per-extractor-
     reextraction PR body for why this is an accepted, disclosed tradeoff rather than a silent one.
+
+    `candidate_frame_families` (frame-family identifiers): the set-narrowed candidate families
+    the card's name resolves to (issue #979), resolved by the caller via
+    `local_frame_family.candidate_frame_families(name, CandidateNameIndex(...))` and passed
+    through explicitly - never queried here. It is a `FrameFamilyCandidates` carrying both the
+    candidate `families` frozenset and whether the name resolved to any candidate at all.
+    `None` (the default, e.g. a direct test call) skips narrowing; a resolution whose
+    `name_resolved` is False means the name resolved to zero candidates and the frame_family
+    extractor abstains with the `no-candidates` skip reason.
     """
     if short_circuit is None:
         short_circuit = _short_circuit_enabled_by_env()
@@ -1717,6 +1735,33 @@ def compute_card_evidence(
                     fields["pinline_inset_verdict"] = pinline_inset.verdict
         extractor_versions["pinline_inset"] = PINLINE_INSET_EXTRACTOR_VERSION
 
+    # frame_family (issues #829/#878/#952/#967/#974/#968/#979/#980): per-card frame-family
+    # identification by set narrowing (metadata, not pixels). Runs after artbox_phash and
+    # layout_class because it reads their output to compute the normal_frame chip (#981).
+    if _stale("frame_family"):
+        if image is None:
+            skip_reasons["frame_family"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
+        else:
+            # normal_frame (#981): a framed, modern-layout card with no borderless treatment.
+            # STANDARD is written only when there is no candidate family to override.
+            normal_frame = (
+                fields.get("art_edge_class", "") == "framed"
+                and fields.get("artbox_frame_class", "") == "modern"
+                and fields.get("layout_class", "") not in ("borderless", "")
+            )
+            ff_result = classify_frame_family(
+                candidates=candidate_frame_families,
+                normal_frame=normal_frame,
+                card_border_reading=fields.get("layout_class", ""),
+            )
+            fields["frame_family_class"] = ff_result.family_class
+            fields["frame_family_confidence"] = ff_result.confidence
+            fields["frame_family_method"] = ff_result.method
+            fields["frame_family_candidate_families"] = list(ff_result.candidate_families)
+            if not ff_result.family_class:
+                skip_reasons["frame_family"] = ff_result.skip_reason or EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        extractor_versions["frame_family"] = FRAME_FAMILY_EXTRACTOR_VERSION
+
     if profile is not None:
         profile["extraction_ms"] = (time.monotonic() - extraction_started_at) * 1000
         profile["other_ms"] = (
@@ -1954,4 +1999,5 @@ __all__ = [
     "ARTBOX_MODERN_CROP_BOX",
     "ARTBOX_OLD_CROP_BOX",
     "PINLINE_INSET_EXTRACTOR_VERSION",
+    "FRAME_FAMILY_EXTRACTOR_VERSION",
 ]

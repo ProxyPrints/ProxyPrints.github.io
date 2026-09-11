@@ -455,6 +455,44 @@ printing votes, so it would have fired on the first `-v2` run.
 
 ## Parallel detectors (same evidence, never gate identification)
 
+- **Frame-family identifiers** (`local_frame_family.classify_frame_family`):
+  names which frame family a card belongs to by **set narrowing** (metadata,
+  not pixels). Produces `frame_family_class` (named family or
+  `OTHER_SHOWCASE`/`STANDARD`/`CUSTOM`/blank), `frame_family_confidence`
+  (0–3), and `frame_family_method` on `ImageEvidence`.
+
+  The population source is `SET_TO_FRAME_FAMILIES` (38 sets, harvested from
+  the CardConjurer pack registry). The card's name resolves through
+  `CandidateNameIndex.candidates_for` to candidate printings, whose expansion
+  codes map to the alternate-frame families that set ships. A set is **exempt**
+  from narrowing when its alternate-frame marker coverage is 0 % (measured by
+  `local_frame_family_blind_sets` — today zero sets qualify). The verdict, by
+  candidate-set size:
+
+  | Candidate families                                            | Verdict                                      | Confidence   |
+  | ------------------------------------------------------------- | -------------------------------------------- | ------------ |
+  | Exactly one                                                   | that family (a proposal, never confirmation) | 1 (moderate) |
+  | Two or more                                                   | `OTHER_SHOWCASE` (pick-list)                 | 1 (moderate) |
+  | Zero (name resolves to nothing, #979)                         | abstain, `no-candidates` reason              | 0            |
+  | Zero (resolvable, no alternate-frame family) + `normal_frame` | `STANDARD`                                   | 1 (moderate) |
+
+  `STANDARD` never overrides a non-empty candidate set: showcase families'
+  cards read as framed constantly, so a normal-frame reading on a card with a
+  live candidate is a property of the render, not evidence against the family.
+  The `normal_frame` chip (#981) is computed at the population site from
+  `art_edge_class == "framed"` AND `artbox_frame_class == "modern"` AND
+  `layout_class != "borderless"`.
+
+  The five structural detectors (ShowcaseMagnified, Pipboy, Vault,
+  MysticalArchive, Storybook) remain in the module but are dormant — not
+  called by `classify_frame_family`. Measured against owner-verified labels
+  they score 0/4 recall and 27/40 false positives, so `NAMED_FAMILIES` stays
+  empty. The caster (`cast_frame_family_vote`) votes nothing.
+
+  Wired via `cast_frame_family_vote` called from
+  `stage_e_dispatch._run_evidence_only_calculators` and the standalone
+  `local_frame_family_cast` management command.
+
 - **AI-art detector**: generator names in the OCR text → "AI-Generated" tag
   votes (ordinary consensus since #292). Detect-and-tag only.
 - **"Marked as proxy"** (#291, planned): marker presence → tag; **absence** →

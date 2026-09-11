@@ -642,6 +642,35 @@ class TestCandidateNameIndex:
         assert len(index.candidates_for("VazaltheCompleat - Copy")) == 1
         assert len(index.candidates_for("VazaltheCompleat (2) - Copy")) == 1
 
+    # Tier 4 (last resort after de-concat): front-face resolution (issue #979 - adventure and
+    # split cards stored as "Front // Back" in Scryfall, but users upload only the front face).
+
+    def test_adventure_front_resolves(self, db):
+        CanonicalCardFactory(name="Valki, God of Lies // Tibalt, the Fiend-Blooded")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Valki, God of Lies")) == 1
+
+    def test_split_front_resolves(self, db):
+        CanonicalCardFactory(name="Sea Gate Restoration // Sea Gate Rebreak")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Sea Gate Restoration")) == 1
+
+    def test_front_face_shared_by_two_names_returns_empty(self, db):
+        CanonicalCardFactory(name="Fire // Ice")
+        CanonicalCardFactory(name="Fire // Water")
+        index = CandidateNameIndex()
+        assert index.candidates_for("Fire") == []
+
+    def test_existing_tier_1_match_is_unchanged(self, db):
+        CanonicalCardFactory(name="Lightning Bolt")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Lightning Bolt")) == 1
+
+    def test_front_face_with_filename_suffix_resolves(self, db):
+        CanonicalCardFactory(name="Valki, God of Lies // Tibalt, the Fiend-Blooded")
+        index = CandidateNameIndex()
+        assert len(index.candidates_for("Valki, God of Lies (1)")) == 1
+
 
 class TestOcrParsing:
     def test_standard_modern_collector_line(self):

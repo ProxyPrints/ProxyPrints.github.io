@@ -1510,6 +1510,25 @@ does not. See [`documentation-process.md`](documentation-process.md)'s
   wiring, matching the "wiring ≠ backfill" convention the four 2026-08-05
   channels above already established.
 
+- **`frame-family-v1`** (`FRAME_FAMILY_ANONYMOUS_ID`,
+  [`MPCAutofill/cardpicker/local_frame_family.py`](../MPCAutofill/cardpicker/local_frame_family.py)) —
+  **DORMANT — casts no votes by construction.** The frame-family channel
+  (issues #829/#878/#952/#967/#974/#968/#979) stores `frame_family_class` /
+  `frame_family_confidence` / `frame_family_method` on `ImageEvidence` and
+  would cast the coarse "Showcase" chip on a named, above-bar verdict. The
+  caster gate reads the calibration table (`NAMED_FAMILIES`), and a family
+  ships as NAMED only where owner-verified truth exists for it and its
+  method cleared #829's bar (false positives at or near zero on ordinary
+  frames). Measured against the owner-verified labels on disk
+  (`frame-groundtruth` V2_KEY_SEALED / RECALL_KEY_SEALED, fable-judge
+  FABLE_KEY_SEALED): the structural detectors score **0/4 recall** on the
+  four owner-confirmed positives (Storybook, Vault, ShowcaseMagnified,
+  Pipboy — one each) and fire spuriously on **27/40** owner-negative cards,
+  so `NAMED_FAMILIES` is empty and **the caster votes nothing today**.
+  Region-hash is closed by the frame-identification audit and not shipped;
+  the identifier's full measurement lives in PR #980's own calibration
+  table.
+
 - **`local-name-frequency-v1`** (`NAME_FREQUENCY_ANONYMOUS_ID`,
   [`MPCAutofill/cardpicker/local_identify_printing_tags.py`](../MPCAutofill/cardpicker/local_identify_printing_tags.py)) —
   **ZERO output of any kind. Under diagnosis; may be retired.** The
