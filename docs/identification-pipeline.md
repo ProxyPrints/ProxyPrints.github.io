@@ -461,10 +461,12 @@ printing votes, so it would have fired on the first `-v2` run.
   `OTHER_SHOWCASE`/`STANDARD`/`CUSTOM`/blank), `frame_family_confidence`
   (0–3), and `frame_family_method` on `ImageEvidence`.
 
-  The population source is `SET_TO_FRAME_FAMILIES` (29 sets, harvested from
+  The population source is `SET_TO_FRAME_FAMILIES` (38 sets, harvested from
   the CardConjurer pack registry). The card's name resolves through
   `CandidateNameIndex.candidates_for` to candidate printings, whose expansion
-  codes map to the alternate-frame families that set ships. The verdict, by
+  codes map to the alternate-frame families that set ships. A set is **exempt**
+  from narrowing when its alternate-frame marker coverage is 0 % (measured by
+  `local_frame_family_blind_sets` — today zero sets qualify). The verdict, by
   candidate-set size:
 
   | Candidate families                                            | Verdict                                      | Confidence   |
