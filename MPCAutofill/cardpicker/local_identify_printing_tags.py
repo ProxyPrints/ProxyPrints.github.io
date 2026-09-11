@@ -240,32 +240,15 @@ class CandidatePrinting:
     pk: int
     expansion_code: str  # lowercase
     collector_number: str
-    # addendum item 3 (2026-07-15): Scryfall's public popularity signal, not user telemetry -
-    # explicitly the zero-telemetry-policy-clean substitute for a previously-parked
-    # export-popularity-ordering idea. Lower = more popular. None where Scryfall never ranked
-    # this specific printing (confirmed live: ~10.7% of CanonicalPrintingMetadata rows,
-    # 2026-07-15) - see _demand_rank_for_candidates for how a name's candidates combine this.
     edhrec_rank: Optional[int] = None
-    # 2026-07-29 (`collector_line_artist`'s CARD-NAME NARROWING): the `CanonicalArtist.name` of
-    # THIS printing, carried so a name-scoped candidate list doubles as the "artists who
-    # illustrated a printing of this card's name" set - the narrowing Stage D applies to a
-    # collector-line artist reading - at ZERO extra query, since `CandidateNameIndex`'s own
-    # single `CanonicalCard` scan can join the row it already reads five other columns off.
-    # Empty string where the printing has no artist on record (never guessed), read as "nothing
-    # to contribute" by every consumer. Trailing position + default so every existing hand-built
-    # `CandidatePrinting(...)` in the test suite keeps constructing unchanged.
     artist_name: str = ""
-    # issue #946 (`cardpicker.filename_candidates`' treatment-tag signal): the same
-    # `CanonicalPrintingMetadata` row's own `full_art`/`border_color`/`frame` columns, carried at
-    # the same zero-extra-query cost as `artist_name` above (`CandidateNameIndex`'s single scan
-    # already `select_related`s `printing_metadata`). `""`/`False` where the printing has no
-    # metadata row at all (same "nothing to contribute" convention as `artist_name`), not
-    # `None` - every consumer compares these against a real card-tag-derived value, never
-    # branches on "was metadata present at all". Trailing position + defaults, same rationale as
-    # `artist_name`'s own comment.
     border_color: str = ""
     frame: str = ""
     full_art: bool = False
+    frame_effects: list[str] = field(default_factory=list)
+    lang: str = ""
+    layout: str = ""
+    promo_types: list[str] = field(default_factory=list)
 
 
 # FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX (module docstring) - stripped from the RAW name BEFORE
@@ -390,6 +373,10 @@ class CandidateNameIndex:
             "printing_metadata__border_color",
             "printing_metadata__frame",
             "printing_metadata__full_art",
+            "printing_metadata__frame_effects",
+            "printing_metadata__lang",
+            "printing_metadata__layout",
+            "printing_metadata__promo_types",
         )
         for (
             pk,
@@ -401,6 +388,10 @@ class CandidateNameIndex:
             border_color,
             frame,
             full_art,
+            frame_effects,
+            lang,
+            layout,
+            promo_types,
         ) in rows:
             by_name[to_searchable(name)].append(
                 CandidatePrinting(
@@ -408,15 +399,14 @@ class CandidateNameIndex:
                     expansion_code=expansion_code.lower(),
                     collector_number=collector_number,
                     edhrec_rank=edhrec_rank,
-                    # 2026-07-29: the SAME scan, one more joined column - see `CandidatePrinting.
-                    # artist_name`. `artist` is nullable, so a printing with no artist on record
-                    # yields None here and is normalised to "" rather than carried as None.
                     artist_name=artist_name or "",
-                    # issue #946: same "no metadata row -> normalise the null" treatment as
-                    # artist_name above - see CandidatePrinting.border_color/frame/full_art.
                     border_color=border_color or "",
                     frame=frame or "",
                     full_art=bool(full_art),
+                    frame_effects=frame_effects or [],
+                    lang=lang or "",
+                    layout=layout or "",
+                    promo_types=promo_types or [],
                 )
             )
         self._by_name = dict(by_name)
@@ -432,8 +422,23 @@ class CandidateNameIndex:
             by_concat[normalised_name.replace(" ", "")].append(normalised_name)
         self._by_concat = dict(by_concat)
 
+        # issue #979: adventure and split cards are stored as "Front // Back" in Scryfall,
+        # but users upload only the front face (e.g. "Valki, God of Lies" not
+        # "Valki, God of Lies // Tibalt, the Fiend-Blooded"). Build a front-face index:
+        # for every canonical name containing "//", key to_searchable(front_part) to the
+        # set of DISTINCT normalised full names it belongs to. Accept only when exactly
+        # one distinct full name collapses to that front face - the same unambiguous-only
+        # discipline _deconcatenated_candidates already uses.
+        by_front: dict[str, set[str]] = collections.defaultdict(set)
+        for normalised_name in self._by_name:
+            if "//" in normalised_name:
+                front_part = normalised_name.split("//")[0].strip()
+                if front_part:
+                    by_front[to_searchable(front_part)].add(normalised_name)
+        self._by_front = {k: list(v) for k, v in by_front.items() if len(v) == 1}
+
     def candidates_for(self, name: str) -> list[CandidatePrinting]:
-        """Three tiers, cheapest to costliest, each attempted only after the previous one comes
+        """Four tiers, cheapest to costliest, each attempted only after the previous one comes
         up empty:
           1. direct - the common, unsuffixed case (`to_searchable(name)` against `_by_name`);
           2. filename-style duplicate-upload suffix strip (`_strip_filename_duplicate_suffix` -
@@ -449,7 +454,13 @@ class CandidateNameIndex:
              of `name`/the suffix-stripped form is more normalised - a name carrying BOTH a
              glued multi-word body and a duplicate-upload suffix (e.g. "VazaltheCompleat (2) -
              Copy") still reaches the concat lookup suffix-free, not just space-stripped.
-        A card unmatched by all three stays unmatched - never partially or ambiguously guessed
+          4. front-face resolution (`_by_front` - "Valki, God of Lies" for "Valki, God of Lies
+             // Tibalt, the Fiend-Blooded") - adventure and split cards are stored as
+             "Front // Back" in Scryfall, but users upload only the front face. This tier
+             attempts after all three existing tiers miss, and only accepts when exactly one
+             distinct full name collapses to that front face (same unambiguous-only discipline
+             as tier 3).
+        A card unmatched by all four stays unmatched - never partially or ambiguously guessed
         at by falling through to a weaker tier."""
         normalised = to_searchable(name)
         direct = self._by_name.get(normalised, [])
@@ -463,7 +474,14 @@ class CandidateNameIndex:
                 return suffix_stripped
 
         effective_name = stripped if stripped != name else name
-        return self._deconcatenated_candidates(effective_name, to_searchable(effective_name))
+        concat_result = self._deconcatenated_candidates(effective_name, to_searchable(effective_name))
+        if concat_result:
+            return concat_result
+
+        front_candidates = self._by_front.get(normalised, [])
+        if len(front_candidates) == 1:
+            return self._by_name.get(front_candidates[0], [])
+        return []
 
     def _deconcatenated_candidates(self, raw_name: str, normalised: str) -> list[CandidatePrinting]:
         """

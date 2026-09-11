@@ -271,6 +271,43 @@ SET_TO_FRAME_FAMILIES: dict[str, frozenset[str]] = {
 }
 
 
+def _has_alternate_frame_marker(candidate: Any) -> bool:
+    """True if a candidate printing carries an alternate-frame marker.
+
+    Marker predicate: frame_effects contains 'showcase' or 'extendedart', OR
+    border_color == 'borderless', OR full_art, OR layout != 'normal'.
+    """
+    if any(fe in ("showcase", "extendedart") for fe in candidate.frame_effects):
+        return True
+    if candidate.border_color == "borderless":
+        return True
+    if candidate.full_art:
+        return True
+    if candidate.layout and candidate.layout != "normal":
+        return True
+    return False
+
+
+def _build_exempt_sets(index: CandidateNameIndex) -> frozenset[str]:
+    """Compute which mapped sets have 0% alternate-frame printings.
+
+    Per mapped set, the fraction of that set's printings satisfying the marker predicate
+    is computed. Any set at 0% is exempt from the narrowing - its families are kept as-is
+    because the predicate cannot see them at all.
+    """
+    set_printing_counts: dict[str, int] = {}
+    set_marker_counts: dict[str, int] = {}
+    for printings in index._by_name.values():
+        for candidate in printings:
+            code = candidate.expansion_code
+            if code not in SET_TO_FRAME_FAMILIES:
+                continue
+            set_printing_counts[code] = set_printing_counts.get(code, 0) + 1
+            if _has_alternate_frame_marker(candidate):
+                set_marker_counts[code] = set_marker_counts.get(code, 0) + 1
+    return frozenset(code for code in set_printing_counts if set_marker_counts.get(code, 0) == 0)
+
+
 @dataclass(frozen=True)
 class FrameFamilyCandidates:
     """A name's set-narrowed candidate frame families plus whether the name resolved at all.
@@ -292,12 +329,26 @@ def candidate_frame_families(name: str, index: CandidateNameIndex) -> FrameFamil
     Resolves the name through `CandidateNameIndex.candidates_for` (unmodified), maps each
     candidate's expansion code through `SET_TO_FRAME_FAMILIES`, and returns the union plus
     whether the name resolved to any candidate at all (False = issue #979).
+
+    If NONE of the card's candidate printings carries an alternate-frame marker, returns an
+    empty family set so the classifier falls through to STANDARD/abstain rather than naming
+    a family. Exempt sets (0% marker coverage) are kept as-is.
     """
     candidates = index.candidates_for(name)
+    if not candidates:
+        return FrameFamilyCandidates(families=frozenset(), name_resolved=False)
+
+    exempt_sets = _build_exempt_sets(index)
+    has_marker = any(_has_alternate_frame_marker(c) for c in candidates if c.expansion_code not in exempt_sets)
+
     families: set[str] = set()
     for candidate in candidates:
         families |= SET_TO_FRAME_FAMILIES.get(candidate.expansion_code, frozenset())
-    return FrameFamilyCandidates(families=frozenset(families), name_resolved=bool(candidates))
+
+    if families and not has_marker:
+        return FrameFamilyCandidates(families=frozenset(), name_resolved=True)
+
+    return FrameFamilyCandidates(families=frozenset(families), name_resolved=True)
 
 
 def build_candidate_frame_families_lookup() -> Callable[[str], FrameFamilyCandidates]:
