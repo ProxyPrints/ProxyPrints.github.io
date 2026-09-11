@@ -339,14 +339,24 @@ def candidate_frame_families(name: str, index: CandidateNameIndex) -> FrameFamil
         return FrameFamilyCandidates(families=frozenset(), name_resolved=False)
 
     exempt_sets = _build_exempt_sets(index)
-    has_marker = any(_has_alternate_frame_marker(c) for c in candidates if c.expansion_code not in exempt_sets)
 
-    families: set[str] = set()
+    exempt_families: set[str] = set()
+    non_exempt_families: set[str] = set()
+    has_non_exempt_marker = False
+
     for candidate in candidates:
-        families |= SET_TO_FRAME_FAMILIES.get(candidate.expansion_code, frozenset())
+        code = candidate.expansion_code
+        if code in exempt_sets:
+            exempt_families |= SET_TO_FRAME_FAMILIES.get(code, frozenset())
+        else:
+            non_exempt_families |= SET_TO_FRAME_FAMILIES.get(code, frozenset())
+            if _has_alternate_frame_marker(candidate):
+                has_non_exempt_marker = True
 
-    if families and not has_marker:
-        return FrameFamilyCandidates(families=frozenset(), name_resolved=True)
+    if has_non_exempt_marker:
+        families = exempt_families | non_exempt_families
+    else:
+        families = exempt_families
 
     return FrameFamilyCandidates(families=frozenset(families), name_resolved=True)
 

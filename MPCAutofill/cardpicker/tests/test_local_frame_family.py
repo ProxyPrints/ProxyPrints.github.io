@@ -389,9 +389,15 @@ class TestCandidateFrameFamilies:
     # the family set is emptied so the classifier falls through to STANDARD/abstain.
 
     def test_narrowing_returns_empty_when_no_candidate_has_marker(self):
-        """A card from a multi-family set (pip → Pipboy) but none of its candidate
-        printings carries an alternate-frame marker → families cleared."""
-        index = _FakeIndex({"foo": [_FakeCandidate("pip", layout="normal", full_art=False)]})
+        """A card from a non-exempt set (pip) where no candidate printing carries
+        an alternate-frame marker → families cleared. pip is non-exempt because
+        another entry in the index ('bar') has a showcase printing for pip."""
+        index = _FakeIndex(
+            {
+                "foo": [_FakeCandidate("pip", layout="normal", full_art=False)],
+                "bar": [_FakeCandidate("pip", frame_effects=["showcase"])],
+            }
+        )
         result = candidate_frame_families("foo", index)
         assert result.families == frozenset()
         assert result.name_resolved is True
