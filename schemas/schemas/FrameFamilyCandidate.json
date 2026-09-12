@@ -1,0 +1,21 @@
+{
+  "title": "Frame Family Candidate",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "The Tag.name (e.g. 'Pipboy') the frontend casts a CardTagVote against."
+    },
+    "displayName": {
+      "type": "string",
+      "description": "The human-readable label (e.g. 'Pipboy') for the UI."
+    },
+    "confidence": {
+      "type": "number",
+      "description": "The net polarity (-1..+1) for the fill overlay."
+    }
+  },
+  "required": ["name", "displayName", "confidence"],
+  "additionalProperties": false
+}
