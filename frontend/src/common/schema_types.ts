@@ -2,7 +2,7 @@
 
 // To parse this data:
 //
-//   import { Convert, ArtistAutocompleteResult, ArtistVoteTallyEntry, BleedProvenance, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PilotRunHistoryEntry, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SkipReasonEngineCount, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistAutocompleteRequest, ArtistAutocompleteResponse, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, ArtistExternalLinksResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, CastImplicitVoteRequest, CatalogStatsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, RetractImplicitVoteRequest, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitArtistWriteInVoteRequest, SubmitArtistWriteInVoteResponse, SubmitIllustrationRejectionRequest, SubmitIllustrationRejectionResponse, SubmitIllustrationVoteRequest, SubmitIllustrationVoteResponse, SubmitPrintingTagRequest, SubmitQuestionAbstentionRequest, SubmitQuestionAbstentionResponse, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
+//   import { Convert, ArtistAutocompleteResult, ArtistVoteTallyEntry, BleedProvenance, Campaign, CanonicalArtist, CanonicalCard, Card, CardType, FilterSettings, FrameFamilyCandidate, Game, ImportSite, Language, ModerationDriveItem, ModerationQueueItem, NewCardsFirstPage, PilotRunHistoryEntry, PrintingCandidate, PrintingTagStatus, QuestionFeedCounts, QuestionFeedItem, QuestionFeedResponse, ReviewClusterMember, ReviewClusterSignal, ReviewClusterSignalType, ReviewClusterSummary, SearchQuery, SearchSettings, SearchTypeSettings, SkipReasonEngineCount, SortBy, Source, SourceContribution, SourceSettings, SourceType, Supporter, SupporterTier, Tag, TagConsensusEntry, TagVoteDisplayStatus, TagVoteTallyEntry, VoteQueueItem, VoteTallyEntry, ArtistAutocompleteRequest, ArtistAutocompleteResponse, ArtistCandidatesRequest, ArtistCandidatesResponse, ArtistConsensusRequest, ArtistConsensusResponse, ArtistExternalLinksResponse, CardbacksRequest, CardbacksResponse, CardsRequest, CardsResponse, CastImplicitVoteRequest, CatalogStatsResponse, ConfirmReviewClusterRequest, ConfirmReviewClusterResponse, ContributionsResponse, CreateDeckShareRequest, CreateDeckShareResponse, CryptoProfileResponse, DFCPairsResponse, DeckShareSummary, DeckSharesResponse, DeleteDeckRequest, DeleteDeckResponse, EditorSearchRequest, EditorSearchResponse, ErrorResponse, ExploreSearchRequest, ExploreSearchResponse, GetSharedDeckRequest, GetSharedDeckResponse, ImportSiteDecklistRequest, ImportSiteDecklistResponse, ImportSitesResponse, InfoResponse, LanguagesResponse, LoadDeckRequest, LoadDeckResponse, ModerationDriveCardsRequest, ModerationDriveCardsResponse, ModerationDrivesRequest, ModerationDrivesResponse, ModerationQueueRequest, ModerationQueueResponse, ModerationRemoveCardRequest, ModerationRemoveCardResponse, ModerationRemoveDriveRequest, ModerationRemoveDriveResponse, NewCardsFirstPagesResponse, NewCardsPageResponse, OldEditorSearchRequest, OldEditorSearchResponse, PatreonResponse, PrintingCandidatesRequest, PrintingCandidatesResponse, PrintingConsensusRequest, PrintingConsensusResponse, PrintingTagQueueResponse, ReportCardRequest, ReportCardResponse, ResetSavedDecksRequest, ResetSavedDecksResponse, RetractImplicitVoteRequest, ReviewClusterDetailRequest, ReviewClusterDetailResponse, ReviewClusterListRequest, ReviewClusterListResponse, RevokeDeckShareRequest, RevokeDeckShareResponse, SampleCardsResponse, SaveCryptoProfileRequest, SaveCryptoProfileResponse, SaveDeckRequest, SaveDeckResponse, SavedDeckSummary, SavedDecksResponse, SearchEngineHealthResponse, SourcesResponse, SubmitArtistVoteRequest, SubmitArtistWriteInVoteRequest, SubmitArtistWriteInVoteResponse, SubmitIllustrationRejectionRequest, SubmitIllustrationRejectionResponse, SubmitIllustrationVoteRequest, SubmitIllustrationVoteResponse, SubmitPrintingTagRequest, SubmitQuestionAbstentionRequest, SubmitQuestionAbstentionResponse, SubmitTagVoteRequest, TagConsensusRequest, TagConsensusResponse, TagsResponse, VoteQueueRequest, VoteQueueResponse, WhoamiResponse } from "./file";
 //
 //   const artistAutocompleteResult = Convert.toArtistAutocompleteResult(json);
 //   const artistVoteTallyEntry = Convert.toArtistVoteTallyEntry(json);
@@ -13,6 +13,7 @@
 //   const card = Convert.toCard(json);
 //   const cardType = Convert.toCardType(json);
 //   const filterSettings = Convert.toFilterSettings(json);
+//   const frameFamilyCandidate = Convert.toFrameFamilyCandidate(json);
 //   const game = Convert.toGame(json);
 //   const importSite = Convert.toImportSite(json);
 //   const language = Convert.toLanguage(json);
@@ -159,8 +160,12 @@ export interface QuestionFeedItem {
   candidates?: PrintingCandidate[];
   card: Card;
   confidentlyKnownArtistName?: null | string;
+  familyCandidates?: FrameFamilyCandidate[];
+  familyConfidence?: number;
   illustrationCandidates?: PrintingCandidate[];
   isAnotherCopy?: boolean;
+  proposedFamilyDisplayName?: string;
+  proposedFamilyName?: string;
   scryfallIllustrationUrl?: null | string;
   suggestedPrinting?: PrintingCandidate;
   tagConfidence?: { [key: string]: number };
@@ -384,10 +389,26 @@ export enum TagVoteDisplayStatus {
   Suggested = "suggested",
 }
 
+export interface FrameFamilyCandidate {
+  /**
+   * The net polarity (-1..+1) for the fill overlay.
+   */
+  confidence: number;
+  /**
+   * The human-readable label (e.g. 'Pipboy') for the UI.
+   */
+  displayName: string;
+  /**
+   * The Tag.name (e.g. 'Pipboy') the frontend casts a CardTagVote against.
+   */
+  name: string;
+}
+
 export enum Type {
   Artist = "artist",
   Border = "border",
   ConfirmSuggestion = "confirm_suggestion",
+  FrameFamily = "frame_family",
   IdentifyPrinting = "identify_printing",
   Illustration = "illustration",
   Tag = "tag",
@@ -1514,6 +1535,16 @@ export class Convert {
 
   public static filterSettingsToJson(value: FilterSettings): string {
     return JSON.stringify(uncast(value, r("FilterSettings")), null, 2);
+  }
+
+  public static toFrameFamilyCandidate(json: string): FrameFamilyCandidate {
+    return cast(JSON.parse(json), r("FrameFamilyCandidate"));
+  }
+
+  public static frameFamilyCandidateToJson(
+    value: FrameFamilyCandidate
+  ): string {
+    return JSON.stringify(uncast(value, r("FrameFamilyCandidate")), null, 2);
   }
 
   public static toGame(json: string): Game {
@@ -3149,11 +3180,31 @@ const typeMap: any = {
         typ: u(undefined, u(null, "")),
       },
       {
+        json: "familyCandidates",
+        js: "familyCandidates",
+        typ: u(undefined, a(r("FrameFamilyCandidate"))),
+      },
+      {
+        json: "familyConfidence",
+        js: "familyConfidence",
+        typ: u(undefined, 3.14),
+      },
+      {
         json: "illustrationCandidates",
         js: "illustrationCandidates",
         typ: u(undefined, a(r("PrintingCandidate"))),
       },
       { json: "isAnotherCopy", js: "isAnotherCopy", typ: u(undefined, true) },
+      {
+        json: "proposedFamilyDisplayName",
+        js: "proposedFamilyDisplayName",
+        typ: u(undefined, ""),
+      },
+      {
+        json: "proposedFamilyName",
+        js: "proposedFamilyName",
+        typ: u(undefined, ""),
+      },
       {
         json: "scryfallIllustrationUrl",
         js: "scryfallIllustrationUrl",
@@ -3301,6 +3352,14 @@ const typeMap: any = {
       { json: "identifier", js: "identifier", typ: "" },
       { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
       { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+    ],
+    false
+  ),
+  FrameFamilyCandidate: o(
+    [
+      { json: "confidence", js: "confidence", typ: 3.14 },
+      { json: "displayName", js: "displayName", typ: "" },
+      { json: "name", js: "name", typ: "" },
     ],
     false
   ),
@@ -4441,6 +4500,7 @@ const typeMap: any = {
     "artist",
     "border",
     "confirm_suggestion",
+    "frame_family",
     "identify_printing",
     "illustration",
     "tag",

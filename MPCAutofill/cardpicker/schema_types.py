@@ -537,6 +537,32 @@ class Card(BaseModel):
         return result
 
 
+class FrameFamilyCandidate(BaseModel):
+    confidence: float
+    """The net polarity (-1..+1) for the fill overlay."""
+
+    displayName: str
+    """The human-readable label (e.g. 'Pipboy') for the UI."""
+
+    name: str
+    """The Tag.name (e.g. 'Pipboy') the frontend casts a CardTagVote against."""
+
+    @staticmethod
+    def from_dict(obj: Any) -> "FrameFamilyCandidate":
+        assert isinstance(obj, dict)
+        confidence = from_float(obj.get("confidence"))
+        displayName = from_str(obj.get("displayName"))
+        name = from_str(obj.get("name"))
+        return FrameFamilyCandidate(confidence, displayName, name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["confidence"] = to_float(self.confidence)
+        result["displayName"] = from_str(self.displayName)
+        result["name"] = from_str(self.name)
+        return result
+
+
 class TypeEnum(str, Enum):
     artist = "artist"
     border = "border"
@@ -545,34 +571,6 @@ class TypeEnum(str, Enum):
     identifyprinting = "identify_printing"
     illustration = "illustration"
     tag = "tag"
-
-
-class FrameFamilyCandidate(BaseModel):
-    """One candidate frame family in a frame-family question's pick-list.
-
-    `name` is the Tag.name (e.g. "Pipboy") the frontend casts a CardTagVote against.
-    `displayName` is the human-readable label (e.g. "Pipboy") for the UI.
-    `confidence` is the net polarity (-1..+1) for the fill overlay.
-    """
-
-    name: str
-    displayName: str
-    confidence: float
-
-    @staticmethod
-    def from_dict(obj: Any) -> "FrameFamilyCandidate":
-        assert isinstance(obj, dict)
-        name = from_str(obj.get("name"))
-        displayName = from_str(obj.get("displayName"))
-        confidence = from_float(obj.get("confidence"))
-        return FrameFamilyCandidate(name, displayName, confidence)
-
-    def to_dict(self) -> dict:
-        result: dict = {}
-        result["name"] = from_str(self.name)
-        result["displayName"] = from_str(self.displayName)
-        result["confidence"] = to_float(self.confidence)
-        return result
 
 
 class QuestionFeedItem(BaseModel):
@@ -606,8 +604,8 @@ class QuestionFeedItem(BaseModel):
             [lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("illustrationCandidates")
         )
         isAnotherCopy = from_union([from_bool, from_none], obj.get("isAnotherCopy"))
-        proposedFamilyDisplayName = from_union([from_none, from_str], obj.get("proposedFamilyDisplayName"))
-        proposedFamilyName = from_union([from_none, from_str], obj.get("proposedFamilyName"))
+        proposedFamilyDisplayName = from_union([from_str, from_none], obj.get("proposedFamilyDisplayName"))
+        proposedFamilyName = from_union([from_str, from_none], obj.get("proposedFamilyName"))
         scryfallIllustrationUrl = from_union([from_none, from_str], obj.get("scryfallIllustrationUrl"))
         suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
         tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
@@ -644,7 +642,7 @@ class QuestionFeedItem(BaseModel):
                 [lambda x: from_list(lambda x: to_class(FrameFamilyCandidate, x), x), from_none], self.familyCandidates
             )
         if self.familyConfidence is not None:
-            result["familyConfidence"] = from_union([from_none, from_float], self.familyConfidence)
+            result["familyConfidence"] = from_union([from_none, to_float], self.familyConfidence)
         if self.illustrationCandidates is not None:
             result["illustrationCandidates"] = from_union(
                 [lambda x: from_list(lambda x: to_class(PrintingCandidate, x), x), from_none],
@@ -653,9 +651,9 @@ class QuestionFeedItem(BaseModel):
         if self.isAnotherCopy is not None:
             result["isAnotherCopy"] = from_union([from_bool, from_none], self.isAnotherCopy)
         if self.proposedFamilyDisplayName is not None:
-            result["proposedFamilyDisplayName"] = from_union([from_none, from_str], self.proposedFamilyDisplayName)
+            result["proposedFamilyDisplayName"] = from_union([from_str, from_none], self.proposedFamilyDisplayName)
         if self.proposedFamilyName is not None:
-            result["proposedFamilyName"] = from_union([from_none, from_str], self.proposedFamilyName)
+            result["proposedFamilyName"] = from_union([from_str, from_none], self.proposedFamilyName)
         if self.scryfallIllustrationUrl is not None:
             result["scryfallIllustrationUrl"] = from_union([from_none, from_str], self.scryfallIllustrationUrl)
         if self.suggestedPrinting is not None:
@@ -3849,6 +3847,14 @@ def FilterSettingsfromdict(s: Any) -> FilterSettings:
 
 def FilterSettingstodict(x: FilterSettings) -> Any:
     return to_class(FilterSettings, x)
+
+
+def FrameFamilyCandidatefromdict(s: Any) -> FrameFamilyCandidate:
+    return FrameFamilyCandidate.from_dict(s)
+
+
+def FrameFamilyCandidatetodict(x: FrameFamilyCandidate) -> Any:
+    return to_class(FrameFamilyCandidate, x)
 
 
 def Gamefromdict(s: Any) -> Game:

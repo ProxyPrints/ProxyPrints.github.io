@@ -11,6 +11,7 @@
         "artist",
         "tag",
         "border",
+        "frame_family",
         "illustration"
       ]
     },
@@ -31,7 +32,14 @@
     "confidentlyKnownArtistName": { "type": ["string", "null"] },
     "scryfallIllustrationUrl": { "type": ["string", "null"] },
     "tagName": { "type": "string" },
-    "isAnotherCopy": { "type": "boolean" }
+    "isAnotherCopy": { "type": "boolean" },
+    "familyCandidates": {
+      "type": "array",
+      "items": { "$ref": "./FrameFamilyCandidate.json" }
+    },
+    "familyConfidence": { "type": "number" },
+    "proposedFamilyName": { "type": "string" },
+    "proposedFamilyDisplayName": { "type": "string" }
   },
   "required": ["type", "card"],
   "additionalProperties": false
