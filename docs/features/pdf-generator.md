@@ -206,6 +206,34 @@ uses `measuredBleedMm` (the card's own measured bleed margin) as a refinement:
 same physical boundary the PDF export targets - the card's trim edge at the
 configured bleed - without any per-card canvas work in the preview path.
 
+The image element is stretched independently on each axis (`objectFit: "fill"`), and that mode
+is load-bearing for the transform rather than incidental styling. The correction is a two-step
+cancellation: the image's natural size (the trim face plus twice its own measured bleed) is
+stretched to exactly fill the slot box, then the CSS transform scales it by the inverse ratio.
+The two steps only cancel when the first is a per-axis stretch. A proportional fit
+(`objectFit: "contain"`) scales uniformly and letterboxes whichever axis does not bind, so the
+transform then corrects a box that has already lost that axis. Measured in Chromium: a card
+carrying 0.05 mm of bleed in a slot granted 3.175 mm painted 61.4 mm wide against 63.1 mm
+expected - 1.70 mm narrow, about a 2.7% horizontal squash, putting the card's true trim edge
+roughly 0.85 mm inside the cut guide on each side. The error is exactly zero when a card's
+measured bleed equals the slot's granted bleed, which is why evenly-bled cards looked correct
+and masked it.
+
+The fallback to `STANDARD_BLEED_MARGIN_MM` (3.175 mm) when `measuredBleedMm` is null is
+load-bearing too, not a defensive default. Null has two distinct causes: no measurement
+evidence exists for the card at all (provenance `"no-evidence"`), or both measurement methods
+ran and disagreed beyond the 2 mm `METHOD_DISAGREEMENT_ABSTAIN_THRESHOLD_MM` gate so the
+backend declined to pick between them (provenance `"abstained"`), which covers roughly 3,600
+cards. The fallback therefore runs in production on real cards and must not be optimised away
+as a branch that never fires.
+
+`jsdom` does not lay out `object-fit` at all, so a unit test asserting the transform _string_
+re-states the implementation's own formula and cannot fail when that formula is the bug. The
+geometry is pinned instead by `frontend/tests/PagePreviewImageScale.spec.ts`, a Chromium test
+that renders a fixture whose blue trim rectangle is inset inside a red bleed field, screenshots
+the rendered slot, decodes the raw PNG pixels to find the painted boundary of the blue
+rectangle, and asserts all four of its edges land within 2 px of the cut guide's box.
+
 **Trailing-edge / bordered-profile warning (`marginProfiles.ts` + `MarginProfileControl.tsx`)**:
 `maxBleedForFourColumns`'s FORMULA is unchanged (it already computed exactly the per-edge bleed
 `fitAxisWithBleed`'s water-filling converges to at a fixed count of 4 - the same expression,

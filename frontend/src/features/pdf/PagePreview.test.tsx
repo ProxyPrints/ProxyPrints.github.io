@@ -382,7 +382,7 @@ describe("PagePreview", () => {
     expect(img).toHaveStyle({
       transform: `scale(${expectedScaleX}, ${expectedScaleY})`,
       transformOrigin: "center center",
-      objectFit: "contain",
+      objectFit: "fill",
     });
   });
 
