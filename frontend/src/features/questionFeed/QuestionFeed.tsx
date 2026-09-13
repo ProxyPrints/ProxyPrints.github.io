@@ -65,6 +65,7 @@ import { getPrintingCandidateDataAttributes } from "@/common/cardDom";
 import { getOrCreateAnonymousId } from "@/common/cookies";
 import { getWorkerImageURL } from "@/common/image";
 import {
+  FrameFamilyCandidate,
   PrintingCandidate,
   QuestionFeedCounts,
   QuestionFeedItem,
@@ -1453,6 +1454,40 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
     advance();
   };
 
+  // Frame family vote handler - submits a tag vote for the selected candidate's name with
+  // polarity +1 (APPLY) when the user confirms, or polarity -1 (NOT_APPLICABLE) when the user
+  // rejects. Uses the existing APISubmitTagVote path with the candidate's name as the tag.
+  const submitFrameFamilyVote = (
+    candidate: FrameFamilyCandidate,
+    polarity: 1 | -1
+  ) => {
+    if (backendURL == null || item == null || voteInFlightRef.current) {
+      return;
+    }
+    voteInFlightRef.current = true;
+    setSubmitting(true);
+    const anonymousId = getOrCreateAnonymousId();
+    APISubmitTagVote(
+      backendURL,
+      item.card.identifier,
+      anonymousId,
+      candidate.name,
+      polarity,
+      "same-origin",
+      "question-feed"
+    )
+      .then(() => {
+        bumpSessionCount();
+        setLanded(true);
+        advance();
+      })
+      .catch(reportVoteFailed)
+      .finally(() => {
+        voteInFlightRef.current = false;
+        setSubmitting(false);
+      });
+  };
+
   if (loading && item == null) {
     return (
       <div className="text-center py-4" data-testid="question-feed-loading">
@@ -2437,6 +2472,93 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
             </ActionRow>
           </>
         )}
+        {item.type === "frame_family" &&
+          item.familyCandidates != null &&
+          item.familyCandidates.length > 0 && (
+            <>
+              <QHead>
+                <ShapePill className="pick">frame family</ShapePill>
+                <Prompt>
+                  {item.familyCandidates.length === 1
+                    ? `Is this ${item.familyCandidates[0].displayName}?`
+                    : "Which frame family is this?"}
+                </Prompt>
+              </QHead>
+              {item.familyCandidates.length === 1 ? (
+                <ActionStack>
+                  <Btn
+                    className="primary"
+                    disabled={submitting}
+                    onClick={() =>
+                      submitFrameFamilyVote(item.familyCandidates![0], 1)
+                    }
+                    data-testid="question-feed-frame-family-yes"
+                  >
+                    {submitting ? (
+                      <Spinner size={1} />
+                    ) : (
+                      `Yes — ${item.familyCandidates[0].displayName}`
+                    )}
+                  </Btn>
+                  <ActionGrid>
+                    <Btn
+                      className="secondary"
+                      disabled={submitting}
+                      onClick={() =>
+                        submitFrameFamilyVote(item.familyCandidates![0], -1)
+                      }
+                      data-testid="question-feed-frame-family-no"
+                    >
+                      No
+                    </Btn>
+                    <Btn
+                      className="ghost"
+                      disabled={submitting}
+                      onClick={() => abstainAndAdvance("cannot-tell")}
+                      data-testid="question-feed-frame-family-skip"
+                    >
+                      Not sure
+                    </Btn>
+                  </ActionGrid>
+                </ActionStack>
+              ) : (
+                <>
+                  <CandidateGrid data-testid="question-feed-frame-family-grid">
+                    {item.familyCandidates.map((candidate) => (
+                      <CandidateButton
+                        key={candidate.name}
+                        disabled={submitting}
+                        onClick={() => submitFrameFamilyVote(candidate, 1)}
+                        data-testid={`question-feed-frame-family-candidate-${candidate.name}`}
+                      >
+                        <CandidateCaption>
+                          <div className="cn">{candidate.displayName}</div>
+                        </CandidateCaption>
+                      </CandidateButton>
+                    ))}
+                  </CandidateGrid>
+                  <ActionRow>
+                    <Btn
+                      className="secondary"
+                      disabled={submitting}
+                      onClick={() => abstainAndAdvance("none-of-these")}
+                      data-testid="question-feed-frame-family-none"
+                    >
+                      None of these
+                    </Btn>
+                    <Btn
+                      className="ghost"
+                      disabled={submitting}
+                      onClick={() => abstainAndAdvance()}
+                      data-testid="question-feed-frame-family-skip"
+                    >
+                      Skip
+                    </Btn>
+                  </ActionRow>
+                </>
+              )}
+            </>
+          )}
       </>
     );
   }
