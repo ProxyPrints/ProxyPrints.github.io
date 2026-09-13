@@ -213,6 +213,7 @@ def _install_ok_stage_c_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         stale_extractor_keys=None,
         stored_evidence_fields=None,
         stored_extractor_versions=None,
+        candidate_frame_families=None,
     ):
         fields = {
             "fetch_ok": True,

@@ -183,6 +183,7 @@ def _install_ok_stage_c_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         stale_extractor_keys: Any = None,
         stored_evidence_fields: Any = None,
         stored_extractor_versions: Any = None,
+        candidate_frame_families: Any = None,
     ) -> Any:
         return ExtractionResult(
             card_id=card_id,

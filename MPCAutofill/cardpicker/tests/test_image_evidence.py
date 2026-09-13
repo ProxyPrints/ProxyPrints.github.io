@@ -95,6 +95,7 @@ from cardpicker.image_evidence import (
     CROP_COORDINATES_EXTRACTOR_VERSION,
     EXTRACTOR_OWNED_FIELDS,
     FETCH_HEALTH_EXTRACTOR_VERSION,
+    FRAME_FAMILY_EXTRACTOR_VERSION,
     GEOMETRY_BLEED_EXTRACTOR_VERSION,
     LAYOUT_CLASS_EXTRACTOR_VERSION,
     LEGAL_LINE_EXTRACTOR_VERSION,
@@ -300,6 +301,7 @@ class TestExtractCardEvidence:
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
             "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
             "pinline_inset": PINLINE_INSET_EXTRACTOR_VERSION,
+            "frame_family": FRAME_FAMILY_EXTRACTOR_VERSION,
         }
         # _stub_ocr's default raw text ("158/287 R MOM EN") is a realistic modern-frame collector
         # line with no artist credit in it - artist_ocr genuinely skips here, which is the
@@ -311,7 +313,11 @@ class TestExtractCardEvidence:
         # TestExtractCardEvidenceArtboxPhash below for the extractor's own dedicated tests.
         # pinline_inset does NOT skip either - _stub_pinline_inset above is given a concrete
         # non-skip result rather than its own default (see this test's own "no_skip" name).
-        assert result.skip_reasons == {"artist_ocr": "no-text", "legal_line": "no-text"}
+        assert result.skip_reasons == {
+            "artist_ocr": "no-text",
+            "legal_line": "no-text",
+            "frame_family": "ambiguous",
+        }
 
     def test_forwards_the_cards_own_md5_checksum_onto_the_result(self, db, monkeypatch):
         card = CardFactory(content_phash=12345, md5_checksum="abc123")
@@ -360,6 +366,7 @@ class TestExtractCardEvidence:
             "legal_line": LEGAL_LINE_EXTRACTOR_VERSION,
             "quality_signals": QUALITY_SIGNALS_EXTRACTOR_VERSION,
             "pinline_inset": PINLINE_INSET_EXTRACTOR_VERSION,
+            "frame_family": FRAME_FAMILY_EXTRACTOR_VERSION,
         }
         assert result.skip_reasons == {
             "fetch_health": "fetch_failed",
@@ -375,6 +382,7 @@ class TestExtractCardEvidence:
             "legal_line": "fetch_failed",
             "quality_signals": "fetch_failed",
             "pinline_inset": "fetch_failed",
+            "frame_family": "fetch_failed",
         }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):

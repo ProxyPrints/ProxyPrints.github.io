@@ -1,0 +1,1172 @@
+{
+  "BloomburrowBorderless": {
+    "colours": {
+      "White": false,
+      "Blue": false,
+      "Black": false,
+      "Red": false,
+      "Green": false,
+      "Multicolored": false,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": false,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 3
+  },
+  "BorderlessStellarSights": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 16
+  },
+  "BreakingNews": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "CommanderLegends": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 16
+  },
+  "Crystal": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 26
+  },
+  "DMUStainedGlass": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 19
+  },
+  "DNDModule": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": true
+    },
+    "crown": false,
+    "pt": false,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 9
+  },
+  "DNDSourcebook": {
+    "colours": {
+      "White": false,
+      "Blue": false,
+      "Black": false,
+      "Red": false,
+      "Green": false,
+      "Multicolored": false,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 4
+  },
+  "Dossier": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": false,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 16
+  },
+  "DoubleFeature": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 37
+  },
+  "DoubleFeatureTransform": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 51
+  },
+  "Draconic": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 23
+  },
+  "Elemental": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 47
+  },
+  "EnchantingTales": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 18
+  },
+  "Equinox": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "EquinoxBack": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 16
+  },
+  "EquinoxFront": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "EternalNight": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 25
+  },
+  "FCA": {
+    "colours": {
+      "White": false,
+      "Blue": false,
+      "Black": false,
+      "Red": false,
+      "Green": false,
+      "Multicolored": false,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": false,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 5
+  },
+  "FableECL": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 26
+  },
+  "Fang": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "Ghostfire": {
+    "colours": {
+      "White": false,
+      "Blue": false,
+      "Black": false,
+      "Red": false,
+      "Green": false,
+      "Multicolored": false,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": false,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 3
+  },
+  "IxalanCoin": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 27
+  },
+  "IxalanLegends1": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "IxalanLegends2": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "IxalanLegends3": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "JapanShowcase": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 30
+  },
+  "Kaldheim-2": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 42
+  },
+  "KaldheimNonleg": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 42
+  },
+  "M15NyxShowcase": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": true,
+    "basic_land": false,
+    "n_layers": 22
+  },
+  "M21": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": false,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": true,
+    "n_layers": 17
+  },
+  "MH2": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 25
+  },
+  "MemoryCorridor": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 18
+  },
+  "MysticalArchive": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "MysticalArchiveJP": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 28
+  },
+  "MysticalArchiveJPEN": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 17
+  },
+  "MysticalArchiveSOA": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "NeoNeon": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "NeoNinja": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 22
+  },
+  "NeoSamurai": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 20
+  },
+  "NeonInk": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 33
+  },
+  "OilSlick": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 34
+  },
+  "Paranormal": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 32
+  },
+  "Pipboy": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 19
+  },
+  "PixelTMT": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 34
+  },
+  "PosterStellarSights": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 17
+  },
+  "Ravnica": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 25
+  },
+  "Ring": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 33
+  },
+  "SNCArtDeco": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 22
+  },
+  "SNCGilded": {
+    "colours": {
+      "White": false,
+      "Blue": false,
+      "Black": false,
+      "Red": false,
+      "Green": false,
+      "Multicolored": false,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 3
+  },
+  "SNCSkyscraper": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": false,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": false,
+    "pt": false,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 8
+  },
+  "Scroll": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 33
+  },
+  "SewerTMT": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 25
+  },
+  "ShatteredGlass": {
+    "colours": {
+      "White": false,
+      "Blue": false,
+      "Black": false,
+      "Red": false,
+      "Green": false,
+      "Multicolored": false,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": false,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 4
+  },
+  "ShowcaseMagnified": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 25
+  },
+  "ShowcasePanel": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 23
+  },
+  "Storybook": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": false,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 15
+  },
+  "StorybookMUL": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": false,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 22
+  },
+  "StorybookWOE": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 19
+  },
+  "TARDIS": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 19
+  },
+  "Tarkir": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "Vault": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": true
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 34
+  },
+  "Wanted": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 21
+  },
+  "Woodland": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": false,
+      "Colorless": false,
+      "Land": false
+    },
+    "crown": true,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 24
+  },
+  "ZendikarRising": {
+    "colours": {
+      "White": true,
+      "Blue": true,
+      "Black": true,
+      "Red": true,
+      "Green": true,
+      "Multicolored": true,
+      "Artifact": true,
+      "Colorless": true,
+      "Land": true
+    },
+    "crown": false,
+    "pt": true,
+    "nyx": false,
+    "basic_land": false,
+    "n_layers": 37
+  }
+}
