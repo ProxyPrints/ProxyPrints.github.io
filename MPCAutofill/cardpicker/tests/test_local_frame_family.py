@@ -326,6 +326,7 @@ class TestClassifyFrameFamily:
 class _FakeIndex:
     def __init__(self, by_name):
         self._by_name = by_name
+        self.name_to_printings = by_name
 
     def candidates_for(self, name):
         return self._by_name.get(name, [])
@@ -339,17 +340,28 @@ class _FakeCandidate:
         border_color="",
         full_art=False,
         layout="normal",
+        color_identity=None,
+        type_line="Creature",
     ):
         self.expansion_code = expansion_code
         self.frame_effects = frame_effects or []
         self.border_color = border_color
         self.full_art = full_art
         self.layout = layout
+        self.color_identity = color_identity or []
+        self.type_line = type_line
 
 
 class TestCandidateFrameFamilies:
     def test_maps_set_codes_to_families(self):
-        index = _FakeIndex({"foo": [_FakeCandidate("mkm"), _FakeCandidate("eld")]})
+        index = _FakeIndex(
+            {
+                "foo": [
+                    _FakeCandidate("mkm", color_identity=["W"], type_line="Creature"),
+                    _FakeCandidate("eld", color_identity=["U"], type_line="Creature"),
+                ]
+            }
+        )
         result = candidate_frame_families("foo", index)
         assert isinstance(result, FrameFamilyCandidates)
         assert result.families == frozenset({"Dossier", FRAME_FAMILY_SHOWCASE_MAGNIFIED, FRAME_FAMILY_STORYBOOK})
@@ -362,19 +374,19 @@ class TestCandidateFrameFamilies:
         assert result.name_resolved is False
 
     def test_empty_families_resolvable_for_sets_without_family(self):
-        index = _FakeIndex({"foo": [_FakeCandidate("mmq")]})
+        index = _FakeIndex({"foo": [_FakeCandidate("mmq", color_identity=["W"], type_line="Creature")]})
         result = candidate_frame_families("foo", index)
         assert result.families == frozenset()
         assert result.name_resolved is True
 
     def test_single_candidate_single_family(self):
-        index = _FakeIndex({"foo": [_FakeCandidate("pip")]})
+        index = _FakeIndex({"foo": [_FakeCandidate("pip", color_identity=["W"], type_line="Creature")]})
         result = candidate_frame_families("foo", index)
         assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
         assert result.name_resolved is True
 
     def test_multi_template_set_maps_all_families(self):
-        index = _FakeIndex({"foo": [_FakeCandidate("sta")]})
+        index = _FakeIndex({"foo": [_FakeCandidate("sta", color_identity=["W"], type_line="Instant")]})
         result = candidate_frame_families("foo", index)
         assert result.families == frozenset(
             {
@@ -394,8 +406,10 @@ class TestCandidateFrameFamilies:
         another entry in the index ('bar') has a showcase printing for pip."""
         index = _FakeIndex(
             {
-                "foo": [_FakeCandidate("pip", layout="normal", full_art=False)],
-                "bar": [_FakeCandidate("pip", frame_effects=["showcase"])],
+                "foo": [
+                    _FakeCandidate("pip", layout="normal", full_art=False, color_identity=["W"], type_line="Creature")
+                ],
+                "bar": [_FakeCandidate("pip", frame_effects=["showcase"], color_identity=["W"], type_line="Creature")],
             }
         )
         result = candidate_frame_families("foo", index)
@@ -404,7 +418,9 @@ class TestCandidateFrameFamilies:
 
     def test_narrowing_preserves_families_when_candidate_has_marker(self):
         """A candidate with a marker keeps its set's families."""
-        index = _FakeIndex({"foo": [_FakeCandidate("pip", frame_effects=["showcase"])]})
+        index = _FakeIndex(
+            {"foo": [_FakeCandidate("pip", frame_effects=["showcase"], color_identity=["W"], type_line="Creature")]}
+        )
         result = candidate_frame_families("foo", index)
         assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
         assert result.name_resolved is True
@@ -412,10 +428,14 @@ class TestCandidateFrameFamilies:
     def test_exempt_set_bypasses_narrowing(self):
         """If ALL of a set's printings in the index have 0% marker coverage,
         the set is exempt and its families are kept even without a marker."""
-        index = _FakeIndex({"foo": [_FakeCandidate("pip", layout="normal", full_art=False)]})
+        index = _FakeIndex(
+            {
+                "foo": [
+                    _FakeCandidate("pip", layout="normal", full_art=False, color_identity=["W"], type_line="Creature")
+                ]
+            }
+        )
         result = candidate_frame_families("foo", index)
-        # pip is the only set with any printings in this index;
-        # it has 0% marker coverage → exempt → families preserved
         assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
         assert result.name_resolved is True
 
@@ -426,32 +446,135 @@ class TestCandidateFrameFamilies:
         index = _FakeIndex(
             {
                 "foo": [
-                    _FakeCandidate("pip", layout="normal", full_art=False),
-                    _FakeCandidate("eld", layout="normal", full_art=False),
+                    _FakeCandidate("pip", layout="normal", full_art=False, color_identity=["W"], type_line="Creature"),
+                    _FakeCandidate("eld", layout="normal", full_art=False, color_identity=["U"], type_line="Creature"),
                 ],
                 "bar": [
-                    _FakeCandidate("eld", frame_effects=["showcase"]),
+                    _FakeCandidate("eld", frame_effects=["showcase"], color_identity=["U"], type_line="Creature"),
                 ],
             }
         )
         result = candidate_frame_families("foo", index)
-        # pip is exempt (only printing, no marker); eld is NOT exempt
-        # (bar has a showcase printing for eld), but foo's eld printing has no marker.
-        # All non-exempt candidates (foo's eld) lack marker → families cleared.
         assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
         assert result.name_resolved is True
 
     def test_marker_borderless_counts(self):
-        index = _FakeIndex({"foo": [_FakeCandidate("pip", border_color="borderless")]})
+        index = _FakeIndex(
+            {"foo": [_FakeCandidate("pip", border_color="borderless", color_identity=["W"], type_line="Creature")]}
+        )
         result = candidate_frame_families("foo", index)
         assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
         assert result.name_resolved is True
 
     def test_marker_non_normal_layout_counts(self):
-        index = _FakeIndex({"foo": [_FakeCandidate("pip", layout="transform")]})
+        index = _FakeIndex(
+            {"foo": [_FakeCandidate("pip", layout="transform", color_identity=["W"], type_line="Creature")]}
+        )
         result = candidate_frame_families("foo", index)
         assert result.families == frozenset({FRAME_FAMILY_PIPBOY})
         assert result.name_resolved is True
+
+    def test_land_card_abstains_when_all_families_require_non_land(self):
+        """A land card should produce an empty set if all candidate families only support
+        non-land cards, causing the classifier to abstain (STANDARD) rather than picking
+        a family the card can never wear."""
+        index = _FakeIndex(
+            {
+                "foo": [
+                    _FakeCandidate(
+                        "pip",
+                        frame_effects=["showcase"],
+                        color_identity=[],
+                        type_line="Land — Plains",
+                    )
+                ],
+            }
+        )
+        result = candidate_frame_families("foo", index)
+        assert result.families == frozenset()
+        assert result.name_resolved is True
+
+    def test_multicolor_card_drops_families_missing_multicolored_axis(self):
+        """A multicolor card should only keep families that ship the Multicolored frame."""
+        index = _FakeIndex(
+            {
+                "foo": [
+                    _FakeCandidate(
+                        "pip",
+                        frame_effects=["showcase"],
+                        color_identity=["W", "U"],
+                        type_line="Creature — Human Wizard",
+                    )
+                ],
+            }
+        )
+        result = candidate_frame_families("foo", index)
+        assert result.name_resolved is True
+        for family in result.families:
+            cap = mod.FAMILY_CAPABILITY.get(family, {})
+            colours = cap.get("colours", {})
+            assert "Multicolored" in colours, f"{family} missing Multicolored axis"
+
+    def test_woe_normal_layout_survives_layout_filter(self):
+        """StorybookWOE has a hard layout requirement of 'adventure'. A card with
+        layout='normal' should be dropped by the layout filter, yielding an empty set."""
+        index = _FakeIndex(
+            {
+                "foo": [
+                    _FakeCandidate(
+                        "woe",
+                        frame_effects=["showcase"],
+                        color_identity=["R"],
+                        type_line="Creature — Dragon",
+                        layout="normal",
+                    )
+                ],
+            }
+        )
+        result = candidate_frame_families("foo", index)
+        assert result.name_resolved is True
+        assert "StorybookWOE" not in result.families
+
+    def test_dbl_doublefeature_survives_layout_filter(self):
+        """DoubleFeature has a hard layout requirement of 'transform/modal_dfc'. A card with
+        layout='transform/modal_dfc' should survive the layout filter."""
+        index = _FakeIndex(
+            {
+                "foo": [
+                    _FakeCandidate(
+                        "dbl",
+                        frame_effects=[],
+                        color_identity=["W", "B"],
+                        type_line="Creature — Vampire Knight",
+                        layout="transform/modal_dfc",
+                    )
+                ],
+            }
+        )
+        result = candidate_frame_families("foo", index)
+        assert result.name_resolved is True
+        assert "DoubleFeature" in result.families
+
+    def test_mono_colour_card_drops_families_missing_that_colour(self):
+        """A mono-blue card should only keep families that ship the Blue frame."""
+        index = _FakeIndex(
+            {
+                "foo": [
+                    _FakeCandidate(
+                        "pip",
+                        frame_effects=["showcase"],
+                        color_identity=["U"],
+                        type_line="Creature — Merfolk",
+                    )
+                ],
+            }
+        )
+        result = candidate_frame_families("foo", index)
+        assert result.name_resolved is True
+        for family in result.families:
+            cap = mod.FAMILY_CAPABILITY.get(family, {})
+            colours = cap.get("colours", {})
+            assert "Blue" in colours, f"{family} missing Blue axis"
 
 
 # ---------------------------------------------------------------------------

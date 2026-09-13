@@ -205,6 +205,43 @@ _BORDERED_READINGS: frozenset[str] = frozenset({"black", "white", "silver"})
 _ART_TO_EDGE_READINGS: frozenset[str] = frozenset({"borderless"})
 
 # ---------------------------------------------------------------------------
+# FAMILY CAPABILITY and LAYOUT HARD tables.
+#
+# PROVENANCE. Derived from the CardConjurer pack registry harvested inventory
+# (proxyprints-orchestration/frame-identification/labels/FAMILY_CAPABILITY.json
+# and FAMILY_LAYOUT_HARD.json), which lists the colour frames and hard layout
+# requirements each family ships. These are data files committed to the catalog
+# repo - do not hand-retype their contents; re-harvest from the source if they
+# change.
+#
+# FAMILY_CAPABILITY maps family name -> dict with "colours" (keyed on colour
+# axis: White/Blue/Black/Red/Green/Multicolored/Artifact/Colorless/Land) plus
+# "crown"/"pt"/"nyx" dressing flags (unused by narrowing - crown is dressing,
+# not frame; P/T at 59/65 and Nyx at 1/65 carry no information).
+#
+# FAMILY_LAYOUT_HARD maps family name -> required layout string. A family with
+# a hard layout requirement can only dress cards whose `layout` matches.
+# Path segments count as layout markers ONLY when they are not the family's own
+# directory - `/doubleFeature/w.png` is the family folder and means nothing,
+# `/doubleFeature/transform/w.png` is a real segment.
+# ---------------------------------------------------------------------------
+_FAMILY_CAPABILITY_PATH = Path(__file__).parent / "family_capability.json"
+_FAMILY_LAYOUT_HARD_PATH = Path(__file__).parent / "family_layout_hard.json"
+FAMILY_CAPABILITY: dict[str, dict[str, Any]] = json.loads(_FAMILY_CAPABILITY_PATH.read_text())
+FAMILY_LAYOUT_HARD: dict[str, str] = json.loads(_FAMILY_LAYOUT_HARD_PATH.read_text())
+
+# The colour axes a card's colour identity maps onto for capability checking.
+# Mono-colour cards map to their single colour; multicolour maps to Multicolored;
+# artifact maps to Artifact; colourless maps to Colorless; land maps to Land.
+_COLOUR_IDENTITY_TO_CAPABILITY: dict[str, str] = {
+    "W": "White",
+    "U": "Blue",
+    "B": "Black",
+    "R": "Red",
+    "G": "Green",
+}
+
+# ---------------------------------------------------------------------------
 # SET -> FRAME FAMILIES (set narrowing, issue #979 / the audit's own finding).
 #
 # PROVENANCE. Derived from the CardConjurer pack registry harvested inventory
@@ -323,6 +360,60 @@ class FrameFamilyCandidates:
     name_resolved: bool
 
 
+def _card_satisfies_layout(candidate: Any, family: str) -> bool:
+    """True if the candidate's layout satisfies the family's hard layout requirement.
+
+    A family with a hard layout requirement can only dress cards whose `layout` matches.
+    A family with no hard layout requirement (not in FAMILY_LAYOUT_HARD) can dress any layout.
+    """
+    required = FAMILY_LAYOUT_HARD.get(family)
+    if required is None:
+        return True
+    if not candidate.layout:
+        return False
+    return candidate.layout == required
+
+
+def _card_capability_axes(candidate: Any) -> set[str]:
+    """Map a candidate's colour identity and type line onto the capability axes.
+
+    Returns the set of capability axes the candidate needs from a family:
+    - Land cards need Land Frame
+    - Colourless cards need Colorless Frame
+    - Artifact cards need Artifact Frame
+    - Multicolour cards need Multicolored Frame
+    - Mono-colour cards need that colour's frame
+    """
+    axes: set[str] = set()
+    type_line = candidate.type_line.lower()
+    if "land" in type_line:
+        axes.add("Land")
+    if not candidate.color_identity:
+        axes.add("Colorless")
+    elif len(candidate.color_identity) > 1:
+        axes.add("Multicolored")
+    else:
+        colour = candidate.color_identity[0]
+        axis = _COLOUR_IDENTITY_TO_CAPABILITY.get(colour)
+        if axis:
+            axes.add(axis)
+    if "artifact" in type_line:
+        axes.add("Artifact")
+    return axes
+
+
+def _family_has_capability(family: str, axes: set[str]) -> bool:
+    """True if the family ships at least one of the required capability axes.
+
+    A family must have at least one of the candidate's required axes to dress that card.
+    """
+    cap = FAMILY_CAPABILITY.get(family)
+    if cap is None:
+        return True
+    colours = cap.get("colours", {})
+    return any(axes.intersection({k for k, v in colours.items() if v}))
+
+
 def candidate_frame_families(name: str, index: CandidateNameIndex) -> FrameFamilyCandidates:
     """The set-narrowed candidate frame families a name can resolve to.
 
@@ -333,6 +424,15 @@ def candidate_frame_families(name: str, index: CandidateNameIndex) -> FrameFamil
     If NONE of the card's candidate printings carries an alternate-frame marker, returns an
     empty family set so the classifier falls through to STANDARD/abstain rather than naming
     a family. Exempt sets (0% marker coverage) are kept as-is.
+
+    After the marker-founded filter, families are further narrowed by:
+    - layout: if the family has a hard layout requirement and the candidate's layout does not
+      satisfy it, drop it;
+    - capability: map the candidate's colour identity and type line onto the capability
+      axes and drop any family that ships none.
+
+    Dropping every family is a correct outcome and yields an abstain, never a fallback to
+    the unnarrowed set.
     """
     candidates = index.candidates_for(name)
     if not candidates:
@@ -358,7 +458,28 @@ def candidate_frame_families(name: str, index: CandidateNameIndex) -> FrameFamil
     else:
         families = exempt_families
 
-    return FrameFamilyCandidates(families=frozenset(families), name_resolved=True)
+    if not families:
+        return FrameFamilyCandidates(families=frozenset(), name_resolved=True)
+
+    # Narrow by layout: drop families whose hard layout requirement the candidate doesn't satisfy.
+    # Collect the set of all candidates' layouts and the families they can satisfy.
+    narrowed_layout: set[str] = set()
+    for candidate in candidates:
+        for family in families:
+            if _card_satisfies_layout(candidate, family):
+                narrowed_layout.add(family)
+
+    # Narrow by capability: drop families whose colour/type capability the candidate doesn't need.
+    narrowed_capability: set[str] = set()
+    for candidate in candidates:
+        axes = _card_capability_axes(candidate)
+        if not axes:
+            continue
+        for family in narrowed_layout:
+            if _family_has_capability(family, axes):
+                narrowed_capability.add(family)
+
+    return FrameFamilyCandidates(families=frozenset(narrowed_capability), name_resolved=True)
 
 
 def build_candidate_frame_families_lookup() -> Callable[[str], FrameFamilyCandidates]:

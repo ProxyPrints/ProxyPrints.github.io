@@ -249,6 +249,8 @@ class CandidatePrinting:
     lang: str = ""
     layout: str = ""
     promo_types: list[str] = field(default_factory=list)
+    color_identity: list[str] = field(default_factory=list)
+    type_line: str = ""
 
 
 # FILENAME-STYLE DUPLICATE-UPLOAD SUFFIX (module docstring) - stripped from the RAW name BEFORE
@@ -377,6 +379,8 @@ class CandidateNameIndex:
             "printing_metadata__lang",
             "printing_metadata__layout",
             "printing_metadata__promo_types",
+            "printing_metadata__color_identity",
+            "printing_metadata__type_line",
         )
         for (
             pk,
@@ -392,6 +396,8 @@ class CandidateNameIndex:
             lang,
             layout,
             promo_types,
+            color_identity,
+            type_line,
         ) in rows:
             by_name[to_searchable(name)].append(
                 CandidatePrinting(
@@ -407,6 +413,8 @@ class CandidateNameIndex:
                     lang=lang or "",
                     layout=layout or "",
                     promo_types=promo_types or [],
+                    color_identity=color_identity or [],
+                    type_line=type_line or "",
                 )
             )
         self._by_name = dict(by_name)
