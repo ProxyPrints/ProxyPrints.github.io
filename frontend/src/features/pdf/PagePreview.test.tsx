@@ -195,7 +195,11 @@ describe("PagePreview", () => {
       />
     );
     const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
-    expect(cutLine.style.outline).toBe("0.25mm dashed #8ae234");
+    // The sub-pixel floor is dynamic: it's the mm value that maps to 1 device pixel
+    // *after* the outer transform: scale(k). For this A4/400px config the scale is
+    // ~0.504, so the floor is 0.525mm — higher than the DEFAULT_CUT_LINE_THICKNESS_MM
+    // (0.25mm) because the stroke would otherwise be sub-pixel after the transform.
+    expect(cutLine.style.outline).toBe("0.525mm dashed #8ae234");
   });
 
   it("honors custom cutLineColor/cutLineThicknessMM/cutLineOffsetMM props", () => {

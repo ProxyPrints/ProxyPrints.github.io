@@ -244,6 +244,20 @@ export const SortByOptions: { [option in SortBy]: string } = {
   nameDescending: "Name (Z-A)",
 };
 
+/**
+ * Cut-guide shape selection - replaces the old boolean `showCrossCutLines` toggle with a
+ * three-way choice that makes corner marks a standalone selectable shape (defect 2 fix).
+ *
+ * `"perimeter"` = dashed rounded-rect outline only (the original default)
+ * `"cornerMarks"` = four L-bracket corner marks only (the old screenPresentation behavior)
+ * `"both"` = dashed outline + corner marks (the old showCrossCutLines=true behavior)
+ *
+ * Both surfaces (PDF.tsx and PagePreview.tsx) consume this enum via the shared
+ * cutGuideGeometry module, guaranteeing shape parity (defect 1 fix).
+ */
+export type CutLineShape = "perimeter" | "cornerMarks" | "both";
+export const DEFAULT_CUT_LINE_SHAPE: CutLineShape = "perimeter";
+
 export const FavouritesSourceKey = "__favorites__";
 export const UnknownSourceKey = "__unknown__";
 export const Unknown = "Unknown";

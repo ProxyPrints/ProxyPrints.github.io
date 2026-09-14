@@ -15,12 +15,17 @@ import {
   CardHeightMM,
   CardWidthMM,
   CornerRadiusMM,
+  CutLineShape,
 } from "@/common/constants";
 import { SourceType } from "@/common/schema_types";
 import { CardDocument, SlotProjectMembers } from "@/common/types";
 import { chunk } from "@/common/utils";
 import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
 import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
+import {
+  computeCutGuideGeometry,
+  CUT_LINE_DASH_GAP_MM,
+} from "@/features/pdf/cutGuideGeometry";
 import { computeLayout, LayoutEdgeBleed } from "@/features/pdf/layout";
 import { getPageSizeMM, PageSize } from "@/features/pdf/pageSize";
 import {
@@ -146,12 +151,10 @@ export interface PDFProps {
   roundCorners: boolean;
   drawCardCutLines: boolean;
   drawPageCutLines: boolean;
-  // Optional crosshair corner marks alongside the default dashed bleed outline `drawCardCutLines`
-  // already draws - default off (most users just need the outline; the marks are for anyone who
-  // specifically wants a traditional corner-mark guide too). Independent of drawCardCutLines'
-  // own on/off state in principle, but only rendered when it's on (nothing to add marks to
-  // otherwise) - see PDFCardCutLines' own render.
-  showCrossCutLines: boolean;
+  // Cut guide shape: "perimeter" (dashed bleed outline only), "cornerMarks" (crosshair marks
+  // only), or "both". Default "perimeter" matches the original dashed-outline behavior.
+  // Only rendered when drawCardCutLines is on (nothing to draw shapes onto otherwise).
+  cutLineShape: CutLineShape;
   cutLineLengthMM: number;
   cutLineOffsetMM: number;
   cutLineThicknessMM: number;
@@ -239,10 +242,6 @@ interface CutLineCornerProps {
   verticalDownLengthOverrideMM?: number;
 }
 
-// Gap between dashes on the trim outline (PDFCardCutLines' Svg/Rect strokeDasharray) - the dash
-// length itself is the user-adjustable cutLineLengthMM, so only the fixed gap lives here.
-const CUT_LINE_DASH_GAP_MM = 1;
-
 // @react-pdf/renderer's Svg/Rect (unlike View's mm-string styles) take bare point values - see
 // PDFCardCutLines' own comment where this is used.
 const mmToPt = (mm: number): number => (mm / 25.4) * 72;
@@ -284,7 +283,7 @@ const CutLineBar = ({
   return <View style={style} />;
 };
 
-// The optional crosshair corner-mark guide (PDFProps.showCrossCutLines) - always anchored at the
+// The optional crosshair corner-mark guide (PDFProps.cutLineShape) - always anchored at the
 // true trim edge (bleedMM.<edge> from the slot's own boundary, same per-axis-cropped-bleed
 // reasoning the dashed outline below uses). This is the only placement CutLineCorner ever needed
 // (PageCutLines, further down, already hardcoded it).
@@ -614,12 +613,9 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
 };
 
 // Renders cut lines for a single card slot, absolutely positioned within the overlay layer to
-// match the card at (colIndex, rowIndex) in the grid. The default guide is a dashed rounded-rect
-// outline traced directly on the trim boundary (an Svg/Rect, not a corner mark - native SVG
-// stroke-dashing continues the pattern seamlessly around the rounded corners, which the old
-// segment-by-segment CutLineBar approach couldn't do for a full perimeter); the crosshair corner
-// marks (CutLineCorner, same component PageCutLines uses for the sheet-wide guillotine lines) are
-// an opt-in addition, not an alternative shape.
+// match the card at (colIndex, rowIndex) in the grid. The guide shape (dashed perimeter outline,
+// corner marks, or both) is determined by the shared computeCutGuideGeometry module - the same
+// module PagePreview.tsx uses, guaranteeing shape parity between the editor and the export PDF.
 const PDFCardCutLines = ({
   colIndex,
   rowIndex,
@@ -636,11 +632,8 @@ const PDFCardCutLines = ({
     cutLineColor,
     cutLineOffsetMM,
     roundCorners,
-    showCrossCutLines,
+    cutLineShape,
   } = ctx;
-  // #301 - this slot's actual rendered size (may be less than CardSize + 2*bleedEdgeMM on a
-  // crowded axis - see layout.ts's fitAxisWithBleed), not the flat target-bleed box the pre-
-  // #301 version assumed every slot always got.
   const bleedMM = contextAvailableBleedMM(ctx);
   const cardSlotWidth = CardWidthMM + bleedMM.left + bleedMM.right;
   const cardSlotHeight = CardHeightMM + bleedMM.top + bleedMM.bottom;
@@ -648,31 +641,15 @@ const PDFCardCutLines = ({
   const left = colIndex * (cardSlotWidth + cardSpacingColMM);
   const top = rowIndex * (cardSlotHeight + cardSpacingRowMM);
 
-  // The outline's own path grows outward from the true trim rect (CardWidthMM x CardHeightMM at
-  // bleedMM.left/top) by cutLineOffsetMM on every side - offset 0 (the default) puts the path
-  // exactly on the trim boundary, so the stroke straddles it (half into the visible card face,
-  // half into the bleed), which is what "sits on the trim boundary" means for a drawn line. The
-  // Svg viewport is padded by half the stroke width beyond that so the stroke's own outer edge
-  // never sits exactly on (and risks being clipped at) the viewport bound.
-  const outlineWidthMM = CardWidthMM + 2 * cutLineOffsetMM;
-  const outlineHeightMM = CardHeightMM + 2 * cutLineOffsetMM;
-  const strokePadMM = cutLineThicknessMM / 2;
-  const svgLeftMM = bleedMM.left - cutLineOffsetMM - strokePadMM;
-  const svgTopMM = bleedMM.top - cutLineOffsetMM - strokePadMM;
-  const radiusMM = roundCorners ? CornerRadiusMM : 0;
-  // Rasterized proof (fix/print-cut-guides verification pass): Svg's own width/height props
-  // (unlike a View's mm-string styles, which DO get react-pdf's box-model unit conversion) are
-  // read as bare point values - "63mm" renders at 63pt (~22mm), not 63mm. The Rect's own
-  // coordinates share whatever physical scale the Svg viewport resolves to (no viewBox is set),
-  // so every number handed to Svg/Rect below is pre-converted to points explicitly; only the
-  // outer wrapping View's position (mm strings) needs no conversion.
-  const outlineWidthPt = mmToPt(outlineWidthMM);
-  const outlineHeightPt = mmToPt(outlineHeightMM);
-  const strokePadPt = mmToPt(strokePadMM);
-  const radiusPt = mmToPt(radiusMM);
-  const strokeWidthPt = mmToPt(cutLineThicknessMM);
-  const dashLengthPt = mmToPt(cutLineLengthMM);
-  const dashGapPt = mmToPt(CUT_LINE_DASH_GAP_MM);
+  const geometry = computeCutGuideGeometry({
+    bleedMM,
+    cutLineOffsetMM,
+    cutLineThicknessMM,
+    cutLineLengthMM,
+    cutLineColor,
+    roundCorners,
+    cutLineShape,
+  });
 
   return (
     <View
@@ -684,36 +661,56 @@ const PDFCardCutLines = ({
         height: cardSlotHeight + "mm",
       }}
     >
-      <Svg
-        style={{
-          position: "absolute" as const,
-          left: svgLeftMM + "mm",
-          top: svgTopMM + "mm",
-        }}
-        width={outlineWidthPt + 2 * strokePadPt}
-        height={outlineHeightPt + 2 * strokePadPt}
-      >
-        <Rect
-          x={strokePadPt}
-          y={strokePadPt}
-          width={outlineWidthPt}
-          height={outlineHeightPt}
-          rx={radiusPt}
-          ry={radiusPt}
-          fill="none"
-          stroke={cutLineColor}
-          strokeWidth={strokeWidthPt}
-          strokeDasharray={`${dashLengthPt} ${dashGapPt}`}
+      {geometry.perimeter &&
+        (() => {
+          const p = geometry.perimeter;
+          const svgLeftMM = p.xMM - p.strokeWidthMM / 2;
+          const svgTopMM = p.yMM - p.strokeWidthMM / 2;
+          const outlineWidthPt = mmToPt(p.widthMM);
+          const outlineHeightPt = mmToPt(p.heightMM);
+          const strokePadPt = mmToPt(p.strokeWidthMM / 2);
+          const radiusPt = mmToPt(p.radiusMM);
+          const strokeWidthPt = mmToPt(p.strokeWidthMM);
+          const dashLengthPt = mmToPt(p.dashLengthMM);
+          const dashGapPt = mmToPt(p.dashGapMM);
+          return (
+            <Svg
+              style={{
+                position: "absolute" as const,
+                left: svgLeftMM + "mm",
+                top: svgTopMM + "mm",
+              }}
+              width={outlineWidthPt + 2 * strokePadPt}
+              height={outlineHeightPt + 2 * strokePadPt}
+            >
+              <Rect
+                x={strokePadPt}
+                y={strokePadPt}
+                width={outlineWidthPt}
+                height={outlineHeightPt}
+                rx={radiusPt}
+                ry={radiusPt}
+                fill="none"
+                stroke={p.color}
+                strokeWidth={strokeWidthPt}
+                strokeDasharray={`${dashLengthPt} ${dashGapPt}`}
+              />
+            </Svg>
+          );
+        })()}
+      {geometry.cornerMarks.map((mark, i) => (
+        <View
+          key={i}
+          style={{
+            position: "absolute" as const,
+            left: mark.xMM + "mm",
+            top: mark.yMM + "mm",
+            width: mark.widthMM + "mm",
+            height: mark.heightMM + "mm",
+            backgroundColor: mark.color,
+          }}
         />
-      </Svg>
-      {showCrossCutLines && (
-        <>
-          <CutLineCorner position="top-left" lengthMM={cutLineLengthMM} />
-          <CutLineCorner position="top-right" lengthMM={cutLineLengthMM} />
-          <CutLineCorner position="bottom-left" lengthMM={cutLineLengthMM} />
-          <CutLineCorner position="bottom-right" lengthMM={cutLineLengthMM} />
-        </>
-      )}
+      ))}
     </View>
   );
 };

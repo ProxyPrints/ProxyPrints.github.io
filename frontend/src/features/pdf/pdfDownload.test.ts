@@ -82,7 +82,7 @@ const baseInput = (
     bleedEdgeMM: 3.175,
     showCutLines: true,
     cutLineColor: "#8ae234",
-    showCrossCutLines: false,
+    cutLineShape: "perimeter",
     cutLineLengthMM: 3,
     cutLineThicknessMM: 0.6,
     cutLineOffsetMM: 0,
