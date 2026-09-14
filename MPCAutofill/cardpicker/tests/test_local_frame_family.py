@@ -279,6 +279,11 @@ class TestClassifyFrameFamily:
         assert result.confidence == CONFIDENCE_ABSTAIN
         assert result.skip_reason == FRAME_FAMILY_AMBIGUOUS_SKIP_REASON
 
+    def test_normal_frame_false_no_candidates_not_standard(self):
+        candidates = FrameFamilyCandidates(families=frozenset(), name_resolved=True)
+        result = classify_frame_family(candidates=candidates, normal_frame=False)
+        assert result.family_class != FRAME_FAMILY_STANDARD
+
     def test_three_candidates_returns_other_showcase(self):
         candidates = FrameFamilyCandidates(
             families=frozenset({"MysticalArchive", "MysticalArchiveJP", "MysticalArchiveJPEN"}),
