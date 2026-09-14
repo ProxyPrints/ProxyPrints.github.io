@@ -382,7 +382,7 @@ class TestExtractCardEvidence:
             "legal_line": "fetch_failed",
             "quality_signals": "fetch_failed",
             "pinline_inset": "fetch_failed",
-            "frame_family": "fetch_failed",
+            "frame_family": "ambiguous",
         }
 
     def test_null_content_phash_surfaces_as_none(self, db, monkeypatch):
