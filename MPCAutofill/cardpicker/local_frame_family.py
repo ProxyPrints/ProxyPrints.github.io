@@ -148,12 +148,9 @@ NAMED_FAMILIES: frozenset[str] = frozenset()
 # ---------------------------------------------------------------------------
 # `set-narrowing` is the only method the shipped `classify_frame_family` writes for
 # single-candidate verdicts.  `border-table-tiebreak` is returned when a multi-candidate set
-# collapses to one family through the FAMILY_BORDER_TABLE.  `structural-construction` is
-# retained because the dormant detectors will emit it once one clears #829's bar and is
-# re-wired back into the classifier.
+# collapses to one family through the FAMILY_BORDER_TABLE.
 METHOD_SET_NARROWING = "set-narrowing"
 METHOD_BORDER_TABLE_TIEBREAK = "border-table-tiebreak"
-METHOD_STRUCTURAL_CONSTRUCTION = "structural-construction"
 
 # ---------------------------------------------------------------------------
 # Confidence levels.
