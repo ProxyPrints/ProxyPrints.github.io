@@ -1739,27 +1739,24 @@ def compute_card_evidence(
     # identification by set narrowing (metadata, not pixels). Runs after artbox_phash and
     # layout_class because it reads their output to compute the normal_frame chip (#981).
     if _stale("frame_family"):
-        if image is None:
-            skip_reasons["frame_family"] = EXTRACTOR_FETCH_FAILED_SKIP_REASON
-        else:
-            # normal_frame (#981): a framed, modern-layout card with no borderless treatment.
-            # STANDARD is written only when there is no candidate family to override.
-            normal_frame = (
-                fields.get("art_edge_class", "") == "framed"
-                and fields.get("artbox_frame_class", "") == "modern"
-                and fields.get("layout_class", "") not in ("borderless", "")
-            )
-            ff_result = classify_frame_family(
-                candidates=candidate_frame_families,
-                normal_frame=normal_frame,
-                card_border_reading=fields.get("layout_class", ""),
-            )
-            fields["frame_family_class"] = ff_result.family_class
-            fields["frame_family_confidence"] = ff_result.confidence
-            fields["frame_family_method"] = ff_result.method
-            fields["frame_family_candidate_families"] = list(ff_result.candidate_families)
-            if not ff_result.family_class:
-                skip_reasons["frame_family"] = ff_result.skip_reason or EXTRACTOR_AMBIGUOUS_SKIP_REASON
+        # normal_frame (#981): a framed, modern-layout card with no borderless treatment.
+        # STANDARD is written only when there is no candidate family to override.
+        normal_frame = (
+            fields.get("art_edge_class", "") == "framed"
+            and fields.get("artbox_frame_class", "") == "modern"
+            and fields.get("layout_class", "") not in ("borderless", "")
+        )
+        ff_result = classify_frame_family(
+            candidates=candidate_frame_families,
+            normal_frame=normal_frame,
+            card_border_reading=fields.get("layout_class", ""),
+        )
+        fields["frame_family_class"] = ff_result.family_class
+        fields["frame_family_confidence"] = ff_result.confidence
+        fields["frame_family_method"] = ff_result.method
+        fields["frame_family_candidate_families"] = list(ff_result.candidate_families)
+        if not ff_result.family_class:
+            skip_reasons["frame_family"] = ff_result.skip_reason or EXTRACTOR_AMBIGUOUS_SKIP_REASON
         extractor_versions["frame_family"] = FRAME_FAMILY_EXTRACTOR_VERSION
 
     if profile is not None:
