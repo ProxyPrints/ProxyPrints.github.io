@@ -3070,17 +3070,18 @@ class ImageEvidence(models.Model):
     # the method cleared #829's bar on negatives; otherwise it ships as OTHER_SHOWCASE
     # capability.
     #
-    # frame_family_class: the named family, or "OTHER_SHOWCASE"/"STANDARD"/"CUSTOM", or
+    # frame_family_class: the named family, or "OTHER_SHOWCASE"/"STANDARD", or
     # blank-string-as-sentinel (abstain).  Same blank-vs-null convention as bleed_class/
     # layout_class above: blank means "not yet computed or abstained", not "null".
+    # "CUSTOM" exists as a constant (FRAME_FAMILY_CUSTOM) so the caster refuses it if it
+    # ever appears, but the classifier never assigns it.
     frame_family_class = models.CharField(max_length=32, blank=True, default="")
     # frame_family_confidence: 0-3 integer.  2 = high (single candidate or tie-break), 1 =
     # moderate (multi-candidate pick-list), 0 = abstained.
     frame_family_confidence = models.IntegerField(default=0)
     # frame_family_method: which detection method produced the verdict.  One of:
     # "set-narrowing" (single-candidate), "border-table-tiebreak" (multi-candidate collapse),
-    # "structural-construction" (dormant, only if NAMED_FAMILIES is populated), or blank
-    # (abstained).
+    # or blank (abstained).
     frame_family_method = models.CharField(max_length=32, blank=True, default="")
     # frame_family_candidate_families: sorted list of candidate family names when the
     # verdict is OTHER_SHOWCASE (multi-candidate). Persisted so the review UI can present
