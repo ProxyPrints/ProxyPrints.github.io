@@ -366,22 +366,31 @@ why an unvalidated class abstains rather than casting a negative).
 coarse "Showcase" tag on named, above-bar frame-family verdicts (issues #829,
 #878, #952, #967, #974, #968, #979). Reads `ImageEvidence.frame_family_class`
 and `frame_family_confidence`, populated at Stage C by `classify_frame_family`.
-The gate reads the calibration table (`NAMED_FAMILIES`): a family is cast only
-where owner-verified truth exists for it and its method cleared #829's bar
-(false positives at or near zero on ordinary frames). Measured against the
-owner-verified labels on disk the structural detectors score 0/4 recall on the
-four owner-confirmed positives and fire spuriously on 27/40 owner-negative
-cards, so `NAMED_FAMILIES` is empty and **this caster is dormant — it casts no
-votes today** until a method clears the bar. Region-hash is closed by the
-frame-identification audit and not shipped; furniture-colour has no stored
-swatch artifact yet.
+The gate is closed because no available evidence supports a coarse "Showcase"
+claim on this population. Measured against 204 owner-verified labels
+(2026-09-14): 26 of 204 = 12.7% are showcases of some kind, and 90
+rejections carry no note at all, bounding the true share between 12.7% and
+56.9%. #829's bar is false positives near zero on ordinary cards; both ends
+of that interval fail it. `NAMED_FAMILIES` is empty because the question that
+licenses a Showcase tag is "is this render a showcase of any kind", not "is it
+the named family" — and no available evidence supports that coarse claim at the
+required precision. This caster is dormant — it casts no votes today.
 
-| Reason          | Constant                                 | Means                                                                                                                                       | Status            |
-| --------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `no-evidence`   | `FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON`   | No current `ImageEvidence` row. **Rescannable**.                                                                                            | Live, no rows yet |
-| `no-reading`    | `FRAME_FAMILY_NO_READING_SKIP_REASON`    | `frame_family_class` is blank — the extractor abstained or hasn't produced a reading. **Rescannable**.                                      | Live, no rows yet |
-| `ambiguous`     | `FRAME_FAMILY_AMBIGUOUS_SKIP_REASON`     | The classifier ran but could not commit to a single family. Deliberately shares its string with the Stage C extractor reason.               | Live, no rows yet |
-| `no-candidates` | `FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON` | The card's name resolved to zero candidate printings (issue #979), so there is no set to narrow the candidate families by. **Rescannable**. | Live, no rows yet |
+| Reason             | Constant                                 | Means                                                                                                                                                   | Status            |
+| ------------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `no-evidence`      | `FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON`   | No current `ImageEvidence` row. **Rescannable**.                                                                                                        | Live, no rows yet |
+| `no-reading`       | `FRAME_FAMILY_NO_READING_SKIP_REASON`    | `frame_family_class` is blank — the extractor abstained or hasn't produced a reading. **Rescannable**.                                                  | Live, no rows yet |
+| `ambiguous`        | `FRAME_FAMILY_AMBIGUOUS_SKIP_REASON`     | The classifier ran but could not commit to a single family. Deliberately shares its string with the Stage C extractor reason.                           | Live, no rows yet |
+| `no-candidates`    | `FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON` | The card's name resolved to zero candidate printings (issue #979), so there is no set to narrow the candidate families by. **Rescannable**.             | Live, no rows yet |
+| `no-content-phash` | `FRAME_FAMILY_NO_PHASH_SKIP_REASON`      | The card has no `content_phash` yet, so `current_evidence_queryset` cannot key a currency lookup. **Rescannable** — a later backfill computes the hash. | Live, no rows yet |
+
+The `uncalibrated-<class>` dynamic skip reason (emitted when the family is not
+in `NAMED_FAMILIES`) is not a declared constant and is not subject to the
+tether. The name still accurately reflects the meaning: the family lacks
+owner-verified truth at the required precision. The gate's silence is not
+"waiting for calibration" — it is "no evidence supports a coarse Showcase
+claim" — but since the dynamic string is not in the tethered roster and its
+consumer (the skip log) only records the string value, the name is left as-is.
 
 ## Proxy-marker caster — `MPCAutofill/cardpicker/local_proxy_marker_cast.py`
 
