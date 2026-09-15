@@ -195,11 +195,11 @@ describe("PagePreview", () => {
       />
     );
     const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
-    // The sub-pixel floor is dynamic: it's the mm value that maps to 1 device pixel
+    // The sub-pixel floor is dynamic: it's the mm value that maps to 2 device pixels
     // *after* the outer transform: scale(k). For this A4/400px config the scale is
-    // ~0.504, so the floor is 0.525mm — higher than the DEFAULT_CUT_LINE_THICKNESS_MM
+    // ~0.504, so the floor is 1.05mm — higher than the DEFAULT_CUT_LINE_THICKNESS_MM
     // (0.25mm) because the stroke would otherwise be sub-pixel after the transform.
-    expect(cutLine.style.outline).toBe("0.525mm dashed #8ae234");
+    expect(cutLine.style.outline).toBe("1.05mm dashed #8ae234");
   });
 
   it("honors custom cutLineColor/cutLineThicknessMM/cutLineOffsetMM props", () => {
@@ -219,7 +219,7 @@ describe("PagePreview", () => {
       />
     );
     const cutLine = screen.getAllByTestId("page-preview-cut-line")[0];
-    expect(cutLine.style.outline).toBe("1mm dashed #00ff00");
+    expect(cutLine.style.outline).toBe("1.05mm dashed #00ff00");
     // Offset subtracts from the granted bleedMM.left/top (3mm here), it does not add to the
     // slot's own outer edge - see this file's own trim-edge anchor test above.
     expect(cutLine.style.left).toBe("1mm");

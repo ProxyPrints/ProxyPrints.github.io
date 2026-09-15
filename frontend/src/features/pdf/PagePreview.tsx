@@ -614,10 +614,13 @@ function PagePreviewSlotEl({
   // Sub-pixel dropout floor: the outer transform: scale(k) shrinks every mm measurement
   // inside the page by factor k, so a stroke that is 1 CSS px (25.4/96 mm) before the
   // transform still becomes sub-pixel (k * 1 px) after it. The floor must therefore be
-  // expressed as the mm value that maps to exactly 1 device pixel *after* the outer
-  // transform: 1px / (k * CSS_PX_PER_MM). Only applied when the requested thickness
-  // falls below it — strokes already thick enough render at their exact requested size.
-  const minStrokeMM = 1 / (scale * CSS_PX_PER_MM);
+  // expressed as the mm value that maps to at least 2 device pixels *after* the outer
+  // transform: 2px / (k * CSS_PX_PER_MM). A 1-device-pixel floor is too thin at wider
+  // viewports where anti-aliasing against the dark slot background pushes most of the
+  // dashed outline's painted pixels below the detection threshold. Only applied when the
+  // requested thickness falls below it — strokes already thick enough render at their
+  // exact requested size.
+  const minStrokeMM = 2 / (scale * CSS_PX_PER_MM);
 
   // Shared geometry consumed by both the editor preview and the PDF export, guaranteeing
   // shape parity (defect 1 fix). Cuts once per render via useMemo.
