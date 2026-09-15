@@ -135,17 +135,18 @@ votes (cast before this field existed, and every join-key/deductive-backfill vot
 no evidence vocabulary with the fallback calculator) carry `evidence_types_used=null` and fail
 the gate exactly like an empty list does, until a future backfill pass populates them.
 
-**Likely-resolve pool routing (2026-08-12):** the likely-resolve pool (a printing question one
-more agreeing human vote would resolve, per `is_likely_resolve_printing`) does not
-unconditionally serve `confirm_suggestion`/`identify_printing` — the two per-element types §7
-adds (`border`, `illustration`) now exist and are cheaper, narrowing questions, so the pool
-routes to the most discriminating one for THIS card: `border` when the card's own candidates
-split on an unrecorded border colour (a border answer eliminates a candidate), else
-`illustration` when the card's own illustration identity is still unresolved and answerable,
-else the pre-existing confirm/identify fallback. The border-split check reads
-`get_ranked_printing_candidates` live (`CardScanLog.survivor_pks` is unpopulated on ~99.7% of
-rows, so there is no cheaper source today) — measured cost is small (a couple of extra queries,
-single-digit milliseconds per served item) and was shipped, not deferred. See
+**Likely-resolve pool routing (2026-08-12; gate widened 2026-09-15):** the likely-resolve
+pool (a printing question one more agreeing human vote would resolve, per
+`is_likely_resolve_printing`) does not unconditionally serve
+`confirm_suggestion`/`identify_printing` — the two per-element types §7 adds (`border`,
+`illustration`) now exist and are cheaper, narrowing questions, so the pool routes to the most
+discriminating one for THIS card: `border` when the card's own candidates split on any
+unrecorded rendered axis (border colour, treatment, or full art — a narrowing answer eliminates
+a candidate), else `illustration` when the card's own illustration identity is still
+unresolved and answerable, else the pre-existing confirm/identify fallback. The split check
+reads `get_ranked_printing_candidates` live (`CardScanLog.survivor_pks` is unpopulated on
+~99.7% of rows, so there is no cheaper source today) — measured cost is small (a couple of
+extra queries, single-digit milliseconds per served item) and was shipped, not deferred. See
 `cardpicker.question_feed._likely_resolve_item` for the implementation and this PR's report for
 the measured served-mix split by pool. The remainder tier's own illustration-before-printing
 order (§7's "illustration" section) was unreachable in production until this same change — its
@@ -305,20 +306,70 @@ alone.
 A single attribute asked cold, with no printing context. Retained for the contexts where we
 genuinely need one attribute answered on its own.
 
-### border — asked cold (2026-08-11, per-element question types)
+### border — asked cold (2026-08-11, per-element question types; gate widened
 
-The border colour axis asked on its own: renders the plain scan with the four
-`BORDER_COLOR_GROUP` chips plus the `FULL_ART_CHIP` ("No border — full art.") as the answer
-surface (Black / White / Silver / Borderless / Full Art). The Full Art chip casts the same
-`CardTagVote` the narrowing chips cast — Full Art is an independent toggle that co-occurs with
-every border colour (§7 "frame / attribute narrowing"), so "No border — full art." is a real
-border answer, not a new vote target. The ActionRow carries **"Can't tell from this scan."**
-(records the abstention with reason `cannot-tell` on `CardQuestionAbstention`'s optional
-`reason` field — an additive nullable field, no new model or endpoint) and **Skip** (records
-an abstention with no reason). Built as `_border_item` in `question_feed.py` +
-`BorderColorQuestion.tsx` (votes through the same `useTagVoting` path as the narrowing chips,
-§5 rule 1: only what the current question needs). No reveal treatment - a non-candidate
-question like artist/tag.
+2026-09-15, treatment axis)
+
+Renders the plain scan with **seven chips across three axes** as the answer surface:
+
+- **Border colour** (exclusive, §7 "frame / attribute narrowing"): Black / White / Silver /
+  Borderless — the four `BORDER_COLOR_GROUP` chips.
+- **Full Art** (independent toggle, §7): "No border — full art." — the `FULL_ART_CHIP`. Full
+  Art co-occurs with every border colour, so it is a real border answer, not a new vote target.
+- **Treatment** (exclusive, §7): Showcase / Extended Art — the two `FRAME_TREATMENT_GROUP`
+  chips. These were added because candidates that share a `borderColor` and differ solely on
+  `isExtendedArt`/`isShowcase` (e.g. a plain black-border printing vs. its extended-art
+  reprint, both `border_color: black` on Scryfall) cannot be separated by the four-colour set
+  alone. Both treatments clear the same "a lay voter can recognise it by sight" bar §7.7 used
+  to rule the set-symbol question OUT — running artwork to the card edge (Extended Art) and the
+  bordered accent frame (Showcase) are both plainly visible on the scan. The pair is already one
+  `ExclusionGroup` (co-occurring in 0 of 113,224 printings), so rendering both costs nothing
+  extra and keeps the mutual-exclusion styling `isChipContradicted` already derives from
+  `FRAME_TREATMENT_GROUP` membership.
+
+Every chip here — including the two treatment chips — casts the same `CardTagVote` through the
+same `useTagVoting`/`APISubmitTagVote` path every other WTC chip uses, so a border answer is a
+first-class vote on an existing axis, not a new vote model. The ActionRow carries **"Can't tell
+from this scan."** (records the abstention with reason `cannot-tell` on
+`CardQuestionAbstention`'s optional `reason` field — an additive nullable field, no new model or
+endpoint) and **Skip** (records an abstention with no reason). Built as `_border_item` in
+`question_feed.py` + `BorderColorQuestion.tsx` (votes through the same `useTagVoting` path as
+the narrowing chips, §5 rule 1: only what the current question needs). No reveal treatment — a
+non-candidate question like artist/tag.
+
+#### Gate — when the border question is served
+
+The question is served when the card's own ranked printing candidates split on **any rendered
+axis** (border colour, treatment, or full art) and that axis has not been settled by a resolved
+vote — i.e. no tag on that axis has reached `RESOLVED_APPLY` consensus. The original gate
+(built 2026-08-11) checked border colour splits only. The widened gate (2026-09-15, this PR)
+added treatment and full art: measured over a sample of **327 multi-candidate cards**, 172
+(52.6%) split on border colour, and **37 (11.3%) split on a treatment axis only** — those 37
+cards were never served the border question under the original gate despite the question being
+worth asking (the candidates differ on a visible property the four-colour set cannot express).
+The gate also checks that the current voter has not already answered border for this card (to
+prevent re-serving on every future visit). See `_likely_resolve_item` in `question_feed.py` for
+the full routing and `_candidates_split_on_any_rendered_axis` for the split detection.
+
+#### `discriminatingAxes` — backend-to-frontend axis signalling
+
+The served item carries `discriminatingAxes`, a list naming which axes actually discriminate for
+that card (values: `"border"`, `"treatment"`, `"full_art"` — the `DiscriminatingAx` enum in
+`schema_types.py`). The frontend reads it to word its prompt:
+
+- **One axis**: specific question — "Which border colour is this?" / "Is this full art?" /
+  "What treatment is this?"
+- **Multiple axes**: generic — "Help identify this printing."
+- **Absent or empty** (older backend, cached payload): falls back to "Which border colour is
+  this?" — the original border wording.
+
+This field exists to keep the backend and frontend independent of each other's release order:
+the backend can ship the widened gate before the frontend ships the treatment/full-art prompt
+wording, and a cached payload from an older backend legitimately produces no field. The fallback
+ensures older clients still work.
+
+This gate widening changes **which cards get asked**; it does not change the answer surface, the
+vote path, or the consensus rules.
 
 **Symbol is not built as a question type; the collector-line question is deferred to its own
 PR** (2026-08-11, same scope; the deferral is the owner's ruling). These are different
@@ -358,7 +409,8 @@ spec, and contradict this section.
 
 ## 10. Rulings ledger
 
-All items ruled 2026-08-11. Nothing in this document is awaiting a decision.
+All items ruled 2026-08-11 unless dated otherwise. Nothing in this document is awaiting a
+decision.
 
 1. **"Not this art" is retained** as a distinct `confirm_suggestion` answer (§7.1). The
    governing reason, in the owner's words: whichever question gets the most data. Skip
@@ -372,9 +424,12 @@ All items ruled 2026-08-11. Nothing in this document is awaiting a decision.
 4. **`border` becomes a first-class question type; `symbol` is ruled out, `collector_line`
    is deferred to its own PR** (§7.7). Border adds the `border` question-type value, the
    `_border_item` feed builder, and the `BorderColorQuestion` render branch - the answer
-   surface is the four `BORDER_COLOR_GROUP` chips plus the `FULL_ART_CHIP` ("No border —
-   full art."), casting real `CardTagVote`s through the existing chip machinery, so no new
-   vote model or endpoint is required. The "Can't tell from this scan." answer records the
+   surface is the four `BORDER_COLOR_GROUP` chips, the `FULL_ART_CHIP` ("No border —
+   full art."), and the two `FRAME_TREATMENT_GROUP` chips (Showcase / Extended Art), seven
+   chips across three axes, casting real `CardTagVote`s through the existing chip machinery, so
+   no new vote model or endpoint is required. Treatment was added (2026-09-15, this PR) because
+   candidates that share a `borderColor` and differ solely on treatment cannot be separated by
+   the four-colour set alone. The "Can't tell from this scan." answer records the
    abstention with reason `cannot-tell` via `CardQuestionAbstention`'s optional `reason`
    field (additive nullable, migration 0110). Symbol is ruled
    out against §5: set symbols by sight are expert knowledge, so the question would harvest
@@ -389,6 +444,15 @@ All items ruled 2026-08-11. Nothing in this document is awaiting a decision.
    the one printed on their card; each option is a printing, phrased as a whole-printing
    confirmation (frame, artist credit and all), since a printing vote is the expensive
    full claim. Symbol stays unbuilt; the collector-line question is a documented next PR.
+5. **Gate widened from border-only to any rendered axis** (2026-09-15, this PR). The border
+   question is now served when the card's own ranked candidates split on any rendered axis
+   (border colour, treatment, or full art) that has not been settled by a resolved vote,
+   not only when they split on border colour. Measured sample: 37 of 327 multi-candidate cards
+   (11.3%) split on a treatment axis only and were never served. The served item carries
+   `discriminatingAxes` naming the splitting axes; the frontend words its prompt from that
+   field, falling back to border wording when the field is absent (older backend or cached
+   payload). This changes which cards get asked; it does not change the answer surface, the
+   vote path, or the consensus rules.
 
 Earlier rulings folded into the body above: illustration votes never imply a printing
 whatever the group size; each voting axis is a first-class question; confirming and
