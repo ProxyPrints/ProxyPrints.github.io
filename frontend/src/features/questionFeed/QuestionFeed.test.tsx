@@ -1985,6 +1985,201 @@ describe("QuestionFeed", () => {
     expect(abstentionBody).toBeUndefined();
   });
 
+  describe("discriminatingAxes wording", () => {
+    it("shows axis-specific wording for a single border axis", async () => {
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: {
+                type: "border",
+                card: cardDocument9,
+                discriminatingAxes: ["border"],
+                tagConfidence: {
+                  "Black Border": 0.8,
+                  "White Border": 0,
+                  "Silver Border": 0,
+                  Borderless: 0,
+                  "Full Art": 0,
+                },
+              },
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      renderFeed();
+
+      expect(
+        await screen.findByTestId("question-feed-axis-pill")
+      ).toHaveTextContent("border");
+      expect(screen.getByTestId("question-feed-axis-prompt")).toHaveTextContent(
+        "Which border colour is this?"
+      );
+    });
+
+    it("shows axis-specific wording for a single full_art axis", async () => {
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: {
+                type: "border",
+                card: cardDocument9,
+                discriminatingAxes: ["full_art"],
+                tagConfidence: {
+                  "Black Border": 0,
+                  "White Border": 0,
+                  "Silver Border": 0,
+                  Borderless: 0,
+                  "Full Art": 0.8,
+                },
+              },
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      renderFeed();
+
+      expect(
+        await screen.findByTestId("question-feed-axis-pill")
+      ).toHaveTextContent("full art");
+      expect(screen.getByTestId("question-feed-axis-prompt")).toHaveTextContent(
+        "Is this full art?"
+      );
+    });
+
+    it("shows axis-specific wording for a single treatment axis", async () => {
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: {
+                type: "border",
+                card: cardDocument9,
+                discriminatingAxes: ["treatment"],
+                tagConfidence: {
+                  "Black Border": 0,
+                  "White Border": 0,
+                  "Silver Border": 0,
+                  Borderless: 0,
+                  "Full Art": 0,
+                  Showcase: 0,
+                  Extended: 0,
+                },
+              },
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      renderFeed();
+
+      expect(
+        await screen.findByTestId("question-feed-axis-pill")
+      ).toHaveTextContent("treatment");
+      expect(screen.getByTestId("question-feed-axis-prompt")).toHaveTextContent(
+        "What treatment is this?"
+      );
+    });
+
+    it("shows generic wording for multiple discriminating axes", async () => {
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: {
+                type: "border",
+                card: cardDocument9,
+                discriminatingAxes: ["border", "full_art", "treatment"],
+                tagConfidence: {
+                  "Black Border": 0.8,
+                  "White Border": 0,
+                  "Silver Border": 0,
+                  Borderless: 0,
+                  "Full Art": 0,
+                  Showcase: 0,
+                  Extended: 0,
+                },
+              },
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      renderFeed();
+
+      expect(
+        await screen.findByTestId("question-feed-axis-pill")
+      ).toHaveTextContent("details");
+      expect(screen.getByTestId("question-feed-axis-prompt")).toHaveTextContent(
+        "Help identify this printing."
+      );
+    });
+
+    it("falls back to border wording when discriminatingAxes is absent", async () => {
+      server.use(
+        http.get(buildRoute("2/questionFeed/"), () =>
+          HttpResponse.json(
+            {
+              item: {
+                type: "border",
+                card: cardDocument9,
+                tagConfidence: {
+                  "Black Border": 0.8,
+                  "White Border": 0,
+                  "Silver Border": 0,
+                  Borderless: 0,
+                  "Full Art": 0,
+                },
+              },
+              remainingEstimate: {
+                total: 1,
+                confirmable: 0,
+                contested: 0,
+                fresh: 1,
+              },
+            },
+            { status: 200 }
+          )
+        )
+      );
+      renderFeed();
+
+      expect(
+        await screen.findByTestId("question-feed-axis-pill")
+      ).toHaveTextContent("border");
+      expect(screen.getByTestId("question-feed-axis-prompt")).toHaveTextContent(
+        "Which border colour is this?"
+      );
+    });
+  });
+
   it("'Confirm' appears on artist questions only after a vote lands, and advances carrying the vote without recording an abstention", async () => {
     let feedFetchCount = 0;
     server.use(

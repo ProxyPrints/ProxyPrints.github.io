@@ -2379,8 +2379,39 @@ export function QuestionFeed({ hideHeading = false }: QuestionFeedProps = {}) {
         {item.type === "border" && (
           <>
             <QHead>
-              <ShapePill className="pick">border</ShapePill>
-              <Prompt>Which border colour is this?</Prompt>
+              <ShapePill className="pick" data-testid="question-feed-axis-pill">
+                {(() => {
+                  const axes = item.discriminatingAxes ?? [];
+                  // Multi-axis: the card splits on multiple properties and listing
+                  // every combination would be unwieldy. Single axis: specific name.
+                  // Absent/empty: fall back to border wording (current behaviour).
+                  if (axes.length === 1) {
+                    const axis = axes[0];
+                    if (axis === "border") return "border";
+                    if (axis === "full_art") return "full art";
+                    if (axis === "treatment") return "treatment";
+                  }
+                  if (axes.length > 1) return "details";
+                  return "border";
+                })()}
+              </ShapePill>
+              <Prompt data-testid="question-feed-axis-prompt">
+                {(() => {
+                  const axes = item.discriminatingAxes ?? [];
+                  // Single axis: ask a specific question. Multi-axis: generic prompt
+                  // covering all axes. Absent/empty (older backend or cached payload):
+                  // fall back to the original border question.
+                  if (axes.length === 1) {
+                    const axis = axes[0];
+                    if (axis === "border")
+                      return "Which border colour is this?";
+                    if (axis === "full_art") return "Is this full art?";
+                    if (axis === "treatment") return "What treatment is this?";
+                  }
+                  if (axes.length > 1) return "Help identify this printing.";
+                  return "Which border colour is this?";
+                })()}
+              </Prompt>
             </QHead>
             <BorderColorQuestion
               backendURL={backendURL}
