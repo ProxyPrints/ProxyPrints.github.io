@@ -1,6 +1,7 @@
 import { expect } from "@playwright/test";
+import { inflateSync } from "zlib";
 
-import { localBackendURL } from "@/common/test-constants";
+import { CardHeightMM, CardWidthMM } from "@/common/constants";
 import {
   defaultHandlers,
   searchResultsOneResult,
@@ -20,80 +21,273 @@ const singleCardHandlers = [
   ...defaultHandlers,
 ];
 
+// ─── PNG decoder (reused from PagePreviewImageScale.spec.ts) ────────────────
+// Minimal, dependency-free PNG decoder: 8-bit, non-interlaced, colour type 2
+// (RGB) or 6 (RGBA) - exactly what Chromium's own screenshot encoder produces.
+function decodePNG(buffer: Buffer): {
+  width: number;
+  height: number;
+  data: Buffer;
+  channels: number;
+} {
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idatChunks: Buffer[] = [];
+  while (offset < buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    if (type === "IHDR") {
+      width = buffer.readUInt32BE(dataStart);
+      height = buffer.readUInt32BE(dataStart + 4);
+      bitDepth = buffer.readUInt8(dataStart + 8);
+      colorType = buffer.readUInt8(dataStart + 9);
+    } else if (type === "IDAT") {
+      idatChunks.push(buffer.subarray(dataStart, dataStart + length));
+    } else if (type === "IEND") {
+      break;
+    }
+    offset = dataStart + length + 4;
+  }
+  if (bitDepth !== 8) {
+    throw new Error(`unsupported PNG bit depth ${bitDepth}`);
+  }
+  const channels =
+    colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 0 ? 1 : null;
+  if (channels == null) {
+    throw new Error(`unsupported PNG color type ${colorType}`);
+  }
+  const raw = inflateSync(Buffer.concat(idatChunks));
+  const stride = width * channels;
+  const data = Buffer.alloc(height * stride);
+  const prevLine = Buffer.alloc(stride);
+  let rawOffset = 0;
+  for (let y = 0; y < height; y++) {
+    const filterType = raw[rawOffset];
+    rawOffset += 1;
+    const line = raw.subarray(rawOffset, rawOffset + stride);
+    rawOffset += stride;
+    const outLine = data.subarray(y * stride, y * stride + stride);
+    for (let x = 0; x < stride; x++) {
+      const a = x >= channels ? outLine[x - channels] : 0;
+      const b = prevLine[x];
+      const c = x >= channels ? prevLine[x - channels] : 0;
+      let value = line[x];
+      switch (filterType) {
+        case 0:
+          break;
+        case 1:
+          value = (value + a) & 0xff;
+          break;
+        case 2:
+          value = (value + b) & 0xff;
+          break;
+        case 3:
+          value = (value + Math.floor((a + b) / 2)) & 0xff;
+          break;
+        case 4: {
+          const p = a + b - c;
+          const pa = Math.abs(p - a);
+          const pb = Math.abs(p - b);
+          const pc = Math.abs(p - c);
+          const predictor = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+          value = (value + predictor) & 0xff;
+          break;
+        }
+        default:
+          throw new Error(`unsupported PNG filter type ${filterType}`);
+      }
+      outLine[x] = value;
+    }
+    outLine.copy(prevLine);
+  }
+  return { width, height, data, channels };
+}
+
+// ─── Guide color detection ──────────────────────────────────────────────────
+// Default cutLineColor is #8ae234 (a bright yellow-green). After rasterisation
+// the rendered colour may shift slightly due to anti-aliasing and gamma, so we
+// match a broad green-dominant band rather than the exact hex.
+function isGuideGreen(r: number, g: number, b: number): boolean {
+  return g > 150 && g > r * 1.3 && g > b * 1.3;
+}
+
+function countGuidePixels(image: {
+  width: number;
+  height: number;
+  data: Buffer;
+  channels: number;
+}): number {
+  let count = 0;
+  const { width, height, data, channels } = image;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * channels;
+      if (isGuideGreen(data[i], data[i + 1], data[i + 2])) {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+type MarginProfile = "bordered" | "rearFeed";
+
 /**
- * Cut-guide shape rendering - browser-level verification that the three
- * CutLineShape values (perimeter, cornerMarks, both) produce the expected
- * number of painted guide segments on the real page preview. Style-string
- * assertions can't catch this: the guide's outline/background is invisible
- * to the accessibility tree and only observable via screenshot geometry.
- *
- * The sub-pixel stroke floor (Defect 1) ensures each guide element is at
- * least 1 device pixel wide after the page's CSS transform - without it,
- * zero-width strokes vanish at certain zoom levels.
+ * Load the Display page, import a single card, configure the margin profile,
+ * cut-line shape, and guides toggle.  All UI interaction happens at the default
+ * Playwright viewport (800×600 from the config) where the rail is visible.
+ * The caller resizes to the target viewport *after* this returns, then waits
+ * for the layout to settle before screenshotting.
  */
-test.describe("Cut guide rendering - segment counts by shape", () => {
-  test.describe.configure({ timeout: 60_000 });
+async function setupCardOnPage(
+  page: import("@playwright/test").Page,
+  marginProfile: MarginProfile,
+  cutLineShape: "perimeter" | "cornerMarks" | "both" = "perimeter"
+) {
+  await loadPageWithDefaultBackend(page);
+  await importTextOnEditorLanding(page, "1x my search query");
 
-  test("perimeter shape: exactly 1 guide segment visible", async ({
-    page,
-    network,
-  }) => {
-    network.use(...singleCardHandlers);
-    await loadPageWithDefaultBackend(page);
-    await importTextOnEditorLanding(page, "1x my search query");
+  const profileSelect = page.getByTestId("display-margin-profile-select");
+  await profileSelect.waitFor({ state: "visible" });
+  await profileSelect.selectOption(marginProfile);
 
-    await expandRailSection(page, "cut-lines-guides");
-    await page.getByTestId("display-cut-line-shape").selectOption("perimeter");
+  await expandRailSection(page, "cut-lines-guides");
+  await page.getByTestId("display-cut-line-shape").selectOption(cutLineShape);
+}
 
-    const slot = page.getByTestId("page-preview-slot").first();
-    const guides = slot.getByTestId("page-preview-cut-line");
-    await expect(guides).toBeVisible();
+/**
+ * Wait for the sheet region to finish re-layout after a viewport resize, then
+ * return the page-preview-slot locator (assumes the first card slot).
+ */
+async function waitForLayoutSettle(
+  page: import("@playwright/test").Page
+): Promise<import("@playwright/test").Locator> {
+  const slot = page.getByTestId("page-preview-slot").first();
+  await expect(slot).toBeVisible();
+  const guide = slot.getByTestId("page-preview-cut-line");
+  await expect(guide.first()).toBeVisible();
+  // Give the CSS transform scale time to recalculate after resize.
+  await page.waitForTimeout(300);
+  return slot;
+}
 
-    const count = await guides.count();
-    expect(count).toBe(1);
-  });
+// ─── Test suite ─────────────────────────────────────────────────────────────
 
-  test("cornerMarks shape: exactly 8 guide segments visible (2 per corner)", async ({
-    page,
-    network,
-  }) => {
-    network.use(...singleCardHandlers);
-    await loadPageWithDefaultBackend(page);
-    await importTextOnEditorLanding(page, "1x my search query");
+/**
+ * Cut-guide painted-output verification — browser-level verification that the
+ * sub-pixel stroke floor actually produces painted guide pixels on every
+ * margin-profile × viewport-width combination.
+ *
+ * The sub-pixel floor (minStrokeMM = 1 / (scale * CSS_PX_PER_MM)) ensures
+ * each guide element is at least 1 device pixel wide after the page's CSS
+ * transform. Without it, the default 0.25mm stroke goes sub-pixel at every
+ * realistic scale and is silently dropped by the rasterizer.
+ *
+ * This suite exercises at least two margin profiles (bordered, rearFeed) and
+ * at least two viewport widths so the outer `scale` differs materially
+ * between them, asserting that guide colour pixels are actually painted in
+ * every combination.
+ */
+test.describe("Cut guide rendering - painted output", () => {
+  test.describe.configure({ timeout: 90_000 });
 
-    await expandRailSection(page, "cut-lines-guides");
-    await page
-      .getByTestId("display-cut-line-shape")
-      .selectOption("cornerMarks");
+  const viewports: Array<{ name: string; width: number; height: number }> = [
+    { name: "narrow (800px)", width: 800, height: 600 },
+    { name: "wide (1280px)", width: 1280, height: 800 },
+  ];
 
-    const slot = page.getByTestId("page-preview-slot").first();
-    const guides = slot.getByTestId("page-preview-cut-line");
-    await expect(guides.first()).toBeVisible();
+  const profiles: MarginProfile[] = ["bordered", "rearFeed"];
 
-    const count = await guides.count();
-    expect(count).toBe(8);
-  });
+  for (const viewport of viewports) {
+    for (const profile of profiles) {
+      test(`perimeter guide paints green pixels [${profile}, ${viewport.name}]`, async ({
+        page,
+        network,
+      }) => {
+        network.use(...singleCardHandlers);
+        await setupCardOnPage(page, profile, "perimeter");
 
-  test("both shape: exactly 9 guide segments visible (1 perimeter + 8 corner marks)", async ({
-    page,
-    network,
-  }) => {
-    network.use(...singleCardHandlers);
-    await loadPageWithDefaultBackend(page);
-    await importTextOnEditorLanding(page, "1x my search query");
+        await page.setViewportSize({
+          width: viewport.width,
+          height: viewport.height,
+        });
+        const slot = await waitForLayoutSettle(page);
 
-    await expandRailSection(page, "cut-lines-guides");
-    await page.getByTestId("display-cut-line-shape").selectOption("both");
+        const screenshot = await slot.screenshot();
+        const decoded = decodePNG(screenshot);
+        const guidePixels = countGuidePixels(decoded);
 
-    const slot = page.getByTestId("page-preview-slot").first();
-    const guides = slot.getByTestId("page-preview-cut-line");
-    await expect(guides.first()).toBeVisible();
+        expect(
+          guidePixels,
+          `Expected painted guide pixels in slot screenshot (${profile}, ${viewport.name}) — guide may have gone sub-pixel`
+        ).toBeGreaterThan(20);
+      });
+    }
+  }
 
-    const count = await guides.count();
-    expect(count).toBe(9);
-  });
+  for (const viewport of viewports) {
+    for (const profile of profiles) {
+      test(`cornerMarks guide paints green pixels [${profile}, ${viewport.name}]`, async ({
+        page,
+        network,
+      }) => {
+        network.use(...singleCardHandlers);
+        await setupCardOnPage(page, profile, "cornerMarks");
 
-  test("shape switcher: changing from perimeter to cornerMarks replaces segments", async ({
+        await page.setViewportSize({
+          width: viewport.width,
+          height: viewport.height,
+        });
+        const slot = await waitForLayoutSettle(page);
+
+        const screenshot = await slot.screenshot();
+        const decoded = decodePNG(screenshot);
+        const guidePixels = countGuidePixels(decoded);
+
+        expect(
+          guidePixels,
+          `Expected painted corner-mark pixels (${profile}, ${viewport.name})`
+        ).toBeGreaterThan(8);
+      });
+    }
+  }
+
+  for (const viewport of viewports) {
+    for (const profile of profiles) {
+      test(`both shape paints green pixels [${profile}, ${viewport.name}]`, async ({
+        page,
+        network,
+      }) => {
+        network.use(...singleCardHandlers);
+        await setupCardOnPage(page, profile, "both");
+
+        await page.setViewportSize({
+          width: viewport.width,
+          height: viewport.height,
+        });
+        const slot = await waitForLayoutSettle(page);
+
+        const screenshot = await slot.screenshot();
+        const decoded = decodePNG(screenshot);
+        const guidePixels = countGuidePixels(decoded);
+
+        expect(
+          guidePixels,
+          `Expected painted guide pixels for "both" shape (${profile}, ${viewport.name})`
+        ).toBeGreaterThan(30);
+      });
+    }
+  }
+
+  // ─── Shape-switching still works (DOM-level sanity, kept from old suite) ───
+
+  test("shape switcher replaces DOM segments correctly", async ({
     page,
     network,
   }) => {
@@ -103,8 +297,8 @@ test.describe("Cut guide rendering - segment counts by shape", () => {
 
     await expandRailSection(page, "cut-lines-guides");
     const shapeSelect = page.getByTestId("display-cut-line-shape");
-    await shapeSelect.selectOption("perimeter");
 
+    await shapeSelect.selectOption("perimeter");
     const slot = page.getByTestId("page-preview-slot").first();
     const guides = slot.getByTestId("page-preview-cut-line");
     await expect(guides).toBeVisible();
