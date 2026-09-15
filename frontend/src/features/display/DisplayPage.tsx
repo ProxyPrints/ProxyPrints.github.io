@@ -233,8 +233,10 @@ import {
   Back,
   CardHeightMM,
   CardWidthMM,
+  CutLineShape,
   DEFAULT_CUT_LINE_COLOR,
   DEFAULT_CUT_LINE_LENGTH_MM,
+  DEFAULT_CUT_LINE_SHAPE,
   DEFAULT_CUT_LINE_THICKNESS_MM,
   Front,
 } from "@/common/constants";
@@ -391,7 +393,7 @@ interface DisplaySheetSettings {
   // reason imageDPI/jpgQuality/roundCorners moved: printed-artifact appearance, not a one-off
   // export-run choice (see displayPdfProps.ts's DisplaySheetExportSettings comment).
   cutLineColor: string;
-  showCrossCutLines: boolean;
+  cutLineShape: CutLineShape;
   cutLineLengthMM: number;
   cutLineThicknessMM: number;
   cutLineOffsetMM: number;
@@ -452,7 +454,7 @@ const DEFAULT_SHEET_SETTINGS: DisplaySheetSettings = {
   bleedEdgeMM: STANDARD_BLEED_MARGIN_MM,
   showCutLines: true,
   cutLineColor: DEFAULT_CUT_LINE_COLOR,
-  showCrossCutLines: false,
+  cutLineShape: DEFAULT_CUT_LINE_SHAPE,
   cutLineLengthMM: DEFAULT_CUT_LINE_LENGTH_MM,
   cutLineThicknessMM: DEFAULT_CUT_LINE_THICKNESS_MM,
   cutLineOffsetMM: 0,
@@ -3303,6 +3305,7 @@ export function DisplayPage() {
                       cutLineLengthMM={settings.cutLineLengthMM}
                       cutLineThicknessMM={settings.cutLineThicknessMM}
                       cutLineOffsetMM={settings.cutLineOffsetMM}
+                      cutLineShape={settings.cutLineShape}
                       maxWidthPx={sheetRenderWidthPx}
                       // R7/D17 - screen-only presentation (no white fill/box-shadow, a hairline
                       // pinline instead); the exported PDF (exportPdfProps above) never reads
@@ -3839,20 +3842,28 @@ export function DisplayPage() {
                           card. Offset pushes the mark further out (negative
                           pulls it back in).
                         </div>
-                        <Form.Check
-                          type="switch"
-                          id="display-cross-cut-lines-toggle"
-                          className="mb-0"
-                          data-testid="display-cross-cut-lines"
-                          label="Crosshair marks"
-                          checked={settings.showCrossCutLines}
-                          onChange={(event) =>
-                            setSettings((previous) => ({
-                              ...previous,
-                              showCrossCutLines: event.target.checked,
-                            }))
-                          }
-                        />
+                        <Form.Group className="mb-0">
+                          <Form.Label className="small mb-1">
+                            Cut guide shape
+                          </Form.Label>
+                          <Form.Select
+                            size="sm"
+                            aria-label="Cut guide shape"
+                            data-testid="display-cut-line-shape"
+                            value={settings.cutLineShape}
+                            onChange={(event) =>
+                              setSettings((previous) => ({
+                                ...previous,
+                                cutLineShape: event.target
+                                  .value as CutLineShape,
+                              }))
+                            }
+                          >
+                            <option value="perimeter">Perimeter</option>
+                            <option value="cornerMarks">Corner marks</option>
+                            <option value="both">Both</option>
+                          </Form.Select>
+                        </Form.Group>
                       </div>
                     )}
                     {/* Page-level guillotine cut guide lines, independent of the per-card Guides

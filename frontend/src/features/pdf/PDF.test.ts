@@ -88,7 +88,7 @@ const DEFAULT_SHEET_SETTINGS = {
   bleedEdgeMM: 3.175,
   showCutLines: true,
   cutLineColor: DEFAULT_CUT_LINE_COLOR,
-  showCrossCutLines: false,
+  cutLineShape: "perimeter" as const,
   cutLineLengthMM: DEFAULT_CUT_LINE_LENGTH_MM,
   cutLineThicknessMM: DEFAULT_CUT_LINE_THICKNESS_MM,
   cutLineOffsetMM: 0,

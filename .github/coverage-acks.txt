@@ -377,3 +377,13 @@ coverage-ack: frontend/tests/DisplayLeftRailFidelity.spec.ts::Editor-polish roun
 # because there is nothing left at that route to report an error for; every other test in
 # Toasts.spec.ts's "error reporting toasts" describe block is untouched.
 coverage-ack: frontend/tests/Toasts.spec.ts::error reporting toasts > /2/SplitCardNames — the /2/SplitCardNames endpoint is deleted (split-vs-directive parsing now routes on layout, not a fetched name list); the frontend no longer calls it, so there is nothing left to report an error for.
+
+# Cut-guide shape-select round (PR #991) - the boolean showCrossCutLines prop (testid
+# display-cross-cut-lines) is replaced by a CutLineShape enum (perimeter | cornerMarks | both,
+# testid display-cut-line-shape). The old test title named the retired boolean toggle directly;
+# the replacement asserts the same behaviour (hidden when Guides off, visible at its default
+# perimeter when on, changeable to cornerMarks, mapping through to the export) against the new
+# select. Commit 79470723 raised the sub-pixel stroke floor from 1 device pixel to 2 (the
+# outline anti-aliased against the dark slot background at wider viewports, most painted pixels
+# fell below detection); that fix only touches PagePreview.tsx and its test, not this title.
+coverage-ack: frontend/tests/DisplayExportPDFSettings.spec.ts::DisplayExportPDF - editor export controls > cut-line colour and cross-marks toggle are only shown when the rail's Guides toggle is on, and map through to the export — renamed to "cut-line colour and cut guide shape select are only shown when the rail's Guides toggle is on, and map through to the export" when the boolean display-cross-cut-lines toggle was replaced by the display-cut-line-shape select (perimeter/cornerMarks/both); the guides-on/off gating assertion is unchanged, now exercised against the new select.

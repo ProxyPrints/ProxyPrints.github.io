@@ -65,7 +65,7 @@
  * profile. Seeded from the current profile's own values when the toggle turns on (see
  * `DisplayPage.tsx`), so turning it on never starts from a jarring unrelated number.
  */
-import { CardHeightMM, CardWidthMM } from "@/common/constants";
+import { CardHeightMM, CardWidthMM, CutLineShape } from "@/common/constants";
 import {
   CardDocument,
   MarginProfileKey,
@@ -114,9 +114,10 @@ export interface DisplaySheetExportSettings {
    * the Guides toggle it depends on rather than behind the Export PDF dialog. Applies to both the
    * dashed trim outline and, when enabled, the crosshair corner marks below. */
   cutLineColor: string;
-  /** Optional crosshair corner marks alongside the default dashed trim outline - see
-   * `PDFProps.showCrossCutLines`'s own comment. Default off (`DisplayPage.tsx`). */
-  showCrossCutLines: boolean;
+  /** Cut guide shape: "perimeter" (dashed bleed outline only), "cornerMarks" (crosshair marks
+   * only), or "both". Default "perimeter" matches the original dashed-outline behavior.
+   * Only rendered when drawCardCutLines is on (nothing to draw shapes onto otherwise). */
+  cutLineShape: CutLineShape;
   cutLineLengthMM: number;
   cutLineThicknessMM: number;
   cutLineOffsetMM: number;
@@ -283,7 +284,7 @@ export const buildDisplayPDFProps = (
       );
   return {
     cardSelectionMode: sheetSettings.cardSelectionMode,
-    showCrossCutLines: sheetSettings.showCrossCutLines,
+    cutLineShape: sheetSettings.cutLineShape,
     pageSize: "CUSTOM",
     pageWidth: portraitSize.height,
     pageHeight: portraitSize.width,

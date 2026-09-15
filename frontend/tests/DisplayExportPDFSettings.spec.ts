@@ -223,7 +223,7 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     expect(requestUrl.searchParams.get("jpgQuality")).toBe("5");
   });
 
-  test("cut-line colour and cross-marks toggle are only shown when the rail's Guides toggle is on, and map through to the export", async ({
+  test("cut-line colour and cut guide shape select are only shown when the rail's Guides toggle is on, and map through to the export", async ({
     page,
     network,
   }) => {
@@ -236,22 +236,24 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     // default, so the controls aren't reachable (or present in the accessibility tree as
     // visible) until the section is opened.
     await expect(page.getByTestId("display-cut-line-color")).not.toBeVisible();
+    await expect(page.getByTestId("display-cut-line-shape")).not.toBeVisible();
     await expandRailSection(page, "cut-lines-guides");
 
     await expect(page.getByTestId("display-cut-line-color")).toBeVisible();
-    const crossToggle = page.getByTestId("display-cross-cut-lines");
-    await expect(crossToggle).toBeVisible();
-    await expect(crossToggle).not.toBeChecked();
+    const shapeSelect = page.getByTestId("display-cut-line-shape");
+    await expect(shapeSelect).toBeVisible();
+    await expect(shapeSelect).toHaveValue("perimeter");
     await page.getByTestId("display-cut-line-color").fill("#ff0000");
-    await crossToggle.check();
+    await shapeSelect.selectOption("cornerMarks");
     await expect(page.getByTestId("display-cut-line-color")).toHaveValue(
       "#ff0000"
     );
-    await expect(crossToggle).toBeChecked();
+    await expect(shapeSelect).toHaveValue("cornerMarks");
 
-    // Guides off -> the colour/cross-marks controls have nothing to style, so they don't render.
+    // Guides off -> the colour/shape controls have nothing to style, so they don't render.
     await page.getByLabel("Guides").uncheck();
     await expect(page.getByTestId("display-cut-line-color")).not.toBeVisible();
+    await expect(shapeSelect).not.toBeVisible();
   });
 
   test("the bleed-will-be-generated badge appears on the editor sheet for a forced-trimmed eligible card", async ({

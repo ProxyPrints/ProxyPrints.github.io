@@ -32,7 +32,7 @@ const DEFAULT_SHEET_SETTINGS = {
   bleedEdgeMM: 3.175,
   showCutLines: true,
   cutLineColor: "#8ae234",
-  showCrossCutLines: false,
+  cutLineShape: "perimeter" as const,
   cutLineLengthMM: 3,
   cutLineThicknessMM: 0.6,
   cutLineOffsetMM: 0,
@@ -161,7 +161,7 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
     const props = buildDisplayPDFProps(baseInput);
     expect(props.drawCardCutLines).toBe(true);
     expect(props.cutLineColor).toBe("#8ae234");
-    expect(props.showCrossCutLines).toBe(false);
+    expect(props.cutLineShape).toBe("perimeter");
     expect(props.cutLineLengthMM).toBe(3);
     expect(props.cutLineThicknessMM).toBe(0.6);
     expect(props.cutLineOffsetMM).toBe(0);
@@ -190,14 +190,14 @@ describe("buildDisplayPDFProps - rail guide state reaches the exported PDF's cut
       sheetSettings: {
         ...DEFAULT_SHEET_SETTINGS,
         cutLineColor: "#ff0000",
-        showCrossCutLines: true,
+        cutLineShape: "both" as const,
         cutLineLengthMM: 5,
         cutLineThicknessMM: 1,
         cutLineOffsetMM: 0.5,
       },
     });
     expect(props.cutLineColor).toBe("#ff0000");
-    expect(props.showCrossCutLines).toBe(true);
+    expect(props.cutLineShape).toBe("both");
     expect(props.cutLineLengthMM).toBe(5);
     expect(props.cutLineThicknessMM).toBe(1);
     expect(props.cutLineOffsetMM).toBe(0.5);
