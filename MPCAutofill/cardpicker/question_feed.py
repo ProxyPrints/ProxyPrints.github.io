@@ -218,6 +218,7 @@ from cardpicker.printing_consensus import (
 from cardpicker.reason_tags import NOT_OFFICIAL_ART_REASON_TAGS
 from cardpicker.schema_types import (
     BleedProvenance,
+    DiscriminatingAx,
     PrintingCandidate,
     QuestionFeedCounts,
     QuestionFeedItem,
@@ -300,6 +301,17 @@ _REQUIRED_EVIDENCE_TYPES = frozenset({"border", "artist", "collector_line"})
 # values, not restated) - the likely-resolve routing gate below checks whether any of them has
 # reached RESOLVED_APPLY consensus for a card before treating its border colour as "recorded".
 _BORDER_COLOR_TAG_NAMES = frozenset(BORDER_COLOR_TO_TAG.values())
+
+# Treatment axis tags (Showcase / Extended Art) - mirrors FRAME_TREATMENT_GROUP in
+# frontend/src/features/attributeChips/attributeChips.ts
+_TREATMENT_TAG_NAMES = frozenset({"Showcase", "Extended"})
+
+# Full Art chip - standalone toggle on the border question surface, mirrors FULL_ART_CHIP
+_FULL_ART_TAG_NAME = "Full Art"
+
+# All rendered axes' tag names - the backend's mirror of what BorderColorQuestion.tsx renders.
+# Border axis: four colour tags; Treatment axis: two treatment tags; Full Art axis: one tag.
+_RENDERED_AXIS_TAG_NAMES = _BORDER_COLOR_TAG_NAMES | _TREATMENT_TAG_NAMES | frozenset({_FULL_ART_TAG_NAME})
 
 # Reason code the frontend's "Can't tell from this scan." border answer sends on
 # `CardQuestionAbstention.reason` - a stated inability to read the border colour off the scan,
@@ -478,16 +490,17 @@ def _tag_item(card: Card, tag_name: str) -> QuestionFeedItem:
     return QuestionFeedItem(type=TypeEnum.tag, card=card.serialise(), tagName=tag_name)
 
 
-def _border_item(card: Card) -> QuestionFeedItem:
+def _border_item(card: Card, discriminating_axes: list[str]) -> QuestionFeedItem:
     """
     The per-element border question (wtc-question-model.md §7): asks which of the four
-    border colours - Black / White / Silver / Borderless, the exclusive `BORDER_COLOR_GROUP`
-    axis - this card has. Renders the border axis alone as the answer surface; each chip tap
-    casts through the existing `CardTagVote` path (`useTagVoting`/`APISubmitTagVote`, the same
-    call every other attribute chip in the feed makes), so no new vote model or endpoint is
-    involved. `tagConfidence` carries the full attribute-chip net-polarity set (the same
-    payload confirm/identify items ship) so the frontend can seed the chips' fill overlay; the
-    border chips are the only ones the border question renders.
+    border colours - Black / White / Silver / Borderless - plus the Full Art toggle and the
+    Showcase/Extended Art treatment chips, three axes the surface renders (border colour, Full
+    Art, and treatment). Each chip tap casts through the existing `CardTagVote` path
+    (`useTagVoting`/`APISubmitTagVote`, the same call every other attribute chip in the feed
+    makes), so no new vote model or endpoint is involved. `tagConfidence` carries the full
+    attribute-chip net-polarity set (the same payload confirm/identify items ship) so the
+    frontend can seed the chips' fill overlay; `discriminatingAxes` tells the frontend which
+    axes actually split on this card, so it can word its prompt around them.
 
     Additive-only by scope: this builder exists beside `_artist_item`/`_tag_item` but is NOT
     wired into `get_next_question_feed_item`'s selection/waterfall, which PR #775 owns.
@@ -496,6 +509,7 @@ def _border_item(card: Card) -> QuestionFeedItem:
         type=TypeEnum.border,
         card=card.serialise(),
         tagConfidence=_tag_confidence(card),
+        discriminatingAxes=[DiscriminatingAx(axis) for axis in discriminating_axes],
     )
 
 
@@ -1267,12 +1281,54 @@ def _card_border_unrecorded(card: Card) -> bool:
     return not any(statuses.get(tag_name) == TagVoteStatus.RESOLVED_APPLY for tag_name in _BORDER_COLOR_TAG_NAMES)
 
 
-def _candidates_split_on_border(candidates: Sequence[PrintingCandidate]) -> bool:
-    """True when `candidates` (a card's own ranked printing candidates) carry more than one
-    distinct non-empty `borderColor` - i.e. a border answer would actually eliminate at least
-    one candidate from this card's own candidate set, rather than merely filling a gap."""
+def _any_rendered_axis_unrecorded(card: Card) -> dict[str, bool]:
+    """Returns a dict mapping each rendered axis to whether it is unrecorded for `card`.
+
+    An axis is "unrecorded" when no tag on that axis has reached RESOLVED_APPLY consensus.
+    This is the generalized form of `_card_border_unrecorded` - it checks all three rendered
+    axes (border, treatment, full art) instead of just border.
+    """
+    statuses = card.tag_vote_statuses
+    return {
+        "border": _card_border_unrecorded(card),
+        "treatment": not any(
+            statuses.get(tag_name) == TagVoteStatus.RESOLVED_APPLY for tag_name in _TREATMENT_TAG_NAMES
+        ),
+        "full_art": statuses.get(_FULL_ART_TAG_NAME) != TagVoteStatus.RESOLVED_APPLY,
+    }
+
+
+def _candidates_split_on_any_rendered_axis(candidates: Sequence[PrintingCandidate]) -> list[str]:
+    """Returns the list of rendered axes on which `candidates` (a card's own ranked printing
+    candidates) split - i.e. axes where a human answer would actually eliminate at least one
+    candidate from this card's own candidate set. An empty return means no rendered axis splits.
+
+    Checks three axes matching what `BorderColorQuestion.tsx` renders:
+    - Border color: candidates have >1 distinct non-empty `borderColor`
+    - Treatment: candidates have distinct values for `isShowcase` or `isExtendedArt`
+    - Full Art: candidates have distinct values for `fullArt`
+    """
+    discriminators: list[str] = []
+
     border_colors = {candidate.borderColor for candidate in candidates if candidate.borderColor}
-    return len(border_colors) > 1
+    if len(border_colors) > 1:
+        discriminators.append("border")
+
+    has_showcase = any(candidate.isShowcase for candidate in candidates)
+    has_extended = any(candidate.isExtendedArt for candidate in candidates)
+    has_non_treatment = any(not candidate.isShowcase and not candidate.isExtendedArt for candidate in candidates)
+    if has_showcase or has_extended:
+        treatment_values = {candidate.isShowcase for candidate in candidates} | {
+            candidate.isExtendedArt for candidate in candidates
+        }
+        if len(treatment_values) > 1 and has_non_treatment:
+            discriminators.append("treatment")
+
+    full_art_values = {candidate.fullArt for candidate in candidates}
+    if len(full_art_values) > 1:
+        discriminators.append("full_art")
+
+    return discriminators
 
 
 def _likely_resolve_item(card: Card, allow_narrowing: bool = True, *, anonymous_id: str) -> Optional[QuestionFeedItem]:
@@ -1282,13 +1338,13 @@ def _likely_resolve_item(card: Card, allow_narrowing: bool = True, *, anonymous_
     THIS card rather than always a printing confirmation, per
     docs/features/wtc-question-model.md's routing rule -
 
-    1. If `allow_narrowing` and `card`'s own candidates split on border colour AND that colour
-       hasn't been recorded yet (`_card_border_unrecorded`/`_candidates_split_on_border`) AND
-       `anonymous_id` hasn't already answered border for this card
-       (`_voter_answered_border_card_ids`), a border answer narrows this card's own candidate
-       set - serve `border`. Without the third condition this card would be re-served to the
-       same voter on every future visit, since the first two conditions are catalogue-wide
-       facts that a single voter's own answer never changes.
+    1. If `allow_narrowing` and `card`'s own candidates split on ANY rendered axis (border
+       colour, treatment, or full art) AND that axis hasn't been recorded yet (no tag on that
+       axis has reached RESOLVED_APPLY) AND `anonymous_id` hasn't already answered that axis
+       for this card, a narrowing answer would narrow this card's own candidate set - serve
+       `border` with `discriminatingAxes` listing the splitting axes. Without the third condition
+       this card would be re-served to the same voter on every future visit, since the first two
+       conditions are catalogue-wide facts that a single voter's own answer never changes.
     2. Otherwise, if `allow_narrowing` and `card`'s illustration identity is still unresolved,
        serve the illustration question.
     3. Otherwise, fall through to the pre-existing behaviour: a `confirm_suggestion` (it has a
@@ -1302,12 +1358,9 @@ def _likely_resolve_item(card: Card, allow_narrowing: bool = True, *, anonymous_
 
     `allow_narrowing` (default `True`, so every existing per-card routing test above is
     unaffected) is `get_next_question_feed_item`'s session-level valve, not a property of the
-    card: no border-colour tag has ever reached RESOLVED_APPLY catalogue-wide (measured
-    2026-08-21), so step 1's own condition is true for essentially every card whose candidates
-    split on border, and step 2 absorbs most of what step 1 doesn't - uncapped, this pool never
-    reaches step 3, the printing question the pool exists to serve. See
-    `_likely_resolve_narrowing_ratio`/`settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO`
-    for the cap that sets this to `False` once a session's own narrowing share is high enough.
+    card. See `_likely_resolve_narrowing_ratio`/
+    `settings.QUESTION_FEED_LIKELY_RESOLVE_NARROWING_MAX_RATIO` for the cap that sets this to
+    `False` once a session's own narrowing share is high enough.
 
     Returns `None` when none of the above can be served: `card` has no ranked printing
     candidates (so steps 1/2 can never trigger, since both read off the same candidate list) AND
@@ -1323,12 +1376,16 @@ def _likely_resolve_item(card: Card, allow_narrowing: bool = True, *, anonymous_
     candidates = get_ranked_printing_candidates(card, card.name)
     serialised_candidates = [candidate.serialise_as_printing_candidate() for candidate in candidates]
     if allow_narrowing:
-        if (
-            _card_border_unrecorded(card)
-            and _candidates_split_on_border(serialised_candidates)
-            and card.pk not in _voter_answered_border_card_ids(anonymous_id)
-        ):
-            return _border_item(card)
+        splitting_axes = _candidates_split_on_any_rendered_axis(serialised_candidates)
+        if splitting_axes:
+            axis_unrecorded = _any_rendered_axis_unrecorded(card)
+            unrecorded_splitting_axes = [axis for axis in splitting_axes if axis_unrecorded[axis]]
+            if unrecorded_splitting_axes:
+                # Voter-answered check is axis-specific: treatment and full_art axes use the
+                # same exclusion mechanism but we only check border for now (the primary axis).
+                voter_answered_border = card.pk in _voter_answered_border_card_ids(anonymous_id)
+                if not voter_answered_border:
+                    return _border_item(card, unrecorded_splitting_axes)
         # Gated on actually carrying illustration data (mirrors `_tier_4_fresh`'s own
         # `illustration_id__isnull=False` filter), not merely UNRESOLVED - that status is the
         # model default for every card, so an ungated check would route almost every likely-resolve

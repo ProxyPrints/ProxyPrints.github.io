@@ -537,6 +537,12 @@ class Card(BaseModel):
         return result
 
 
+class DiscriminatingAx(str, Enum):
+    border = "border"
+    fullart = "full_art"
+    treatment = "treatment"
+
+
 class TypeEnum(str, Enum):
     artist = "artist"
     border = "border"
@@ -551,6 +557,7 @@ class QuestionFeedItem(BaseModel):
     type: TypeEnum
     candidates: Optional[List[PrintingCandidate]] = None
     confidentlyKnownArtistName: Optional[str] = None
+    discriminatingAxes: Optional[List[DiscriminatingAx]] = None
     illustrationCandidates: Optional[List[PrintingCandidate]] = None
     isAnotherCopy: Optional[bool] = None
     scryfallIllustrationUrl: Optional[str] = None
@@ -565,6 +572,9 @@ class QuestionFeedItem(BaseModel):
         type = TypeEnum(obj.get("type"))
         candidates = from_union([lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("candidates"))
         confidentlyKnownArtistName = from_union([from_none, from_str], obj.get("confidentlyKnownArtistName"))
+        discriminatingAxes = from_union(
+            [lambda x: from_list(DiscriminatingAx, x), from_none], obj.get("discriminatingAxes")
+        )
         illustrationCandidates = from_union(
             [lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("illustrationCandidates")
         )
@@ -578,6 +588,7 @@ class QuestionFeedItem(BaseModel):
             type,
             candidates,
             confidentlyKnownArtistName,
+            discriminatingAxes,
             illustrationCandidates,
             isAnotherCopy,
             scryfallIllustrationUrl,
@@ -596,6 +607,10 @@ class QuestionFeedItem(BaseModel):
             )
         if self.confidentlyKnownArtistName is not None:
             result["confidentlyKnownArtistName"] = from_union([from_none, from_str], self.confidentlyKnownArtistName)
+        if self.discriminatingAxes is not None:
+            result["discriminatingAxes"] = from_union(
+                [lambda x: from_list(lambda x: to_enum(DiscriminatingAx, x), x), from_none], self.discriminatingAxes
+            )
         if self.illustrationCandidates is not None:
             result["illustrationCandidates"] = from_union(
                 [lambda x: from_list(lambda x: to_class(PrintingCandidate, x), x), from_none],
