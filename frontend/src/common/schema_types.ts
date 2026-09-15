@@ -159,6 +159,7 @@ export interface QuestionFeedItem {
   candidates?: PrintingCandidate[];
   card: Card;
   confidentlyKnownArtistName?: null | string;
+  discriminatingAxes?: DiscriminatingAx[];
   illustrationCandidates?: PrintingCandidate[];
   isAnotherCopy?: boolean;
   scryfallIllustrationUrl?: null | string;
@@ -382,6 +383,12 @@ export enum SourceType {
 export enum TagVoteDisplayStatus {
   Resolved = "resolved",
   Suggested = "suggested",
+}
+
+export enum DiscriminatingAx {
+  Border = "border",
+  FullArt = "full_art",
+  Treatment = "treatment",
 }
 
 export enum Type {
@@ -3149,6 +3156,11 @@ const typeMap: any = {
         typ: u(undefined, u(null, "")),
       },
       {
+        json: "discriminatingAxes",
+        js: "discriminatingAxes",
+        typ: u(undefined, a(r("DiscriminatingAx"))),
+      },
+      {
         json: "illustrationCandidates",
         js: "illustrationCandidates",
         typ: u(undefined, a(r("PrintingCandidate"))),
@@ -4437,6 +4449,7 @@ const typeMap: any = {
   PrintingTagStatus: ["no_match", "resolved", "unresolved"],
   SourceType: ["AWS S3", "Google Drive", "Local File"],
   TagVoteDisplayStatus: ["resolved", "suggested"],
+  DiscriminatingAx: ["border", "full_art", "treatment"],
   Type: [
     "artist",
     "border",

@@ -610,7 +610,7 @@ class TestBorderItem:
     def test_border_item_is_type_border(self, db):
         card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED)
 
-        item = _border_item(card)
+        item = _border_item(card, ["border"])
 
         assert item.type.value == "border"
         assert item.card.name == card.name
@@ -623,7 +623,7 @@ class TestBorderItem:
             TagFactory(name=tag_name)
         card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED)
 
-        item = _border_item(card)
+        item = _border_item(card, ["border"])
 
         assert item.tagConfidence == {
             "Black Border": 0.0,
@@ -641,7 +641,7 @@ class TestLogServedMeasuredBleed:
     def test_attaches_measured_bleed_when_current_evidence_has_it(self, db):
         card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED, content_phash=123)
         ImageEvidenceFactory(card=card, content_hash=123, bleed_diff_mm=0.675)
-        item = _border_item(card)
+        item = _border_item(card, ["border"])
 
         served = _log_served("anon", item, QuestionFeedServedPool.REMAINDER, "test")
 
@@ -649,7 +649,7 @@ class TestLogServedMeasuredBleed:
 
     def test_leaves_measured_bleed_null_when_no_current_evidence(self, db):
         card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED, content_phash=456)
-        item = _border_item(card)
+        item = _border_item(card, ["border"])
 
         served = _log_served("anon", item, QuestionFeedServedPool.REMAINDER, "test")
 
@@ -660,7 +660,7 @@ class TestLogServedMeasuredBleed:
         # queryset excludes it, the same staleness rule every other bleed reader honours.
         card = CardFactory(canonical_card=None, printing_tag_status=PrintingTagStatus.UNRESOLVED, content_phash=789)
         ImageEvidenceFactory(card=card, content_hash=999, bleed_diff_mm=0.675)
-        item = _border_item(card)
+        item = _border_item(card, ["border"])
 
         served = _log_served("anon", item, QuestionFeedServedPool.REMAINDER, "test")
 
@@ -1766,6 +1766,14 @@ def _printing_with_border(name: str, border_color: str, illustration_id=None) ->
     )
 
 
+def _printing_with_treatment(name: str, frame_effects: list[str], border_color: str = "black") -> None:
+    """A live `CanonicalCard` candidate matching `name`, carrying specific `frame_effects` and
+    `border_color` - the fixture `_likely_resolve_item` routing tests below use to control what
+    `get_ranked_printing_candidates` returns for treatment-axis splits."""
+    printing = CanonicalCardFactory(name=name)
+    CanonicalPrintingMetadataFactory(canonical_card=printing, border_color=border_color, frame_effects=frame_effects)
+
+
 class TestIllustrationItem:
     """`_illustration_item` (wtc-question-model.md §7.2): asks which artwork a card depicts,
     deduplicating candidates that share an `illustration_id`. Returns `None` unless the
@@ -1910,6 +1918,71 @@ class TestLikelyResolveRouting:
         item = _likely_resolve_item(card, anonymous_id="anon-1")
 
         assert item.type.value == "confirm_suggestion"
+
+    def test_treatment_only_split_serves_border_question(self, db):
+        """Treatment-only split now serves where it previously did not: candidates share a
+        borderColor but differ on isShowcase/isExtendedArt."""
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _printing_with_treatment("Brainstorm", frame_effects=["showcase"])
+        _printing_with_treatment("Brainstorm", frame_effects=[])
+
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
+
+        assert item.type.value == "border"
+        assert item.discriminatingAxes is not None
+        assert "treatment" in item.discriminatingAxes
+
+    def test_border_and_treatment_split_serves_border_question_with_both_axes(self, db):
+        """Both border and treatment splits should be listed in discriminatingAxes."""
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _printing_with_treatment("Brainstorm", frame_effects=["showcase"], border_color="black")
+        _printing_with_treatment("Brainstorm", frame_effects=[], border_color="white")
+
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
+
+        assert item.type.value == "border"
+        assert item.discriminatingAxes is not None
+        assert "border" in item.discriminatingAxes
+        assert "treatment" in item.discriminatingAxes
+
+    def test_treatment_axis_already_resolved_suppresses_treatment_only_split(self, db):
+        """A card whose only splitting axis is already RESOLVED_APPLY is NOT served as border."""
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        card.tag_vote_statuses = {"Showcase": TagVoteStatus.RESOLVED_APPLY}
+        card.save(update_fields=["tag_vote_statuses"])
+        _printing_with_treatment("Brainstorm", frame_effects=["showcase"])
+        _printing_with_treatment("Brainstorm", frame_effects=[])
+
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
+
+        assert item.type.value != "border"
+
+    def test_border_settled_does_not_suppress_treatment_question(self, db):
+        """A settled border colour must not suppress an unasked, discriminating treatment question."""
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        card.tag_vote_statuses = {"Black Border": TagVoteStatus.RESOLVED_APPLY}
+        card.save(update_fields=["tag_vote_statuses"])
+        _printing_with_treatment("Brainstorm", frame_effects=["showcase"], border_color="black")
+        _printing_with_treatment("Brainstorm", frame_effects=[], border_color="black")
+
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
+
+        assert item.type.value == "border"
+        assert item.discriminatingAxes is not None
+        assert "treatment" in item.discriminatingAxes
+        assert "border" not in item.discriminatingAxes
+
+    def test_voter_answered_border_suppresses_border_question(self, db):
+        """Voter-already-answered condition still suppresses the border question."""
+        card = CardFactory(name="Brainstorm", printing_tag_status=PrintingTagStatus.UNRESOLVED)
+        _printing_with_border("Brainstorm", "black")
+        _printing_with_border("Brainstorm", "white")
+        tag = TagFactory(name="Black Border")
+        CardTagVoteFactory(card=card, tag=tag, anonymous_id="anon-1", polarity=VotePolarity.APPLY)
+
+        item = _likely_resolve_item(card, anonymous_id="anon-1")
+
+        assert item.type.value != "border"
 
 
 class TestBorderPerVoterExclusion:

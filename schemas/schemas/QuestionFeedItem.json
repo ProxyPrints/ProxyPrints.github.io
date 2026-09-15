@@ -31,7 +31,11 @@
     "confidentlyKnownArtistName": { "type": ["string", "null"] },
     "scryfallIllustrationUrl": { "type": ["string", "null"] },
     "tagName": { "type": "string" },
-    "isAnotherCopy": { "type": "boolean" }
+    "isAnotherCopy": { "type": "boolean" },
+    "discriminatingAxes": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["border", "treatment", "full_art"] }
+    }
   },
   "required": ["type", "card"],
   "additionalProperties": false
