@@ -29,6 +29,7 @@ from cardpicker.local_frame_family import (
     FRAME_FAMILY_CUSTOM,
     FRAME_FAMILY_MYSTICAL_ARCHIVE,
     FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON,
+    FRAME_FAMILY_NO_PHASH_SKIP_REASON,
     FRAME_FAMILY_NO_READING_SKIP_REASON,
     FRAME_FAMILY_OTHER_SHOWCASE,
     FRAME_FAMILY_PIPBOY,
@@ -781,6 +782,54 @@ class TestRunFrameFamilyCast:
         CardFactory(content_phash=1)
         with pytest.raises(RuntimeError):
             run_frame_family_cast(dry_run=False)
+
+    def test_currency_selection_uses_current_evidence_not_newest_created(self, db, monkeypatch):
+        """A card with two ImageEvidence rows where the newest-created is NOT the one
+        matching card.content_phash. The caster must read the current evidence (matching
+        the card's live content_phash), not the most recently created row."""
+        self._enable(monkeypatch, [FRAME_FAMILY_SHOWCASE_MAGNIFIED])
+        seed_default_tags()
+        card = CardFactory(content_phash=42)
+
+        # Current evidence (matches card.content_phash) — created FIRST
+        _evidence(
+            card,
+            content_hash=42,
+            frame_family_class=FRAME_FAMILY_SHOWCASE_MAGNIFIED,
+            frame_family_confidence=CONFIDENCE_STRUCTURAL,
+        )
+
+        # Stale evidence (different content_hash) — created SECOND (newest-created)
+        _evidence(
+            card,
+            content_hash=999,
+            frame_family_class=FRAME_FAMILY_STANDARD,
+            frame_family_confidence=CONFIDENCE_STRUCTURAL,
+        )
+
+        result = run_frame_family_cast(dry_run=False)
+
+        # Must have read the current evidence (ShowcaseMagnified), not the stale one (Standard)
+        assert result.votes_would_cast == 1
+        assert result.votes_written == 1
+        vote = CardTagVote.objects.get(card=card, anonymous_id=FRAME_FAMILY_ANONYMOUS_ID)
+        assert vote.tag.name == FRAME_FAMILY_TAG_NAME
+
+    def test_no_phash_skips_with_no_content_phash_reason(self, db):
+        """A card with no content_phash must be skipped with the no-content-phash reason."""
+        seed_default_tags()
+        card = CardFactory(content_phash=None)
+        _evidence(
+            card,
+            content_hash=0,
+            frame_family_class=FRAME_FAMILY_SHOWCASE_MAGNIFIED,
+            frame_family_confidence=CONFIDENCE_STRUCTURAL,
+        )
+
+        result = run_frame_family_cast(dry_run=False)
+
+        assert result.votes_written == 0
+        assert result.skip_counts.get(FRAME_FAMILY_NO_PHASH_SKIP_REASON, 0) == 1
 
 
 # ---------------------------------------------------------------------------

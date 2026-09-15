@@ -85,7 +85,6 @@ from cardpicker.models import (
     Card,
     CardScanLog,
     CardTagVote,
-    ImageEvidence,
     Tag,
     VotePolarity,
     VoteSource,
@@ -169,6 +168,9 @@ FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON = "no-candidates"
 FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON = "no-evidence"
 FRAME_FAMILY_NO_READING_SKIP_REASON = "no-reading"
 FRAME_FAMILY_AMBIGUOUS_SKIP_REASON = "ambiguous"
+# The card has no content_phash yet, so current_evidence_queryset cannot key a currency
+# lookup.  Rescannable — a later backfill pass computes the hash.
+FRAME_FAMILY_NO_PHASH_SKIP_REASON = "no-content-phash"
 
 # Rescannable = transient "nothing to look at YET" states a later pass can change.
 FRAME_FAMILY_RESCANNABLE_SKIP_REASONS: frozenset[str] = frozenset(
@@ -176,6 +178,7 @@ FRAME_FAMILY_RESCANNABLE_SKIP_REASONS: frozenset[str] = frozenset(
         FRAME_FAMILY_NO_CANDIDATES_SKIP_REASON,
         FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON,
         FRAME_FAMILY_NO_READING_SKIP_REASON,
+        FRAME_FAMILY_NO_PHASH_SKIP_REASON,
     }
 )
 
@@ -801,12 +804,24 @@ def cast_frame_family_vote(
 ) -> Optional[CardTagVote]:
     """An unsaved `CardTagVote` applying the pre-existing "Showcase" tag, or None.
 
-    The gate reads the calibration table's outcome, not a hard-coded tier: a vote is cast
-    only when the family is in `NAMED_FAMILIES` (owner-verified truth + #829's bar cleared)
-    AND the confidence is structural. "STANDARD", "CUSTOM", "OTHER_SHOWCASE", and blank are
-    deliberately silent rather than casting a negative "Showcase" vote: a negative vote from
-    an unvalidated class is a claim, not an abstention. `NAMED_FAMILIES` is currently empty
-    (the calibration failed #829's bar), so this function casts nothing today.
+    The gate is closed because no available evidence supports a coarse "Showcase"
+    claim on this population.  Measured against 204 owner-verified labels
+    (2026-09-14): 19 of 204 confirmed the shown family, 7 further rejections
+    carry a note saying the render is a showcase anyway (six of the seven are the
+    identical phrase `borderless (true showcase?)`, with the owner's own question
+    mark), so a showcase of some kind is 26 of 204 = 12.7%, and 90 rejections
+    carry no note at all, which bounds the true share between 12.7% and 56.9%.
+    #829's bar is false positives near zero on ordinary cards.  Both ends of that
+    interval fail it.  So even a perfect family namer would not license this cast,
+    because most claimed-alternate-frame uploads are not showcases at all.
+
+    `NAMED_FAMILIES` is empty because the question that licenses a Showcase tag is
+    "is this render a showcase of any kind", not "is it the named family" — and no
+    available evidence supports that coarse claim at the required precision.
+
+    "STANDARD", "CUSTOM", "OTHER_SHOWCASE", and blank are deliberately silent
+    rather than casting a negative "Showcase" vote: a negative vote from an
+    unvalidated class is a claim, not an abstention.
     """
     if frame_family_class not in NAMED_FAMILIES:
         return None
@@ -882,8 +897,16 @@ def run_frame_family_cast(
 
     Mirrors `local_art_edge.run_art_edge_continuity_cast`'s own pattern: eligible cards ->
     read stored evidence -> cast if above-bar -> log skips. The bar is `cast_frame_family_vote`'s
-    own calibration gate (`NAMED_FAMILIES`), which is empty today, so this run casts nothing.
-    """
+    own gate (no available evidence supports a coarse Showcase claim on this population), so
+    this run casts nothing.
+
+    `current_evidence_queryset` is imported inside this function rather than at module scope:
+    `image_evidence.py` itself imports `classify_frame_family` from this module at its own
+    top level, so a top-level import the other way would be a circular import between the two
+    modules — the same reason `local_art_edge.run_art_edge_continuity_cast` imports its own
+    sibling lazily, inside the function, rather than at the top of that file."""
+    from cardpicker.image_evidence import current_evidence_queryset
+
     run_id = run_id or generate_run_id()
 
     tag = Tag.objects.filter(name=FRAME_FAMILY_TAG_NAME).first()
@@ -909,7 +932,11 @@ def run_frame_family_cast(
     votes_batch: list[CardTagVote] = []
 
     for card in _eligible_cards_queryset(card_ids).iterator(chunk_size=chunk_size):
-        evidence = ImageEvidence.objects.filter(card=card).order_by("-created_at").first()
+        if card.content_phash is None:
+            _skip(card.pk, FRAME_FAMILY_NO_PHASH_SKIP_REASON)
+            continue
+
+        evidence = current_evidence_queryset(card).order_by("-updated_at").first()
         if evidence is None:
             _skip(card.pk, FRAME_FAMILY_NO_EVIDENCE_SKIP_REASON)
             continue

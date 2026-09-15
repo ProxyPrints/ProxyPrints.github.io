@@ -86,7 +86,7 @@ EXPECTED_SKIP_REASONS = {
     # never written to CardScanLog; see the doc's own section)
     "no-artist-extracted": {"LANDS_NO_ARTIST_EXTRACTED_SKIP_REASON"},
     "artist-no-match": {"LANDS_ARTIST_NO_MATCH_SKIP_REASON"},
-    "no-content-phash": {"LANDS_NO_CONTENT_PHASH_SKIP_REASON"},
+    "no-content-phash": {"LANDS_NO_CONTENT_PHASH_SKIP_REASON", "FRAME_FAMILY_NO_PHASH_SKIP_REASON"},
     "fetch-budget-exhausted": {"LANDS_FETCH_BUDGET_EXHAUSTED_SKIP_REASON"},
     # Values emitted by MORE THAN ONE calculator, each with its own constant.
     # The `LOCAL_FALLBACK_*` three belong to the `local-fallback-v1` pilot engine
