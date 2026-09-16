@@ -11,6 +11,7 @@
         "artist",
         "tag",
         "border",
+        "frame_family",
         "illustration"
       ]
     },
@@ -35,7 +36,14 @@
     "discriminatingAxes": {
       "type": "array",
       "items": { "type": "string", "enum": ["border", "treatment", "full_art"] }
-    }
+    },
+    "familyCandidates": {
+      "type": "array",
+      "items": { "$ref": "./FrameFamilyCandidate.json" }
+    },
+    "familyConfidence": { "type": "number" },
+    "proposedFamilyName": { "type": "string" },
+    "proposedFamilyDisplayName": { "type": "string" }
   },
   "required": ["type", "card"],
   "additionalProperties": false

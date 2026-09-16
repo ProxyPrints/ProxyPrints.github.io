@@ -543,10 +543,37 @@ class DiscriminatingAx(str, Enum):
     treatment = "treatment"
 
 
+class FrameFamilyCandidate(BaseModel):
+    confidence: float
+    """The net polarity (-1..+1) for the fill overlay."""
+
+    displayName: str
+    """The human-readable label (e.g. 'Pipboy') for the UI."""
+
+    name: str
+    """The Tag.name (e.g. 'Pipboy') the frontend casts a CardTagVote against."""
+
+    @staticmethod
+    def from_dict(obj: Any) -> "FrameFamilyCandidate":
+        assert isinstance(obj, dict)
+        confidence = from_float(obj.get("confidence"))
+        displayName = from_str(obj.get("displayName"))
+        name = from_str(obj.get("name"))
+        return FrameFamilyCandidate(confidence, displayName, name)
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        result["confidence"] = to_float(self.confidence)
+        result["displayName"] = from_str(self.displayName)
+        result["name"] = from_str(self.name)
+        return result
+
+
 class TypeEnum(str, Enum):
     artist = "artist"
     border = "border"
     confirmsuggestion = "confirm_suggestion"
+    framefamily = "frame_family"
     identifyprinting = "identify_printing"
     illustration = "illustration"
     tag = "tag"
@@ -558,8 +585,12 @@ class QuestionFeedItem(BaseModel):
     candidates: Optional[List[PrintingCandidate]] = None
     confidentlyKnownArtistName: Optional[str] = None
     discriminatingAxes: Optional[List[DiscriminatingAx]] = None
+    familyCandidates: Optional[List[FrameFamilyCandidate]] = None
+    familyConfidence: Optional[float] = None
     illustrationCandidates: Optional[List[PrintingCandidate]] = None
     isAnotherCopy: Optional[bool] = None
+    proposedFamilyDisplayName: Optional[str] = None
+    proposedFamilyName: Optional[str] = None
     scryfallIllustrationUrl: Optional[str] = None
     suggestedPrinting: Optional[PrintingCandidate] = None
     tagConfidence: Optional[Dict[str, float]] = None
@@ -575,10 +606,16 @@ class QuestionFeedItem(BaseModel):
         discriminatingAxes = from_union(
             [lambda x: from_list(DiscriminatingAx, x), from_none], obj.get("discriminatingAxes")
         )
+        familyCandidates = from_union(
+            [lambda x: from_list(FrameFamilyCandidate.from_dict, x), from_none], obj.get("familyCandidates")
+        )
+        familyConfidence = from_union([from_none, from_float], obj.get("familyConfidence"))
         illustrationCandidates = from_union(
             [lambda x: from_list(PrintingCandidate.from_dict, x), from_none], obj.get("illustrationCandidates")
         )
         isAnotherCopy = from_union([from_bool, from_none], obj.get("isAnotherCopy"))
+        proposedFamilyDisplayName = from_union([from_str, from_none], obj.get("proposedFamilyDisplayName"))
+        proposedFamilyName = from_union([from_str, from_none], obj.get("proposedFamilyName"))
         scryfallIllustrationUrl = from_union([from_none, from_str], obj.get("scryfallIllustrationUrl"))
         suggestedPrinting = from_union([PrintingCandidate.from_dict, from_none], obj.get("suggestedPrinting"))
         tagConfidence = from_union([lambda x: from_dict(from_float, x), from_none], obj.get("tagConfidence"))
@@ -589,8 +626,12 @@ class QuestionFeedItem(BaseModel):
             candidates,
             confidentlyKnownArtistName,
             discriminatingAxes,
+            familyCandidates,
+            familyConfidence,
             illustrationCandidates,
             isAnotherCopy,
+            proposedFamilyDisplayName,
+            proposedFamilyName,
             scryfallIllustrationUrl,
             suggestedPrinting,
             tagConfidence,
@@ -611,6 +652,12 @@ class QuestionFeedItem(BaseModel):
             result["discriminatingAxes"] = from_union(
                 [lambda x: from_list(lambda x: to_enum(DiscriminatingAx, x), x), from_none], self.discriminatingAxes
             )
+        if self.familyCandidates is not None:
+            result["familyCandidates"] = from_union(
+                [lambda x: from_list(lambda x: to_class(FrameFamilyCandidate, x), x), from_none], self.familyCandidates
+            )
+        if self.familyConfidence is not None:
+            result["familyConfidence"] = from_union([from_none, to_float], self.familyConfidence)
         if self.illustrationCandidates is not None:
             result["illustrationCandidates"] = from_union(
                 [lambda x: from_list(lambda x: to_class(PrintingCandidate, x), x), from_none],
@@ -618,6 +665,10 @@ class QuestionFeedItem(BaseModel):
             )
         if self.isAnotherCopy is not None:
             result["isAnotherCopy"] = from_union([from_bool, from_none], self.isAnotherCopy)
+        if self.proposedFamilyDisplayName is not None:
+            result["proposedFamilyDisplayName"] = from_union([from_str, from_none], self.proposedFamilyDisplayName)
+        if self.proposedFamilyName is not None:
+            result["proposedFamilyName"] = from_union([from_str, from_none], self.proposedFamilyName)
         if self.scryfallIllustrationUrl is not None:
             result["scryfallIllustrationUrl"] = from_union([from_none, from_str], self.scryfallIllustrationUrl)
         if self.suggestedPrinting is not None:
@@ -3811,6 +3862,14 @@ def FilterSettingsfromdict(s: Any) -> FilterSettings:
 
 def FilterSettingstodict(x: FilterSettings) -> Any:
     return to_class(FilterSettings, x)
+
+
+def FrameFamilyCandidatefromdict(s: Any) -> FrameFamilyCandidate:
+    return FrameFamilyCandidate.from_dict(s)
+
+
+def FrameFamilyCandidatetodict(x: FrameFamilyCandidate) -> Any:
+    return to_class(FrameFamilyCandidate, x)
 
 
 def Gamefromdict(s: Any) -> Game:
