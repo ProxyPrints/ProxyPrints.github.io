@@ -2127,4 +2127,388 @@ describe("QuestionFeed", () => {
       screen.getByTestId("question-feed-subject-art-title")
     ).toHaveTextContent("Fresh Card");
   });
+
+  it("single frame_family candidate: one-tap question renders yes/no/not-sure and advances on vote", async () => {
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return feedFetchCount === 1
+          ? HttpResponse.json(
+              {
+                item: {
+                  type: "frame_family",
+                  card: cardDocument9,
+                  familyCandidates: [
+                    {
+                      name: "elder-ofoil",
+                      displayName: "Elder Ofoil",
+                      confidence: 0.95,
+                    },
+                  ],
+                  familyConfidence: 0.95,
+                  proposedFamilyName: "elder-ofoil",
+                  proposedFamilyDisplayName: "Elder Ofoil",
+                },
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
+              { status: 200 }
+            )
+          : HttpResponse.json(
+              {
+                remainingEstimate: {
+                  total: 0,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 0,
+                },
+              },
+              { status: 200 }
+            );
+      })
+    );
+    const tagVoteCalls: Array<{ tagName: string; polarity: number }> = [];
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          tagName: string;
+          polarity: number;
+        };
+        tagVoteCalls.push({ tagName: body.tagName, polarity: body.polarity });
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: body.polarity,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+
+    expect(await screen.findByText("Is this Elder Ofoil?")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("question-feed-frame-family-yes")
+    ).toHaveTextContent("Yes — Elder Ofoil");
+    expect(
+      screen.getByTestId("question-feed-frame-family-no")
+    ).toHaveTextContent("No");
+    expect(
+      screen.getByTestId("question-feed-frame-family-skip")
+    ).toHaveTextContent("Not sure");
+
+    fireEvent.click(screen.getByTestId("question-feed-frame-family-yes"));
+    await waitFor(() =>
+      expect(tagVoteCalls).toEqual([{ tagName: "elder-ofoil", polarity: 1 }])
+    );
+    await waitFor(() => expect(feedFetchCount).toBe(2));
+  });
+
+  it("single frame_family candidate: 'No' casts NOT_APPLICABLE polarity -1", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "frame_family",
+              card: cardDocument9,
+              familyCandidates: [
+                {
+                  name: "elder-ofoil",
+                  displayName: "Elder Ofoil",
+                  confidence: 0.95,
+                },
+              ],
+              familyConfidence: 0.95,
+              proposedFamilyName: "elder-ofoil",
+              proposedFamilyDisplayName: "Elder Ofoil",
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    const tagVoteCalls: Array<{ tagName: string; polarity: number }> = [];
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          tagName: string;
+          polarity: number;
+        };
+        tagVoteCalls.push({ tagName: body.tagName, polarity: body.polarity });
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: body.polarity,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+
+    fireEvent.click(await screen.findByTestId("question-feed-frame-family-no"));
+    await waitFor(() =>
+      expect(tagVoteCalls).toEqual([{ tagName: "elder-ofoil", polarity: -1 }])
+    );
+  });
+
+  it("single frame_family candidate: 'Not sure' records an abstention with reason 'cannot-tell'", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "frame_family",
+              card: cardDocument9,
+              familyCandidates: [
+                {
+                  name: "elder-ofoil",
+                  displayName: "Elder Ofoil",
+                  confidence: 0.95,
+                },
+              ],
+              familyConfidence: 0.95,
+              proposedFamilyName: "elder-ofoil",
+              proposedFamilyDisplayName: "Elder Ofoil",
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    let abstentionBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitQuestionAbstention/"),
+        async ({ request }) => {
+          abstentionBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        }
+      )
+    );
+    renderFeed();
+
+    fireEvent.click(
+      await screen.findByTestId("question-feed-frame-family-skip")
+    );
+    await waitFor(() => expect(abstentionBody).toBeDefined());
+    expect(abstentionBody?.reason).toBe("cannot-tell");
+  });
+
+  it("multiple frame_family candidates: grid renders with 'None of these' and skip", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "frame_family",
+              card: cardDocument9,
+              familyCandidates: [
+                { name: "modern", displayName: "Modern", confidence: 0.8 },
+                { name: "retro", displayName: "Retro", confidence: 0.6 },
+                { name: "futurist", displayName: "Futurist", confidence: 0.3 },
+              ],
+              familyConfidence: 0.8,
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+
+    expect(
+      await screen.findByText("Which frame family is this?")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("question-feed-frame-family-grid")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("question-feed-frame-family-candidate-modern")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("question-feed-frame-family-candidate-retro")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("question-feed-frame-family-candidate-futurist")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("question-feed-frame-family-none")
+    ).toHaveTextContent("None of these");
+    expect(
+      screen.getByTestId("question-feed-frame-family-skip")
+    ).toHaveTextContent("Skip");
+  });
+
+  it("multiple frame_family candidates: clicking a candidate submits APPLY and advances", async () => {
+    let feedFetchCount = 0;
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () => {
+        feedFetchCount += 1;
+        return feedFetchCount === 1
+          ? HttpResponse.json(
+              {
+                item: {
+                  type: "frame_family",
+                  card: cardDocument9,
+                  familyCandidates: [
+                    { name: "modern", displayName: "Modern", confidence: 0.8 },
+                    { name: "retro", displayName: "Retro", confidence: 0.6 },
+                  ],
+                  familyConfidence: 0.8,
+                },
+                remainingEstimate: {
+                  total: 1,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 1,
+                },
+              },
+              { status: 200 }
+            )
+          : HttpResponse.json(
+              {
+                remainingEstimate: {
+                  total: 0,
+                  confirmable: 0,
+                  contested: 0,
+                  fresh: 0,
+                },
+              },
+              { status: 200 }
+            );
+      })
+    );
+    const tagVoteCalls: Array<{ tagName: string; polarity: number }> = [];
+    server.use(
+      http.post(buildRoute("2/submitTagVote/"), async ({ request }) => {
+        const body = (await request.json()) as {
+          tagName: string;
+          polarity: number;
+        };
+        tagVoteCalls.push({ tagName: body.tagName, polarity: body.polarity });
+        return HttpResponse.json(
+          {
+            tagName: body.tagName,
+            resolvedPolarity: null,
+            netPolarity: body.polarity,
+            tally: [],
+          },
+          { status: 200 }
+        );
+      })
+    );
+    renderFeed();
+
+    fireEvent.click(
+      await screen.findByTestId("question-feed-frame-family-candidate-retro")
+    );
+    await waitFor(() =>
+      expect(tagVoteCalls).toEqual([{ tagName: "retro", polarity: 1 }])
+    );
+    await waitFor(() => expect(feedFetchCount).toBe(2));
+  });
+
+  it("multiple frame_family candidates: 'None of these' records an abstention with reason 'none-of-these'", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "frame_family",
+              card: cardDocument9,
+              familyCandidates: [
+                { name: "modern", displayName: "Modern", confidence: 0.8 },
+                { name: "retro", displayName: "Retro", confidence: 0.6 },
+              ],
+              familyConfidence: 0.8,
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    let abstentionBody: Record<string, unknown> | undefined;
+    server.use(
+      http.post(
+        buildRoute("2/submitQuestionAbstention/"),
+        async ({ request }) => {
+          abstentionBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ recorded: true }, { status: 200 });
+        }
+      )
+    );
+    renderFeed();
+
+    fireEvent.click(
+      await screen.findByTestId("question-feed-frame-family-none")
+    );
+    await waitFor(() => expect(abstentionBody).toBeDefined());
+    expect(abstentionBody?.reason).toBe("none-of-these");
+  });
+
+  it("frame_family candidates do not render confidence percentages", async () => {
+    server.use(
+      http.get(buildRoute("2/questionFeed/"), () =>
+        HttpResponse.json(
+          {
+            item: {
+              type: "frame_family",
+              card: cardDocument9,
+              familyCandidates: [
+                { name: "modern", displayName: "Modern", confidence: 0.83 },
+                { name: "retro", displayName: "Retro", confidence: 0.41 },
+              ],
+              familyConfidence: 0.83,
+            },
+            remainingEstimate: {
+              total: 1,
+              confirmable: 0,
+              contested: 0,
+              fresh: 1,
+            },
+          },
+          { status: 200 }
+        )
+      )
+    );
+    renderFeed();
+
+    await screen.findByTestId("question-feed-frame-family-grid");
+    expect(screen.queryByText(/confidence/)).not.toBeInTheDocument();
+  });
 });
