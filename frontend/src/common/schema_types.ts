@@ -148,179 +148,179 @@
 // match the expected interface, even if the JSON is valid.
 
 export enum Game {
-    Mtg = "MTG",
+  Mtg = "MTG",
 }
 
 export interface QuestionFeedResponse {
-    item?:             QuestionFeedItem;
-    remainingEstimate: QuestionFeedCounts;
+  item?: QuestionFeedItem;
+  remainingEstimate: QuestionFeedCounts;
 }
 
 export interface QuestionFeedItem {
-    candidates?:                 PrintingCandidate[];
-    card:                        Card;
-    confidentlyKnownArtistName?: null | string;
-    discriminatingAxes?:         DiscriminatingAx[];
-    familyCandidates?:           FrameFamilyCandidate[];
-    familyConfidence?:           number;
-    illustrationCandidates?:     PrintingCandidate[];
-    isAnotherCopy?:              boolean;
-    proposedFamilyDisplayName?:  string;
-    proposedFamilyName?:         string;
-    scryfallIllustrationUrl?:    null | string;
-    suggestedPrinting?:          PrintingCandidate;
-    tagConfidence?:              { [key: string]: number };
-    tagName?:                    string;
-    type:                        Type;
+  candidates?: PrintingCandidate[];
+  card: Card;
+  confidentlyKnownArtistName?: null | string;
+  discriminatingAxes?: DiscriminatingAx[];
+  familyCandidates?: FrameFamilyCandidate[];
+  familyConfidence?: number;
+  illustrationCandidates?: PrintingCandidate[];
+  isAnotherCopy?: boolean;
+  proposedFamilyDisplayName?: string;
+  proposedFamilyName?: string;
+  scryfallIllustrationUrl?: null | string;
+  suggestedPrinting?: PrintingCandidate;
+  tagConfidence?: { [key: string]: number };
+  tagName?: string;
+  type: Type;
 }
 
 export interface PrintingCandidate {
-    artCropUrl?:        null | string;
-    artist:             string;
-    borderColor:        string;
-    canonicalId:        string;
-    collectorNumber:    string;
-    expansionCode:      string;
-    expansionName:      string;
-    frame:              string;
-    fullArt:            boolean;
-    identifier:         string;
-    illustrationId?:    null | string;
-    isBorderless:       boolean;
-    isEtched:           boolean;
-    isExtendedArt:      boolean;
-    isShowcase:         boolean;
-    mediumThumbnailUrl: string;
-    releasedAt?:        null | string;
-    smallThumbnailUrl:  string;
+  artCropUrl?: null | string;
+  artist: string;
+  borderColor: string;
+  canonicalId: string;
+  collectorNumber: string;
+  expansionCode: string;
+  expansionName: string;
+  frame: string;
+  fullArt: boolean;
+  identifier: string;
+  illustrationId?: null | string;
+  isBorderless: boolean;
+  isEtched: boolean;
+  isExtendedArt: boolean;
+  isShowcase: boolean;
+  mediumThumbnailUrl: string;
+  releasedAt?: null | string;
+  smallThumbnailUrl: string;
 }
 
 export interface Card {
-    /**
-     * Which method answered measuredBleedMm: "method-a" (aspect-ratio-derived, a function of
-     * image dimensions alone), "method-b" (pinline-ruler, per-edge measurement from calibrated
-     * frame-class constants), "abstained" (both methods present and disagreed beyond the 2mm
-     * gate - a human should look), or "no-evidence" (no current ImageEvidence row with
-     * completed geometry_bleed extractor). Populated only alongside measuredBleedMm for the
-     * single item the question feed serves. A consumer that reads measuredBleedMm should check
-     * this field to distinguish a real per-card measurement from one of Method A's three
-     * dominant constants.
-     */
-    bleedProvenance?: BleedProvenance;
-    canonicalArtist?: CanonicalArtist | null;
-    /**
-     * True only when canonicalArtist was supplied by artist-vote consensus alone, with no
-     * confirmed indexing match or resolved printing backing it - lets the frontend distinguish
-     * a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
-     * 'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
-     */
-    canonicalArtistIsFromVoteOnly?: boolean;
-    /**
-     * Which rung of the artist fallback chain actually supplied canonicalArtist -
-     * debug/introspection field, not load-bearing for any current frontend logic.
-     */
-    canonicalArtistSource?: null | string;
-    canonicalCard?:         CanonicalCard | null;
-    cardType:               CardType;
-    /**
-     * Created date - formatted by backend
-     */
-    dateCreated: string;
-    /**
-     * Modified date - formatted by backend
-     */
-    dateModified: string;
-    dpi:          number;
-    extension:    string;
-    identifier:   string;
-    language:     string;
-    /**
-     * Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme"), read
-     * from whichever printing backs canonicalCard (CanonicalPrintingMetadata.layout) - same
-     * canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses
-     * for canonicalCard itself. null whenever canonicalCard is null, or the resolved printing
-     * has no metadata row, or that row's layout hasn't been populated. Lets a consumer ask
-     * "does this card have a back face" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in
-     * printing_metadata_import.py) directly from a card it already has, rather than
-     * cross-referencing a separately-fetched name list.
-     */
-    layout?: null | string;
-    /**
-     * This card's cross-checked measured bleed margin in millimetres. Method B (pinline-ruler,
-     * per-edge) where present and agreeing with Method A (aspect-ratio-derived) inside the 2mm
-     * gate; Method A alone otherwise; null when both are present and disagree beyond the gate
-     * (abstain) or when no current ImageEvidence row has completed the geometry_bleed
-     * extractor. Populated only for the single item the question feed actually serves
-     * (question_feed._log_served attaches it post-serialise, after the served card is already
-     * chosen - never computed while scanning pool-eligibility candidates, so it costs nothing
-     * anywhere else Card.serialise() is called) - every other response leaves this null. A
-     * consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend)
-     * / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already
-     * assumes. See bleedProvenance for which method answered.
-     */
-    measuredBleedMm?:   number | null;
-    mediumThumbnailUrl: string;
-    name:               string;
-    /**
-     * Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
-     * community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
-     * the frontend to show a 'matched by community tags' indicator and is otherwise
-     * informational.
-     */
-    printingTagStatus:   PrintingTagStatus;
-    priority:            number;
-    searchq:             string;
-    size:                number;
-    smallThumbnailUrl:   string;
-    source:              string;
-    sourceExternalLink?: string;
-    sourceId:            number;
-    sourceName:          string;
-    sourceType?:         SourceType;
-    sourceVerbose:       string;
-    /**
-     * The catalog's own best unconfirmed guess at this card's printing - a machine-cast
-     * (VoteSource.DEDUCTION/OCR) CardPrintingTag vote's printing, surfaced only while
-     * printingTagStatus is not 'resolved' (never redundant with the already-resolved
-     * canonicalCard). null when no machine vote exists yet, printingTagStatus is already
-     * 'resolved', or the serializing endpoint didn't request this field (see
-     * cardpicker/models.py Card.serialise's include_suggested_printing kwarg - opt-in per
-     * endpoint to keep this a zero-cost no-op everywhere it isn't needed).
-     */
-    suggestedCanonicalCard?: CanonicalCard | null;
-    /**
-     * SEAM, not yet populated server-side (owner decision, D14 numeric-confidence round,
-     * 2026-07-23 - see docs/features/display-left-rail.md's "D14 numeric confidence" section
-     * for the full flag-to-backend note). Expected shape once a calibrated score lands: an
-     * integer 0-100 percentage, present only alongside a non-null suggestedCanonicalCard (never
-     * sent for an already-resolved card, same opt-in-per-endpoint pattern as
-     * suggestedCanonicalCard/suggestedFilterTagNames above). Until the backend sends this
-     * field, every real API response omits it and it reads as undefined - ConfidenceElement.tsx
-     * degrades to its existing qualitative "Suggested" pill in that case, never a crash or a
-     * fabricated number.
-     */
-    suggestedCanonicalCardConfidence?: number | null;
-    /**
-     * Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter
-     * chip, per the implicit-vote consensus ruling (docs/features/printing-tags.md's
-     * implicit-vote section): the leaning side's non-implicit weight is >= 1.0, the pair isn't
-     * already RESOLVED_APPLY/RESOLVED_REJECT/PENDING_APPROVAL or genuinely CONTESTED, and the
-     * tag isn't SENSITIVE. null when the serializing endpoint didn't request this field (see
-     * Card.serialise's include_suggested_filter_tags kwarg - opt-in per endpoint, same
-     * zero-cost-when-unused pattern as suggestedCanonicalCard/include_suggested_printing above).
-     */
-    suggestedFilterTagNames?: string[] | null;
-    tags:                     string[];
-    /**
-     * Suggested-vs-resolved status for every tag with at least one cast vote against this card
-     * (Card.tag_vote_statuses collapsed from its 5-way DB status to the 2-way distinction the
-     * frontend needs - see TagVoteDisplayStatus.json). A tag absent from this object has zero
-     * votes cast, same convention as the DB field it derives from. pending_approval tags are
-     * deliberately excluded entirely (sensitive-tag co-sign queue, docs/features/moderation.md)
-     * - never leaked ahead of that review, same reason they're excluded from the `tags` field
-     * today.
-     */
-    tagVoteStatuses?: { [key: string]: TagVoteDisplayStatus };
+  /**
+   * Which method answered measuredBleedMm: "method-a" (aspect-ratio-derived, a function of
+   * image dimensions alone), "method-b" (pinline-ruler, per-edge measurement from calibrated
+   * frame-class constants), "abstained" (both methods present and disagreed beyond the 2mm
+   * gate - a human should look), or "no-evidence" (no current ImageEvidence row with
+   * completed geometry_bleed extractor). Populated only alongside measuredBleedMm for the
+   * single item the question feed serves. A consumer that reads measuredBleedMm should check
+   * this field to distinguish a real per-card measurement from one of Method A's three
+   * dominant constants.
+   */
+  bleedProvenance?: BleedProvenance;
+  canonicalArtist?: CanonicalArtist | null;
+  /**
+   * True only when canonicalArtist was supplied by artist-vote consensus alone, with no
+   * confirmed indexing match or resolved printing backing it - lets the frontend distinguish
+   * a confidently-known artist from a vote-derived one (e.g. for the ArtistVotePicker
+   * 'wrong?' affordance) without needing to know serialise()'s fallback chain itself.
+   */
+  canonicalArtistIsFromVoteOnly?: boolean;
+  /**
+   * Which rung of the artist fallback chain actually supplied canonicalArtist -
+   * debug/introspection field, not load-bearing for any current frontend logic.
+   */
+  canonicalArtistSource?: null | string;
+  canonicalCard?: CanonicalCard | null;
+  cardType: CardType;
+  /**
+   * Created date - formatted by backend
+   */
+  dateCreated: string;
+  /**
+   * Modified date - formatted by backend
+   */
+  dateModified: string;
+  dpi: number;
+  extension: string;
+  identifier: string;
+  language: string;
+  /**
+   * Scryfall's own layout tag verbatim (e.g. "normal", "transform", "planar", "scheme"), read
+   * from whichever printing backs canonicalCard (CanonicalPrintingMetadata.layout) - same
+   * canonical_card/inferred_canonical_card fallback precedence Card.serialise() already uses
+   * for canonicalCard itself. null whenever canonicalCard is null, or the resolved printing
+   * has no metadata row, or that row's layout hasn't been populated. Lets a consumer ask
+   * "does this card have a back face" (per DOUBLE_FACED_LAYOUTS/SPLIT_STYLE_LAYOUTS in
+   * printing_metadata_import.py) directly from a card it already has, rather than
+   * cross-referencing a separately-fetched name list.
+   */
+  layout?: null | string;
+  /**
+   * This card's cross-checked measured bleed margin in millimetres. Method B (pinline-ruler,
+   * per-edge) where present and agreeing with Method A (aspect-ratio-derived) inside the 2mm
+   * gate; Method A alone otherwise; null when both are present and disagree beyond the gate
+   * (abstain) or when no current ImageEvidence row has completed the geometry_bleed
+   * extractor. Populated only for the single item the question feed actually serves
+   * (question_feed._log_served attaches it post-serialise, after the served card is already
+   * chosen - never computed while scanning pool-eligibility candidates, so it costs nothing
+   * anywhere else Card.serialise() is called) - every other response leaves this null. A
+   * consumer that needs a value regardless falls back to STANDARD_BLEED_MARGIN_MM (frontend)
+   * / BLEED_MARGIN_MM (backend), the same profile-default bleed the rest of the app already
+   * assumes. See bleedProvenance for which method answered.
+   */
+  measuredBleedMm?: number | null;
+  mediumThumbnailUrl: string;
+  name: string;
+  /**
+   * Community printing-tag vote consensus status for this card. Only RESOLVED cards have a
+   * community-confirmed printing behind canonicalCard (via inferred_canonical_card) - used by
+   * the frontend to show a 'matched by community tags' indicator and is otherwise
+   * informational.
+   */
+  printingTagStatus: PrintingTagStatus;
+  priority: number;
+  searchq: string;
+  size: number;
+  smallThumbnailUrl: string;
+  source: string;
+  sourceExternalLink?: string;
+  sourceId: number;
+  sourceName: string;
+  sourceType?: SourceType;
+  sourceVerbose: string;
+  /**
+   * The catalog's own best unconfirmed guess at this card's printing - a machine-cast
+   * (VoteSource.DEDUCTION/OCR) CardPrintingTag vote's printing, surfaced only while
+   * printingTagStatus is not 'resolved' (never redundant with the already-resolved
+   * canonicalCard). null when no machine vote exists yet, printingTagStatus is already
+   * 'resolved', or the serializing endpoint didn't request this field (see
+   * cardpicker/models.py Card.serialise's include_suggested_printing kwarg - opt-in per
+   * endpoint to keep this a zero-cost no-op everywhere it isn't needed).
+   */
+  suggestedCanonicalCard?: CanonicalCard | null;
+  /**
+   * SEAM, not yet populated server-side (owner decision, D14 numeric-confidence round,
+   * 2026-07-23 - see docs/features/display-left-rail.md's "D14 numeric confidence" section
+   * for the full flag-to-backend note). Expected shape once a calibrated score lands: an
+   * integer 0-100 percentage, present only alongside a non-null suggestedCanonicalCard (never
+   * sent for an already-resolved card, same opt-in-per-endpoint pattern as
+   * suggestedCanonicalCard/suggestedFilterTagNames above). Until the backend sends this
+   * field, every real API response omits it and it reads as undefined - ConfidenceElement.tsx
+   * degrades to its existing qualitative "Suggested" pill in that case, never a crash or a
+   * fabricated number.
+   */
+  suggestedCanonicalCardConfidence?: number | null;
+  /**
+   * Tag names leaning APPLY for this card strongly enough to preselect as a /editor filter
+   * chip, per the implicit-vote consensus ruling (docs/features/printing-tags.md's
+   * implicit-vote section): the leaning side's non-implicit weight is >= 1.0, the pair isn't
+   * already RESOLVED_APPLY/RESOLVED_REJECT/PENDING_APPROVAL or genuinely CONTESTED, and the
+   * tag isn't SENSITIVE. null when the serializing endpoint didn't request this field (see
+   * Card.serialise's include_suggested_filter_tags kwarg - opt-in per endpoint, same
+   * zero-cost-when-unused pattern as suggestedCanonicalCard/include_suggested_printing above).
+   */
+  suggestedFilterTagNames?: string[] | null;
+  tags: string[];
+  /**
+   * Suggested-vs-resolved status for every tag with at least one cast vote against this card
+   * (Card.tag_vote_statuses collapsed from its 5-way DB status to the 2-way distinction the
+   * frontend needs - see TagVoteDisplayStatus.json). A tag absent from this object has zero
+   * votes cast, same convention as the DB field it derives from. pending_approval tags are
+   * deliberately excluded entirely (sensitive-tag co-sign queue, docs/features/moderation.md)
+   * - never leaked ahead of that review, same reason they're excluded from the `tags` field
+   * today.
+   */
+  tagVoteStatuses?: { [key: string]: TagVoteDisplayStatus };
 }
 
 /**
@@ -334,31 +334,31 @@ export interface Card {
  * dominant constants.
  */
 export enum BleedProvenance {
-    Abstained = "abstained",
-    MethodA = "method-a",
-    MethodB = "method-b",
-    NoEvidence = "no-evidence",
+  Abstained = "abstained",
+  MethodA = "method-a",
+  MethodB = "method-b",
+  NoEvidence = "no-evidence",
 }
 
 export interface CanonicalArtist {
-    name: string;
+  name: string;
 }
 
 export interface CanonicalCard {
-    artist?:            string;
-    canonicalId?:       string;
-    collectorNumber:    string;
-    expansionCode:      string;
-    expansionName:      string;
-    identifier:         string;
-    mediumThumbnailUrl: string;
-    smallThumbnailUrl:  string;
+  artist?: string;
+  canonicalId?: string;
+  collectorNumber: string;
+  expansionCode: string;
+  expansionName: string;
+  identifier: string;
+  mediumThumbnailUrl: string;
+  smallThumbnailUrl: string;
 }
 
 export enum CardType {
-    Card = "CARD",
-    Cardback = "CARDBACK",
-    Token = "TOKEN",
+  Card = "CARD",
+  Cardback = "CARDBACK",
+  Token = "TOKEN",
 }
 
 /**
@@ -368,15 +368,15 @@ export enum CardType {
  * informational.
  */
 export enum PrintingTagStatus {
-    NoMatch = "no_match",
-    Resolved = "resolved",
-    Unresolved = "unresolved",
+  NoMatch = "no_match",
+  Resolved = "resolved",
+  Unresolved = "unresolved",
 }
 
 export enum SourceType {
-    AwsS3 = "AWS S3",
-    GoogleDrive = "Google Drive",
-    LocalFile = "Local File",
+  AwsS3 = "AWS S3",
+  GoogleDrive = "Google Drive",
+  LocalFile = "Local File",
 }
 
 /**
@@ -386,190 +386,190 @@ export enum SourceType {
  * tagVoteStatuses field docs for why.
  */
 export enum TagVoteDisplayStatus {
-    Resolved = "resolved",
-    Suggested = "suggested",
+  Resolved = "resolved",
+  Suggested = "suggested",
 }
 
 export enum DiscriminatingAx {
-    Border = "border",
-    FullArt = "full_art",
-    Treatment = "treatment",
+  Border = "border",
+  FullArt = "full_art",
+  Treatment = "treatment",
 }
 
 export interface FrameFamilyCandidate {
-    /**
-     * The net polarity (-1..+1) for the fill overlay.
-     */
-    confidence: number;
-    /**
-     * The human-readable label (e.g. 'Pipboy') for the UI.
-     */
-    displayName: string;
-    /**
-     * The Tag.name (e.g. 'Pipboy') the frontend casts a CardTagVote against.
-     */
-    name: string;
+  /**
+   * The net polarity (-1..+1) for the fill overlay.
+   */
+  confidence: number;
+  /**
+   * The human-readable label (e.g. 'Pipboy') for the UI.
+   */
+  displayName: string;
+  /**
+   * The Tag.name (e.g. 'Pipboy') the frontend casts a CardTagVote against.
+   */
+  name: string;
 }
 
 export enum Type {
-    Artist = "artist",
-    Border = "border",
-    ConfirmSuggestion = "confirm_suggestion",
-    FrameFamily = "frame_family",
-    IdentifyPrinting = "identify_printing",
-    Illustration = "illustration",
-    Tag = "tag",
+  Artist = "artist",
+  Border = "border",
+  ConfirmSuggestion = "confirm_suggestion",
+  FrameFamily = "frame_family",
+  IdentifyPrinting = "identify_printing",
+  Illustration = "illustration",
+  Tag = "tag",
 }
 
 export interface QuestionFeedCounts {
-    confirmable: number;
-    contested:   number;
-    fresh:       number;
-    total:       number;
+  confirmable: number;
+  contested: number;
+  fresh: number;
+  total: number;
 }
 
 export interface ArtistAutocompleteRequest {
-    query: string;
+  query: string;
 }
 
 export interface ArtistAutocompleteResponse {
-    results: ArtistAutocompleteResult[];
+  results: ArtistAutocompleteResult[];
 }
 
 export interface ArtistAutocompleteResult {
-    id:   number;
-    name: string;
+  id: number;
+  name: string;
 }
 
 export interface ArtistCandidatesRequest {
-    identifier: string;
-    query?:     null | string;
+  identifier: string;
+  query?: null | string;
 }
 
 export interface ArtistCandidatesResponse {
-    results: Array<CanonicalArtist | null>;
+  results: Array<CanonicalArtist | null>;
 }
 
 export interface ArtistConsensusRequest {
-    identifier: string;
+  identifier: string;
 }
 
 export interface ArtistConsensusResponse {
-    isUnknown:       boolean;
-    resolvedArtist?: CanonicalArtist | null;
-    voteTally:       ArtistVoteTallyEntry[];
+  isUnknown: boolean;
+  resolvedArtist?: CanonicalArtist | null;
+  voteTally: ArtistVoteTallyEntry[];
 }
 
 export interface ArtistVoteTallyEntry {
-    artist?:   CanonicalArtist | null;
-    count:     number;
-    isUnknown: boolean;
+  artist?: CanonicalArtist | null;
+  count: number;
+  isUnknown: boolean;
 }
 
 export interface ArtistExternalLinksResponse {
-    found: boolean;
-    /**
-     * Surfaced as a boolean flag only, never as a link - see MTGAC integration docs.
-     */
-    hasSignatureService: boolean;
-    links:               Link[];
-    location:            null | string;
-    pageUrl:             null | string;
+  found: boolean;
+  /**
+   * Surfaced as a boolean flag only, never as a link - see MTGAC integration docs.
+   */
+  hasSignatureService: boolean;
+  links: Link[];
+  location: null | string;
+  pageUrl: null | string;
 }
 
 export interface Link {
-    /**
-     * One of the fixed allowlist field names, in fixed priority order: website, artstation,
-     * inprnt, mountainmage, omalink, instagram (instagram is a deliberate last-resort
-     * exception, not a commerce field - see docs/features/artist-support-links.md).
-     */
-    type: string;
-    url:  string;
+  /**
+   * One of the fixed allowlist field names, in fixed priority order: website, artstation,
+   * inprnt, mountainmage, omalink, instagram (instagram is a deliberate last-resort
+   * exception, not a commerce field - see docs/features/artist-support-links.md).
+   */
+  type: string;
+  url: string;
 }
 
 export interface CardbacksRequest {
-    searchSettings: SearchSettings;
+  searchSettings: SearchSettings;
 }
 
 export interface SearchSettings {
-    filterSettings:     FilterSettings;
-    searchTypeSettings: SearchTypeSettings;
-    sourceSettings:     SourceSettings;
+  filterSettings: FilterSettings;
+  searchTypeSettings: SearchTypeSettings;
+  sourceSettings: SourceSettings;
 }
 
 export interface FilterSettings {
-    /**
-     * Opt-in filter. When true, excludes cards whose community-resolved printing
-     * (printingTagStatus == RESOLVED) is confirmed not borderless. Cards without a resolved
-     * printing are never excluded by this filter - they're unknowns, not mismatches.
-     */
-    borderlessOnly: boolean;
-    /**
-     * The tags which the cards must *not* have to be included in search results
-     */
-    excludesTags: string[];
-    /**
-     * Opt-in filter. When true, excludes cards whose community-resolved printing
-     * (printingTagStatus == RESOLVED) is confirmed not full-art. Cards without a resolved
-     * printing are never excluded by this filter - they're unknowns, not mismatches.
-     */
-    fullArtOnly: boolean;
-    /**
-     * The tags which the cards must have to be included in search results
-     */
-    includesTags: string[];
-    /**
-     * The language the cards have to be written in to be included in search results
-     */
-    languages: string[];
-    /**
-     * The maximum DPI that cards can have to be included in search results
-     */
-    maximumDPI: number;
-    /**
-     * The maximum filesize that cards can have to be included in search results
-     */
-    maximumSize: number;
-    /**
-     * The minimum DPI that cards must meet to be included in search results
-     */
-    minimumDPI: number;
+  /**
+   * Opt-in filter. When true, excludes cards whose community-resolved printing
+   * (printingTagStatus == RESOLVED) is confirmed not borderless. Cards without a resolved
+   * printing are never excluded by this filter - they're unknowns, not mismatches.
+   */
+  borderlessOnly: boolean;
+  /**
+   * The tags which the cards must *not* have to be included in search results
+   */
+  excludesTags: string[];
+  /**
+   * Opt-in filter. When true, excludes cards whose community-resolved printing
+   * (printingTagStatus == RESOLVED) is confirmed not full-art. Cards without a resolved
+   * printing are never excluded by this filter - they're unknowns, not mismatches.
+   */
+  fullArtOnly: boolean;
+  /**
+   * The tags which the cards must have to be included in search results
+   */
+  includesTags: string[];
+  /**
+   * The language the cards have to be written in to be included in search results
+   */
+  languages: string[];
+  /**
+   * The maximum DPI that cards can have to be included in search results
+   */
+  maximumDPI: number;
+  /**
+   * The maximum filesize that cards can have to be included in search results
+   */
+  maximumSize: number;
+  /**
+   * The minimum DPI that cards must meet to be included in search results
+   */
+  minimumDPI: number;
 }
 
 export interface SearchTypeSettings {
-    /**
-     * Whether search settings apply to cardbacks or not
-     */
-    filterCardbacks: boolean;
-    /**
-     * Whether fuzzy search is active
-     */
-    fuzzySearch: boolean;
+  /**
+   * Whether search settings apply to cardbacks or not
+   */
+  filterCardbacks: boolean;
+  /**
+   * Whether fuzzy search is active
+   */
+  fuzzySearch: boolean;
 }
 
 export interface SourceSettings {
-    /**
-     * The list of sources in the order they should be searched
-     */
-    sources: Array<Array<boolean | number>>;
+  /**
+   * The list of sources in the order they should be searched
+   */
+  sources: Array<Array<boolean | number>>;
 }
 
 export interface CardbacksResponse {
-    cardbacks: string[];
+  cardbacks: string[];
 }
 
 export interface CardsRequest {
-    cardIdentifiers: string[];
+  cardIdentifiers: string[];
 }
 
 export interface CardsResponse {
-    results: { [key: string]: Card };
+  results: { [key: string]: Card };
 }
 
 export interface CastImplicitVoteRequest {
-    anonymousId: string;
-    identifier:  string;
-    tagNames:    string[];
+  anonymousId: string;
+  identifier: string;
+  tagNames: string[];
 }
 
 /**
@@ -581,40 +581,40 @@ export interface CastImplicitVoteRequest {
  * (chart 5) are deliberately deferred, see that module's own docstring.
  */
 export interface CatalogStatsResponse {
-    /**
-     * Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved
-     * onto this cache instead of GET 2/contributions/'s live query.
-     */
-    catalogComposition: CatalogComposition;
-    /**
-     * Proposal F chart 2 - human confirmations bucketed by week, split by vote_surface, across
-     * CardPrintingTag/CardArtistVote/CardTagVote. Human-only by construction (vote_surface plus
-     * a HUMAN_SOURCES source filter - see catalog_stats.py's own docstring for why both are
-     * needed).
-     */
-    contributionsOverTime: ContributionsOverTime;
-    /**
-     * ISO-8601 timestamp of the warm run that produced this blob, or null on a cache miss
-     * (never warmed, or the shared cache backend isn't configured yet).
-     */
-    generatedAt: null | string;
-    /**
-     * The call-to-action panel. Emits raw counts only, deliberately no 'percent complete' field
-     * - see compute_participation's own docstring.
-     */
-    participation: Participation;
-    /**
-     * Proposal F chart 6 - the most recent PilotRunLedger rows. See catalog_stats.py's
-     * compute_run_history docstring for the stage_d_*_already_voted caveat (deliberately never
-     * surfaced here) and why votes_written is safe to surface as-is (but null for
-     * stage_e_streaming_dispatch rows specifically).
-     */
-    runHistory: RunHistory;
-    /**
-     * Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine
-     * (anonymous_id).
-     */
-    skipBreakdown: SkipBreakdown;
+  /**
+   * Proposal F chart 7 - cardpicker.models.summarise_contributions() reused verbatim, moved
+   * onto this cache instead of GET 2/contributions/'s live query.
+   */
+  catalogComposition: CatalogComposition;
+  /**
+   * Proposal F chart 2 - human confirmations bucketed by week, split by vote_surface, across
+   * CardPrintingTag/CardArtistVote/CardTagVote. Human-only by construction (vote_surface plus
+   * a HUMAN_SOURCES source filter - see catalog_stats.py's own docstring for why both are
+   * needed).
+   */
+  contributionsOverTime: ContributionsOverTime;
+  /**
+   * ISO-8601 timestamp of the warm run that produced this blob, or null on a cache miss
+   * (never warmed, or the shared cache backend isn't configured yet).
+   */
+  generatedAt: null | string;
+  /**
+   * The call-to-action panel. Emits raw counts only, deliberately no 'percent complete' field
+   * - see compute_participation's own docstring.
+   */
+  participation: Participation;
+  /**
+   * Proposal F chart 6 - the most recent PilotRunLedger rows. See catalog_stats.py's
+   * compute_run_history docstring for the stage_d_*_already_voted caveat (deliberately never
+   * surfaced here) and why votes_written is safe to surface as-is (but null for
+   * stage_e_streaming_dispatch rows specifically).
+   */
+  runHistory: RunHistory;
+  /**
+   * Proposal F chart 4 - CardScanLog.skip_reason grouped by reason, and by reason + engine
+   * (anonymous_id).
+   */
+  skipBreakdown: SkipBreakdown;
 }
 
 /**
@@ -622,21 +622,21 @@ export interface CatalogStatsResponse {
  * onto this cache instead of GET 2/contributions/'s live query.
  */
 export interface CatalogComposition {
-    cardCountByType:   { [key: string]: number };
-    sources:           SourceContribution[];
-    totalDatabaseSize: number;
+  cardCountByType: { [key: string]: number };
+  sources: SourceContribution[];
+  totalDatabaseSize: number;
 }
 
 export interface SourceContribution {
-    avgdpi:        string;
-    description:   string;
-    externalLink?: string;
-    name:          string;
-    qtyCardbacks:  string;
-    qtyCards:      string;
-    qtyTokens:     string;
-    size:          string;
-    sourceType:    SourceType;
+  avgdpi: string;
+  description: string;
+  externalLink?: string;
+  name: string;
+  qtyCardbacks: string;
+  qtyCards: string;
+  qtyTokens: string;
+  size: string;
+  sourceType: SourceType;
 }
 
 /**
@@ -646,19 +646,19 @@ export interface SourceContribution {
  * needed).
  */
 export interface ContributionsOverTime {
-    bucketDays: number;
-    series:     Series[];
+  bucketDays: number;
+  series: Series[];
 }
 
 export interface Series {
-    /**
-     * vote_surface value -> human confirmation count for this week.
-     */
-    bySurface: { [key: string]: number };
-    /**
-     * ISO date (Monday) this bucket starts on.
-     */
-    weekStart: string;
+  /**
+   * vote_surface value -> human confirmation count for this week.
+   */
+  bySurface: { [key: string]: number };
+  /**
+   * ISO date (Monday) this bucket starts on.
+   */
+  weekStart: string;
 }
 
 /**
@@ -666,51 +666,51 @@ export interface Series {
  * - see compute_participation's own docstring.
  */
 export interface Participation {
-    confirmable: number;
-    contested:   number;
-    /**
-     * Distinct card_id in CardScanLog filtered to the slow-path agent (SLOW_PATH_ANONYMOUS_ID)
-     * and skip_reason=SLOW_PATH_TO_REVIEW_REASON - same filter review_clusters.py's
-     * _review_queue_card_ids() uses. A distinct-card count, not a row count: CardScanLog is an
-     * append-only audit trail, so a card can carry more than one row for the same (card,
-     * anonymous_id) pair. Only ever grows (nothing clears the routing marker when a card later
-     * gets a human vote) - a denominator, not a progress measure on its own.
-     */
-    distinctCardsRoutedToReview: number;
-    /**
-     * The intersection of distinctCardsRoutedToReview and distinctCardsWithHumanVotes: cards
-     * that are both routed to review AND carry a human vote. This, not
-     * distinctCardsWithHumanVotes over distinctCardsRoutedToReview, is the pair that forms a
-     * valid progress ratio - distinctCardsWithHumanVotes is not a subset of
-     * distinctCardsRoutedToReview (a person can vote on a card the machine never routed), so
-     * dividing them directly is not coherent.
-     */
-    distinctCardsRoutedToReviewWithHumanVotes: number;
-    /**
-     * Distinct card_id across CardPrintingTag/CardArtistVote/CardTagVote filtered to
-     * HUMAN_SOURCES, unioned across the three tables so a card voted on in two tables counts
-     * once. CARD-denominated (unlike humanVotes, which counts votes) so the page's
-     * participation ratio can be cards-over-cards.
-     */
-    distinctCardsWithHumanVotes: number;
-    distinctHumanVoters:         number;
-    fresh:                       number;
-    humanVotes:                  HumanVotes;
-    md5Groups:                   Md5Groups;
-    total:                       number;
+  confirmable: number;
+  contested: number;
+  /**
+   * Distinct card_id in CardScanLog filtered to the slow-path agent (SLOW_PATH_ANONYMOUS_ID)
+   * and skip_reason=SLOW_PATH_TO_REVIEW_REASON - same filter review_clusters.py's
+   * _review_queue_card_ids() uses. A distinct-card count, not a row count: CardScanLog is an
+   * append-only audit trail, so a card can carry more than one row for the same (card,
+   * anonymous_id) pair. Only ever grows (nothing clears the routing marker when a card later
+   * gets a human vote) - a denominator, not a progress measure on its own.
+   */
+  distinctCardsRoutedToReview: number;
+  /**
+   * The intersection of distinctCardsRoutedToReview and distinctCardsWithHumanVotes: cards
+   * that are both routed to review AND carry a human vote. This, not
+   * distinctCardsWithHumanVotes over distinctCardsRoutedToReview, is the pair that forms a
+   * valid progress ratio - distinctCardsWithHumanVotes is not a subset of
+   * distinctCardsRoutedToReview (a person can vote on a card the machine never routed), so
+   * dividing them directly is not coherent.
+   */
+  distinctCardsRoutedToReviewWithHumanVotes: number;
+  /**
+   * Distinct card_id across CardPrintingTag/CardArtistVote/CardTagVote filtered to
+   * HUMAN_SOURCES, unioned across the three tables so a card voted on in two tables counts
+   * once. CARD-denominated (unlike humanVotes, which counts votes) so the page's
+   * participation ratio can be cards-over-cards.
+   */
+  distinctCardsWithHumanVotes: number;
+  distinctHumanVoters: number;
+  fresh: number;
+  humanVotes: HumanVotes;
+  md5Groups: Md5Groups;
+  total: number;
 }
 
 export interface HumanVotes {
-    artist:      number;
-    printingTag: number;
-    tag:         number;
-    total:       number;
+  artist: number;
+  printingTag: number;
+  tag: number;
+  total: number;
 }
 
 export interface Md5Groups {
-    cardsInMultiCardGroups:  number;
-    groupsWithMultipleCards: number;
-    largestGroupSize:        number;
+  cardsInMultiCardGroups: number;
+  groupsWithMultipleCards: number;
+  largestGroupSize: number;
 }
 
 /**
@@ -720,17 +720,17 @@ export interface Md5Groups {
  * stage_e_streaming_dispatch rows specifically).
  */
 export interface RunHistory {
-    recent: PilotRunHistoryEntry[];
+  recent: PilotRunHistoryEntry[];
 }
 
 export interface PilotRunHistoryEntry {
-    command:         string;
-    durationSeconds: number | null;
-    finishedAt:      null | string;
-    runId:           string;
-    startedAt:       string;
-    status:          string;
-    votesWritten:    number | null;
+  command: string;
+  durationSeconds: number | null;
+  finishedAt: null | string;
+  runId: string;
+  startedAt: string;
+  status: string;
+  votesWritten: number | null;
 }
 
 /**
@@ -738,2813 +738,3796 @@ export interface PilotRunHistoryEntry {
  * (anonymous_id).
  */
 export interface SkipBreakdown {
-    byReason:          ByReason[];
-    byReasonAndEngine: SkipReasonEngineCount[];
+  byReason: ByReason[];
+  byReasonAndEngine: SkipReasonEngineCount[];
 }
 
 export interface ByReason {
-    count:  number;
-    reason: string;
+  count: number;
+  reason: string;
 }
 
 export interface SkipReasonEngineCount {
-    count:  number;
-    engine: string;
-    reason: string;
+  count: number;
+  engine: string;
+  reason: string;
 }
 
 export interface ConfirmReviewClusterRequest {
-    clusterId: string;
-    /**
-     * The exact set of member identifiers the moderator actually saw and approved in this
-     * cluster - never re-expanded server-side to whatever the cluster currently contains. Every
-     * entry must currently be a member of the freshly-recomputed cluster named by clusterId, or
-     * the whole request is rejected (400) rather than partially applied.
-     */
-    memberIdentifiers: string[];
+  clusterId: string;
+  /**
+   * The exact set of member identifiers the moderator actually saw and approved in this
+   * cluster - never re-expanded server-side to whatever the cluster currently contains. Every
+   * entry must currently be a member of the freshly-recomputed cluster named by clusterId, or
+   * the whole request is rejected (400) rather than partially applied.
+   */
+  memberIdentifiers: string[];
 }
 
 export interface ConfirmReviewClusterResponse {
-    clusterId: string;
-    /**
-     * Echo of the member identifiers this call cast a no-match vote for, in the same order they
-     * were submitted.
-     */
-    confirmedIdentifiers: string[];
-    /**
-     * Number of CardPrintingTag no-match votes cast by this call - always equal to
-     * len(confirmedIdentifiers), included for a frontend toast/summary without recounting the
-     * array itself.
-     */
-    votesCast: number;
+  clusterId: string;
+  /**
+   * Echo of the member identifiers this call cast a no-match vote for, in the same order they
+   * were submitted.
+   */
+  confirmedIdentifiers: string[];
+  /**
+   * Number of CardPrintingTag no-match votes cast by this call - always equal to
+   * len(confirmedIdentifiers), included for a frontend toast/summary without recounting the
+   * array itself.
+   */
+  votesCast: number;
 }
 
 export interface ContributionsResponse {
-    cardCountByType:   { [key: string]: number };
-    sources:           SourceContribution[];
-    totalDatabaseSize: number;
+  cardCountByType: { [key: string]: number };
+  sources: SourceContribution[];
+  totalDatabaseSize: number;
 }
 
 export interface CreateDeckShareRequest {
-    deckKey:         string;
-    expiresInDays:   number | null;
-    wrappedDek:      string;
-    wrappedDekNonce: string;
+  deckKey: string;
+  expiresInDays: number | null;
+  wrappedDek: string;
+  wrappedDekNonce: string;
 }
 
 export interface CreateDeckShareResponse {
-    createdAt: string;
-    shareId:   string;
+  createdAt: string;
+  shareId: string;
 }
 
 export interface CryptoProfileResponse {
-    exists:                          boolean;
-    kdfIterations:                   number | null;
-    passphraseWrappedMasterKey:      null | string;
-    passphraseWrappedMasterKeyNonce: null | string;
-    recoveryWrappedMasterKey:        null | string;
-    recoveryWrappedMasterKeyNonce:   null | string;
-    salt:                            null | string;
+  exists: boolean;
+  kdfIterations: number | null;
+  passphraseWrappedMasterKey: null | string;
+  passphraseWrappedMasterKeyNonce: null | string;
+  recoveryWrappedMasterKey: null | string;
+  recoveryWrappedMasterKeyNonce: null | string;
+  salt: null | string;
 }
 
 export interface DFCPairsResponse {
-    dfcPairs: { [key: string]: string };
+  dfcPairs: { [key: string]: string };
 }
 
 export interface DeckSharesResponse {
-    shares: DeckShareSummary[];
+  shares: DeckShareSummary[];
 }
 
 export interface DeckShareSummary {
-    createdAt: string;
-    deckKey:   string;
-    expiresAt: null | string;
-    shareId:   string;
+  createdAt: string;
+  deckKey: string;
+  expiresAt: null | string;
+  shareId: string;
 }
 
 export interface DeleteDeckRequest {
-    key: string;
+  key: string;
 }
 
 export interface DeleteDeckResponse {
-    deleted: boolean;
+  deleted: boolean;
 }
 
 export interface EditorSearchRequest {
-    queries:        { [key: string]: SearchQuery };
-    searchSettings: SearchSettings;
+  queries: { [key: string]: SearchQuery };
+  searchSettings: SearchSettings;
 }
 
 export interface SearchQuery {
-    cardType:         CardType;
-    collectorNumber?: string;
-    expansionCode?:   string;
-    query:            null | string;
+  cardType: CardType;
+  collectorNumber?: string;
+  expansionCode?: string;
+  query: null | string;
 }
 
 export interface EditorSearchResponse {
-    /**
-     * Hash keys (matching `results`' own keys) of queries whose printing-specific search
-     * (expansion_code and/or collector_number) found zero hits under that filter and were
-     * retried without it. Absence from this list means either the query carried no printing
-     * filter at all, or the filter found real hits - exact-match behaviour when hits exist is
-     * completely unaffected by this field.
-     */
-    degradedQueries: string[];
-    /**
-     * Search-operator syntax (e.g. `artist:`, `tag:`, `power:` - see
-     * cardpicker.search.operator_parser). Hash keys (matching `results`' own keys) of queries
-     * whose raw text contained one or more unrecognised `operator:` tokens, mapped to a
-     * human-readable message per unrecognised operator (e.g. "unsupported operator: power"). An
-     * unrecognised operator's token is dropped from the query entirely (never silently treated
-     * as literal search text) - `results` for that hash key still reflects whatever the REST of
-     * the query (recognised operators plus residual free text) matched. Deliberately NOT
-     * required/optional on the wire - older clients that don't read this field are completely
-     * unaffected; its absence or emptiness both mean every query parsed without an unrecognised
-     * operator.
-     */
-    operatorErrors?: { [key: string]: string[] };
-    results:         { [key: string]: string[] };
+  /**
+   * Hash keys (matching `results`' own keys) of queries whose printing-specific search
+   * (expansion_code and/or collector_number) found zero hits under that filter and were
+   * retried without it. Absence from this list means either the query carried no printing
+   * filter at all, or the filter found real hits - exact-match behaviour when hits exist is
+   * completely unaffected by this field.
+   */
+  degradedQueries: string[];
+  /**
+   * Search-operator syntax (e.g. `artist:`, `tag:`, `power:` - see
+   * cardpicker.search.operator_parser). Hash keys (matching `results`' own keys) of queries
+   * whose raw text contained one or more unrecognised `operator:` tokens, mapped to a
+   * human-readable message per unrecognised operator (e.g. "unsupported operator: power"). An
+   * unrecognised operator's token is dropped from the query entirely (never silently treated
+   * as literal search text) - `results` for that hash key still reflects whatever the REST of
+   * the query (recognised operators plus residual free text) matched. Deliberately NOT
+   * required/optional on the wire - older clients that don't read this field are completely
+   * unaffected; its absence or emptiness both mean every query parsed without an unrecognised
+   * operator.
+   */
+  operatorErrors?: { [key: string]: string[] };
+  results: { [key: string]: string[] };
 }
 
 export interface ErrorResponse {
-    errors?:  { [key: string]: any }[];
-    message?: string;
-    name:     string;
+  errors?: { [key: string]: any }[];
+  message?: string;
+  name: string;
 }
 
 export interface ExploreSearchRequest {
-    cardTypes:      CardType[];
-    pageSize:       number;
-    pageStart:      number;
-    query:          null | string;
-    searchSettings: SearchSettings;
-    sortBy:         SortBy;
+  cardTypes: CardType[];
+  pageSize: number;
+  pageStart: number;
+  query: null | string;
+  searchSettings: SearchSettings;
+  sortBy: SortBy;
 }
 
 export enum SortBy {
-    DateCreatedAscending = "dateCreatedAscending",
-    DateCreatedDescending = "dateCreatedDescending",
-    DateModifiedAscending = "dateModifiedAscending",
-    DateModifiedDescending = "dateModifiedDescending",
-    NameAscending = "nameAscending",
-    NameDescending = "nameDescending",
+  DateCreatedAscending = "dateCreatedAscending",
+  DateCreatedDescending = "dateCreatedDescending",
+  DateModifiedAscending = "dateModifiedAscending",
+  DateModifiedDescending = "dateModifiedDescending",
+  NameAscending = "nameAscending",
+  NameDescending = "nameDescending",
 }
 
 export interface ExploreSearchResponse {
-    cards: Card[];
-    count: number;
+  cards: Card[];
+  count: number;
 }
 
 export interface GetSharedDeckRequest {
-    shareId: string;
+  shareId: string;
 }
 
 export interface GetSharedDeckResponse {
-    ciphertext:      string;
-    ciphertextNonce: string;
-    createdAt:       string;
-    wrappedDek:      string;
-    wrappedDekNonce: string;
+  ciphertext: string;
+  ciphertextNonce: string;
+  createdAt: string;
+  wrappedDek: string;
+  wrappedDekNonce: string;
 }
 
 export interface ImportSiteDecklistRequest {
-    url: string;
+  url: string;
 }
 
 export interface ImportSiteDecklistResponse {
-    cards: string;
+  cards: string;
 }
 
 export interface ImportSitesResponse {
-    importSites: ImportSite[];
+  importSites: ImportSite[];
 }
 
 export interface ImportSite {
-    name: string;
-    url:  string;
+  name: string;
+  url: string;
 }
 
 export interface InfoResponse {
-    info: Info;
+  info: Info;
 }
 
 export interface Info {
-    description: null | string;
-    discord:     null | string;
-    email:       null | string;
-    name:        null | string;
-    reddit:      null | string;
+  description: null | string;
+  discord: null | string;
+  email: null | string;
+  name: null | string;
+  reddit: null | string;
 }
 
 export interface LanguagesResponse {
-    languages: Language[];
+  languages: Language[];
 }
 
 export interface Language {
-    code: string;
-    name: string;
+  code: string;
+  name: string;
 }
 
 export interface LoadDeckRequest {
-    key: string;
+  key: string;
 }
 
 export interface LoadDeckResponse {
-    ciphertext:      string;
-    ciphertextNonce: string;
-    createdAt:       string;
-    kind:            LoadDeckResponseKind;
-    updatedAt:       string;
-    wrappedDek:      string;
-    wrappedDekNonce: string;
+  ciphertext: string;
+  ciphertextNonce: string;
+  createdAt: string;
+  kind: LoadDeckResponseKind;
+  updatedAt: string;
+  wrappedDek: string;
+  wrappedDekNonce: string;
 }
 
 export enum LoadDeckResponseKind {
-    Deck = "deck",
-    Snapshot = "snapshot",
+  Deck = "deck",
+  Snapshot = "snapshot",
 }
 
 export interface ModerationDriveCardsRequest {
-    page:     number;
-    sourceId: number;
+  page: number;
+  sourceId: number;
 }
 
 export interface ModerationDriveCardsResponse {
-    cards:  Card[];
-    hits:   number;
-    pages:  number;
-    source: Source;
+  cards: Card[];
+  hits: number;
+  pages: number;
+  source: Source;
 }
 
 export interface Source {
-    description:   string;
-    externalLink?: string;
-    key:           string;
-    name:          string;
-    /**
-     * Primary key
-     */
-    pk:         number;
-    sourceType: SourceType;
+  description: string;
+  externalLink?: string;
+  key: string;
+  name: string;
+  /**
+   * Primary key
+   */
+  pk: number;
+  sourceType: SourceType;
 }
 
 export interface ModerationDrivesRequest {
-    page: number;
+  page: number;
 }
 
 export interface ModerationDrivesResponse {
-    hits:  number;
-    items: ModerationDriveItem[];
-    pages: number;
+  hits: number;
+  items: ModerationDriveItem[];
+  pages: number;
 }
 
 export interface ModerationDriveItem {
-    qtyCardbacks: number;
-    qtyCards:     number;
-    qtyTokens:    number;
-    source:       Source;
+  qtyCardbacks: number;
+  qtyCards: number;
+  qtyTokens: number;
+  source: Source;
 }
 
 export interface ModerationQueueRequest {
-    page: number;
+  page: number;
 }
 
 export interface ModerationQueueResponse {
-    hits:  number;
-    items: ModerationQueueItem[];
-    pages: number;
+  hits: number;
+  items: ModerationQueueItem[];
+  pages: number;
 }
 
 export interface ModerationQueueItem {
-    card:           Card;
-    reportCount:    number;
-    reportExcerpts: string[];
-    tagName:        string;
+  card: Card;
+  reportCount: number;
+  reportExcerpts: string[];
+  tagName: string;
 }
 
 export interface ModerationRemoveCardRequest {
-    identifier: string;
+  identifier: string;
 }
 
 export interface ModerationRemoveCardResponse {
-    removed: boolean;
+  removed: boolean;
 }
 
 export interface ModerationRemoveDriveRequest {
-    sourceId: number;
+  sourceId: number;
 }
 
 export interface ModerationRemoveDriveResponse {
-    cardsRemoved: number;
-    removed:      boolean;
+  cardsRemoved: number;
+  removed: boolean;
 }
 
 export interface NewCardsFirstPagesResponse {
-    results: { [key: string]: NewCardsFirstPage };
+  results: { [key: string]: NewCardsFirstPage };
 }
 
 export interface NewCardsFirstPage {
-    cards:  Card[];
-    hits:   number;
-    pages:  number;
-    source: Source;
+  cards: Card[];
+  hits: number;
+  pages: number;
+  source: Source;
 }
 
 export interface NewCardsPageResponse {
-    cards: Card[];
+  cards: Card[];
 }
 
 export interface OldEditorSearchRequest {
-    queries:        SearchQuery[];
-    searchSettings: SearchSettings;
+  queries: SearchQuery[];
+  searchSettings: SearchSettings;
 }
 
 export interface OldEditorSearchResponse {
-    results: { [key: string]: { [key: string]: string[] } };
+  results: { [key: string]: { [key: string]: string[] } };
 }
 
 export interface PatreonResponse {
-    patreon: Patreon;
+  patreon: Patreon;
 }
 
 export interface Patreon {
-    campaign: Campaign | null;
-    members:  Supporter[];
-    tiers:    { [key: string]: SupporterTier } | null;
-    url:      null | string;
+  campaign: Campaign | null;
+  members: Supporter[];
+  tiers: { [key: string]: SupporterTier } | null;
+  url: null | string;
 }
 
 export interface Campaign {
-    about: string;
-    id:    string;
+  about: string;
+  id: string;
 }
 
 export interface Supporter {
-    date: string;
-    name: string;
-    tier: string;
-    usd:  number;
+  date: string;
+  name: string;
+  tier: string;
+  usd: number;
 }
 
 export interface SupporterTier {
-    description: string;
-    title:       string;
-    usd:         number;
+  description: string;
+  title: string;
+  usd: number;
 }
 
 export interface PrintingCandidatesRequest {
-    identifier: string;
-    query?:     null | string;
+  identifier: string;
+  query?: null | string;
 }
 
 export interface PrintingCandidatesResponse {
-    results: PrintingCandidate[];
+  results: PrintingCandidate[];
 }
 
 export interface PrintingConsensusRequest {
-    identifier: string;
+  identifier: string;
 }
 
 export interface PrintingConsensusResponse {
-    isNoMatch:         boolean;
-    resolvedPrinting?: PrintingCandidate;
-    voteTally:         VoteTallyEntry[];
+  isNoMatch: boolean;
+  resolvedPrinting?: PrintingCandidate;
+  voteTally: VoteTallyEntry[];
 }
 
 export interface VoteTallyEntry {
-    count:     number;
-    isNoMatch: boolean;
-    printing?: PrintingCandidate;
+  count: number;
+  isNoMatch: boolean;
+  printing?: PrintingCandidate;
 }
 
 export interface PrintingTagQueueResponse {
-    cards: Card[];
-    hits:  number;
-    pages: number;
+  cards: Card[];
+  hits: number;
+  pages: number;
 }
 
 export interface ReportCardRequest {
-    anonymousId: string;
-    hide?:       boolean;
-    identifier:  string;
-    reason:      Reason;
-    text?:       string;
+  anonymousId: string;
+  hide?: boolean;
+  identifier: string;
+  reason: Reason;
+  text?: string;
 }
 
 export enum Reason {
-    BrokenImage = "broken_image",
-    LowQuality = "low_quality",
-    Nsfw = "nsfw",
-    Other = "other",
-    WrongCard = "wrong_card",
+  BrokenImage = "broken_image",
+  LowQuality = "low_quality",
+  Nsfw = "nsfw",
+  Other = "other",
+  WrongCard = "wrong_card",
 }
 
 export interface ReportCardResponse {
-    reported: boolean;
-    voteCast: boolean;
+  reported: boolean;
+  voteCast: boolean;
 }
 
 export interface ResetSavedDecksRequest {
-    confirm: boolean;
+  confirm: boolean;
 }
 
 export interface ResetSavedDecksResponse {
-    deletedDeckCount: number;
+  deletedDeckCount: number;
 }
 
 export interface RetractImplicitVoteRequest {
-    anonymousId: string;
-    identifier:  string;
-    tagName:     string;
+  anonymousId: string;
+  identifier: string;
+  tagName: string;
 }
 
 export interface ReviewClusterDetailRequest {
-    clusterId: string;
+  clusterId: string;
 }
 
 export interface ReviewClusterDetailResponse {
-    cluster: ReviewClusterSummary;
+  cluster: ReviewClusterSummary;
 }
 
 export interface ReviewClusterSummary {
-    /**
-     * Opaque, stable handle for this cluster - the identifier of its lowest-card-id member.
-     * Pass straight back on 2/reviewClusterDetail/ and 2/confirmReviewCluster/.
-     */
-    clusterId: string;
-    members:   ReviewClusterMember[];
-    /**
-     * Which of the three clustering signals bind this cluster's members together - can be more
-     * than one entry (a cluster can be the transitive union of several signal groups) or, in
-     * principle, empty (a cluster reached only via a chain the caller isn't shown individually)
-     * - practically always non-empty since every edge in this cluster came from one of these
-     * three signal types.
-     */
-    signals: ReviewClusterSignal[];
-    /**
-     * Number of member cards in this cluster.
-     */
-    size: number;
+  /**
+   * Opaque, stable handle for this cluster - the identifier of its lowest-card-id member.
+   * Pass straight back on 2/reviewClusterDetail/ and 2/confirmReviewCluster/.
+   */
+  clusterId: string;
+  members: ReviewClusterMember[];
+  /**
+   * Which of the three clustering signals bind this cluster's members together - can be more
+   * than one entry (a cluster can be the transitive union of several signal groups) or, in
+   * principle, empty (a cluster reached only via a chain the caller isn't shown individually)
+   * - practically always non-empty since every edge in this cluster came from one of these
+   * three signal types.
+   */
+  signals: ReviewClusterSignal[];
+  /**
+   * Number of member cards in this cluster.
+   */
+  size: number;
 }
 
 export interface ReviewClusterMember {
-    /**
-     * Card.identifier - the same stable, opaque identifier every other endpoint addresses a
-     * card by.
-     */
-    identifier: string;
-    name:       string;
-    /**
-     * Display-serving thumbnail identifier only - never pixel data from our own side
-     * (CLAUDE.md's Governing premise). The frontend turns this into a display-serving CDN URL
-     * exactly as it already does for Card.smallThumbnailUrl.
-     */
-    smallThumbnailUrl: string;
+  /**
+   * Card.identifier - the same stable, opaque identifier every other endpoint addresses a
+   * card by.
+   */
+  identifier: string;
+  name: string;
+  /**
+   * Display-serving thumbnail identifier only - never pixel data from our own side
+   * (CLAUDE.md's Governing premise). The frontend turns this into a display-serving CDN URL
+   * exactly as it already does for Card.smallThumbnailUrl.
+   */
+  smallThumbnailUrl: string;
 }
 
 export interface ReviewClusterSignal {
-    /**
-     * How many of this cluster's members share this exact signal value - not necessarily the
-     * cluster's full size, since a cluster can be the transitive union of several signal groups.
-     */
-    memberCount: number;
-    signalType:  ReviewClusterSignalType;
-    /**
-     * The shared value that binds this signal's members together - the md5 checksum for
-     * md5_checksum, a decimal string for symbol_phash (avoids JS bigint precision issues), or
-     * the normalized legal-line text itself for legal_line_text.
-     */
-    value: string;
+  /**
+   * How many of this cluster's members share this exact signal value - not necessarily the
+   * cluster's full size, since a cluster can be the transitive union of several signal groups.
+   */
+  memberCount: number;
+  signalType: ReviewClusterSignalType;
+  /**
+   * The shared value that binds this signal's members together - the md5 checksum for
+   * md5_checksum, a decimal string for symbol_phash (avoids JS bigint precision issues), or
+   * the normalized legal-line text itself for legal_line_text.
+   */
+  value: string;
 }
 
 export enum ReviewClusterSignalType {
-    LegalLineText = "legal_line_text",
-    Md5Checksum = "md5_checksum",
-    SymbolPhash = "symbol_phash",
+  LegalLineText = "legal_line_text",
+  Md5Checksum = "md5_checksum",
+  SymbolPhash = "symbol_phash",
 }
 
 export interface ReviewClusterListRequest {
-    page: number;
+  page: number;
 }
 
 export interface ReviewClusterListResponse {
-    hits:  number;
-    items: ReviewClusterSummary[];
-    pages: number;
+  hits: number;
+  items: ReviewClusterSummary[];
+  pages: number;
 }
 
 export interface RevokeDeckShareRequest {
-    shareId: string;
+  shareId: string;
 }
 
 export interface RevokeDeckShareResponse {
-    deleted: boolean;
+  deleted: boolean;
 }
 
 export interface SampleCardsResponse {
-    cards: Cards;
-    [property: string]: any;
+  cards: Cards;
+  [property: string]: any;
 }
 
 export interface Cards {
-    CARD:     Card[];
-    CARDBACK: Card[];
-    TOKEN:    Card[];
-    [property: string]: any;
+  CARD: Card[];
+  CARDBACK: Card[];
+  TOKEN: Card[];
+  [property: string]: any;
 }
 
 export interface SaveCryptoProfileRequest {
-    kdfIterations:                   number;
-    passphraseWrappedMasterKey:      string;
-    passphraseWrappedMasterKeyNonce: string;
-    recoveryWrappedMasterKey:        string;
-    recoveryWrappedMasterKeyNonce:   string;
-    salt:                            string;
+  kdfIterations: number;
+  passphraseWrappedMasterKey: string;
+  passphraseWrappedMasterKeyNonce: string;
+  recoveryWrappedMasterKey: string;
+  recoveryWrappedMasterKeyNonce: string;
+  salt: string;
 }
 
 export interface SaveCryptoProfileResponse {
-    saved: boolean;
+  saved: boolean;
 }
 
 export interface SaveDeckRequest {
-    ciphertext:      string;
-    ciphertextNonce: string;
-    key:             null | string;
-    kind?:           LoadDeckResponseKind;
-    wrappedDek:      string;
-    wrappedDekNonce: string;
+  ciphertext: string;
+  ciphertextNonce: string;
+  key: null | string;
+  kind?: LoadDeckResponseKind;
+  wrappedDek: string;
+  wrappedDekNonce: string;
 }
 
 export interface SaveDeckResponse {
-    key: string;
+  key: string;
 }
 
 export interface SavedDecksResponse {
-    decks: SavedDeckSummary[];
+  decks: SavedDeckSummary[];
 }
 
 export interface SavedDeckSummary {
-    ciphertext:      string;
-    ciphertextNonce: string;
-    createdAt:       string;
-    key:             string;
-    kind:            LoadDeckResponseKind;
-    updatedAt:       string;
-    wrappedDek:      string;
-    wrappedDekNonce: string;
+  ciphertext: string;
+  ciphertextNonce: string;
+  createdAt: string;
+  key: string;
+  kind: LoadDeckResponseKind;
+  updatedAt: string;
+  wrappedDek: string;
+  wrappedDekNonce: string;
 }
 
 export interface SearchEngineHealthResponse {
-    online: boolean;
+  online: boolean;
 }
 
 export interface SourcesResponse {
-    results: { [key: string]: Source };
+  results: { [key: string]: Source };
 }
 
 export interface SubmitArtistVoteRequest {
-    anonymousId:  string;
-    artistName?:  null | string;
-    identifier:   string;
-    isUnknown:    boolean;
-    voteSurface?: null | string;
+  anonymousId: string;
+  artistName?: null | string;
+  identifier: string;
+  isUnknown: boolean;
+  voteSurface?: null | string;
 }
 
 export interface SubmitArtistWriteInVoteRequest {
-    anonymousId:  string;
-    artistId?:    number | null;
-    freeText?:    null | string;
-    identifier:   string;
-    voteSurface?: null | string;
+  anonymousId: string;
+  artistId?: number | null;
+  freeText?: null | string;
+  identifier: string;
+  voteSurface?: null | string;
 }
 
 export interface SubmitArtistWriteInVoteResponse {
-    castArtist:       ArtistAutocompleteResult;
-    createdNewArtist: boolean;
-    isUnknown:        boolean;
-    resolvedArtist?:  CanonicalArtist | null;
-    voteTally:        ArtistVoteTallyEntry[];
+  castArtist: ArtistAutocompleteResult;
+  createdNewArtist: boolean;
+  isUnknown: boolean;
+  resolvedArtist?: CanonicalArtist | null;
+  voteTally: ArtistVoteTallyEntry[];
 }
 
 export interface SubmitIllustrationRejectionRequest {
-    anonymousId:    string;
-    identifier:     string;
-    illustrationId: string;
-    voteSurface?:   null | string;
+  anonymousId: string;
+  identifier: string;
+  illustrationId: string;
+  voteSurface?: null | string;
 }
 
 export interface SubmitIllustrationRejectionResponse {
-    illustrationId: string;
+  illustrationId: string;
 }
 
 export interface SubmitIllustrationVoteRequest {
-    anonymousId:     string;
-    identifier:      string;
-    illustrationId?: null | string;
-    isUnknown:       boolean;
-    voteSurface?:    null | string;
+  anonymousId: string;
+  identifier: string;
+  illustrationId?: null | string;
+  isUnknown: boolean;
+  voteSurface?: null | string;
 }
 
 export interface SubmitIllustrationVoteResponse {
-    artistAbstainReason?: null | string;
-    artistVoteCast:       boolean;
-    illustrationId?:      null | string;
-    isUnknown:            boolean;
-    printingVoteCast:     boolean;
-    resolvedPrinting?:    PrintingCandidate;
+  artistAbstainReason?: null | string;
+  artistVoteCast: boolean;
+  illustrationId?: null | string;
+  isUnknown: boolean;
+  printingVoteCast: boolean;
+  resolvedPrinting?: PrintingCandidate;
 }
 
 export interface SubmitPrintingTagRequest {
-    anonymousId:         string;
-    identifier:          string;
-    isNoMatch:           boolean;
-    printingIdentifier?: null | string;
-    voteSurface?:        null | string;
+  anonymousId: string;
+  identifier: string;
+  isNoMatch: boolean;
+  printingIdentifier?: null | string;
+  voteSurface?: null | string;
 }
 
 export interface SubmitQuestionAbstentionRequest {
-    anonymousId:  string;
-    identifier:   string;
-    questionType: string;
-    reason?:      string;
+  anonymousId: string;
+  identifier: string;
+  questionType: string;
+  reason?: string;
 }
 
 export interface SubmitQuestionAbstentionResponse {
-    recorded: boolean;
+  recorded: boolean;
 }
 
 export interface SubmitTagVoteRequest {
-    anonymousId:  string;
-    identifier:   string;
-    polarity:     number;
-    tagName:      string;
-    voteSurface?: null | string;
+  anonymousId: string;
+  identifier: string;
+  polarity: number;
+  tagName: string;
+  voteSurface?: null | string;
 }
 
 export interface TagConsensusRequest {
-    identifier: string;
+  identifier: string;
 }
 
 export interface TagConsensusResponse {
-    tags: TagConsensusEntry[];
+  tags: TagConsensusEntry[];
 }
 
 export interface TagConsensusEntry {
-    netPolarity:       number;
-    resolvedPolarity?: number | null;
-    tagName:           string;
-    tally:             TagVoteTallyEntry[];
+  netPolarity: number;
+  resolvedPolarity?: number | null;
+  tagName: string;
+  tally: TagVoteTallyEntry[];
 }
 
 export interface TagVoteTallyEntry {
-    count:    number;
-    polarity: number;
+  count: number;
+  polarity: number;
 }
 
 export interface TagsResponse {
-    tags: Tag[];
+  tags: Tag[];
 }
 
 export interface Tag {
-    aliases?:            string[];
-    children:            ChildElement[];
-    displayName?:        null | string;
-    isEnabledByDefault?: boolean;
-    name:                string;
-    parent:              null | string;
+  aliases?: string[];
+  children: ChildElement[];
+  displayName?: null | string;
+  isEnabledByDefault?: boolean;
+  name: string;
+  parent: null | string;
 }
 
 export interface ChildElement {
-    aliases?:            string[];
-    children:            ChildElement[];
-    displayName?:        null | string;
-    isEnabledByDefault?: boolean;
-    name:                string;
-    parent:              null | string;
+  aliases?: string[];
+  children: ChildElement[];
+  displayName?: null | string;
+  isEnabledByDefault?: boolean;
+  name: string;
+  parent: null | string;
 }
 
 export interface VoteQueueRequest {
-    kind: VoteQueueRequestKind;
-    page: number;
+  kind: VoteQueueRequestKind;
+  page: number;
 }
 
 export enum VoteQueueRequestKind {
-    Artist = "artist",
-    Printing = "printing",
-    Tag = "tag",
+  Artist = "artist",
+  Printing = "printing",
+  Tag = "tag",
 }
 
 export interface VoteQueueResponse {
-    hits:  number;
-    items: VoteQueueItem[];
-    pages: number;
+  hits: number;
+  items: VoteQueueItem[];
+  pages: number;
 }
 
 export interface VoteQueueItem {
-    card:     Card;
-    tagName?: null | string;
+  card: Card;
+  tagName?: null | string;
 }
 
 export interface WhoamiResponse {
-    authenticated:  boolean;
-    discordEnabled: boolean;
-    loginUrl:       null | string;
-    logoutUrl:      null | string;
-    moderator:      boolean;
-    username:       null | string;
+  authenticated: boolean;
+  discordEnabled: boolean;
+  loginUrl: null | string;
+  logoutUrl: null | string;
+  moderator: boolean;
+  username: null | string;
 }
 
 // Converts JSON strings to/from your types
 // and asserts the results of JSON.parse at runtime
 export class Convert {
-    public static toArtistAutocompleteResult(json: string): ArtistAutocompleteResult {
-        return cast(JSON.parse(json), r("ArtistAutocompleteResult"));
-    }
-
-    public static artistAutocompleteResultToJson(value: ArtistAutocompleteResult): string {
-        return JSON.stringify(uncast(value, r("ArtistAutocompleteResult")), null, 2);
-    }
-
-    public static toArtistVoteTallyEntry(json: string): ArtistVoteTallyEntry {
-        return cast(JSON.parse(json), r("ArtistVoteTallyEntry"));
-    }
-
-    public static artistVoteTallyEntryToJson(value: ArtistVoteTallyEntry): string {
-        return JSON.stringify(uncast(value, r("ArtistVoteTallyEntry")), null, 2);
-    }
-
-    public static toBleedProvenance(json: string): BleedProvenance {
-        return cast(JSON.parse(json), r("BleedProvenance"));
-    }
-
-    public static bleedProvenanceToJson(value: BleedProvenance): string {
-        return JSON.stringify(uncast(value, r("BleedProvenance")), null, 2);
-    }
-
-    public static toCampaign(json: string): Campaign | null {
-        return cast(JSON.parse(json), u(r("Campaign"), null));
-    }
-
-    public static campaignToJson(value: Campaign | null): string {
-        return JSON.stringify(uncast(value, u(r("Campaign"), null)), null, 2);
-    }
-
-    public static toCanonicalArtist(json: string): CanonicalArtist | null {
-        return cast(JSON.parse(json), u(r("CanonicalArtist"), null));
-    }
-
-    public static canonicalArtistToJson(value: CanonicalArtist | null): string {
-        return JSON.stringify(uncast(value, u(r("CanonicalArtist"), null)), null, 2);
-    }
-
-    public static toCanonicalCard(json: string): CanonicalCard | null {
-        return cast(JSON.parse(json), u(r("CanonicalCard"), null));
-    }
-
-    public static canonicalCardToJson(value: CanonicalCard | null): string {
-        return JSON.stringify(uncast(value, u(r("CanonicalCard"), null)), null, 2);
-    }
-
-    public static toCard(json: string): Card {
-        return cast(JSON.parse(json), r("Card"));
-    }
-
-    public static cardToJson(value: Card): string {
-        return JSON.stringify(uncast(value, r("Card")), null, 2);
-    }
-
-    public static toCardType(json: string): CardType {
-        return cast(JSON.parse(json), r("CardType"));
-    }
-
-    public static cardTypeToJson(value: CardType): string {
-        return JSON.stringify(uncast(value, r("CardType")), null, 2);
-    }
-
-    public static toFilterSettings(json: string): FilterSettings {
-        return cast(JSON.parse(json), r("FilterSettings"));
-    }
-
-    public static filterSettingsToJson(value: FilterSettings): string {
-        return JSON.stringify(uncast(value, r("FilterSettings")), null, 2);
-    }
-
-    public static toFrameFamilyCandidate(json: string): FrameFamilyCandidate {
-        return cast(JSON.parse(json), r("FrameFamilyCandidate"));
-    }
-
-    public static frameFamilyCandidateToJson(value: FrameFamilyCandidate): string {
-        return JSON.stringify(uncast(value, r("FrameFamilyCandidate")), null, 2);
-    }
-
-    public static toGame(json: string): Game {
-        return cast(JSON.parse(json), r("Game"));
-    }
-
-    public static gameToJson(value: Game): string {
-        return JSON.stringify(uncast(value, r("Game")), null, 2);
-    }
-
-    public static toImportSite(json: string): ImportSite {
-        return cast(JSON.parse(json), r("ImportSite"));
-    }
-
-    public static importSiteToJson(value: ImportSite): string {
-        return JSON.stringify(uncast(value, r("ImportSite")), null, 2);
-    }
-
-    public static toLanguage(json: string): Language {
-        return cast(JSON.parse(json), r("Language"));
-    }
-
-    public static languageToJson(value: Language): string {
-        return JSON.stringify(uncast(value, r("Language")), null, 2);
-    }
-
-    public static toModerationDriveItem(json: string): ModerationDriveItem {
-        return cast(JSON.parse(json), r("ModerationDriveItem"));
-    }
-
-    public static moderationDriveItemToJson(value: ModerationDriveItem): string {
-        return JSON.stringify(uncast(value, r("ModerationDriveItem")), null, 2);
-    }
-
-    public static toModerationQueueItem(json: string): ModerationQueueItem {
-        return cast(JSON.parse(json), r("ModerationQueueItem"));
-    }
-
-    public static moderationQueueItemToJson(value: ModerationQueueItem): string {
-        return JSON.stringify(uncast(value, r("ModerationQueueItem")), null, 2);
-    }
-
-    public static toNewCardsFirstPage(json: string): NewCardsFirstPage {
-        return cast(JSON.parse(json), r("NewCardsFirstPage"));
-    }
-
-    public static newCardsFirstPageToJson(value: NewCardsFirstPage): string {
-        return JSON.stringify(uncast(value, r("NewCardsFirstPage")), null, 2);
-    }
-
-    public static toPilotRunHistoryEntry(json: string): PilotRunHistoryEntry {
-        return cast(JSON.parse(json), r("PilotRunHistoryEntry"));
-    }
-
-    public static pilotRunHistoryEntryToJson(value: PilotRunHistoryEntry): string {
-        return JSON.stringify(uncast(value, r("PilotRunHistoryEntry")), null, 2);
-    }
-
-    public static toPrintingCandidate(json: string): PrintingCandidate {
-        return cast(JSON.parse(json), r("PrintingCandidate"));
-    }
-
-    public static printingCandidateToJson(value: PrintingCandidate): string {
-        return JSON.stringify(uncast(value, r("PrintingCandidate")), null, 2);
-    }
-
-    public static toPrintingTagStatus(json: string): PrintingTagStatus {
-        return cast(JSON.parse(json), r("PrintingTagStatus"));
-    }
-
-    public static printingTagStatusToJson(value: PrintingTagStatus): string {
-        return JSON.stringify(uncast(value, r("PrintingTagStatus")), null, 2);
-    }
-
-    public static toQuestionFeedCounts(json: string): QuestionFeedCounts {
-        return cast(JSON.parse(json), r("QuestionFeedCounts"));
-    }
-
-    public static questionFeedCountsToJson(value: QuestionFeedCounts): string {
-        return JSON.stringify(uncast(value, r("QuestionFeedCounts")), null, 2);
-    }
-
-    public static toQuestionFeedItem(json: string): QuestionFeedItem {
-        return cast(JSON.parse(json), r("QuestionFeedItem"));
-    }
-
-    public static questionFeedItemToJson(value: QuestionFeedItem): string {
-        return JSON.stringify(uncast(value, r("QuestionFeedItem")), null, 2);
-    }
-
-    public static toQuestionFeedResponse(json: string): QuestionFeedResponse {
-        return cast(JSON.parse(json), r("QuestionFeedResponse"));
-    }
-
-    public static questionFeedResponseToJson(value: QuestionFeedResponse): string {
-        return JSON.stringify(uncast(value, r("QuestionFeedResponse")), null, 2);
-    }
-
-    public static toReviewClusterMember(json: string): ReviewClusterMember {
-        return cast(JSON.parse(json), r("ReviewClusterMember"));
-    }
-
-    public static reviewClusterMemberToJson(value: ReviewClusterMember): string {
-        return JSON.stringify(uncast(value, r("ReviewClusterMember")), null, 2);
-    }
-
-    public static toReviewClusterSignal(json: string): ReviewClusterSignal {
-        return cast(JSON.parse(json), r("ReviewClusterSignal"));
-    }
-
-    public static reviewClusterSignalToJson(value: ReviewClusterSignal): string {
-        return JSON.stringify(uncast(value, r("ReviewClusterSignal")), null, 2);
-    }
-
-    public static toReviewClusterSignalType(json: string): ReviewClusterSignalType {
-        return cast(JSON.parse(json), r("ReviewClusterSignalType"));
-    }
-
-    public static reviewClusterSignalTypeToJson(value: ReviewClusterSignalType): string {
-        return JSON.stringify(uncast(value, r("ReviewClusterSignalType")), null, 2);
-    }
-
-    public static toReviewClusterSummary(json: string): ReviewClusterSummary {
-        return cast(JSON.parse(json), r("ReviewClusterSummary"));
-    }
-
-    public static reviewClusterSummaryToJson(value: ReviewClusterSummary): string {
-        return JSON.stringify(uncast(value, r("ReviewClusterSummary")), null, 2);
-    }
-
-    public static toSearchQuery(json: string): SearchQuery {
-        return cast(JSON.parse(json), r("SearchQuery"));
-    }
-
-    public static searchQueryToJson(value: SearchQuery): string {
-        return JSON.stringify(uncast(value, r("SearchQuery")), null, 2);
-    }
-
-    public static toSearchSettings(json: string): SearchSettings {
-        return cast(JSON.parse(json), r("SearchSettings"));
-    }
-
-    public static searchSettingsToJson(value: SearchSettings): string {
-        return JSON.stringify(uncast(value, r("SearchSettings")), null, 2);
-    }
-
-    public static toSearchTypeSettings(json: string): SearchTypeSettings {
-        return cast(JSON.parse(json), r("SearchTypeSettings"));
-    }
-
-    public static searchTypeSettingsToJson(value: SearchTypeSettings): string {
-        return JSON.stringify(uncast(value, r("SearchTypeSettings")), null, 2);
-    }
-
-    public static toSkipReasonEngineCount(json: string): SkipReasonEngineCount {
-        return cast(JSON.parse(json), r("SkipReasonEngineCount"));
-    }
-
-    public static skipReasonEngineCountToJson(value: SkipReasonEngineCount): string {
-        return JSON.stringify(uncast(value, r("SkipReasonEngineCount")), null, 2);
-    }
-
-    public static toSortBy(json: string): SortBy {
-        return cast(JSON.parse(json), r("SortBy"));
-    }
-
-    public static sortByToJson(value: SortBy): string {
-        return JSON.stringify(uncast(value, r("SortBy")), null, 2);
-    }
-
-    public static toSource(json: string): Source {
-        return cast(JSON.parse(json), r("Source"));
-    }
-
-    public static sourceToJson(value: Source): string {
-        return JSON.stringify(uncast(value, r("Source")), null, 2);
-    }
-
-    public static toSourceContribution(json: string): SourceContribution {
-        return cast(JSON.parse(json), r("SourceContribution"));
-    }
-
-    public static sourceContributionToJson(value: SourceContribution): string {
-        return JSON.stringify(uncast(value, r("SourceContribution")), null, 2);
-    }
-
-    public static toSourceRow(json: string): Array<boolean | number> {
-        return cast(JSON.parse(json), a(u(true, 0)));
-    }
-
-    public static sourceRowToJson(value: Array<boolean | number>): string {
-        return JSON.stringify(uncast(value, a(u(true, 0))), null, 2);
-    }
-
-    public static toSourceSettings(json: string): SourceSettings {
-        return cast(JSON.parse(json), r("SourceSettings"));
-    }
-
-    public static sourceSettingsToJson(value: SourceSettings): string {
-        return JSON.stringify(uncast(value, r("SourceSettings")), null, 2);
-    }
-
-    public static toSourceType(json: string): SourceType {
-        return cast(JSON.parse(json), r("SourceType"));
-    }
-
-    public static sourceTypeToJson(value: SourceType): string {
-        return JSON.stringify(uncast(value, r("SourceType")), null, 2);
-    }
-
-    public static toSupporter(json: string): Supporter {
-        return cast(JSON.parse(json), r("Supporter"));
-    }
-
-    public static supporterToJson(value: Supporter): string {
-        return JSON.stringify(uncast(value, r("Supporter")), null, 2);
-    }
-
-    public static toSupporterTier(json: string): SupporterTier {
-        return cast(JSON.parse(json), r("SupporterTier"));
-    }
-
-    public static supporterTierToJson(value: SupporterTier): string {
-        return JSON.stringify(uncast(value, r("SupporterTier")), null, 2);
-    }
-
-    public static toTag(json: string): Tag {
-        return cast(JSON.parse(json), r("Tag"));
-    }
-
-    public static tagToJson(value: Tag): string {
-        return JSON.stringify(uncast(value, r("Tag")), null, 2);
-    }
-
-    public static toTagConsensusEntry(json: string): TagConsensusEntry {
-        return cast(JSON.parse(json), r("TagConsensusEntry"));
-    }
-
-    public static tagConsensusEntryToJson(value: TagConsensusEntry): string {
-        return JSON.stringify(uncast(value, r("TagConsensusEntry")), null, 2);
-    }
-
-    public static toTagVoteDisplayStatus(json: string): TagVoteDisplayStatus {
-        return cast(JSON.parse(json), r("TagVoteDisplayStatus"));
-    }
-
-    public static tagVoteDisplayStatusToJson(value: TagVoteDisplayStatus): string {
-        return JSON.stringify(uncast(value, r("TagVoteDisplayStatus")), null, 2);
-    }
-
-    public static toTagVoteTallyEntry(json: string): TagVoteTallyEntry {
-        return cast(JSON.parse(json), r("TagVoteTallyEntry"));
-    }
-
-    public static tagVoteTallyEntryToJson(value: TagVoteTallyEntry): string {
-        return JSON.stringify(uncast(value, r("TagVoteTallyEntry")), null, 2);
-    }
-
-    public static toVoteQueueItem(json: string): VoteQueueItem {
-        return cast(JSON.parse(json), r("VoteQueueItem"));
-    }
-
-    public static voteQueueItemToJson(value: VoteQueueItem): string {
-        return JSON.stringify(uncast(value, r("VoteQueueItem")), null, 2);
-    }
-
-    public static toVoteTallyEntry(json: string): VoteTallyEntry {
-        return cast(JSON.parse(json), r("VoteTallyEntry"));
-    }
-
-    public static voteTallyEntryToJson(value: VoteTallyEntry): string {
-        return JSON.stringify(uncast(value, r("VoteTallyEntry")), null, 2);
-    }
-
-    public static toArtistAutocompleteRequest(json: string): ArtistAutocompleteRequest {
-        return cast(JSON.parse(json), r("ArtistAutocompleteRequest"));
-    }
-
-    public static artistAutocompleteRequestToJson(value: ArtistAutocompleteRequest): string {
-        return JSON.stringify(uncast(value, r("ArtistAutocompleteRequest")), null, 2);
-    }
-
-    public static toArtistAutocompleteResponse(json: string): ArtistAutocompleteResponse {
-        return cast(JSON.parse(json), r("ArtistAutocompleteResponse"));
-    }
-
-    public static artistAutocompleteResponseToJson(value: ArtistAutocompleteResponse): string {
-        return JSON.stringify(uncast(value, r("ArtistAutocompleteResponse")), null, 2);
-    }
-
-    public static toArtistCandidatesRequest(json: string): ArtistCandidatesRequest {
-        return cast(JSON.parse(json), r("ArtistCandidatesRequest"));
-    }
-
-    public static artistCandidatesRequestToJson(value: ArtistCandidatesRequest): string {
-        return JSON.stringify(uncast(value, r("ArtistCandidatesRequest")), null, 2);
-    }
-
-    public static toArtistCandidatesResponse(json: string): ArtistCandidatesResponse {
-        return cast(JSON.parse(json), r("ArtistCandidatesResponse"));
-    }
-
-    public static artistCandidatesResponseToJson(value: ArtistCandidatesResponse): string {
-        return JSON.stringify(uncast(value, r("ArtistCandidatesResponse")), null, 2);
-    }
-
-    public static toArtistConsensusRequest(json: string): ArtistConsensusRequest {
-        return cast(JSON.parse(json), r("ArtistConsensusRequest"));
-    }
-
-    public static artistConsensusRequestToJson(value: ArtistConsensusRequest): string {
-        return JSON.stringify(uncast(value, r("ArtistConsensusRequest")), null, 2);
-    }
-
-    public static toArtistConsensusResponse(json: string): ArtistConsensusResponse {
-        return cast(JSON.parse(json), r("ArtistConsensusResponse"));
-    }
-
-    public static artistConsensusResponseToJson(value: ArtistConsensusResponse): string {
-        return JSON.stringify(uncast(value, r("ArtistConsensusResponse")), null, 2);
-    }
-
-    public static toArtistExternalLinksResponse(json: string): ArtistExternalLinksResponse {
-        return cast(JSON.parse(json), r("ArtistExternalLinksResponse"));
-    }
-
-    public static artistExternalLinksResponseToJson(value: ArtistExternalLinksResponse): string {
-        return JSON.stringify(uncast(value, r("ArtistExternalLinksResponse")), null, 2);
-    }
-
-    public static toCardbacksRequest(json: string): CardbacksRequest {
-        return cast(JSON.parse(json), r("CardbacksRequest"));
-    }
-
-    public static cardbacksRequestToJson(value: CardbacksRequest): string {
-        return JSON.stringify(uncast(value, r("CardbacksRequest")), null, 2);
-    }
-
-    public static toCardbacksResponse(json: string): CardbacksResponse {
-        return cast(JSON.parse(json), r("CardbacksResponse"));
-    }
-
-    public static cardbacksResponseToJson(value: CardbacksResponse): string {
-        return JSON.stringify(uncast(value, r("CardbacksResponse")), null, 2);
-    }
-
-    public static toCardsRequest(json: string): CardsRequest {
-        return cast(JSON.parse(json), r("CardsRequest"));
-    }
-
-    public static cardsRequestToJson(value: CardsRequest): string {
-        return JSON.stringify(uncast(value, r("CardsRequest")), null, 2);
-    }
-
-    public static toCardsResponse(json: string): CardsResponse {
-        return cast(JSON.parse(json), r("CardsResponse"));
-    }
-
-    public static cardsResponseToJson(value: CardsResponse): string {
-        return JSON.stringify(uncast(value, r("CardsResponse")), null, 2);
-    }
-
-    public static toCastImplicitVoteRequest(json: string): CastImplicitVoteRequest {
-        return cast(JSON.parse(json), r("CastImplicitVoteRequest"));
-    }
-
-    public static castImplicitVoteRequestToJson(value: CastImplicitVoteRequest): string {
-        return JSON.stringify(uncast(value, r("CastImplicitVoteRequest")), null, 2);
-    }
-
-    public static toCatalogStatsResponse(json: string): CatalogStatsResponse {
-        return cast(JSON.parse(json), r("CatalogStatsResponse"));
-    }
-
-    public static catalogStatsResponseToJson(value: CatalogStatsResponse): string {
-        return JSON.stringify(uncast(value, r("CatalogStatsResponse")), null, 2);
-    }
-
-    public static toConfirmReviewClusterRequest(json: string): ConfirmReviewClusterRequest {
-        return cast(JSON.parse(json), r("ConfirmReviewClusterRequest"));
-    }
-
-    public static confirmReviewClusterRequestToJson(value: ConfirmReviewClusterRequest): string {
-        return JSON.stringify(uncast(value, r("ConfirmReviewClusterRequest")), null, 2);
-    }
-
-    public static toConfirmReviewClusterResponse(json: string): ConfirmReviewClusterResponse {
-        return cast(JSON.parse(json), r("ConfirmReviewClusterResponse"));
-    }
-
-    public static confirmReviewClusterResponseToJson(value: ConfirmReviewClusterResponse): string {
-        return JSON.stringify(uncast(value, r("ConfirmReviewClusterResponse")), null, 2);
-    }
-
-    public static toContributionsResponse(json: string): ContributionsResponse {
-        return cast(JSON.parse(json), r("ContributionsResponse"));
-    }
-
-    public static contributionsResponseToJson(value: ContributionsResponse): string {
-        return JSON.stringify(uncast(value, r("ContributionsResponse")), null, 2);
-    }
-
-    public static toCreateDeckShareRequest(json: string): CreateDeckShareRequest {
-        return cast(JSON.parse(json), r("CreateDeckShareRequest"));
-    }
-
-    public static createDeckShareRequestToJson(value: CreateDeckShareRequest): string {
-        return JSON.stringify(uncast(value, r("CreateDeckShareRequest")), null, 2);
-    }
-
-    public static toCreateDeckShareResponse(json: string): CreateDeckShareResponse {
-        return cast(JSON.parse(json), r("CreateDeckShareResponse"));
-    }
-
-    public static createDeckShareResponseToJson(value: CreateDeckShareResponse): string {
-        return JSON.stringify(uncast(value, r("CreateDeckShareResponse")), null, 2);
-    }
-
-    public static toCryptoProfileResponse(json: string): CryptoProfileResponse {
-        return cast(JSON.parse(json), r("CryptoProfileResponse"));
-    }
-
-    public static cryptoProfileResponseToJson(value: CryptoProfileResponse): string {
-        return JSON.stringify(uncast(value, r("CryptoProfileResponse")), null, 2);
-    }
-
-    public static toDFCPairsResponse(json: string): DFCPairsResponse {
-        return cast(JSON.parse(json), r("DFCPairsResponse"));
-    }
-
-    public static dFCPairsResponseToJson(value: DFCPairsResponse): string {
-        return JSON.stringify(uncast(value, r("DFCPairsResponse")), null, 2);
-    }
-
-    public static toDeckShareSummary(json: string): DeckShareSummary {
-        return cast(JSON.parse(json), r("DeckShareSummary"));
-    }
-
-    public static deckShareSummaryToJson(value: DeckShareSummary): string {
-        return JSON.stringify(uncast(value, r("DeckShareSummary")), null, 2);
-    }
-
-    public static toDeckSharesResponse(json: string): DeckSharesResponse {
-        return cast(JSON.parse(json), r("DeckSharesResponse"));
-    }
-
-    public static deckSharesResponseToJson(value: DeckSharesResponse): string {
-        return JSON.stringify(uncast(value, r("DeckSharesResponse")), null, 2);
-    }
-
-    public static toDeleteDeckRequest(json: string): DeleteDeckRequest {
-        return cast(JSON.parse(json), r("DeleteDeckRequest"));
-    }
-
-    public static deleteDeckRequestToJson(value: DeleteDeckRequest): string {
-        return JSON.stringify(uncast(value, r("DeleteDeckRequest")), null, 2);
-    }
-
-    public static toDeleteDeckResponse(json: string): DeleteDeckResponse {
-        return cast(JSON.parse(json), r("DeleteDeckResponse"));
-    }
-
-    public static deleteDeckResponseToJson(value: DeleteDeckResponse): string {
-        return JSON.stringify(uncast(value, r("DeleteDeckResponse")), null, 2);
-    }
-
-    public static toEditorSearchRequest(json: string): EditorSearchRequest {
-        return cast(JSON.parse(json), r("EditorSearchRequest"));
-    }
-
-    public static editorSearchRequestToJson(value: EditorSearchRequest): string {
-        return JSON.stringify(uncast(value, r("EditorSearchRequest")), null, 2);
-    }
-
-    public static toEditorSearchResponse(json: string): EditorSearchResponse {
-        return cast(JSON.parse(json), r("EditorSearchResponse"));
-    }
-
-    public static editorSearchResponseToJson(value: EditorSearchResponse): string {
-        return JSON.stringify(uncast(value, r("EditorSearchResponse")), null, 2);
-    }
-
-    public static toErrorResponse(json: string): ErrorResponse {
-        return cast(JSON.parse(json), r("ErrorResponse"));
-    }
-
-    public static errorResponseToJson(value: ErrorResponse): string {
-        return JSON.stringify(uncast(value, r("ErrorResponse")), null, 2);
-    }
-
-    public static toExploreSearchRequest(json: string): ExploreSearchRequest {
-        return cast(JSON.parse(json), r("ExploreSearchRequest"));
-    }
-
-    public static exploreSearchRequestToJson(value: ExploreSearchRequest): string {
-        return JSON.stringify(uncast(value, r("ExploreSearchRequest")), null, 2);
-    }
-
-    public static toExploreSearchResponse(json: string): ExploreSearchResponse {
-        return cast(JSON.parse(json), r("ExploreSearchResponse"));
-    }
-
-    public static exploreSearchResponseToJson(value: ExploreSearchResponse): string {
-        return JSON.stringify(uncast(value, r("ExploreSearchResponse")), null, 2);
-    }
-
-    public static toGetSharedDeckRequest(json: string): GetSharedDeckRequest {
-        return cast(JSON.parse(json), r("GetSharedDeckRequest"));
-    }
-
-    public static getSharedDeckRequestToJson(value: GetSharedDeckRequest): string {
-        return JSON.stringify(uncast(value, r("GetSharedDeckRequest")), null, 2);
-    }
-
-    public static toGetSharedDeckResponse(json: string): GetSharedDeckResponse {
-        return cast(JSON.parse(json), r("GetSharedDeckResponse"));
-    }
-
-    public static getSharedDeckResponseToJson(value: GetSharedDeckResponse): string {
-        return JSON.stringify(uncast(value, r("GetSharedDeckResponse")), null, 2);
-    }
-
-    public static toImportSiteDecklistRequest(json: string): ImportSiteDecklistRequest {
-        return cast(JSON.parse(json), r("ImportSiteDecklistRequest"));
-    }
-
-    public static importSiteDecklistRequestToJson(value: ImportSiteDecklistRequest): string {
-        return JSON.stringify(uncast(value, r("ImportSiteDecklistRequest")), null, 2);
-    }
-
-    public static toImportSiteDecklistResponse(json: string): ImportSiteDecklistResponse {
-        return cast(JSON.parse(json), r("ImportSiteDecklistResponse"));
-    }
-
-    public static importSiteDecklistResponseToJson(value: ImportSiteDecklistResponse): string {
-        return JSON.stringify(uncast(value, r("ImportSiteDecklistResponse")), null, 2);
-    }
-
-    public static toImportSitesResponse(json: string): ImportSitesResponse {
-        return cast(JSON.parse(json), r("ImportSitesResponse"));
-    }
-
-    public static importSitesResponseToJson(value: ImportSitesResponse): string {
-        return JSON.stringify(uncast(value, r("ImportSitesResponse")), null, 2);
-    }
-
-    public static toInfoResponse(json: string): InfoResponse {
-        return cast(JSON.parse(json), r("InfoResponse"));
-    }
-
-    public static infoResponseToJson(value: InfoResponse): string {
-        return JSON.stringify(uncast(value, r("InfoResponse")), null, 2);
-    }
-
-    public static toLanguagesResponse(json: string): LanguagesResponse {
-        return cast(JSON.parse(json), r("LanguagesResponse"));
-    }
-
-    public static languagesResponseToJson(value: LanguagesResponse): string {
-        return JSON.stringify(uncast(value, r("LanguagesResponse")), null, 2);
-    }
-
-    public static toLoadDeckRequest(json: string): LoadDeckRequest {
-        return cast(JSON.parse(json), r("LoadDeckRequest"));
-    }
-
-    public static loadDeckRequestToJson(value: LoadDeckRequest): string {
-        return JSON.stringify(uncast(value, r("LoadDeckRequest")), null, 2);
-    }
-
-    public static toLoadDeckResponse(json: string): LoadDeckResponse {
-        return cast(JSON.parse(json), r("LoadDeckResponse"));
-    }
-
-    public static loadDeckResponseToJson(value: LoadDeckResponse): string {
-        return JSON.stringify(uncast(value, r("LoadDeckResponse")), null, 2);
-    }
-
-    public static toModerationDriveCardsRequest(json: string): ModerationDriveCardsRequest {
-        return cast(JSON.parse(json), r("ModerationDriveCardsRequest"));
-    }
-
-    public static moderationDriveCardsRequestToJson(value: ModerationDriveCardsRequest): string {
-        return JSON.stringify(uncast(value, r("ModerationDriveCardsRequest")), null, 2);
-    }
-
-    public static toModerationDriveCardsResponse(json: string): ModerationDriveCardsResponse {
-        return cast(JSON.parse(json), r("ModerationDriveCardsResponse"));
-    }
-
-    public static moderationDriveCardsResponseToJson(value: ModerationDriveCardsResponse): string {
-        return JSON.stringify(uncast(value, r("ModerationDriveCardsResponse")), null, 2);
-    }
-
-    public static toModerationDrivesRequest(json: string): ModerationDrivesRequest {
-        return cast(JSON.parse(json), r("ModerationDrivesRequest"));
-    }
-
-    public static moderationDrivesRequestToJson(value: ModerationDrivesRequest): string {
-        return JSON.stringify(uncast(value, r("ModerationDrivesRequest")), null, 2);
-    }
-
-    public static toModerationDrivesResponse(json: string): ModerationDrivesResponse {
-        return cast(JSON.parse(json), r("ModerationDrivesResponse"));
-    }
-
-    public static moderationDrivesResponseToJson(value: ModerationDrivesResponse): string {
-        return JSON.stringify(uncast(value, r("ModerationDrivesResponse")), null, 2);
-    }
-
-    public static toModerationQueueRequest(json: string): ModerationQueueRequest {
-        return cast(JSON.parse(json), r("ModerationQueueRequest"));
-    }
-
-    public static moderationQueueRequestToJson(value: ModerationQueueRequest): string {
-        return JSON.stringify(uncast(value, r("ModerationQueueRequest")), null, 2);
-    }
-
-    public static toModerationQueueResponse(json: string): ModerationQueueResponse {
-        return cast(JSON.parse(json), r("ModerationQueueResponse"));
-    }
-
-    public static moderationQueueResponseToJson(value: ModerationQueueResponse): string {
-        return JSON.stringify(uncast(value, r("ModerationQueueResponse")), null, 2);
-    }
-
-    public static toModerationRemoveCardRequest(json: string): ModerationRemoveCardRequest {
-        return cast(JSON.parse(json), r("ModerationRemoveCardRequest"));
-    }
-
-    public static moderationRemoveCardRequestToJson(value: ModerationRemoveCardRequest): string {
-        return JSON.stringify(uncast(value, r("ModerationRemoveCardRequest")), null, 2);
-    }
-
-    public static toModerationRemoveCardResponse(json: string): ModerationRemoveCardResponse {
-        return cast(JSON.parse(json), r("ModerationRemoveCardResponse"));
-    }
-
-    public static moderationRemoveCardResponseToJson(value: ModerationRemoveCardResponse): string {
-        return JSON.stringify(uncast(value, r("ModerationRemoveCardResponse")), null, 2);
-    }
-
-    public static toModerationRemoveDriveRequest(json: string): ModerationRemoveDriveRequest {
-        return cast(JSON.parse(json), r("ModerationRemoveDriveRequest"));
-    }
-
-    public static moderationRemoveDriveRequestToJson(value: ModerationRemoveDriveRequest): string {
-        return JSON.stringify(uncast(value, r("ModerationRemoveDriveRequest")), null, 2);
-    }
-
-    public static toModerationRemoveDriveResponse(json: string): ModerationRemoveDriveResponse {
-        return cast(JSON.parse(json), r("ModerationRemoveDriveResponse"));
-    }
-
-    public static moderationRemoveDriveResponseToJson(value: ModerationRemoveDriveResponse): string {
-        return JSON.stringify(uncast(value, r("ModerationRemoveDriveResponse")), null, 2);
-    }
-
-    public static toNewCardsFirstPagesResponse(json: string): NewCardsFirstPagesResponse {
-        return cast(JSON.parse(json), r("NewCardsFirstPagesResponse"));
-    }
-
-    public static newCardsFirstPagesResponseToJson(value: NewCardsFirstPagesResponse): string {
-        return JSON.stringify(uncast(value, r("NewCardsFirstPagesResponse")), null, 2);
-    }
-
-    public static toNewCardsPageResponse(json: string): NewCardsPageResponse {
-        return cast(JSON.parse(json), r("NewCardsPageResponse"));
-    }
-
-    public static newCardsPageResponseToJson(value: NewCardsPageResponse): string {
-        return JSON.stringify(uncast(value, r("NewCardsPageResponse")), null, 2);
-    }
-
-    public static toOldEditorSearchRequest(json: string): OldEditorSearchRequest {
-        return cast(JSON.parse(json), r("OldEditorSearchRequest"));
-    }
-
-    public static oldEditorSearchRequestToJson(value: OldEditorSearchRequest): string {
-        return JSON.stringify(uncast(value, r("OldEditorSearchRequest")), null, 2);
-    }
-
-    public static toOldEditorSearchResponse(json: string): OldEditorSearchResponse {
-        return cast(JSON.parse(json), r("OldEditorSearchResponse"));
-    }
-
-    public static oldEditorSearchResponseToJson(value: OldEditorSearchResponse): string {
-        return JSON.stringify(uncast(value, r("OldEditorSearchResponse")), null, 2);
-    }
-
-    public static toPatreonResponse(json: string): PatreonResponse {
-        return cast(JSON.parse(json), r("PatreonResponse"));
-    }
-
-    public static patreonResponseToJson(value: PatreonResponse): string {
-        return JSON.stringify(uncast(value, r("PatreonResponse")), null, 2);
-    }
-
-    public static toPrintingCandidatesRequest(json: string): PrintingCandidatesRequest {
-        return cast(JSON.parse(json), r("PrintingCandidatesRequest"));
-    }
-
-    public static printingCandidatesRequestToJson(value: PrintingCandidatesRequest): string {
-        return JSON.stringify(uncast(value, r("PrintingCandidatesRequest")), null, 2);
-    }
-
-    public static toPrintingCandidatesResponse(json: string): PrintingCandidatesResponse {
-        return cast(JSON.parse(json), r("PrintingCandidatesResponse"));
-    }
-
-    public static printingCandidatesResponseToJson(value: PrintingCandidatesResponse): string {
-        return JSON.stringify(uncast(value, r("PrintingCandidatesResponse")), null, 2);
-    }
-
-    public static toPrintingConsensusRequest(json: string): PrintingConsensusRequest {
-        return cast(JSON.parse(json), r("PrintingConsensusRequest"));
-    }
-
-    public static printingConsensusRequestToJson(value: PrintingConsensusRequest): string {
-        return JSON.stringify(uncast(value, r("PrintingConsensusRequest")), null, 2);
-    }
-
-    public static toPrintingConsensusResponse(json: string): PrintingConsensusResponse {
-        return cast(JSON.parse(json), r("PrintingConsensusResponse"));
-    }
-
-    public static printingConsensusResponseToJson(value: PrintingConsensusResponse): string {
-        return JSON.stringify(uncast(value, r("PrintingConsensusResponse")), null, 2);
-    }
-
-    public static toPrintingTagQueueResponse(json: string): PrintingTagQueueResponse {
-        return cast(JSON.parse(json), r("PrintingTagQueueResponse"));
-    }
-
-    public static printingTagQueueResponseToJson(value: PrintingTagQueueResponse): string {
-        return JSON.stringify(uncast(value, r("PrintingTagQueueResponse")), null, 2);
-    }
-
-    public static toReportCardRequest(json: string): ReportCardRequest {
-        return cast(JSON.parse(json), r("ReportCardRequest"));
-    }
-
-    public static reportCardRequestToJson(value: ReportCardRequest): string {
-        return JSON.stringify(uncast(value, r("ReportCardRequest")), null, 2);
-    }
-
-    public static toReportCardResponse(json: string): ReportCardResponse {
-        return cast(JSON.parse(json), r("ReportCardResponse"));
-    }
-
-    public static reportCardResponseToJson(value: ReportCardResponse): string {
-        return JSON.stringify(uncast(value, r("ReportCardResponse")), null, 2);
-    }
-
-    public static toResetSavedDecksRequest(json: string): ResetSavedDecksRequest {
-        return cast(JSON.parse(json), r("ResetSavedDecksRequest"));
-    }
-
-    public static resetSavedDecksRequestToJson(value: ResetSavedDecksRequest): string {
-        return JSON.stringify(uncast(value, r("ResetSavedDecksRequest")), null, 2);
-    }
-
-    public static toResetSavedDecksResponse(json: string): ResetSavedDecksResponse {
-        return cast(JSON.parse(json), r("ResetSavedDecksResponse"));
-    }
-
-    public static resetSavedDecksResponseToJson(value: ResetSavedDecksResponse): string {
-        return JSON.stringify(uncast(value, r("ResetSavedDecksResponse")), null, 2);
-    }
-
-    public static toRetractImplicitVoteRequest(json: string): RetractImplicitVoteRequest {
-        return cast(JSON.parse(json), r("RetractImplicitVoteRequest"));
-    }
-
-    public static retractImplicitVoteRequestToJson(value: RetractImplicitVoteRequest): string {
-        return JSON.stringify(uncast(value, r("RetractImplicitVoteRequest")), null, 2);
-    }
-
-    public static toReviewClusterDetailRequest(json: string): ReviewClusterDetailRequest {
-        return cast(JSON.parse(json), r("ReviewClusterDetailRequest"));
-    }
-
-    public static reviewClusterDetailRequestToJson(value: ReviewClusterDetailRequest): string {
-        return JSON.stringify(uncast(value, r("ReviewClusterDetailRequest")), null, 2);
-    }
-
-    public static toReviewClusterDetailResponse(json: string): ReviewClusterDetailResponse {
-        return cast(JSON.parse(json), r("ReviewClusterDetailResponse"));
-    }
-
-    public static reviewClusterDetailResponseToJson(value: ReviewClusterDetailResponse): string {
-        return JSON.stringify(uncast(value, r("ReviewClusterDetailResponse")), null, 2);
-    }
-
-    public static toReviewClusterListRequest(json: string): ReviewClusterListRequest {
-        return cast(JSON.parse(json), r("ReviewClusterListRequest"));
-    }
-
-    public static reviewClusterListRequestToJson(value: ReviewClusterListRequest): string {
-        return JSON.stringify(uncast(value, r("ReviewClusterListRequest")), null, 2);
-    }
-
-    public static toReviewClusterListResponse(json: string): ReviewClusterListResponse {
-        return cast(JSON.parse(json), r("ReviewClusterListResponse"));
-    }
-
-    public static reviewClusterListResponseToJson(value: ReviewClusterListResponse): string {
-        return JSON.stringify(uncast(value, r("ReviewClusterListResponse")), null, 2);
-    }
-
-    public static toRevokeDeckShareRequest(json: string): RevokeDeckShareRequest {
-        return cast(JSON.parse(json), r("RevokeDeckShareRequest"));
-    }
-
-    public static revokeDeckShareRequestToJson(value: RevokeDeckShareRequest): string {
-        return JSON.stringify(uncast(value, r("RevokeDeckShareRequest")), null, 2);
-    }
-
-    public static toRevokeDeckShareResponse(json: string): RevokeDeckShareResponse {
-        return cast(JSON.parse(json), r("RevokeDeckShareResponse"));
-    }
-
-    public static revokeDeckShareResponseToJson(value: RevokeDeckShareResponse): string {
-        return JSON.stringify(uncast(value, r("RevokeDeckShareResponse")), null, 2);
-    }
-
-    public static toSampleCardsResponse(json: string): SampleCardsResponse {
-        return cast(JSON.parse(json), r("SampleCardsResponse"));
-    }
-
-    public static sampleCardsResponseToJson(value: SampleCardsResponse): string {
-        return JSON.stringify(uncast(value, r("SampleCardsResponse")), null, 2);
-    }
-
-    public static toSaveCryptoProfileRequest(json: string): SaveCryptoProfileRequest {
-        return cast(JSON.parse(json), r("SaveCryptoProfileRequest"));
-    }
-
-    public static saveCryptoProfileRequestToJson(value: SaveCryptoProfileRequest): string {
-        return JSON.stringify(uncast(value, r("SaveCryptoProfileRequest")), null, 2);
-    }
-
-    public static toSaveCryptoProfileResponse(json: string): SaveCryptoProfileResponse {
-        return cast(JSON.parse(json), r("SaveCryptoProfileResponse"));
-    }
-
-    public static saveCryptoProfileResponseToJson(value: SaveCryptoProfileResponse): string {
-        return JSON.stringify(uncast(value, r("SaveCryptoProfileResponse")), null, 2);
-    }
-
-    public static toSaveDeckRequest(json: string): SaveDeckRequest {
-        return cast(JSON.parse(json), r("SaveDeckRequest"));
-    }
-
-    public static saveDeckRequestToJson(value: SaveDeckRequest): string {
-        return JSON.stringify(uncast(value, r("SaveDeckRequest")), null, 2);
-    }
-
-    public static toSaveDeckResponse(json: string): SaveDeckResponse {
-        return cast(JSON.parse(json), r("SaveDeckResponse"));
-    }
-
-    public static saveDeckResponseToJson(value: SaveDeckResponse): string {
-        return JSON.stringify(uncast(value, r("SaveDeckResponse")), null, 2);
-    }
-
-    public static toSavedDeckSummary(json: string): SavedDeckSummary {
-        return cast(JSON.parse(json), r("SavedDeckSummary"));
-    }
-
-    public static savedDeckSummaryToJson(value: SavedDeckSummary): string {
-        return JSON.stringify(uncast(value, r("SavedDeckSummary")), null, 2);
-    }
-
-    public static toSavedDecksResponse(json: string): SavedDecksResponse {
-        return cast(JSON.parse(json), r("SavedDecksResponse"));
-    }
-
-    public static savedDecksResponseToJson(value: SavedDecksResponse): string {
-        return JSON.stringify(uncast(value, r("SavedDecksResponse")), null, 2);
-    }
-
-    public static toSearchEngineHealthResponse(json: string): SearchEngineHealthResponse {
-        return cast(JSON.parse(json), r("SearchEngineHealthResponse"));
-    }
-
-    public static searchEngineHealthResponseToJson(value: SearchEngineHealthResponse): string {
-        return JSON.stringify(uncast(value, r("SearchEngineHealthResponse")), null, 2);
-    }
-
-    public static toSourcesResponse(json: string): SourcesResponse {
-        return cast(JSON.parse(json), r("SourcesResponse"));
-    }
-
-    public static sourcesResponseToJson(value: SourcesResponse): string {
-        return JSON.stringify(uncast(value, r("SourcesResponse")), null, 2);
-    }
-
-    public static toSubmitArtistVoteRequest(json: string): SubmitArtistVoteRequest {
-        return cast(JSON.parse(json), r("SubmitArtistVoteRequest"));
-    }
-
-    public static submitArtistVoteRequestToJson(value: SubmitArtistVoteRequest): string {
-        return JSON.stringify(uncast(value, r("SubmitArtistVoteRequest")), null, 2);
-    }
-
-    public static toSubmitArtistWriteInVoteRequest(json: string): SubmitArtistWriteInVoteRequest {
-        return cast(JSON.parse(json), r("SubmitArtistWriteInVoteRequest"));
-    }
-
-    public static submitArtistWriteInVoteRequestToJson(value: SubmitArtistWriteInVoteRequest): string {
-        return JSON.stringify(uncast(value, r("SubmitArtistWriteInVoteRequest")), null, 2);
-    }
-
-    public static toSubmitArtistWriteInVoteResponse(json: string): SubmitArtistWriteInVoteResponse {
-        return cast(JSON.parse(json), r("SubmitArtistWriteInVoteResponse"));
-    }
-
-    public static submitArtistWriteInVoteResponseToJson(value: SubmitArtistWriteInVoteResponse): string {
-        return JSON.stringify(uncast(value, r("SubmitArtistWriteInVoteResponse")), null, 2);
-    }
-
-    public static toSubmitIllustrationRejectionRequest(json: string): SubmitIllustrationRejectionRequest {
-        return cast(JSON.parse(json), r("SubmitIllustrationRejectionRequest"));
-    }
-
-    public static submitIllustrationRejectionRequestToJson(value: SubmitIllustrationRejectionRequest): string {
-        return JSON.stringify(uncast(value, r("SubmitIllustrationRejectionRequest")), null, 2);
-    }
-
-    public static toSubmitIllustrationRejectionResponse(json: string): SubmitIllustrationRejectionResponse {
-        return cast(JSON.parse(json), r("SubmitIllustrationRejectionResponse"));
-    }
-
-    public static submitIllustrationRejectionResponseToJson(value: SubmitIllustrationRejectionResponse): string {
-        return JSON.stringify(uncast(value, r("SubmitIllustrationRejectionResponse")), null, 2);
-    }
-
-    public static toSubmitIllustrationVoteRequest(json: string): SubmitIllustrationVoteRequest {
-        return cast(JSON.parse(json), r("SubmitIllustrationVoteRequest"));
-    }
-
-    public static submitIllustrationVoteRequestToJson(value: SubmitIllustrationVoteRequest): string {
-        return JSON.stringify(uncast(value, r("SubmitIllustrationVoteRequest")), null, 2);
-    }
-
-    public static toSubmitIllustrationVoteResponse(json: string): SubmitIllustrationVoteResponse {
-        return cast(JSON.parse(json), r("SubmitIllustrationVoteResponse"));
-    }
-
-    public static submitIllustrationVoteResponseToJson(value: SubmitIllustrationVoteResponse): string {
-        return JSON.stringify(uncast(value, r("SubmitIllustrationVoteResponse")), null, 2);
-    }
-
-    public static toSubmitPrintingTagRequest(json: string): SubmitPrintingTagRequest {
-        return cast(JSON.parse(json), r("SubmitPrintingTagRequest"));
-    }
-
-    public static submitPrintingTagRequestToJson(value: SubmitPrintingTagRequest): string {
-        return JSON.stringify(uncast(value, r("SubmitPrintingTagRequest")), null, 2);
-    }
-
-    public static toSubmitQuestionAbstentionRequest(json: string): SubmitQuestionAbstentionRequest {
-        return cast(JSON.parse(json), r("SubmitQuestionAbstentionRequest"));
-    }
-
-    public static submitQuestionAbstentionRequestToJson(value: SubmitQuestionAbstentionRequest): string {
-        return JSON.stringify(uncast(value, r("SubmitQuestionAbstentionRequest")), null, 2);
-    }
-
-    public static toSubmitQuestionAbstentionResponse(json: string): SubmitQuestionAbstentionResponse {
-        return cast(JSON.parse(json), r("SubmitQuestionAbstentionResponse"));
-    }
-
-    public static submitQuestionAbstentionResponseToJson(value: SubmitQuestionAbstentionResponse): string {
-        return JSON.stringify(uncast(value, r("SubmitQuestionAbstentionResponse")), null, 2);
-    }
-
-    public static toSubmitTagVoteRequest(json: string): SubmitTagVoteRequest {
-        return cast(JSON.parse(json), r("SubmitTagVoteRequest"));
-    }
-
-    public static submitTagVoteRequestToJson(value: SubmitTagVoteRequest): string {
-        return JSON.stringify(uncast(value, r("SubmitTagVoteRequest")), null, 2);
-    }
-
-    public static toTagConsensusRequest(json: string): TagConsensusRequest {
-        return cast(JSON.parse(json), r("TagConsensusRequest"));
-    }
-
-    public static tagConsensusRequestToJson(value: TagConsensusRequest): string {
-        return JSON.stringify(uncast(value, r("TagConsensusRequest")), null, 2);
-    }
-
-    public static toTagConsensusResponse(json: string): TagConsensusResponse {
-        return cast(JSON.parse(json), r("TagConsensusResponse"));
-    }
-
-    public static tagConsensusResponseToJson(value: TagConsensusResponse): string {
-        return JSON.stringify(uncast(value, r("TagConsensusResponse")), null, 2);
-    }
-
-    public static toTagsResponse(json: string): TagsResponse {
-        return cast(JSON.parse(json), r("TagsResponse"));
-    }
-
-    public static tagsResponseToJson(value: TagsResponse): string {
-        return JSON.stringify(uncast(value, r("TagsResponse")), null, 2);
-    }
-
-    public static toVoteQueueRequest(json: string): VoteQueueRequest {
-        return cast(JSON.parse(json), r("VoteQueueRequest"));
-    }
-
-    public static voteQueueRequestToJson(value: VoteQueueRequest): string {
-        return JSON.stringify(uncast(value, r("VoteQueueRequest")), null, 2);
-    }
-
-    public static toVoteQueueResponse(json: string): VoteQueueResponse {
-        return cast(JSON.parse(json), r("VoteQueueResponse"));
-    }
-
-    public static voteQueueResponseToJson(value: VoteQueueResponse): string {
-        return JSON.stringify(uncast(value, r("VoteQueueResponse")), null, 2);
-    }
-
-    public static toWhoamiResponse(json: string): WhoamiResponse {
-        return cast(JSON.parse(json), r("WhoamiResponse"));
-    }
-
-    public static whoamiResponseToJson(value: WhoamiResponse): string {
-        return JSON.stringify(uncast(value, r("WhoamiResponse")), null, 2);
-    }
+  public static toArtistAutocompleteResult(
+    json: string
+  ): ArtistAutocompleteResult {
+    return cast(JSON.parse(json), r("ArtistAutocompleteResult"));
+  }
+
+  public static artistAutocompleteResultToJson(
+    value: ArtistAutocompleteResult
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistAutocompleteResult")),
+      null,
+      2
+    );
+  }
+
+  public static toArtistVoteTallyEntry(json: string): ArtistVoteTallyEntry {
+    return cast(JSON.parse(json), r("ArtistVoteTallyEntry"));
+  }
+
+  public static artistVoteTallyEntryToJson(
+    value: ArtistVoteTallyEntry
+  ): string {
+    return JSON.stringify(uncast(value, r("ArtistVoteTallyEntry")), null, 2);
+  }
+
+  public static toBleedProvenance(json: string): BleedProvenance {
+    return cast(JSON.parse(json), r("BleedProvenance"));
+  }
+
+  public static bleedProvenanceToJson(value: BleedProvenance): string {
+    return JSON.stringify(uncast(value, r("BleedProvenance")), null, 2);
+  }
+
+  public static toCampaign(json: string): Campaign | null {
+    return cast(JSON.parse(json), u(r("Campaign"), null));
+  }
+
+  public static campaignToJson(value: Campaign | null): string {
+    return JSON.stringify(uncast(value, u(r("Campaign"), null)), null, 2);
+  }
+
+  public static toCanonicalArtist(json: string): CanonicalArtist | null {
+    return cast(JSON.parse(json), u(r("CanonicalArtist"), null));
+  }
+
+  public static canonicalArtistToJson(value: CanonicalArtist | null): string {
+    return JSON.stringify(
+      uncast(value, u(r("CanonicalArtist"), null)),
+      null,
+      2
+    );
+  }
+
+  public static toCanonicalCard(json: string): CanonicalCard | null {
+    return cast(JSON.parse(json), u(r("CanonicalCard"), null));
+  }
+
+  public static canonicalCardToJson(value: CanonicalCard | null): string {
+    return JSON.stringify(uncast(value, u(r("CanonicalCard"), null)), null, 2);
+  }
+
+  public static toCard(json: string): Card {
+    return cast(JSON.parse(json), r("Card"));
+  }
+
+  public static cardToJson(value: Card): string {
+    return JSON.stringify(uncast(value, r("Card")), null, 2);
+  }
+
+  public static toCardType(json: string): CardType {
+    return cast(JSON.parse(json), r("CardType"));
+  }
+
+  public static cardTypeToJson(value: CardType): string {
+    return JSON.stringify(uncast(value, r("CardType")), null, 2);
+  }
+
+  public static toFilterSettings(json: string): FilterSettings {
+    return cast(JSON.parse(json), r("FilterSettings"));
+  }
+
+  public static filterSettingsToJson(value: FilterSettings): string {
+    return JSON.stringify(uncast(value, r("FilterSettings")), null, 2);
+  }
+
+  public static toFrameFamilyCandidate(json: string): FrameFamilyCandidate {
+    return cast(JSON.parse(json), r("FrameFamilyCandidate"));
+  }
+
+  public static frameFamilyCandidateToJson(
+    value: FrameFamilyCandidate
+  ): string {
+    return JSON.stringify(uncast(value, r("FrameFamilyCandidate")), null, 2);
+  }
+
+  public static toGame(json: string): Game {
+    return cast(JSON.parse(json), r("Game"));
+  }
+
+  public static gameToJson(value: Game): string {
+    return JSON.stringify(uncast(value, r("Game")), null, 2);
+  }
+
+  public static toImportSite(json: string): ImportSite {
+    return cast(JSON.parse(json), r("ImportSite"));
+  }
+
+  public static importSiteToJson(value: ImportSite): string {
+    return JSON.stringify(uncast(value, r("ImportSite")), null, 2);
+  }
+
+  public static toLanguage(json: string): Language {
+    return cast(JSON.parse(json), r("Language"));
+  }
+
+  public static languageToJson(value: Language): string {
+    return JSON.stringify(uncast(value, r("Language")), null, 2);
+  }
+
+  public static toModerationDriveItem(json: string): ModerationDriveItem {
+    return cast(JSON.parse(json), r("ModerationDriveItem"));
+  }
+
+  public static moderationDriveItemToJson(value: ModerationDriveItem): string {
+    return JSON.stringify(uncast(value, r("ModerationDriveItem")), null, 2);
+  }
+
+  public static toModerationQueueItem(json: string): ModerationQueueItem {
+    return cast(JSON.parse(json), r("ModerationQueueItem"));
+  }
+
+  public static moderationQueueItemToJson(value: ModerationQueueItem): string {
+    return JSON.stringify(uncast(value, r("ModerationQueueItem")), null, 2);
+  }
+
+  public static toNewCardsFirstPage(json: string): NewCardsFirstPage {
+    return cast(JSON.parse(json), r("NewCardsFirstPage"));
+  }
+
+  public static newCardsFirstPageToJson(value: NewCardsFirstPage): string {
+    return JSON.stringify(uncast(value, r("NewCardsFirstPage")), null, 2);
+  }
+
+  public static toPilotRunHistoryEntry(json: string): PilotRunHistoryEntry {
+    return cast(JSON.parse(json), r("PilotRunHistoryEntry"));
+  }
+
+  public static pilotRunHistoryEntryToJson(
+    value: PilotRunHistoryEntry
+  ): string {
+    return JSON.stringify(uncast(value, r("PilotRunHistoryEntry")), null, 2);
+  }
+
+  public static toPrintingCandidate(json: string): PrintingCandidate {
+    return cast(JSON.parse(json), r("PrintingCandidate"));
+  }
+
+  public static printingCandidateToJson(value: PrintingCandidate): string {
+    return JSON.stringify(uncast(value, r("PrintingCandidate")), null, 2);
+  }
+
+  public static toPrintingTagStatus(json: string): PrintingTagStatus {
+    return cast(JSON.parse(json), r("PrintingTagStatus"));
+  }
+
+  public static printingTagStatusToJson(value: PrintingTagStatus): string {
+    return JSON.stringify(uncast(value, r("PrintingTagStatus")), null, 2);
+  }
+
+  public static toQuestionFeedCounts(json: string): QuestionFeedCounts {
+    return cast(JSON.parse(json), r("QuestionFeedCounts"));
+  }
+
+  public static questionFeedCountsToJson(value: QuestionFeedCounts): string {
+    return JSON.stringify(uncast(value, r("QuestionFeedCounts")), null, 2);
+  }
+
+  public static toQuestionFeedItem(json: string): QuestionFeedItem {
+    return cast(JSON.parse(json), r("QuestionFeedItem"));
+  }
+
+  public static questionFeedItemToJson(value: QuestionFeedItem): string {
+    return JSON.stringify(uncast(value, r("QuestionFeedItem")), null, 2);
+  }
+
+  public static toQuestionFeedResponse(json: string): QuestionFeedResponse {
+    return cast(JSON.parse(json), r("QuestionFeedResponse"));
+  }
+
+  public static questionFeedResponseToJson(
+    value: QuestionFeedResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("QuestionFeedResponse")), null, 2);
+  }
+
+  public static toReviewClusterMember(json: string): ReviewClusterMember {
+    return cast(JSON.parse(json), r("ReviewClusterMember"));
+  }
+
+  public static reviewClusterMemberToJson(value: ReviewClusterMember): string {
+    return JSON.stringify(uncast(value, r("ReviewClusterMember")), null, 2);
+  }
+
+  public static toReviewClusterSignal(json: string): ReviewClusterSignal {
+    return cast(JSON.parse(json), r("ReviewClusterSignal"));
+  }
+
+  public static reviewClusterSignalToJson(value: ReviewClusterSignal): string {
+    return JSON.stringify(uncast(value, r("ReviewClusterSignal")), null, 2);
+  }
+
+  public static toReviewClusterSignalType(
+    json: string
+  ): ReviewClusterSignalType {
+    return cast(JSON.parse(json), r("ReviewClusterSignalType"));
+  }
+
+  public static reviewClusterSignalTypeToJson(
+    value: ReviewClusterSignalType
+  ): string {
+    return JSON.stringify(uncast(value, r("ReviewClusterSignalType")), null, 2);
+  }
+
+  public static toReviewClusterSummary(json: string): ReviewClusterSummary {
+    return cast(JSON.parse(json), r("ReviewClusterSummary"));
+  }
+
+  public static reviewClusterSummaryToJson(
+    value: ReviewClusterSummary
+  ): string {
+    return JSON.stringify(uncast(value, r("ReviewClusterSummary")), null, 2);
+  }
+
+  public static toSearchQuery(json: string): SearchQuery {
+    return cast(JSON.parse(json), r("SearchQuery"));
+  }
+
+  public static searchQueryToJson(value: SearchQuery): string {
+    return JSON.stringify(uncast(value, r("SearchQuery")), null, 2);
+  }
+
+  public static toSearchSettings(json: string): SearchSettings {
+    return cast(JSON.parse(json), r("SearchSettings"));
+  }
+
+  public static searchSettingsToJson(value: SearchSettings): string {
+    return JSON.stringify(uncast(value, r("SearchSettings")), null, 2);
+  }
+
+  public static toSearchTypeSettings(json: string): SearchTypeSettings {
+    return cast(JSON.parse(json), r("SearchTypeSettings"));
+  }
+
+  public static searchTypeSettingsToJson(value: SearchTypeSettings): string {
+    return JSON.stringify(uncast(value, r("SearchTypeSettings")), null, 2);
+  }
+
+  public static toSkipReasonEngineCount(json: string): SkipReasonEngineCount {
+    return cast(JSON.parse(json), r("SkipReasonEngineCount"));
+  }
+
+  public static skipReasonEngineCountToJson(
+    value: SkipReasonEngineCount
+  ): string {
+    return JSON.stringify(uncast(value, r("SkipReasonEngineCount")), null, 2);
+  }
+
+  public static toSortBy(json: string): SortBy {
+    return cast(JSON.parse(json), r("SortBy"));
+  }
+
+  public static sortByToJson(value: SortBy): string {
+    return JSON.stringify(uncast(value, r("SortBy")), null, 2);
+  }
+
+  public static toSource(json: string): Source {
+    return cast(JSON.parse(json), r("Source"));
+  }
+
+  public static sourceToJson(value: Source): string {
+    return JSON.stringify(uncast(value, r("Source")), null, 2);
+  }
+
+  public static toSourceContribution(json: string): SourceContribution {
+    return cast(JSON.parse(json), r("SourceContribution"));
+  }
+
+  public static sourceContributionToJson(value: SourceContribution): string {
+    return JSON.stringify(uncast(value, r("SourceContribution")), null, 2);
+  }
+
+  public static toSourceRow(json: string): Array<boolean | number> {
+    return cast(JSON.parse(json), a(u(true, 0)));
+  }
+
+  public static sourceRowToJson(value: Array<boolean | number>): string {
+    return JSON.stringify(uncast(value, a(u(true, 0))), null, 2);
+  }
+
+  public static toSourceSettings(json: string): SourceSettings {
+    return cast(JSON.parse(json), r("SourceSettings"));
+  }
+
+  public static sourceSettingsToJson(value: SourceSettings): string {
+    return JSON.stringify(uncast(value, r("SourceSettings")), null, 2);
+  }
+
+  public static toSourceType(json: string): SourceType {
+    return cast(JSON.parse(json), r("SourceType"));
+  }
+
+  public static sourceTypeToJson(value: SourceType): string {
+    return JSON.stringify(uncast(value, r("SourceType")), null, 2);
+  }
+
+  public static toSupporter(json: string): Supporter {
+    return cast(JSON.parse(json), r("Supporter"));
+  }
+
+  public static supporterToJson(value: Supporter): string {
+    return JSON.stringify(uncast(value, r("Supporter")), null, 2);
+  }
+
+  public static toSupporterTier(json: string): SupporterTier {
+    return cast(JSON.parse(json), r("SupporterTier"));
+  }
+
+  public static supporterTierToJson(value: SupporterTier): string {
+    return JSON.stringify(uncast(value, r("SupporterTier")), null, 2);
+  }
+
+  public static toTag(json: string): Tag {
+    return cast(JSON.parse(json), r("Tag"));
+  }
+
+  public static tagToJson(value: Tag): string {
+    return JSON.stringify(uncast(value, r("Tag")), null, 2);
+  }
+
+  public static toTagConsensusEntry(json: string): TagConsensusEntry {
+    return cast(JSON.parse(json), r("TagConsensusEntry"));
+  }
+
+  public static tagConsensusEntryToJson(value: TagConsensusEntry): string {
+    return JSON.stringify(uncast(value, r("TagConsensusEntry")), null, 2);
+  }
+
+  public static toTagVoteDisplayStatus(json: string): TagVoteDisplayStatus {
+    return cast(JSON.parse(json), r("TagVoteDisplayStatus"));
+  }
+
+  public static tagVoteDisplayStatusToJson(
+    value: TagVoteDisplayStatus
+  ): string {
+    return JSON.stringify(uncast(value, r("TagVoteDisplayStatus")), null, 2);
+  }
+
+  public static toTagVoteTallyEntry(json: string): TagVoteTallyEntry {
+    return cast(JSON.parse(json), r("TagVoteTallyEntry"));
+  }
+
+  public static tagVoteTallyEntryToJson(value: TagVoteTallyEntry): string {
+    return JSON.stringify(uncast(value, r("TagVoteTallyEntry")), null, 2);
+  }
+
+  public static toVoteQueueItem(json: string): VoteQueueItem {
+    return cast(JSON.parse(json), r("VoteQueueItem"));
+  }
+
+  public static voteQueueItemToJson(value: VoteQueueItem): string {
+    return JSON.stringify(uncast(value, r("VoteQueueItem")), null, 2);
+  }
+
+  public static toVoteTallyEntry(json: string): VoteTallyEntry {
+    return cast(JSON.parse(json), r("VoteTallyEntry"));
+  }
+
+  public static voteTallyEntryToJson(value: VoteTallyEntry): string {
+    return JSON.stringify(uncast(value, r("VoteTallyEntry")), null, 2);
+  }
+
+  public static toArtistAutocompleteRequest(
+    json: string
+  ): ArtistAutocompleteRequest {
+    return cast(JSON.parse(json), r("ArtistAutocompleteRequest"));
+  }
+
+  public static artistAutocompleteRequestToJson(
+    value: ArtistAutocompleteRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistAutocompleteRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toArtistAutocompleteResponse(
+    json: string
+  ): ArtistAutocompleteResponse {
+    return cast(JSON.parse(json), r("ArtistAutocompleteResponse"));
+  }
+
+  public static artistAutocompleteResponseToJson(
+    value: ArtistAutocompleteResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistAutocompleteResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toArtistCandidatesRequest(
+    json: string
+  ): ArtistCandidatesRequest {
+    return cast(JSON.parse(json), r("ArtistCandidatesRequest"));
+  }
+
+  public static artistCandidatesRequestToJson(
+    value: ArtistCandidatesRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ArtistCandidatesRequest")), null, 2);
+  }
+
+  public static toArtistCandidatesResponse(
+    json: string
+  ): ArtistCandidatesResponse {
+    return cast(JSON.parse(json), r("ArtistCandidatesResponse"));
+  }
+
+  public static artistCandidatesResponseToJson(
+    value: ArtistCandidatesResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistCandidatesResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toArtistConsensusRequest(json: string): ArtistConsensusRequest {
+    return cast(JSON.parse(json), r("ArtistConsensusRequest"));
+  }
+
+  public static artistConsensusRequestToJson(
+    value: ArtistConsensusRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ArtistConsensusRequest")), null, 2);
+  }
+
+  public static toArtistConsensusResponse(
+    json: string
+  ): ArtistConsensusResponse {
+    return cast(JSON.parse(json), r("ArtistConsensusResponse"));
+  }
+
+  public static artistConsensusResponseToJson(
+    value: ArtistConsensusResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("ArtistConsensusResponse")), null, 2);
+  }
+
+  public static toArtistExternalLinksResponse(
+    json: string
+  ): ArtistExternalLinksResponse {
+    return cast(JSON.parse(json), r("ArtistExternalLinksResponse"));
+  }
+
+  public static artistExternalLinksResponseToJson(
+    value: ArtistExternalLinksResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ArtistExternalLinksResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toCardbacksRequest(json: string): CardbacksRequest {
+    return cast(JSON.parse(json), r("CardbacksRequest"));
+  }
+
+  public static cardbacksRequestToJson(value: CardbacksRequest): string {
+    return JSON.stringify(uncast(value, r("CardbacksRequest")), null, 2);
+  }
+
+  public static toCardbacksResponse(json: string): CardbacksResponse {
+    return cast(JSON.parse(json), r("CardbacksResponse"));
+  }
+
+  public static cardbacksResponseToJson(value: CardbacksResponse): string {
+    return JSON.stringify(uncast(value, r("CardbacksResponse")), null, 2);
+  }
+
+  public static toCardsRequest(json: string): CardsRequest {
+    return cast(JSON.parse(json), r("CardsRequest"));
+  }
+
+  public static cardsRequestToJson(value: CardsRequest): string {
+    return JSON.stringify(uncast(value, r("CardsRequest")), null, 2);
+  }
+
+  public static toCardsResponse(json: string): CardsResponse {
+    return cast(JSON.parse(json), r("CardsResponse"));
+  }
+
+  public static cardsResponseToJson(value: CardsResponse): string {
+    return JSON.stringify(uncast(value, r("CardsResponse")), null, 2);
+  }
+
+  public static toCastImplicitVoteRequest(
+    json: string
+  ): CastImplicitVoteRequest {
+    return cast(JSON.parse(json), r("CastImplicitVoteRequest"));
+  }
+
+  public static castImplicitVoteRequestToJson(
+    value: CastImplicitVoteRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("CastImplicitVoteRequest")), null, 2);
+  }
+
+  public static toCatalogStatsResponse(json: string): CatalogStatsResponse {
+    return cast(JSON.parse(json), r("CatalogStatsResponse"));
+  }
+
+  public static catalogStatsResponseToJson(
+    value: CatalogStatsResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("CatalogStatsResponse")), null, 2);
+  }
+
+  public static toConfirmReviewClusterRequest(
+    json: string
+  ): ConfirmReviewClusterRequest {
+    return cast(JSON.parse(json), r("ConfirmReviewClusterRequest"));
+  }
+
+  public static confirmReviewClusterRequestToJson(
+    value: ConfirmReviewClusterRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ConfirmReviewClusterRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toConfirmReviewClusterResponse(
+    json: string
+  ): ConfirmReviewClusterResponse {
+    return cast(JSON.parse(json), r("ConfirmReviewClusterResponse"));
+  }
+
+  public static confirmReviewClusterResponseToJson(
+    value: ConfirmReviewClusterResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ConfirmReviewClusterResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toContributionsResponse(json: string): ContributionsResponse {
+    return cast(JSON.parse(json), r("ContributionsResponse"));
+  }
+
+  public static contributionsResponseToJson(
+    value: ContributionsResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("ContributionsResponse")), null, 2);
+  }
+
+  public static toCreateDeckShareRequest(json: string): CreateDeckShareRequest {
+    return cast(JSON.parse(json), r("CreateDeckShareRequest"));
+  }
+
+  public static createDeckShareRequestToJson(
+    value: CreateDeckShareRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("CreateDeckShareRequest")), null, 2);
+  }
+
+  public static toCreateDeckShareResponse(
+    json: string
+  ): CreateDeckShareResponse {
+    return cast(JSON.parse(json), r("CreateDeckShareResponse"));
+  }
+
+  public static createDeckShareResponseToJson(
+    value: CreateDeckShareResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("CreateDeckShareResponse")), null, 2);
+  }
+
+  public static toCryptoProfileResponse(json: string): CryptoProfileResponse {
+    return cast(JSON.parse(json), r("CryptoProfileResponse"));
+  }
+
+  public static cryptoProfileResponseToJson(
+    value: CryptoProfileResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("CryptoProfileResponse")), null, 2);
+  }
+
+  public static toDFCPairsResponse(json: string): DFCPairsResponse {
+    return cast(JSON.parse(json), r("DFCPairsResponse"));
+  }
+
+  public static dFCPairsResponseToJson(value: DFCPairsResponse): string {
+    return JSON.stringify(uncast(value, r("DFCPairsResponse")), null, 2);
+  }
+
+  public static toDeckShareSummary(json: string): DeckShareSummary {
+    return cast(JSON.parse(json), r("DeckShareSummary"));
+  }
+
+  public static deckShareSummaryToJson(value: DeckShareSummary): string {
+    return JSON.stringify(uncast(value, r("DeckShareSummary")), null, 2);
+  }
+
+  public static toDeckSharesResponse(json: string): DeckSharesResponse {
+    return cast(JSON.parse(json), r("DeckSharesResponse"));
+  }
+
+  public static deckSharesResponseToJson(value: DeckSharesResponse): string {
+    return JSON.stringify(uncast(value, r("DeckSharesResponse")), null, 2);
+  }
+
+  public static toDeleteDeckRequest(json: string): DeleteDeckRequest {
+    return cast(JSON.parse(json), r("DeleteDeckRequest"));
+  }
+
+  public static deleteDeckRequestToJson(value: DeleteDeckRequest): string {
+    return JSON.stringify(uncast(value, r("DeleteDeckRequest")), null, 2);
+  }
+
+  public static toDeleteDeckResponse(json: string): DeleteDeckResponse {
+    return cast(JSON.parse(json), r("DeleteDeckResponse"));
+  }
+
+  public static deleteDeckResponseToJson(value: DeleteDeckResponse): string {
+    return JSON.stringify(uncast(value, r("DeleteDeckResponse")), null, 2);
+  }
+
+  public static toEditorSearchRequest(json: string): EditorSearchRequest {
+    return cast(JSON.parse(json), r("EditorSearchRequest"));
+  }
+
+  public static editorSearchRequestToJson(value: EditorSearchRequest): string {
+    return JSON.stringify(uncast(value, r("EditorSearchRequest")), null, 2);
+  }
+
+  public static toEditorSearchResponse(json: string): EditorSearchResponse {
+    return cast(JSON.parse(json), r("EditorSearchResponse"));
+  }
+
+  public static editorSearchResponseToJson(
+    value: EditorSearchResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("EditorSearchResponse")), null, 2);
+  }
+
+  public static toErrorResponse(json: string): ErrorResponse {
+    return cast(JSON.parse(json), r("ErrorResponse"));
+  }
+
+  public static errorResponseToJson(value: ErrorResponse): string {
+    return JSON.stringify(uncast(value, r("ErrorResponse")), null, 2);
+  }
+
+  public static toExploreSearchRequest(json: string): ExploreSearchRequest {
+    return cast(JSON.parse(json), r("ExploreSearchRequest"));
+  }
+
+  public static exploreSearchRequestToJson(
+    value: ExploreSearchRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ExploreSearchRequest")), null, 2);
+  }
+
+  public static toExploreSearchResponse(json: string): ExploreSearchResponse {
+    return cast(JSON.parse(json), r("ExploreSearchResponse"));
+  }
+
+  public static exploreSearchResponseToJson(
+    value: ExploreSearchResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("ExploreSearchResponse")), null, 2);
+  }
+
+  public static toGetSharedDeckRequest(json: string): GetSharedDeckRequest {
+    return cast(JSON.parse(json), r("GetSharedDeckRequest"));
+  }
+
+  public static getSharedDeckRequestToJson(
+    value: GetSharedDeckRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("GetSharedDeckRequest")), null, 2);
+  }
+
+  public static toGetSharedDeckResponse(json: string): GetSharedDeckResponse {
+    return cast(JSON.parse(json), r("GetSharedDeckResponse"));
+  }
+
+  public static getSharedDeckResponseToJson(
+    value: GetSharedDeckResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("GetSharedDeckResponse")), null, 2);
+  }
+
+  public static toImportSiteDecklistRequest(
+    json: string
+  ): ImportSiteDecklistRequest {
+    return cast(JSON.parse(json), r("ImportSiteDecklistRequest"));
+  }
+
+  public static importSiteDecklistRequestToJson(
+    value: ImportSiteDecklistRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ImportSiteDecklistRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toImportSiteDecklistResponse(
+    json: string
+  ): ImportSiteDecklistResponse {
+    return cast(JSON.parse(json), r("ImportSiteDecklistResponse"));
+  }
+
+  public static importSiteDecklistResponseToJson(
+    value: ImportSiteDecklistResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ImportSiteDecklistResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toImportSitesResponse(json: string): ImportSitesResponse {
+    return cast(JSON.parse(json), r("ImportSitesResponse"));
+  }
+
+  public static importSitesResponseToJson(value: ImportSitesResponse): string {
+    return JSON.stringify(uncast(value, r("ImportSitesResponse")), null, 2);
+  }
+
+  public static toInfoResponse(json: string): InfoResponse {
+    return cast(JSON.parse(json), r("InfoResponse"));
+  }
+
+  public static infoResponseToJson(value: InfoResponse): string {
+    return JSON.stringify(uncast(value, r("InfoResponse")), null, 2);
+  }
+
+  public static toLanguagesResponse(json: string): LanguagesResponse {
+    return cast(JSON.parse(json), r("LanguagesResponse"));
+  }
+
+  public static languagesResponseToJson(value: LanguagesResponse): string {
+    return JSON.stringify(uncast(value, r("LanguagesResponse")), null, 2);
+  }
+
+  public static toLoadDeckRequest(json: string): LoadDeckRequest {
+    return cast(JSON.parse(json), r("LoadDeckRequest"));
+  }
+
+  public static loadDeckRequestToJson(value: LoadDeckRequest): string {
+    return JSON.stringify(uncast(value, r("LoadDeckRequest")), null, 2);
+  }
+
+  public static toLoadDeckResponse(json: string): LoadDeckResponse {
+    return cast(JSON.parse(json), r("LoadDeckResponse"));
+  }
+
+  public static loadDeckResponseToJson(value: LoadDeckResponse): string {
+    return JSON.stringify(uncast(value, r("LoadDeckResponse")), null, 2);
+  }
+
+  public static toModerationDriveCardsRequest(
+    json: string
+  ): ModerationDriveCardsRequest {
+    return cast(JSON.parse(json), r("ModerationDriveCardsRequest"));
+  }
+
+  public static moderationDriveCardsRequestToJson(
+    value: ModerationDriveCardsRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ModerationDriveCardsRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toModerationDriveCardsResponse(
+    json: string
+  ): ModerationDriveCardsResponse {
+    return cast(JSON.parse(json), r("ModerationDriveCardsResponse"));
+  }
+
+  public static moderationDriveCardsResponseToJson(
+    value: ModerationDriveCardsResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ModerationDriveCardsResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toModerationDrivesRequest(
+    json: string
+  ): ModerationDrivesRequest {
+    return cast(JSON.parse(json), r("ModerationDrivesRequest"));
+  }
+
+  public static moderationDrivesRequestToJson(
+    value: ModerationDrivesRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ModerationDrivesRequest")), null, 2);
+  }
+
+  public static toModerationDrivesResponse(
+    json: string
+  ): ModerationDrivesResponse {
+    return cast(JSON.parse(json), r("ModerationDrivesResponse"));
+  }
+
+  public static moderationDrivesResponseToJson(
+    value: ModerationDrivesResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ModerationDrivesResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toModerationQueueRequest(json: string): ModerationQueueRequest {
+    return cast(JSON.parse(json), r("ModerationQueueRequest"));
+  }
+
+  public static moderationQueueRequestToJson(
+    value: ModerationQueueRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ModerationQueueRequest")), null, 2);
+  }
+
+  public static toModerationQueueResponse(
+    json: string
+  ): ModerationQueueResponse {
+    return cast(JSON.parse(json), r("ModerationQueueResponse"));
+  }
+
+  public static moderationQueueResponseToJson(
+    value: ModerationQueueResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("ModerationQueueResponse")), null, 2);
+  }
+
+  public static toModerationRemoveCardRequest(
+    json: string
+  ): ModerationRemoveCardRequest {
+    return cast(JSON.parse(json), r("ModerationRemoveCardRequest"));
+  }
+
+  public static moderationRemoveCardRequestToJson(
+    value: ModerationRemoveCardRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ModerationRemoveCardRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toModerationRemoveCardResponse(
+    json: string
+  ): ModerationRemoveCardResponse {
+    return cast(JSON.parse(json), r("ModerationRemoveCardResponse"));
+  }
+
+  public static moderationRemoveCardResponseToJson(
+    value: ModerationRemoveCardResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ModerationRemoveCardResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toModerationRemoveDriveRequest(
+    json: string
+  ): ModerationRemoveDriveRequest {
+    return cast(JSON.parse(json), r("ModerationRemoveDriveRequest"));
+  }
+
+  public static moderationRemoveDriveRequestToJson(
+    value: ModerationRemoveDriveRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ModerationRemoveDriveRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toModerationRemoveDriveResponse(
+    json: string
+  ): ModerationRemoveDriveResponse {
+    return cast(JSON.parse(json), r("ModerationRemoveDriveResponse"));
+  }
+
+  public static moderationRemoveDriveResponseToJson(
+    value: ModerationRemoveDriveResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ModerationRemoveDriveResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toNewCardsFirstPagesResponse(
+    json: string
+  ): NewCardsFirstPagesResponse {
+    return cast(JSON.parse(json), r("NewCardsFirstPagesResponse"));
+  }
+
+  public static newCardsFirstPagesResponseToJson(
+    value: NewCardsFirstPagesResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("NewCardsFirstPagesResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toNewCardsPageResponse(json: string): NewCardsPageResponse {
+    return cast(JSON.parse(json), r("NewCardsPageResponse"));
+  }
+
+  public static newCardsPageResponseToJson(
+    value: NewCardsPageResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("NewCardsPageResponse")), null, 2);
+  }
+
+  public static toOldEditorSearchRequest(json: string): OldEditorSearchRequest {
+    return cast(JSON.parse(json), r("OldEditorSearchRequest"));
+  }
+
+  public static oldEditorSearchRequestToJson(
+    value: OldEditorSearchRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("OldEditorSearchRequest")), null, 2);
+  }
+
+  public static toOldEditorSearchResponse(
+    json: string
+  ): OldEditorSearchResponse {
+    return cast(JSON.parse(json), r("OldEditorSearchResponse"));
+  }
+
+  public static oldEditorSearchResponseToJson(
+    value: OldEditorSearchResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("OldEditorSearchResponse")), null, 2);
+  }
+
+  public static toPatreonResponse(json: string): PatreonResponse {
+    return cast(JSON.parse(json), r("PatreonResponse"));
+  }
+
+  public static patreonResponseToJson(value: PatreonResponse): string {
+    return JSON.stringify(uncast(value, r("PatreonResponse")), null, 2);
+  }
+
+  public static toPrintingCandidatesRequest(
+    json: string
+  ): PrintingCandidatesRequest {
+    return cast(JSON.parse(json), r("PrintingCandidatesRequest"));
+  }
+
+  public static printingCandidatesRequestToJson(
+    value: PrintingCandidatesRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingCandidatesRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toPrintingCandidatesResponse(
+    json: string
+  ): PrintingCandidatesResponse {
+    return cast(JSON.parse(json), r("PrintingCandidatesResponse"));
+  }
+
+  public static printingCandidatesResponseToJson(
+    value: PrintingCandidatesResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingCandidatesResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toPrintingConsensusRequest(
+    json: string
+  ): PrintingConsensusRequest {
+    return cast(JSON.parse(json), r("PrintingConsensusRequest"));
+  }
+
+  public static printingConsensusRequestToJson(
+    value: PrintingConsensusRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingConsensusRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toPrintingConsensusResponse(
+    json: string
+  ): PrintingConsensusResponse {
+    return cast(JSON.parse(json), r("PrintingConsensusResponse"));
+  }
+
+  public static printingConsensusResponseToJson(
+    value: PrintingConsensusResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingConsensusResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toPrintingTagQueueResponse(
+    json: string
+  ): PrintingTagQueueResponse {
+    return cast(JSON.parse(json), r("PrintingTagQueueResponse"));
+  }
+
+  public static printingTagQueueResponseToJson(
+    value: PrintingTagQueueResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("PrintingTagQueueResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toReportCardRequest(json: string): ReportCardRequest {
+    return cast(JSON.parse(json), r("ReportCardRequest"));
+  }
+
+  public static reportCardRequestToJson(value: ReportCardRequest): string {
+    return JSON.stringify(uncast(value, r("ReportCardRequest")), null, 2);
+  }
+
+  public static toReportCardResponse(json: string): ReportCardResponse {
+    return cast(JSON.parse(json), r("ReportCardResponse"));
+  }
+
+  public static reportCardResponseToJson(value: ReportCardResponse): string {
+    return JSON.stringify(uncast(value, r("ReportCardResponse")), null, 2);
+  }
+
+  public static toResetSavedDecksRequest(json: string): ResetSavedDecksRequest {
+    return cast(JSON.parse(json), r("ResetSavedDecksRequest"));
+  }
+
+  public static resetSavedDecksRequestToJson(
+    value: ResetSavedDecksRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("ResetSavedDecksRequest")), null, 2);
+  }
+
+  public static toResetSavedDecksResponse(
+    json: string
+  ): ResetSavedDecksResponse {
+    return cast(JSON.parse(json), r("ResetSavedDecksResponse"));
+  }
+
+  public static resetSavedDecksResponseToJson(
+    value: ResetSavedDecksResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("ResetSavedDecksResponse")), null, 2);
+  }
+
+  public static toRetractImplicitVoteRequest(
+    json: string
+  ): RetractImplicitVoteRequest {
+    return cast(JSON.parse(json), r("RetractImplicitVoteRequest"));
+  }
+
+  public static retractImplicitVoteRequestToJson(
+    value: RetractImplicitVoteRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("RetractImplicitVoteRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toReviewClusterDetailRequest(
+    json: string
+  ): ReviewClusterDetailRequest {
+    return cast(JSON.parse(json), r("ReviewClusterDetailRequest"));
+  }
+
+  public static reviewClusterDetailRequestToJson(
+    value: ReviewClusterDetailRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ReviewClusterDetailRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toReviewClusterDetailResponse(
+    json: string
+  ): ReviewClusterDetailResponse {
+    return cast(JSON.parse(json), r("ReviewClusterDetailResponse"));
+  }
+
+  public static reviewClusterDetailResponseToJson(
+    value: ReviewClusterDetailResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ReviewClusterDetailResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toReviewClusterListRequest(
+    json: string
+  ): ReviewClusterListRequest {
+    return cast(JSON.parse(json), r("ReviewClusterListRequest"));
+  }
+
+  public static reviewClusterListRequestToJson(
+    value: ReviewClusterListRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ReviewClusterListRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toReviewClusterListResponse(
+    json: string
+  ): ReviewClusterListResponse {
+    return cast(JSON.parse(json), r("ReviewClusterListResponse"));
+  }
+
+  public static reviewClusterListResponseToJson(
+    value: ReviewClusterListResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("ReviewClusterListResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toRevokeDeckShareRequest(json: string): RevokeDeckShareRequest {
+    return cast(JSON.parse(json), r("RevokeDeckShareRequest"));
+  }
+
+  public static revokeDeckShareRequestToJson(
+    value: RevokeDeckShareRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("RevokeDeckShareRequest")), null, 2);
+  }
+
+  public static toRevokeDeckShareResponse(
+    json: string
+  ): RevokeDeckShareResponse {
+    return cast(JSON.parse(json), r("RevokeDeckShareResponse"));
+  }
+
+  public static revokeDeckShareResponseToJson(
+    value: RevokeDeckShareResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("RevokeDeckShareResponse")), null, 2);
+  }
+
+  public static toSampleCardsResponse(json: string): SampleCardsResponse {
+    return cast(JSON.parse(json), r("SampleCardsResponse"));
+  }
+
+  public static sampleCardsResponseToJson(value: SampleCardsResponse): string {
+    return JSON.stringify(uncast(value, r("SampleCardsResponse")), null, 2);
+  }
+
+  public static toSaveCryptoProfileRequest(
+    json: string
+  ): SaveCryptoProfileRequest {
+    return cast(JSON.parse(json), r("SaveCryptoProfileRequest"));
+  }
+
+  public static saveCryptoProfileRequestToJson(
+    value: SaveCryptoProfileRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SaveCryptoProfileRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSaveCryptoProfileResponse(
+    json: string
+  ): SaveCryptoProfileResponse {
+    return cast(JSON.parse(json), r("SaveCryptoProfileResponse"));
+  }
+
+  public static saveCryptoProfileResponseToJson(
+    value: SaveCryptoProfileResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SaveCryptoProfileResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toSaveDeckRequest(json: string): SaveDeckRequest {
+    return cast(JSON.parse(json), r("SaveDeckRequest"));
+  }
+
+  public static saveDeckRequestToJson(value: SaveDeckRequest): string {
+    return JSON.stringify(uncast(value, r("SaveDeckRequest")), null, 2);
+  }
+
+  public static toSaveDeckResponse(json: string): SaveDeckResponse {
+    return cast(JSON.parse(json), r("SaveDeckResponse"));
+  }
+
+  public static saveDeckResponseToJson(value: SaveDeckResponse): string {
+    return JSON.stringify(uncast(value, r("SaveDeckResponse")), null, 2);
+  }
+
+  public static toSavedDeckSummary(json: string): SavedDeckSummary {
+    return cast(JSON.parse(json), r("SavedDeckSummary"));
+  }
+
+  public static savedDeckSummaryToJson(value: SavedDeckSummary): string {
+    return JSON.stringify(uncast(value, r("SavedDeckSummary")), null, 2);
+  }
+
+  public static toSavedDecksResponse(json: string): SavedDecksResponse {
+    return cast(JSON.parse(json), r("SavedDecksResponse"));
+  }
+
+  public static savedDecksResponseToJson(value: SavedDecksResponse): string {
+    return JSON.stringify(uncast(value, r("SavedDecksResponse")), null, 2);
+  }
+
+  public static toSearchEngineHealthResponse(
+    json: string
+  ): SearchEngineHealthResponse {
+    return cast(JSON.parse(json), r("SearchEngineHealthResponse"));
+  }
+
+  public static searchEngineHealthResponseToJson(
+    value: SearchEngineHealthResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SearchEngineHealthResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toSourcesResponse(json: string): SourcesResponse {
+    return cast(JSON.parse(json), r("SourcesResponse"));
+  }
+
+  public static sourcesResponseToJson(value: SourcesResponse): string {
+    return JSON.stringify(uncast(value, r("SourcesResponse")), null, 2);
+  }
+
+  public static toSubmitArtistVoteRequest(
+    json: string
+  ): SubmitArtistVoteRequest {
+    return cast(JSON.parse(json), r("SubmitArtistVoteRequest"));
+  }
+
+  public static submitArtistVoteRequestToJson(
+    value: SubmitArtistVoteRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("SubmitArtistVoteRequest")), null, 2);
+  }
+
+  public static toSubmitArtistWriteInVoteRequest(
+    json: string
+  ): SubmitArtistWriteInVoteRequest {
+    return cast(JSON.parse(json), r("SubmitArtistWriteInVoteRequest"));
+  }
+
+  public static submitArtistWriteInVoteRequestToJson(
+    value: SubmitArtistWriteInVoteRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitArtistWriteInVoteRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitArtistWriteInVoteResponse(
+    json: string
+  ): SubmitArtistWriteInVoteResponse {
+    return cast(JSON.parse(json), r("SubmitArtistWriteInVoteResponse"));
+  }
+
+  public static submitArtistWriteInVoteResponseToJson(
+    value: SubmitArtistWriteInVoteResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitArtistWriteInVoteResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitIllustrationRejectionRequest(
+    json: string
+  ): SubmitIllustrationRejectionRequest {
+    return cast(JSON.parse(json), r("SubmitIllustrationRejectionRequest"));
+  }
+
+  public static submitIllustrationRejectionRequestToJson(
+    value: SubmitIllustrationRejectionRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitIllustrationRejectionRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitIllustrationRejectionResponse(
+    json: string
+  ): SubmitIllustrationRejectionResponse {
+    return cast(JSON.parse(json), r("SubmitIllustrationRejectionResponse"));
+  }
+
+  public static submitIllustrationRejectionResponseToJson(
+    value: SubmitIllustrationRejectionResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitIllustrationRejectionResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitIllustrationVoteRequest(
+    json: string
+  ): SubmitIllustrationVoteRequest {
+    return cast(JSON.parse(json), r("SubmitIllustrationVoteRequest"));
+  }
+
+  public static submitIllustrationVoteRequestToJson(
+    value: SubmitIllustrationVoteRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitIllustrationVoteRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitIllustrationVoteResponse(
+    json: string
+  ): SubmitIllustrationVoteResponse {
+    return cast(JSON.parse(json), r("SubmitIllustrationVoteResponse"));
+  }
+
+  public static submitIllustrationVoteResponseToJson(
+    value: SubmitIllustrationVoteResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitIllustrationVoteResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitPrintingTagRequest(
+    json: string
+  ): SubmitPrintingTagRequest {
+    return cast(JSON.parse(json), r("SubmitPrintingTagRequest"));
+  }
+
+  public static submitPrintingTagRequestToJson(
+    value: SubmitPrintingTagRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitPrintingTagRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitQuestionAbstentionRequest(
+    json: string
+  ): SubmitQuestionAbstentionRequest {
+    return cast(JSON.parse(json), r("SubmitQuestionAbstentionRequest"));
+  }
+
+  public static submitQuestionAbstentionRequestToJson(
+    value: SubmitQuestionAbstentionRequest
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitQuestionAbstentionRequest")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitQuestionAbstentionResponse(
+    json: string
+  ): SubmitQuestionAbstentionResponse {
+    return cast(JSON.parse(json), r("SubmitQuestionAbstentionResponse"));
+  }
+
+  public static submitQuestionAbstentionResponseToJson(
+    value: SubmitQuestionAbstentionResponse
+  ): string {
+    return JSON.stringify(
+      uncast(value, r("SubmitQuestionAbstentionResponse")),
+      null,
+      2
+    );
+  }
+
+  public static toSubmitTagVoteRequest(json: string): SubmitTagVoteRequest {
+    return cast(JSON.parse(json), r("SubmitTagVoteRequest"));
+  }
+
+  public static submitTagVoteRequestToJson(
+    value: SubmitTagVoteRequest
+  ): string {
+    return JSON.stringify(uncast(value, r("SubmitTagVoteRequest")), null, 2);
+  }
+
+  public static toTagConsensusRequest(json: string): TagConsensusRequest {
+    return cast(JSON.parse(json), r("TagConsensusRequest"));
+  }
+
+  public static tagConsensusRequestToJson(value: TagConsensusRequest): string {
+    return JSON.stringify(uncast(value, r("TagConsensusRequest")), null, 2);
+  }
+
+  public static toTagConsensusResponse(json: string): TagConsensusResponse {
+    return cast(JSON.parse(json), r("TagConsensusResponse"));
+  }
+
+  public static tagConsensusResponseToJson(
+    value: TagConsensusResponse
+  ): string {
+    return JSON.stringify(uncast(value, r("TagConsensusResponse")), null, 2);
+  }
+
+  public static toTagsResponse(json: string): TagsResponse {
+    return cast(JSON.parse(json), r("TagsResponse"));
+  }
+
+  public static tagsResponseToJson(value: TagsResponse): string {
+    return JSON.stringify(uncast(value, r("TagsResponse")), null, 2);
+  }
+
+  public static toVoteQueueRequest(json: string): VoteQueueRequest {
+    return cast(JSON.parse(json), r("VoteQueueRequest"));
+  }
+
+  public static voteQueueRequestToJson(value: VoteQueueRequest): string {
+    return JSON.stringify(uncast(value, r("VoteQueueRequest")), null, 2);
+  }
+
+  public static toVoteQueueResponse(json: string): VoteQueueResponse {
+    return cast(JSON.parse(json), r("VoteQueueResponse"));
+  }
+
+  public static voteQueueResponseToJson(value: VoteQueueResponse): string {
+    return JSON.stringify(uncast(value, r("VoteQueueResponse")), null, 2);
+  }
+
+  public static toWhoamiResponse(json: string): WhoamiResponse {
+    return cast(JSON.parse(json), r("WhoamiResponse"));
+  }
+
+  public static whoamiResponseToJson(value: WhoamiResponse): string {
+    return JSON.stringify(uncast(value, r("WhoamiResponse")), null, 2);
+  }
 }
 
-function invalidValue(typ: any, val: any, key: any, parent: any = ''): never {
-    const prettyTyp = prettyTypeName(typ);
-    const parentText = parent ? ` on ${parent}` : '';
-    const keyText = key ? ` for key "${key}"` : '';
-    throw Error(`Invalid value${keyText}${parentText}. Expected ${prettyTyp} but got ${JSON.stringify(val)}`);
+function invalidValue(typ: any, val: any, key: any, parent: any = ""): never {
+  const prettyTyp = prettyTypeName(typ);
+  const parentText = parent ? ` on ${parent}` : "";
+  const keyText = key ? ` for key "${key}"` : "";
+  throw Error(
+    `Invalid value${keyText}${parentText}. Expected ${prettyTyp} but got ${JSON.stringify(
+      val
+    )}`
+  );
 }
 
 function prettyTypeName(typ: any): string {
-    if (Array.isArray(typ)) {
-        if (typ.length === 2 && typ[0] === undefined) {
-            return `an optional ${prettyTypeName(typ[1])}`;
-        } else {
-            return `one of [${typ.map(a => { return prettyTypeName(a); }).join(", ")}]`;
-        }
-    } else if (typeof typ === "object" && typ.literal !== undefined) {
-        return typ.literal;
+  if (Array.isArray(typ)) {
+    if (typ.length === 2 && typ[0] === undefined) {
+      return `an optional ${prettyTypeName(typ[1])}`;
     } else {
-        return typeof typ;
+      return `one of [${typ
+        .map((a) => {
+          return prettyTypeName(a);
+        })
+        .join(", ")}]`;
     }
+  } else if (typeof typ === "object" && typ.literal !== undefined) {
+    return typ.literal;
+  } else {
+    return typeof typ;
+  }
 }
 
 function jsonToJSProps(typ: any): any {
-    if (typ.jsonToJS === undefined) {
-        const map: any = {};
-        typ.props.forEach((p: any) => map[p.json] = { key: p.js, typ: p.typ });
-        typ.jsonToJS = map;
-    }
-    return typ.jsonToJS;
+  if (typ.jsonToJS === undefined) {
+    const map: any = {};
+    typ.props.forEach((p: any) => (map[p.json] = { key: p.js, typ: p.typ }));
+    typ.jsonToJS = map;
+  }
+  return typ.jsonToJS;
 }
 
 function jsToJSONProps(typ: any): any {
-    if (typ.jsToJSON === undefined) {
-        const map: any = {};
-        typ.props.forEach((p: any) => map[p.js] = { key: p.json, typ: p.typ });
-        typ.jsToJSON = map;
-    }
-    return typ.jsToJSON;
+  if (typ.jsToJSON === undefined) {
+    const map: any = {};
+    typ.props.forEach((p: any) => (map[p.js] = { key: p.json, typ: p.typ }));
+    typ.jsToJSON = map;
+  }
+  return typ.jsToJSON;
 }
 
-function transform(val: any, typ: any, getProps: any, key: any = '', parent: any = ''): any {
-    function transformPrimitive(typ: string, val: any): any {
-        if (typeof typ === typeof val) return val;
-        return invalidValue(typ, val, key, parent);
-    }
+function transform(
+  val: any,
+  typ: any,
+  getProps: any,
+  key: any = "",
+  parent: any = ""
+): any {
+  function transformPrimitive(typ: string, val: any): any {
+    if (typeof typ === typeof val) return val;
+    return invalidValue(typ, val, key, parent);
+  }
 
-    function transformUnion(typs: any[], val: any): any {
-        // val must validate against one typ in typs
-        const l = typs.length;
-        for (let i = 0; i < l; i++) {
-            const typ = typs[i];
-            try {
-                return transform(val, typ, getProps);
-            } catch (_) {}
-        }
-        return invalidValue(typs, val, key, parent);
+  function transformUnion(typs: any[], val: any): any {
+    // val must validate against one typ in typs
+    const l = typs.length;
+    for (let i = 0; i < l; i++) {
+      const typ = typs[i];
+      try {
+        return transform(val, typ, getProps);
+      } catch (_) {}
     }
+    return invalidValue(typs, val, key, parent);
+  }
 
-    function transformEnum(cases: string[], val: any): any {
-        if (cases.indexOf(val) !== -1) return val;
-        return invalidValue(cases.map(a => { return l(a); }), val, key, parent);
-    }
+  function transformEnum(cases: string[], val: any): any {
+    if (cases.indexOf(val) !== -1) return val;
+    return invalidValue(
+      cases.map((a) => {
+        return l(a);
+      }),
+      val,
+      key,
+      parent
+    );
+  }
 
-    function transformArray(typ: any, val: any): any {
-        // val must be an array with no invalid elements
-        if (!Array.isArray(val)) return invalidValue(l("array"), val, key, parent);
-        return val.map(el => transform(el, typ, getProps));
-    }
+  function transformArray(typ: any, val: any): any {
+    // val must be an array with no invalid elements
+    if (!Array.isArray(val)) return invalidValue(l("array"), val, key, parent);
+    return val.map((el) => transform(el, typ, getProps));
+  }
 
-    function transformDate(val: any): any {
-        if (val === null) {
-            return null;
-        }
-        const d = new Date(val);
-        if (isNaN(d.valueOf())) {
-            return invalidValue(l("Date"), val, key, parent);
-        }
-        return d;
+  function transformDate(val: any): any {
+    if (val === null) {
+      return null;
     }
+    const d = new Date(val);
+    if (isNaN(d.valueOf())) {
+      return invalidValue(l("Date"), val, key, parent);
+    }
+    return d;
+  }
 
-    function transformObject(props: { [k: string]: any }, additional: any, val: any): any {
-        if (val === null || typeof val !== "object" || Array.isArray(val)) {
-            return invalidValue(l(ref || "object"), val, key, parent);
-        }
-        const result: any = {};
-        Object.getOwnPropertyNames(props).forEach(key => {
-            const prop = props[key];
-            const v = Object.prototype.hasOwnProperty.call(val, key) ? val[key] : undefined;
-            result[prop.key] = transform(v, prop.typ, getProps, key, ref);
-        });
-        Object.getOwnPropertyNames(val).forEach(key => {
-            if (!Object.prototype.hasOwnProperty.call(props, key)) {
-                result[key] = transform(val[key], additional, getProps, key, ref);
-            }
-        });
-        return result;
+  function transformObject(
+    props: { [k: string]: any },
+    additional: any,
+    val: any
+  ): any {
+    if (val === null || typeof val !== "object" || Array.isArray(val)) {
+      return invalidValue(l(ref || "object"), val, key, parent);
     }
+    const result: any = {};
+    Object.getOwnPropertyNames(props).forEach((key) => {
+      const prop = props[key];
+      const v = Object.prototype.hasOwnProperty.call(val, key)
+        ? val[key]
+        : undefined;
+      result[prop.key] = transform(v, prop.typ, getProps, key, ref);
+    });
+    Object.getOwnPropertyNames(val).forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(props, key)) {
+        result[key] = transform(val[key], additional, getProps, key, ref);
+      }
+    });
+    return result;
+  }
 
-    if (typ === "any") return val;
-    if (typ === null) {
-        if (val === null) return val;
-        return invalidValue(typ, val, key, parent);
-    }
-    if (typ === false) return invalidValue(typ, val, key, parent);
-    let ref: any = undefined;
-    while (typeof typ === "object" && typ.ref !== undefined) {
-        ref = typ.ref;
-        typ = typeMap[typ.ref];
-    }
-    if (Array.isArray(typ)) return transformEnum(typ, val);
-    if (typeof typ === "object") {
-        return typ.hasOwnProperty("unionMembers") ? transformUnion(typ.unionMembers, val)
-            : typ.hasOwnProperty("arrayItems")    ? transformArray(typ.arrayItems, val)
-            : typ.hasOwnProperty("props")         ? transformObject(getProps(typ), typ.additional, val)
-            : invalidValue(typ, val, key, parent);
-    }
-    // Numbers can be parsed by Date but shouldn't be.
-    if (typ === Date && typeof val !== "number") return transformDate(val);
-    return transformPrimitive(typ, val);
+  if (typ === "any") return val;
+  if (typ === null) {
+    if (val === null) return val;
+    return invalidValue(typ, val, key, parent);
+  }
+  if (typ === false) return invalidValue(typ, val, key, parent);
+  let ref: any = undefined;
+  while (typeof typ === "object" && typ.ref !== undefined) {
+    ref = typ.ref;
+    typ = typeMap[typ.ref];
+  }
+  if (Array.isArray(typ)) return transformEnum(typ, val);
+  if (typeof typ === "object") {
+    return typ.hasOwnProperty("unionMembers")
+      ? transformUnion(typ.unionMembers, val)
+      : typ.hasOwnProperty("arrayItems")
+      ? transformArray(typ.arrayItems, val)
+      : typ.hasOwnProperty("props")
+      ? transformObject(getProps(typ), typ.additional, val)
+      : invalidValue(typ, val, key, parent);
+  }
+  // Numbers can be parsed by Date but shouldn't be.
+  if (typ === Date && typeof val !== "number") return transformDate(val);
+  return transformPrimitive(typ, val);
 }
 
 function cast<T>(val: any, typ: any): T {
-    return transform(val, typ, jsonToJSProps);
+  return transform(val, typ, jsonToJSProps);
 }
 
 function uncast<T>(val: T, typ: any): any {
-    return transform(val, typ, jsToJSONProps);
+  return transform(val, typ, jsToJSONProps);
 }
 
 function l(typ: any) {
-    return { literal: typ };
+  return { literal: typ };
 }
 
 function a(typ: any) {
-    return { arrayItems: typ };
+  return { arrayItems: typ };
 }
 
 function u(...typs: any[]) {
-    return { unionMembers: typs };
+  return { unionMembers: typs };
 }
 
 function o(props: any[], additional: any) {
-    return { props, additional };
+  return { props, additional };
 }
 
 function m(additional: any) {
-    return { props: [], additional };
+  return { props: [], additional };
 }
 
 function r(name: string) {
-    return { ref: name };
+  return { ref: name };
 }
 
 const typeMap: any = {
-    "QuestionFeedResponse": o([
-        { json: "item", js: "item", typ: u(undefined, r("QuestionFeedItem")) },
-        { json: "remainingEstimate", js: "remainingEstimate", typ: r("QuestionFeedCounts") },
-    ], false),
-    "QuestionFeedItem": o([
-        { json: "candidates", js: "candidates", typ: u(undefined, a(r("PrintingCandidate"))) },
-        { json: "card", js: "card", typ: r("Card") },
-        { json: "confidentlyKnownArtistName", js: "confidentlyKnownArtistName", typ: u(undefined, u(null, "")) },
-        { json: "discriminatingAxes", js: "discriminatingAxes", typ: u(undefined, a(r("DiscriminatingAx"))) },
-        { json: "familyCandidates", js: "familyCandidates", typ: u(undefined, a(r("FrameFamilyCandidate"))) },
-        { json: "familyConfidence", js: "familyConfidence", typ: u(undefined, 3.14) },
-        { json: "illustrationCandidates", js: "illustrationCandidates", typ: u(undefined, a(r("PrintingCandidate"))) },
-        { json: "isAnotherCopy", js: "isAnotherCopy", typ: u(undefined, true) },
-        { json: "proposedFamilyDisplayName", js: "proposedFamilyDisplayName", typ: u(undefined, "") },
-        { json: "proposedFamilyName", js: "proposedFamilyName", typ: u(undefined, "") },
-        { json: "scryfallIllustrationUrl", js: "scryfallIllustrationUrl", typ: u(undefined, u(null, "")) },
-        { json: "suggestedPrinting", js: "suggestedPrinting", typ: u(undefined, r("PrintingCandidate")) },
-        { json: "tagConfidence", js: "tagConfidence", typ: u(undefined, m(3.14)) },
-        { json: "tagName", js: "tagName", typ: u(undefined, "") },
-        { json: "type", js: "type", typ: r("Type") },
-    ], false),
-    "PrintingCandidate": o([
-        { json: "artCropUrl", js: "artCropUrl", typ: u(undefined, u(null, "")) },
-        { json: "artist", js: "artist", typ: "" },
-        { json: "borderColor", js: "borderColor", typ: "" },
-        { json: "canonicalId", js: "canonicalId", typ: "" },
-        { json: "collectorNumber", js: "collectorNumber", typ: "" },
-        { json: "expansionCode", js: "expansionCode", typ: "" },
-        { json: "expansionName", js: "expansionName", typ: "" },
-        { json: "frame", js: "frame", typ: "" },
-        { json: "fullArt", js: "fullArt", typ: true },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "illustrationId", js: "illustrationId", typ: u(undefined, u(null, "")) },
-        { json: "isBorderless", js: "isBorderless", typ: true },
-        { json: "isEtched", js: "isEtched", typ: true },
-        { json: "isExtendedArt", js: "isExtendedArt", typ: true },
-        { json: "isShowcase", js: "isShowcase", typ: true },
-        { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
-        { json: "releasedAt", js: "releasedAt", typ: u(undefined, u(null, "")) },
-        { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
-    ], false),
-    "Card": o([
-        { json: "bleedProvenance", js: "bleedProvenance", typ: u(undefined, r("BleedProvenance")) },
-        { json: "canonicalArtist", js: "canonicalArtist", typ: u(undefined, u(r("CanonicalArtist"), null)) },
-        { json: "canonicalArtistIsFromVoteOnly", js: "canonicalArtistIsFromVoteOnly", typ: u(undefined, true) },
-        { json: "canonicalArtistSource", js: "canonicalArtistSource", typ: u(undefined, u(null, "")) },
-        { json: "canonicalCard", js: "canonicalCard", typ: u(undefined, u(r("CanonicalCard"), null)) },
-        { json: "cardType", js: "cardType", typ: r("CardType") },
-        { json: "dateCreated", js: "dateCreated", typ: "" },
-        { json: "dateModified", js: "dateModified", typ: "" },
-        { json: "dpi", js: "dpi", typ: 0 },
-        { json: "extension", js: "extension", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "language", js: "language", typ: "" },
-        { json: "layout", js: "layout", typ: u(undefined, u(null, "")) },
-        { json: "measuredBleedMm", js: "measuredBleedMm", typ: u(undefined, u(3.14, null)) },
-        { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
-        { json: "name", js: "name", typ: "" },
-        { json: "printingTagStatus", js: "printingTagStatus", typ: r("PrintingTagStatus") },
-        { json: "priority", js: "priority", typ: 0 },
-        { json: "searchq", js: "searchq", typ: "" },
-        { json: "size", js: "size", typ: 0 },
-        { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
-        { json: "source", js: "source", typ: "" },
-        { json: "sourceExternalLink", js: "sourceExternalLink", typ: u(undefined, "") },
-        { json: "sourceId", js: "sourceId", typ: 0 },
-        { json: "sourceName", js: "sourceName", typ: "" },
-        { json: "sourceType", js: "sourceType", typ: u(undefined, r("SourceType")) },
-        { json: "sourceVerbose", js: "sourceVerbose", typ: "" },
-        { json: "suggestedCanonicalCard", js: "suggestedCanonicalCard", typ: u(undefined, u(r("CanonicalCard"), null)) },
-        { json: "suggestedCanonicalCardConfidence", js: "suggestedCanonicalCardConfidence", typ: u(undefined, u(3.14, null)) },
-        { json: "suggestedFilterTagNames", js: "suggestedFilterTagNames", typ: u(undefined, u(a(""), null)) },
-        { json: "tags", js: "tags", typ: a("") },
-        { json: "tagVoteStatuses", js: "tagVoteStatuses", typ: u(undefined, m(r("TagVoteDisplayStatus"))) },
-    ], false),
-    "CanonicalArtist": o([
-        { json: "name", js: "name", typ: "" },
-    ], false),
-    "CanonicalCard": o([
-        { json: "artist", js: "artist", typ: u(undefined, "") },
-        { json: "canonicalId", js: "canonicalId", typ: u(undefined, "") },
-        { json: "collectorNumber", js: "collectorNumber", typ: "" },
-        { json: "expansionCode", js: "expansionCode", typ: "" },
-        { json: "expansionName", js: "expansionName", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
-        { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
-    ], false),
-    "FrameFamilyCandidate": o([
-        { json: "confidence", js: "confidence", typ: 3.14 },
-        { json: "displayName", js: "displayName", typ: "" },
-        { json: "name", js: "name", typ: "" },
-    ], false),
-    "QuestionFeedCounts": o([
-        { json: "confirmable", js: "confirmable", typ: 0 },
-        { json: "contested", js: "contested", typ: 0 },
-        { json: "fresh", js: "fresh", typ: 0 },
-        { json: "total", js: "total", typ: 0 },
-    ], false),
-    "ArtistAutocompleteRequest": o([
-        { json: "query", js: "query", typ: "" },
-    ], false),
-    "ArtistAutocompleteResponse": o([
-        { json: "results", js: "results", typ: a(r("ArtistAutocompleteResult")) },
-    ], false),
-    "ArtistAutocompleteResult": o([
-        { json: "id", js: "id", typ: 0 },
-        { json: "name", js: "name", typ: "" },
-    ], false),
-    "ArtistCandidatesRequest": o([
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "query", js: "query", typ: u(undefined, u(null, "")) },
-    ], false),
-    "ArtistCandidatesResponse": o([
-        { json: "results", js: "results", typ: a(u(r("CanonicalArtist"), null)) },
-    ], false),
-    "ArtistConsensusRequest": o([
-        { json: "identifier", js: "identifier", typ: "" },
-    ], false),
-    "ArtistConsensusResponse": o([
-        { json: "isUnknown", js: "isUnknown", typ: true },
-        { json: "resolvedArtist", js: "resolvedArtist", typ: u(undefined, u(r("CanonicalArtist"), null)) },
-        { json: "voteTally", js: "voteTally", typ: a(r("ArtistVoteTallyEntry")) },
-    ], false),
-    "ArtistVoteTallyEntry": o([
-        { json: "artist", js: "artist", typ: u(undefined, u(r("CanonicalArtist"), null)) },
-        { json: "count", js: "count", typ: 0 },
-        { json: "isUnknown", js: "isUnknown", typ: true },
-    ], false),
-    "ArtistExternalLinksResponse": o([
-        { json: "found", js: "found", typ: true },
-        { json: "hasSignatureService", js: "hasSignatureService", typ: true },
-        { json: "links", js: "links", typ: a(r("Link")) },
-        { json: "location", js: "location", typ: u(null, "") },
-        { json: "pageUrl", js: "pageUrl", typ: u(null, "") },
-    ], false),
-    "Link": o([
-        { json: "type", js: "type", typ: "" },
-        { json: "url", js: "url", typ: "" },
-    ], false),
-    "CardbacksRequest": o([
-        { json: "searchSettings", js: "searchSettings", typ: r("SearchSettings") },
-    ], false),
-    "SearchSettings": o([
-        { json: "filterSettings", js: "filterSettings", typ: r("FilterSettings") },
-        { json: "searchTypeSettings", js: "searchTypeSettings", typ: r("SearchTypeSettings") },
-        { json: "sourceSettings", js: "sourceSettings", typ: r("SourceSettings") },
-    ], false),
-    "FilterSettings": o([
-        { json: "borderlessOnly", js: "borderlessOnly", typ: true },
-        { json: "excludesTags", js: "excludesTags", typ: a("") },
-        { json: "fullArtOnly", js: "fullArtOnly", typ: true },
-        { json: "includesTags", js: "includesTags", typ: a("") },
-        { json: "languages", js: "languages", typ: a("") },
-        { json: "maximumDPI", js: "maximumDPI", typ: 0 },
-        { json: "maximumSize", js: "maximumSize", typ: 0 },
-        { json: "minimumDPI", js: "minimumDPI", typ: 0 },
-    ], false),
-    "SearchTypeSettings": o([
-        { json: "filterCardbacks", js: "filterCardbacks", typ: true },
-        { json: "fuzzySearch", js: "fuzzySearch", typ: true },
-    ], false),
-    "SourceSettings": o([
-        { json: "sources", js: "sources", typ: a(a(u(true, 0))) },
-    ], false),
-    "CardbacksResponse": o([
-        { json: "cardbacks", js: "cardbacks", typ: a("") },
-    ], false),
-    "CardsRequest": o([
-        { json: "cardIdentifiers", js: "cardIdentifiers", typ: a("") },
-    ], false),
-    "CardsResponse": o([
-        { json: "results", js: "results", typ: m(r("Card")) },
-    ], false),
-    "CastImplicitVoteRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "tagNames", js: "tagNames", typ: a("") },
-    ], false),
-    "CatalogStatsResponse": o([
-        { json: "catalogComposition", js: "catalogComposition", typ: r("CatalogComposition") },
-        { json: "contributionsOverTime", js: "contributionsOverTime", typ: r("ContributionsOverTime") },
-        { json: "generatedAt", js: "generatedAt", typ: u(null, "") },
-        { json: "participation", js: "participation", typ: r("Participation") },
-        { json: "runHistory", js: "runHistory", typ: r("RunHistory") },
-        { json: "skipBreakdown", js: "skipBreakdown", typ: r("SkipBreakdown") },
-    ], false),
-    "CatalogComposition": o([
-        { json: "cardCountByType", js: "cardCountByType", typ: m(0) },
-        { json: "sources", js: "sources", typ: a(r("SourceContribution")) },
-        { json: "totalDatabaseSize", js: "totalDatabaseSize", typ: 0 },
-    ], false),
-    "SourceContribution": o([
-        { json: "avgdpi", js: "avgdpi", typ: "" },
-        { json: "description", js: "description", typ: "" },
-        { json: "externalLink", js: "externalLink", typ: u(undefined, "") },
-        { json: "name", js: "name", typ: "" },
-        { json: "qtyCardbacks", js: "qtyCardbacks", typ: "" },
-        { json: "qtyCards", js: "qtyCards", typ: "" },
-        { json: "qtyTokens", js: "qtyTokens", typ: "" },
-        { json: "size", js: "size", typ: "" },
-        { json: "sourceType", js: "sourceType", typ: r("SourceType") },
-    ], false),
-    "ContributionsOverTime": o([
-        { json: "bucketDays", js: "bucketDays", typ: 0 },
-        { json: "series", js: "series", typ: a(r("Series")) },
-    ], false),
-    "Series": o([
-        { json: "bySurface", js: "bySurface", typ: m(0) },
-        { json: "weekStart", js: "weekStart", typ: "" },
-    ], false),
-    "Participation": o([
-        { json: "confirmable", js: "confirmable", typ: 0 },
-        { json: "contested", js: "contested", typ: 0 },
-        { json: "distinctCardsRoutedToReview", js: "distinctCardsRoutedToReview", typ: 0 },
-        { json: "distinctCardsRoutedToReviewWithHumanVotes", js: "distinctCardsRoutedToReviewWithHumanVotes", typ: 0 },
-        { json: "distinctCardsWithHumanVotes", js: "distinctCardsWithHumanVotes", typ: 0 },
-        { json: "distinctHumanVoters", js: "distinctHumanVoters", typ: 0 },
-        { json: "fresh", js: "fresh", typ: 0 },
-        { json: "humanVotes", js: "humanVotes", typ: r("HumanVotes") },
-        { json: "md5Groups", js: "md5Groups", typ: r("Md5Groups") },
-        { json: "total", js: "total", typ: 0 },
-    ], false),
-    "HumanVotes": o([
-        { json: "artist", js: "artist", typ: 0 },
-        { json: "printingTag", js: "printingTag", typ: 0 },
-        { json: "tag", js: "tag", typ: 0 },
-        { json: "total", js: "total", typ: 0 },
-    ], false),
-    "Md5Groups": o([
-        { json: "cardsInMultiCardGroups", js: "cardsInMultiCardGroups", typ: 0 },
-        { json: "groupsWithMultipleCards", js: "groupsWithMultipleCards", typ: 0 },
-        { json: "largestGroupSize", js: "largestGroupSize", typ: 0 },
-    ], false),
-    "RunHistory": o([
-        { json: "recent", js: "recent", typ: a(r("PilotRunHistoryEntry")) },
-    ], false),
-    "PilotRunHistoryEntry": o([
-        { json: "command", js: "command", typ: "" },
-        { json: "durationSeconds", js: "durationSeconds", typ: u(3.14, null) },
-        { json: "finishedAt", js: "finishedAt", typ: u(null, "") },
-        { json: "runId", js: "runId", typ: "" },
-        { json: "startedAt", js: "startedAt", typ: "" },
-        { json: "status", js: "status", typ: "" },
-        { json: "votesWritten", js: "votesWritten", typ: u(0, null) },
-    ], false),
-    "SkipBreakdown": o([
-        { json: "byReason", js: "byReason", typ: a(r("ByReason")) },
-        { json: "byReasonAndEngine", js: "byReasonAndEngine", typ: a(r("SkipReasonEngineCount")) },
-    ], false),
-    "ByReason": o([
-        { json: "count", js: "count", typ: 0 },
-        { json: "reason", js: "reason", typ: "" },
-    ], false),
-    "SkipReasonEngineCount": o([
-        { json: "count", js: "count", typ: 0 },
-        { json: "engine", js: "engine", typ: "" },
-        { json: "reason", js: "reason", typ: "" },
-    ], false),
-    "ConfirmReviewClusterRequest": o([
-        { json: "clusterId", js: "clusterId", typ: "" },
-        { json: "memberIdentifiers", js: "memberIdentifiers", typ: a("") },
-    ], false),
-    "ConfirmReviewClusterResponse": o([
-        { json: "clusterId", js: "clusterId", typ: "" },
-        { json: "confirmedIdentifiers", js: "confirmedIdentifiers", typ: a("") },
-        { json: "votesCast", js: "votesCast", typ: 0 },
-    ], false),
-    "ContributionsResponse": o([
-        { json: "cardCountByType", js: "cardCountByType", typ: m(0) },
-        { json: "sources", js: "sources", typ: a(r("SourceContribution")) },
-        { json: "totalDatabaseSize", js: "totalDatabaseSize", typ: 0 },
-    ], false),
-    "CreateDeckShareRequest": o([
-        { json: "deckKey", js: "deckKey", typ: "" },
-        { json: "expiresInDays", js: "expiresInDays", typ: u(0, null) },
-        { json: "wrappedDek", js: "wrappedDek", typ: "" },
-        { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
-    ], false),
-    "CreateDeckShareResponse": o([
-        { json: "createdAt", js: "createdAt", typ: "" },
-        { json: "shareId", js: "shareId", typ: "" },
-    ], false),
-    "CryptoProfileResponse": o([
-        { json: "exists", js: "exists", typ: true },
-        { json: "kdfIterations", js: "kdfIterations", typ: u(0, null) },
-        { json: "passphraseWrappedMasterKey", js: "passphraseWrappedMasterKey", typ: u(null, "") },
-        { json: "passphraseWrappedMasterKeyNonce", js: "passphraseWrappedMasterKeyNonce", typ: u(null, "") },
-        { json: "recoveryWrappedMasterKey", js: "recoveryWrappedMasterKey", typ: u(null, "") },
-        { json: "recoveryWrappedMasterKeyNonce", js: "recoveryWrappedMasterKeyNonce", typ: u(null, "") },
-        { json: "salt", js: "salt", typ: u(null, "") },
-    ], false),
-    "DFCPairsResponse": o([
-        { json: "dfcPairs", js: "dfcPairs", typ: m("") },
-    ], false),
-    "DeckSharesResponse": o([
-        { json: "shares", js: "shares", typ: a(r("DeckShareSummary")) },
-    ], false),
-    "DeckShareSummary": o([
-        { json: "createdAt", js: "createdAt", typ: "" },
-        { json: "deckKey", js: "deckKey", typ: "" },
-        { json: "expiresAt", js: "expiresAt", typ: u(null, "") },
-        { json: "shareId", js: "shareId", typ: "" },
-    ], false),
-    "DeleteDeckRequest": o([
-        { json: "key", js: "key", typ: "" },
-    ], false),
-    "DeleteDeckResponse": o([
-        { json: "deleted", js: "deleted", typ: true },
-    ], false),
-    "EditorSearchRequest": o([
-        { json: "queries", js: "queries", typ: m(r("SearchQuery")) },
-        { json: "searchSettings", js: "searchSettings", typ: r("SearchSettings") },
-    ], false),
-    "SearchQuery": o([
-        { json: "cardType", js: "cardType", typ: r("CardType") },
-        { json: "collectorNumber", js: "collectorNumber", typ: u(undefined, "") },
-        { json: "expansionCode", js: "expansionCode", typ: u(undefined, "") },
-        { json: "query", js: "query", typ: u(null, "") },
-    ], false),
-    "EditorSearchResponse": o([
-        { json: "degradedQueries", js: "degradedQueries", typ: a("") },
-        { json: "operatorErrors", js: "operatorErrors", typ: u(undefined, m(a(""))) },
-        { json: "results", js: "results", typ: m(a("")) },
-    ], false),
-    "ErrorResponse": o([
-        { json: "errors", js: "errors", typ: u(undefined, a(m("any"))) },
-        { json: "message", js: "message", typ: u(undefined, "") },
-        { json: "name", js: "name", typ: "" },
-    ], false),
-    "ExploreSearchRequest": o([
-        { json: "cardTypes", js: "cardTypes", typ: a(r("CardType")) },
-        { json: "pageSize", js: "pageSize", typ: 0 },
-        { json: "pageStart", js: "pageStart", typ: 0 },
-        { json: "query", js: "query", typ: u(null, "") },
-        { json: "searchSettings", js: "searchSettings", typ: r("SearchSettings") },
-        { json: "sortBy", js: "sortBy", typ: r("SortBy") },
-    ], false),
-    "ExploreSearchResponse": o([
-        { json: "cards", js: "cards", typ: a(r("Card")) },
-        { json: "count", js: "count", typ: 0 },
-    ], false),
-    "GetSharedDeckRequest": o([
-        { json: "shareId", js: "shareId", typ: "" },
-    ], false),
-    "GetSharedDeckResponse": o([
-        { json: "ciphertext", js: "ciphertext", typ: "" },
-        { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
-        { json: "createdAt", js: "createdAt", typ: "" },
-        { json: "wrappedDek", js: "wrappedDek", typ: "" },
-        { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
-    ], false),
-    "ImportSiteDecklistRequest": o([
-        { json: "url", js: "url", typ: "" },
-    ], false),
-    "ImportSiteDecklistResponse": o([
-        { json: "cards", js: "cards", typ: "" },
-    ], false),
-    "ImportSitesResponse": o([
-        { json: "importSites", js: "importSites", typ: a(r("ImportSite")) },
-    ], false),
-    "ImportSite": o([
-        { json: "name", js: "name", typ: "" },
-        { json: "url", js: "url", typ: "" },
-    ], false),
-    "InfoResponse": o([
-        { json: "info", js: "info", typ: r("Info") },
-    ], false),
-    "Info": o([
-        { json: "description", js: "description", typ: u(null, "") },
-        { json: "discord", js: "discord", typ: u(null, "") },
-        { json: "email", js: "email", typ: u(null, "") },
-        { json: "name", js: "name", typ: u(null, "") },
-        { json: "reddit", js: "reddit", typ: u(null, "") },
-    ], false),
-    "LanguagesResponse": o([
-        { json: "languages", js: "languages", typ: a(r("Language")) },
-    ], false),
-    "Language": o([
-        { json: "code", js: "code", typ: "" },
-        { json: "name", js: "name", typ: "" },
-    ], false),
-    "LoadDeckRequest": o([
-        { json: "key", js: "key", typ: "" },
-    ], false),
-    "LoadDeckResponse": o([
-        { json: "ciphertext", js: "ciphertext", typ: "" },
-        { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
-        { json: "createdAt", js: "createdAt", typ: "" },
-        { json: "kind", js: "kind", typ: r("LoadDeckResponseKind") },
-        { json: "updatedAt", js: "updatedAt", typ: "" },
-        { json: "wrappedDek", js: "wrappedDek", typ: "" },
-        { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
-    ], false),
-    "ModerationDriveCardsRequest": o([
-        { json: "page", js: "page", typ: 0 },
-        { json: "sourceId", js: "sourceId", typ: 0 },
-    ], false),
-    "ModerationDriveCardsResponse": o([
-        { json: "cards", js: "cards", typ: a(r("Card")) },
-        { json: "hits", js: "hits", typ: 0 },
-        { json: "pages", js: "pages", typ: 0 },
-        { json: "source", js: "source", typ: r("Source") },
-    ], false),
-    "Source": o([
-        { json: "description", js: "description", typ: "" },
-        { json: "externalLink", js: "externalLink", typ: u(undefined, "") },
-        { json: "key", js: "key", typ: "" },
-        { json: "name", js: "name", typ: "" },
-        { json: "pk", js: "pk", typ: 0 },
-        { json: "sourceType", js: "sourceType", typ: r("SourceType") },
-    ], false),
-    "ModerationDrivesRequest": o([
-        { json: "page", js: "page", typ: 0 },
-    ], false),
-    "ModerationDrivesResponse": o([
-        { json: "hits", js: "hits", typ: 0 },
-        { json: "items", js: "items", typ: a(r("ModerationDriveItem")) },
-        { json: "pages", js: "pages", typ: 0 },
-    ], false),
-    "ModerationDriveItem": o([
-        { json: "qtyCardbacks", js: "qtyCardbacks", typ: 0 },
-        { json: "qtyCards", js: "qtyCards", typ: 0 },
-        { json: "qtyTokens", js: "qtyTokens", typ: 0 },
-        { json: "source", js: "source", typ: r("Source") },
-    ], false),
-    "ModerationQueueRequest": o([
-        { json: "page", js: "page", typ: 0 },
-    ], false),
-    "ModerationQueueResponse": o([
-        { json: "hits", js: "hits", typ: 0 },
-        { json: "items", js: "items", typ: a(r("ModerationQueueItem")) },
-        { json: "pages", js: "pages", typ: 0 },
-    ], false),
-    "ModerationQueueItem": o([
-        { json: "card", js: "card", typ: r("Card") },
-        { json: "reportCount", js: "reportCount", typ: 0 },
-        { json: "reportExcerpts", js: "reportExcerpts", typ: a("") },
-        { json: "tagName", js: "tagName", typ: "" },
-    ], false),
-    "ModerationRemoveCardRequest": o([
-        { json: "identifier", js: "identifier", typ: "" },
-    ], false),
-    "ModerationRemoveCardResponse": o([
-        { json: "removed", js: "removed", typ: true },
-    ], false),
-    "ModerationRemoveDriveRequest": o([
-        { json: "sourceId", js: "sourceId", typ: 0 },
-    ], false),
-    "ModerationRemoveDriveResponse": o([
-        { json: "cardsRemoved", js: "cardsRemoved", typ: 0 },
-        { json: "removed", js: "removed", typ: true },
-    ], false),
-    "NewCardsFirstPagesResponse": o([
-        { json: "results", js: "results", typ: m(r("NewCardsFirstPage")) },
-    ], false),
-    "NewCardsFirstPage": o([
-        { json: "cards", js: "cards", typ: a(r("Card")) },
-        { json: "hits", js: "hits", typ: 0 },
-        { json: "pages", js: "pages", typ: 0 },
-        { json: "source", js: "source", typ: r("Source") },
-    ], false),
-    "NewCardsPageResponse": o([
-        { json: "cards", js: "cards", typ: a(r("Card")) },
-    ], false),
-    "OldEditorSearchRequest": o([
-        { json: "queries", js: "queries", typ: a(r("SearchQuery")) },
-        { json: "searchSettings", js: "searchSettings", typ: r("SearchSettings") },
-    ], false),
-    "OldEditorSearchResponse": o([
-        { json: "results", js: "results", typ: m(m(a(""))) },
-    ], false),
-    "PatreonResponse": o([
-        { json: "patreon", js: "patreon", typ: r("Patreon") },
-    ], false),
-    "Patreon": o([
-        { json: "campaign", js: "campaign", typ: u(r("Campaign"), null) },
-        { json: "members", js: "members", typ: a(r("Supporter")) },
-        { json: "tiers", js: "tiers", typ: u(m(r("SupporterTier")), null) },
-        { json: "url", js: "url", typ: u(null, "") },
-    ], false),
-    "Campaign": o([
-        { json: "about", js: "about", typ: "" },
-        { json: "id", js: "id", typ: "" },
-    ], false),
-    "Supporter": o([
-        { json: "date", js: "date", typ: "" },
-        { json: "name", js: "name", typ: "" },
-        { json: "tier", js: "tier", typ: "" },
-        { json: "usd", js: "usd", typ: 3.14 },
-    ], false),
-    "SupporterTier": o([
-        { json: "description", js: "description", typ: "" },
-        { json: "title", js: "title", typ: "" },
-        { json: "usd", js: "usd", typ: 3.14 },
-    ], false),
-    "PrintingCandidatesRequest": o([
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "query", js: "query", typ: u(undefined, u(null, "")) },
-    ], false),
-    "PrintingCandidatesResponse": o([
-        { json: "results", js: "results", typ: a(r("PrintingCandidate")) },
-    ], false),
-    "PrintingConsensusRequest": o([
-        { json: "identifier", js: "identifier", typ: "" },
-    ], false),
-    "PrintingConsensusResponse": o([
-        { json: "isNoMatch", js: "isNoMatch", typ: true },
-        { json: "resolvedPrinting", js: "resolvedPrinting", typ: u(undefined, r("PrintingCandidate")) },
-        { json: "voteTally", js: "voteTally", typ: a(r("VoteTallyEntry")) },
-    ], false),
-    "VoteTallyEntry": o([
-        { json: "count", js: "count", typ: 0 },
-        { json: "isNoMatch", js: "isNoMatch", typ: true },
-        { json: "printing", js: "printing", typ: u(undefined, r("PrintingCandidate")) },
-    ], false),
-    "PrintingTagQueueResponse": o([
-        { json: "cards", js: "cards", typ: a(r("Card")) },
-        { json: "hits", js: "hits", typ: 0 },
-        { json: "pages", js: "pages", typ: 0 },
-    ], false),
-    "ReportCardRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "hide", js: "hide", typ: u(undefined, true) },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "reason", js: "reason", typ: r("Reason") },
-        { json: "text", js: "text", typ: u(undefined, "") },
-    ], false),
-    "ReportCardResponse": o([
-        { json: "reported", js: "reported", typ: true },
-        { json: "voteCast", js: "voteCast", typ: true },
-    ], false),
-    "ResetSavedDecksRequest": o([
-        { json: "confirm", js: "confirm", typ: true },
-    ], false),
-    "ResetSavedDecksResponse": o([
-        { json: "deletedDeckCount", js: "deletedDeckCount", typ: 0 },
-    ], false),
-    "RetractImplicitVoteRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "tagName", js: "tagName", typ: "" },
-    ], false),
-    "ReviewClusterDetailRequest": o([
-        { json: "clusterId", js: "clusterId", typ: "" },
-    ], false),
-    "ReviewClusterDetailResponse": o([
-        { json: "cluster", js: "cluster", typ: r("ReviewClusterSummary") },
-    ], false),
-    "ReviewClusterSummary": o([
-        { json: "clusterId", js: "clusterId", typ: "" },
-        { json: "members", js: "members", typ: a(r("ReviewClusterMember")) },
-        { json: "signals", js: "signals", typ: a(r("ReviewClusterSignal")) },
-        { json: "size", js: "size", typ: 0 },
-    ], false),
-    "ReviewClusterMember": o([
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "name", js: "name", typ: "" },
-        { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
-    ], false),
-    "ReviewClusterSignal": o([
-        { json: "memberCount", js: "memberCount", typ: 0 },
-        { json: "signalType", js: "signalType", typ: r("ReviewClusterSignalType") },
-        { json: "value", js: "value", typ: "" },
-    ], false),
-    "ReviewClusterListRequest": o([
-        { json: "page", js: "page", typ: 0 },
-    ], false),
-    "ReviewClusterListResponse": o([
-        { json: "hits", js: "hits", typ: 0 },
-        { json: "items", js: "items", typ: a(r("ReviewClusterSummary")) },
-        { json: "pages", js: "pages", typ: 0 },
-    ], false),
-    "RevokeDeckShareRequest": o([
-        { json: "shareId", js: "shareId", typ: "" },
-    ], false),
-    "RevokeDeckShareResponse": o([
-        { json: "deleted", js: "deleted", typ: true },
-    ], false),
-    "SampleCardsResponse": o([
-        { json: "cards", js: "cards", typ: r("Cards") },
-    ], "any"),
-    "Cards": o([
-        { json: "CARD", js: "CARD", typ: a(r("Card")) },
-        { json: "CARDBACK", js: "CARDBACK", typ: a(r("Card")) },
-        { json: "TOKEN", js: "TOKEN", typ: a(r("Card")) },
-    ], "any"),
-    "SaveCryptoProfileRequest": o([
-        { json: "kdfIterations", js: "kdfIterations", typ: 0 },
-        { json: "passphraseWrappedMasterKey", js: "passphraseWrappedMasterKey", typ: "" },
-        { json: "passphraseWrappedMasterKeyNonce", js: "passphraseWrappedMasterKeyNonce", typ: "" },
-        { json: "recoveryWrappedMasterKey", js: "recoveryWrappedMasterKey", typ: "" },
-        { json: "recoveryWrappedMasterKeyNonce", js: "recoveryWrappedMasterKeyNonce", typ: "" },
-        { json: "salt", js: "salt", typ: "" },
-    ], false),
-    "SaveCryptoProfileResponse": o([
-        { json: "saved", js: "saved", typ: true },
-    ], false),
-    "SaveDeckRequest": o([
-        { json: "ciphertext", js: "ciphertext", typ: "" },
-        { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
-        { json: "key", js: "key", typ: u(null, "") },
-        { json: "kind", js: "kind", typ: u(undefined, r("LoadDeckResponseKind")) },
-        { json: "wrappedDek", js: "wrappedDek", typ: "" },
-        { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
-    ], false),
-    "SaveDeckResponse": o([
-        { json: "key", js: "key", typ: "" },
-    ], false),
-    "SavedDecksResponse": o([
-        { json: "decks", js: "decks", typ: a(r("SavedDeckSummary")) },
-    ], false),
-    "SavedDeckSummary": o([
-        { json: "ciphertext", js: "ciphertext", typ: "" },
-        { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
-        { json: "createdAt", js: "createdAt", typ: "" },
-        { json: "key", js: "key", typ: "" },
-        { json: "kind", js: "kind", typ: r("LoadDeckResponseKind") },
-        { json: "updatedAt", js: "updatedAt", typ: "" },
-        { json: "wrappedDek", js: "wrappedDek", typ: "" },
-        { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
-    ], false),
-    "SearchEngineHealthResponse": o([
-        { json: "online", js: "online", typ: true },
-    ], false),
-    "SourcesResponse": o([
-        { json: "results", js: "results", typ: m(r("Source")) },
-    ], false),
-    "SubmitArtistVoteRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "artistName", js: "artistName", typ: u(undefined, u(null, "")) },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "isUnknown", js: "isUnknown", typ: true },
-        { json: "voteSurface", js: "voteSurface", typ: u(undefined, u(null, "")) },
-    ], false),
-    "SubmitArtistWriteInVoteRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "artistId", js: "artistId", typ: u(undefined, u(0, null)) },
-        { json: "freeText", js: "freeText", typ: u(undefined, u(null, "")) },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "voteSurface", js: "voteSurface", typ: u(undefined, u(null, "")) },
-    ], false),
-    "SubmitArtistWriteInVoteResponse": o([
-        { json: "castArtist", js: "castArtist", typ: r("ArtistAutocompleteResult") },
-        { json: "createdNewArtist", js: "createdNewArtist", typ: true },
-        { json: "isUnknown", js: "isUnknown", typ: true },
-        { json: "resolvedArtist", js: "resolvedArtist", typ: u(undefined, u(r("CanonicalArtist"), null)) },
-        { json: "voteTally", js: "voteTally", typ: a(r("ArtistVoteTallyEntry")) },
-    ], false),
-    "SubmitIllustrationRejectionRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "illustrationId", js: "illustrationId", typ: "" },
-        { json: "voteSurface", js: "voteSurface", typ: u(undefined, u(null, "")) },
-    ], false),
-    "SubmitIllustrationRejectionResponse": o([
-        { json: "illustrationId", js: "illustrationId", typ: "" },
-    ], false),
-    "SubmitIllustrationVoteRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "illustrationId", js: "illustrationId", typ: u(undefined, u(null, "")) },
-        { json: "isUnknown", js: "isUnknown", typ: true },
-        { json: "voteSurface", js: "voteSurface", typ: u(undefined, u(null, "")) },
-    ], false),
-    "SubmitIllustrationVoteResponse": o([
-        { json: "artistAbstainReason", js: "artistAbstainReason", typ: u(undefined, u(null, "")) },
-        { json: "artistVoteCast", js: "artistVoteCast", typ: true },
-        { json: "illustrationId", js: "illustrationId", typ: u(undefined, u(null, "")) },
-        { json: "isUnknown", js: "isUnknown", typ: true },
-        { json: "printingVoteCast", js: "printingVoteCast", typ: true },
-        { json: "resolvedPrinting", js: "resolvedPrinting", typ: u(undefined, r("PrintingCandidate")) },
-    ], false),
-    "SubmitPrintingTagRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "isNoMatch", js: "isNoMatch", typ: true },
-        { json: "printingIdentifier", js: "printingIdentifier", typ: u(undefined, u(null, "")) },
-        { json: "voteSurface", js: "voteSurface", typ: u(undefined, u(null, "")) },
-    ], false),
-    "SubmitQuestionAbstentionRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "questionType", js: "questionType", typ: "" },
-        { json: "reason", js: "reason", typ: u(undefined, "") },
-    ], false),
-    "SubmitQuestionAbstentionResponse": o([
-        { json: "recorded", js: "recorded", typ: true },
-    ], false),
-    "SubmitTagVoteRequest": o([
-        { json: "anonymousId", js: "anonymousId", typ: "" },
-        { json: "identifier", js: "identifier", typ: "" },
-        { json: "polarity", js: "polarity", typ: 0 },
-        { json: "tagName", js: "tagName", typ: "" },
-        { json: "voteSurface", js: "voteSurface", typ: u(undefined, u(null, "")) },
-    ], false),
-    "TagConsensusRequest": o([
-        { json: "identifier", js: "identifier", typ: "" },
-    ], false),
-    "TagConsensusResponse": o([
-        { json: "tags", js: "tags", typ: a(r("TagConsensusEntry")) },
-    ], false),
-    "TagConsensusEntry": o([
-        { json: "netPolarity", js: "netPolarity", typ: 3.14 },
-        { json: "resolvedPolarity", js: "resolvedPolarity", typ: u(undefined, u(0, null)) },
-        { json: "tagName", js: "tagName", typ: "" },
-        { json: "tally", js: "tally", typ: a(r("TagVoteTallyEntry")) },
-    ], false),
-    "TagVoteTallyEntry": o([
-        { json: "count", js: "count", typ: 0 },
-        { json: "polarity", js: "polarity", typ: 0 },
-    ], false),
-    "TagsResponse": o([
-        { json: "tags", js: "tags", typ: a(r("Tag")) },
-    ], false),
-    "Tag": o([
-        { json: "aliases", js: "aliases", typ: u(undefined, a("")) },
-        { json: "children", js: "children", typ: a(r("ChildElement")) },
-        { json: "displayName", js: "displayName", typ: u(undefined, u(null, "")) },
-        { json: "isEnabledByDefault", js: "isEnabledByDefault", typ: u(undefined, true) },
-        { json: "name", js: "name", typ: "" },
-        { json: "parent", js: "parent", typ: u(null, "") },
-    ], false),
-    "ChildElement": o([
-        { json: "aliases", js: "aliases", typ: u(undefined, a("")) },
-        { json: "children", js: "children", typ: a(r("ChildElement")) },
-        { json: "displayName", js: "displayName", typ: u(undefined, u(null, "")) },
-        { json: "isEnabledByDefault", js: "isEnabledByDefault", typ: u(undefined, true) },
-        { json: "name", js: "name", typ: "" },
-        { json: "parent", js: "parent", typ: u(null, "") },
-    ], false),
-    "VoteQueueRequest": o([
-        { json: "kind", js: "kind", typ: r("VoteQueueRequestKind") },
-        { json: "page", js: "page", typ: 0 },
-    ], false),
-    "VoteQueueResponse": o([
-        { json: "hits", js: "hits", typ: 0 },
-        { json: "items", js: "items", typ: a(r("VoteQueueItem")) },
-        { json: "pages", js: "pages", typ: 0 },
-    ], false),
-    "VoteQueueItem": o([
-        { json: "card", js: "card", typ: r("Card") },
-        { json: "tagName", js: "tagName", typ: u(undefined, u(null, "")) },
-    ], false),
-    "WhoamiResponse": o([
-        { json: "authenticated", js: "authenticated", typ: true },
-        { json: "discordEnabled", js: "discordEnabled", typ: true },
-        { json: "loginUrl", js: "loginUrl", typ: u(null, "") },
-        { json: "logoutUrl", js: "logoutUrl", typ: u(null, "") },
-        { json: "moderator", js: "moderator", typ: true },
-        { json: "username", js: "username", typ: u(null, "") },
-    ], false),
-    "Game": [
-        "MTG",
+  QuestionFeedResponse: o(
+    [
+      { json: "item", js: "item", typ: u(undefined, r("QuestionFeedItem")) },
+      {
+        json: "remainingEstimate",
+        js: "remainingEstimate",
+        typ: r("QuestionFeedCounts"),
+      },
     ],
-    "BleedProvenance": [
-        "abstained",
-        "method-a",
-        "method-b",
-        "no-evidence",
+    false
+  ),
+  QuestionFeedItem: o(
+    [
+      {
+        json: "candidates",
+        js: "candidates",
+        typ: u(undefined, a(r("PrintingCandidate"))),
+      },
+      { json: "card", js: "card", typ: r("Card") },
+      {
+        json: "confidentlyKnownArtistName",
+        js: "confidentlyKnownArtistName",
+        typ: u(undefined, u(null, "")),
+      },
+      {
+        json: "discriminatingAxes",
+        js: "discriminatingAxes",
+        typ: u(undefined, a(r("DiscriminatingAx"))),
+      },
+      {
+        json: "familyCandidates",
+        js: "familyCandidates",
+        typ: u(undefined, a(r("FrameFamilyCandidate"))),
+      },
+      {
+        json: "familyConfidence",
+        js: "familyConfidence",
+        typ: u(undefined, 3.14),
+      },
+      {
+        json: "illustrationCandidates",
+        js: "illustrationCandidates",
+        typ: u(undefined, a(r("PrintingCandidate"))),
+      },
+      { json: "isAnotherCopy", js: "isAnotherCopy", typ: u(undefined, true) },
+      {
+        json: "proposedFamilyDisplayName",
+        js: "proposedFamilyDisplayName",
+        typ: u(undefined, ""),
+      },
+      {
+        json: "proposedFamilyName",
+        js: "proposedFamilyName",
+        typ: u(undefined, ""),
+      },
+      {
+        json: "scryfallIllustrationUrl",
+        js: "scryfallIllustrationUrl",
+        typ: u(undefined, u(null, "")),
+      },
+      {
+        json: "suggestedPrinting",
+        js: "suggestedPrinting",
+        typ: u(undefined, r("PrintingCandidate")),
+      },
+      {
+        json: "tagConfidence",
+        js: "tagConfidence",
+        typ: u(undefined, m(3.14)),
+      },
+      { json: "tagName", js: "tagName", typ: u(undefined, "") },
+      { json: "type", js: "type", typ: r("Type") },
     ],
-    "CardType": [
-        "CARD",
-        "CARDBACK",
-        "TOKEN",
+    false
+  ),
+  PrintingCandidate: o(
+    [
+      { json: "artCropUrl", js: "artCropUrl", typ: u(undefined, u(null, "")) },
+      { json: "artist", js: "artist", typ: "" },
+      { json: "borderColor", js: "borderColor", typ: "" },
+      { json: "canonicalId", js: "canonicalId", typ: "" },
+      { json: "collectorNumber", js: "collectorNumber", typ: "" },
+      { json: "expansionCode", js: "expansionCode", typ: "" },
+      { json: "expansionName", js: "expansionName", typ: "" },
+      { json: "frame", js: "frame", typ: "" },
+      { json: "fullArt", js: "fullArt", typ: true },
+      { json: "identifier", js: "identifier", typ: "" },
+      {
+        json: "illustrationId",
+        js: "illustrationId",
+        typ: u(undefined, u(null, "")),
+      },
+      { json: "isBorderless", js: "isBorderless", typ: true },
+      { json: "isEtched", js: "isEtched", typ: true },
+      { json: "isExtendedArt", js: "isExtendedArt", typ: true },
+      { json: "isShowcase", js: "isShowcase", typ: true },
+      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
+      { json: "releasedAt", js: "releasedAt", typ: u(undefined, u(null, "")) },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
     ],
-    "PrintingTagStatus": [
-        "no_match",
-        "resolved",
-        "unresolved",
+    false
+  ),
+  Card: o(
+    [
+      {
+        json: "bleedProvenance",
+        js: "bleedProvenance",
+        typ: u(undefined, r("BleedProvenance")),
+      },
+      {
+        json: "canonicalArtist",
+        js: "canonicalArtist",
+        typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      {
+        json: "canonicalArtistIsFromVoteOnly",
+        js: "canonicalArtistIsFromVoteOnly",
+        typ: u(undefined, true),
+      },
+      {
+        json: "canonicalArtistSource",
+        js: "canonicalArtistSource",
+        typ: u(undefined, u(null, "")),
+      },
+      {
+        json: "canonicalCard",
+        js: "canonicalCard",
+        typ: u(undefined, u(r("CanonicalCard"), null)),
+      },
+      { json: "cardType", js: "cardType", typ: r("CardType") },
+      { json: "dateCreated", js: "dateCreated", typ: "" },
+      { json: "dateModified", js: "dateModified", typ: "" },
+      { json: "dpi", js: "dpi", typ: 0 },
+      { json: "extension", js: "extension", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "language", js: "language", typ: "" },
+      { json: "layout", js: "layout", typ: u(undefined, u(null, "")) },
+      {
+        json: "measuredBleedMm",
+        js: "measuredBleedMm",
+        typ: u(undefined, u(3.14, null)),
+      },
+      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
+      { json: "name", js: "name", typ: "" },
+      {
+        json: "printingTagStatus",
+        js: "printingTagStatus",
+        typ: r("PrintingTagStatus"),
+      },
+      { json: "priority", js: "priority", typ: 0 },
+      { json: "searchq", js: "searchq", typ: "" },
+      { json: "size", js: "size", typ: 0 },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+      { json: "source", js: "source", typ: "" },
+      {
+        json: "sourceExternalLink",
+        js: "sourceExternalLink",
+        typ: u(undefined, ""),
+      },
+      { json: "sourceId", js: "sourceId", typ: 0 },
+      { json: "sourceName", js: "sourceName", typ: "" },
+      {
+        json: "sourceType",
+        js: "sourceType",
+        typ: u(undefined, r("SourceType")),
+      },
+      { json: "sourceVerbose", js: "sourceVerbose", typ: "" },
+      {
+        json: "suggestedCanonicalCard",
+        js: "suggestedCanonicalCard",
+        typ: u(undefined, u(r("CanonicalCard"), null)),
+      },
+      {
+        json: "suggestedCanonicalCardConfidence",
+        js: "suggestedCanonicalCardConfidence",
+        typ: u(undefined, u(3.14, null)),
+      },
+      {
+        json: "suggestedFilterTagNames",
+        js: "suggestedFilterTagNames",
+        typ: u(undefined, u(a(""), null)),
+      },
+      { json: "tags", js: "tags", typ: a("") },
+      {
+        json: "tagVoteStatuses",
+        js: "tagVoteStatuses",
+        typ: u(undefined, m(r("TagVoteDisplayStatus"))),
+      },
     ],
-    "SourceType": [
-        "AWS S3",
-        "Google Drive",
-        "Local File",
+    false
+  ),
+  CanonicalArtist: o([{ json: "name", js: "name", typ: "" }], false),
+  CanonicalCard: o(
+    [
+      { json: "artist", js: "artist", typ: u(undefined, "") },
+      { json: "canonicalId", js: "canonicalId", typ: u(undefined, "") },
+      { json: "collectorNumber", js: "collectorNumber", typ: "" },
+      { json: "expansionCode", js: "expansionCode", typ: "" },
+      { json: "expansionName", js: "expansionName", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "mediumThumbnailUrl", js: "mediumThumbnailUrl", typ: "" },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
     ],
-    "TagVoteDisplayStatus": [
-        "resolved",
-        "suggested",
+    false
+  ),
+  FrameFamilyCandidate: o(
+    [
+      { json: "confidence", js: "confidence", typ: 3.14 },
+      { json: "displayName", js: "displayName", typ: "" },
+      { json: "name", js: "name", typ: "" },
     ],
-    "DiscriminatingAx": [
-        "border",
-        "full_art",
-        "treatment",
+    false
+  ),
+  QuestionFeedCounts: o(
+    [
+      { json: "confirmable", js: "confirmable", typ: 0 },
+      { json: "contested", js: "contested", typ: 0 },
+      { json: "fresh", js: "fresh", typ: 0 },
+      { json: "total", js: "total", typ: 0 },
     ],
-    "Type": [
-        "artist",
-        "border",
-        "confirm_suggestion",
-        "frame_family",
-        "identify_printing",
-        "illustration",
-        "tag",
+    false
+  ),
+  ArtistAutocompleteRequest: o(
+    [{ json: "query", js: "query", typ: "" }],
+    false
+  ),
+  ArtistAutocompleteResponse: o(
+    [{ json: "results", js: "results", typ: a(r("ArtistAutocompleteResult")) }],
+    false
+  ),
+  ArtistAutocompleteResult: o(
+    [
+      { json: "id", js: "id", typ: 0 },
+      { json: "name", js: "name", typ: "" },
     ],
-    "SortBy": [
-        "dateCreatedAscending",
-        "dateCreatedDescending",
-        "dateModifiedAscending",
-        "dateModifiedDescending",
-        "nameAscending",
-        "nameDescending",
+    false
+  ),
+  ArtistCandidatesRequest: o(
+    [
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "query", js: "query", typ: u(undefined, u(null, "")) },
     ],
-    "LoadDeckResponseKind": [
-        "deck",
-        "snapshot",
+    false
+  ),
+  ArtistCandidatesResponse: o(
+    [{ json: "results", js: "results", typ: a(u(r("CanonicalArtist"), null)) }],
+    false
+  ),
+  ArtistConsensusRequest: o(
+    [{ json: "identifier", js: "identifier", typ: "" }],
+    false
+  ),
+  ArtistConsensusResponse: o(
+    [
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      {
+        json: "resolvedArtist",
+        js: "resolvedArtist",
+        typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      { json: "voteTally", js: "voteTally", typ: a(r("ArtistVoteTallyEntry")) },
     ],
-    "Reason": [
-        "broken_image",
-        "low_quality",
-        "nsfw",
-        "other",
-        "wrong_card",
+    false
+  ),
+  ArtistVoteTallyEntry: o(
+    [
+      {
+        json: "artist",
+        js: "artist",
+        typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      { json: "count", js: "count", typ: 0 },
+      { json: "isUnknown", js: "isUnknown", typ: true },
     ],
-    "ReviewClusterSignalType": [
-        "legal_line_text",
-        "md5_checksum",
-        "symbol_phash",
+    false
+  ),
+  ArtistExternalLinksResponse: o(
+    [
+      { json: "found", js: "found", typ: true },
+      { json: "hasSignatureService", js: "hasSignatureService", typ: true },
+      { json: "links", js: "links", typ: a(r("Link")) },
+      { json: "location", js: "location", typ: u(null, "") },
+      { json: "pageUrl", js: "pageUrl", typ: u(null, "") },
     ],
-    "VoteQueueRequestKind": [
-        "artist",
-        "printing",
-        "tag",
+    false
+  ),
+  Link: o(
+    [
+      { json: "type", js: "type", typ: "" },
+      { json: "url", js: "url", typ: "" },
     ],
+    false
+  ),
+  CardbacksRequest: o(
+    [
+      {
+        json: "searchSettings",
+        js: "searchSettings",
+        typ: r("SearchSettings"),
+      },
+    ],
+    false
+  ),
+  SearchSettings: o(
+    [
+      {
+        json: "filterSettings",
+        js: "filterSettings",
+        typ: r("FilterSettings"),
+      },
+      {
+        json: "searchTypeSettings",
+        js: "searchTypeSettings",
+        typ: r("SearchTypeSettings"),
+      },
+      {
+        json: "sourceSettings",
+        js: "sourceSettings",
+        typ: r("SourceSettings"),
+      },
+    ],
+    false
+  ),
+  FilterSettings: o(
+    [
+      { json: "borderlessOnly", js: "borderlessOnly", typ: true },
+      { json: "excludesTags", js: "excludesTags", typ: a("") },
+      { json: "fullArtOnly", js: "fullArtOnly", typ: true },
+      { json: "includesTags", js: "includesTags", typ: a("") },
+      { json: "languages", js: "languages", typ: a("") },
+      { json: "maximumDPI", js: "maximumDPI", typ: 0 },
+      { json: "maximumSize", js: "maximumSize", typ: 0 },
+      { json: "minimumDPI", js: "minimumDPI", typ: 0 },
+    ],
+    false
+  ),
+  SearchTypeSettings: o(
+    [
+      { json: "filterCardbacks", js: "filterCardbacks", typ: true },
+      { json: "fuzzySearch", js: "fuzzySearch", typ: true },
+    ],
+    false
+  ),
+  SourceSettings: o(
+    [{ json: "sources", js: "sources", typ: a(a(u(true, 0))) }],
+    false
+  ),
+  CardbacksResponse: o(
+    [{ json: "cardbacks", js: "cardbacks", typ: a("") }],
+    false
+  ),
+  CardsRequest: o(
+    [{ json: "cardIdentifiers", js: "cardIdentifiers", typ: a("") }],
+    false
+  ),
+  CardsResponse: o(
+    [{ json: "results", js: "results", typ: m(r("Card")) }],
+    false
+  ),
+  CastImplicitVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "tagNames", js: "tagNames", typ: a("") },
+    ],
+    false
+  ),
+  CatalogStatsResponse: o(
+    [
+      {
+        json: "catalogComposition",
+        js: "catalogComposition",
+        typ: r("CatalogComposition"),
+      },
+      {
+        json: "contributionsOverTime",
+        js: "contributionsOverTime",
+        typ: r("ContributionsOverTime"),
+      },
+      { json: "generatedAt", js: "generatedAt", typ: u(null, "") },
+      { json: "participation", js: "participation", typ: r("Participation") },
+      { json: "runHistory", js: "runHistory", typ: r("RunHistory") },
+      { json: "skipBreakdown", js: "skipBreakdown", typ: r("SkipBreakdown") },
+    ],
+    false
+  ),
+  CatalogComposition: o(
+    [
+      { json: "cardCountByType", js: "cardCountByType", typ: m(0) },
+      { json: "sources", js: "sources", typ: a(r("SourceContribution")) },
+      { json: "totalDatabaseSize", js: "totalDatabaseSize", typ: 0 },
+    ],
+    false
+  ),
+  SourceContribution: o(
+    [
+      { json: "avgdpi", js: "avgdpi", typ: "" },
+      { json: "description", js: "description", typ: "" },
+      { json: "externalLink", js: "externalLink", typ: u(undefined, "") },
+      { json: "name", js: "name", typ: "" },
+      { json: "qtyCardbacks", js: "qtyCardbacks", typ: "" },
+      { json: "qtyCards", js: "qtyCards", typ: "" },
+      { json: "qtyTokens", js: "qtyTokens", typ: "" },
+      { json: "size", js: "size", typ: "" },
+      { json: "sourceType", js: "sourceType", typ: r("SourceType") },
+    ],
+    false
+  ),
+  ContributionsOverTime: o(
+    [
+      { json: "bucketDays", js: "bucketDays", typ: 0 },
+      { json: "series", js: "series", typ: a(r("Series")) },
+    ],
+    false
+  ),
+  Series: o(
+    [
+      { json: "bySurface", js: "bySurface", typ: m(0) },
+      { json: "weekStart", js: "weekStart", typ: "" },
+    ],
+    false
+  ),
+  Participation: o(
+    [
+      { json: "confirmable", js: "confirmable", typ: 0 },
+      { json: "contested", js: "contested", typ: 0 },
+      {
+        json: "distinctCardsRoutedToReview",
+        js: "distinctCardsRoutedToReview",
+        typ: 0,
+      },
+      {
+        json: "distinctCardsRoutedToReviewWithHumanVotes",
+        js: "distinctCardsRoutedToReviewWithHumanVotes",
+        typ: 0,
+      },
+      {
+        json: "distinctCardsWithHumanVotes",
+        js: "distinctCardsWithHumanVotes",
+        typ: 0,
+      },
+      { json: "distinctHumanVoters", js: "distinctHumanVoters", typ: 0 },
+      { json: "fresh", js: "fresh", typ: 0 },
+      { json: "humanVotes", js: "humanVotes", typ: r("HumanVotes") },
+      { json: "md5Groups", js: "md5Groups", typ: r("Md5Groups") },
+      { json: "total", js: "total", typ: 0 },
+    ],
+    false
+  ),
+  HumanVotes: o(
+    [
+      { json: "artist", js: "artist", typ: 0 },
+      { json: "printingTag", js: "printingTag", typ: 0 },
+      { json: "tag", js: "tag", typ: 0 },
+      { json: "total", js: "total", typ: 0 },
+    ],
+    false
+  ),
+  Md5Groups: o(
+    [
+      { json: "cardsInMultiCardGroups", js: "cardsInMultiCardGroups", typ: 0 },
+      {
+        json: "groupsWithMultipleCards",
+        js: "groupsWithMultipleCards",
+        typ: 0,
+      },
+      { json: "largestGroupSize", js: "largestGroupSize", typ: 0 },
+    ],
+    false
+  ),
+  RunHistory: o(
+    [{ json: "recent", js: "recent", typ: a(r("PilotRunHistoryEntry")) }],
+    false
+  ),
+  PilotRunHistoryEntry: o(
+    [
+      { json: "command", js: "command", typ: "" },
+      { json: "durationSeconds", js: "durationSeconds", typ: u(3.14, null) },
+      { json: "finishedAt", js: "finishedAt", typ: u(null, "") },
+      { json: "runId", js: "runId", typ: "" },
+      { json: "startedAt", js: "startedAt", typ: "" },
+      { json: "status", js: "status", typ: "" },
+      { json: "votesWritten", js: "votesWritten", typ: u(0, null) },
+    ],
+    false
+  ),
+  SkipBreakdown: o(
+    [
+      { json: "byReason", js: "byReason", typ: a(r("ByReason")) },
+      {
+        json: "byReasonAndEngine",
+        js: "byReasonAndEngine",
+        typ: a(r("SkipReasonEngineCount")),
+      },
+    ],
+    false
+  ),
+  ByReason: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "reason", js: "reason", typ: "" },
+    ],
+    false
+  ),
+  SkipReasonEngineCount: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "engine", js: "engine", typ: "" },
+      { json: "reason", js: "reason", typ: "" },
+    ],
+    false
+  ),
+  ConfirmReviewClusterRequest: o(
+    [
+      { json: "clusterId", js: "clusterId", typ: "" },
+      { json: "memberIdentifiers", js: "memberIdentifiers", typ: a("") },
+    ],
+    false
+  ),
+  ConfirmReviewClusterResponse: o(
+    [
+      { json: "clusterId", js: "clusterId", typ: "" },
+      { json: "confirmedIdentifiers", js: "confirmedIdentifiers", typ: a("") },
+      { json: "votesCast", js: "votesCast", typ: 0 },
+    ],
+    false
+  ),
+  ContributionsResponse: o(
+    [
+      { json: "cardCountByType", js: "cardCountByType", typ: m(0) },
+      { json: "sources", js: "sources", typ: a(r("SourceContribution")) },
+      { json: "totalDatabaseSize", js: "totalDatabaseSize", typ: 0 },
+    ],
+    false
+  ),
+  CreateDeckShareRequest: o(
+    [
+      { json: "deckKey", js: "deckKey", typ: "" },
+      { json: "expiresInDays", js: "expiresInDays", typ: u(0, null) },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
+    ],
+    false
+  ),
+  CreateDeckShareResponse: o(
+    [
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "shareId", js: "shareId", typ: "" },
+    ],
+    false
+  ),
+  CryptoProfileResponse: o(
+    [
+      { json: "exists", js: "exists", typ: true },
+      { json: "kdfIterations", js: "kdfIterations", typ: u(0, null) },
+      {
+        json: "passphraseWrappedMasterKey",
+        js: "passphraseWrappedMasterKey",
+        typ: u(null, ""),
+      },
+      {
+        json: "passphraseWrappedMasterKeyNonce",
+        js: "passphraseWrappedMasterKeyNonce",
+        typ: u(null, ""),
+      },
+      {
+        json: "recoveryWrappedMasterKey",
+        js: "recoveryWrappedMasterKey",
+        typ: u(null, ""),
+      },
+      {
+        json: "recoveryWrappedMasterKeyNonce",
+        js: "recoveryWrappedMasterKeyNonce",
+        typ: u(null, ""),
+      },
+      { json: "salt", js: "salt", typ: u(null, "") },
+    ],
+    false
+  ),
+  DFCPairsResponse: o(
+    [{ json: "dfcPairs", js: "dfcPairs", typ: m("") }],
+    false
+  ),
+  DeckSharesResponse: o(
+    [{ json: "shares", js: "shares", typ: a(r("DeckShareSummary")) }],
+    false
+  ),
+  DeckShareSummary: o(
+    [
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "deckKey", js: "deckKey", typ: "" },
+      { json: "expiresAt", js: "expiresAt", typ: u(null, "") },
+      { json: "shareId", js: "shareId", typ: "" },
+    ],
+    false
+  ),
+  DeleteDeckRequest: o([{ json: "key", js: "key", typ: "" }], false),
+  DeleteDeckResponse: o([{ json: "deleted", js: "deleted", typ: true }], false),
+  EditorSearchRequest: o(
+    [
+      { json: "queries", js: "queries", typ: m(r("SearchQuery")) },
+      {
+        json: "searchSettings",
+        js: "searchSettings",
+        typ: r("SearchSettings"),
+      },
+    ],
+    false
+  ),
+  SearchQuery: o(
+    [
+      { json: "cardType", js: "cardType", typ: r("CardType") },
+      { json: "collectorNumber", js: "collectorNumber", typ: u(undefined, "") },
+      { json: "expansionCode", js: "expansionCode", typ: u(undefined, "") },
+      { json: "query", js: "query", typ: u(null, "") },
+    ],
+    false
+  ),
+  EditorSearchResponse: o(
+    [
+      { json: "degradedQueries", js: "degradedQueries", typ: a("") },
+      {
+        json: "operatorErrors",
+        js: "operatorErrors",
+        typ: u(undefined, m(a(""))),
+      },
+      { json: "results", js: "results", typ: m(a("")) },
+    ],
+    false
+  ),
+  ErrorResponse: o(
+    [
+      { json: "errors", js: "errors", typ: u(undefined, a(m("any"))) },
+      { json: "message", js: "message", typ: u(undefined, "") },
+      { json: "name", js: "name", typ: "" },
+    ],
+    false
+  ),
+  ExploreSearchRequest: o(
+    [
+      { json: "cardTypes", js: "cardTypes", typ: a(r("CardType")) },
+      { json: "pageSize", js: "pageSize", typ: 0 },
+      { json: "pageStart", js: "pageStart", typ: 0 },
+      { json: "query", js: "query", typ: u(null, "") },
+      {
+        json: "searchSettings",
+        js: "searchSettings",
+        typ: r("SearchSettings"),
+      },
+      { json: "sortBy", js: "sortBy", typ: r("SortBy") },
+    ],
+    false
+  ),
+  ExploreSearchResponse: o(
+    [
+      { json: "cards", js: "cards", typ: a(r("Card")) },
+      { json: "count", js: "count", typ: 0 },
+    ],
+    false
+  ),
+  GetSharedDeckRequest: o([{ json: "shareId", js: "shareId", typ: "" }], false),
+  GetSharedDeckResponse: o(
+    [
+      { json: "ciphertext", js: "ciphertext", typ: "" },
+      { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
+    ],
+    false
+  ),
+  ImportSiteDecklistRequest: o([{ json: "url", js: "url", typ: "" }], false),
+  ImportSiteDecklistResponse: o(
+    [{ json: "cards", js: "cards", typ: "" }],
+    false
+  ),
+  ImportSitesResponse: o(
+    [{ json: "importSites", js: "importSites", typ: a(r("ImportSite")) }],
+    false
+  ),
+  ImportSite: o(
+    [
+      { json: "name", js: "name", typ: "" },
+      { json: "url", js: "url", typ: "" },
+    ],
+    false
+  ),
+  InfoResponse: o([{ json: "info", js: "info", typ: r("Info") }], false),
+  Info: o(
+    [
+      { json: "description", js: "description", typ: u(null, "") },
+      { json: "discord", js: "discord", typ: u(null, "") },
+      { json: "email", js: "email", typ: u(null, "") },
+      { json: "name", js: "name", typ: u(null, "") },
+      { json: "reddit", js: "reddit", typ: u(null, "") },
+    ],
+    false
+  ),
+  LanguagesResponse: o(
+    [{ json: "languages", js: "languages", typ: a(r("Language")) }],
+    false
+  ),
+  Language: o(
+    [
+      { json: "code", js: "code", typ: "" },
+      { json: "name", js: "name", typ: "" },
+    ],
+    false
+  ),
+  LoadDeckRequest: o([{ json: "key", js: "key", typ: "" }], false),
+  LoadDeckResponse: o(
+    [
+      { json: "ciphertext", js: "ciphertext", typ: "" },
+      { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "kind", js: "kind", typ: r("LoadDeckResponseKind") },
+      { json: "updatedAt", js: "updatedAt", typ: "" },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
+    ],
+    false
+  ),
+  ModerationDriveCardsRequest: o(
+    [
+      { json: "page", js: "page", typ: 0 },
+      { json: "sourceId", js: "sourceId", typ: 0 },
+    ],
+    false
+  ),
+  ModerationDriveCardsResponse: o(
+    [
+      { json: "cards", js: "cards", typ: a(r("Card")) },
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "pages", js: "pages", typ: 0 },
+      { json: "source", js: "source", typ: r("Source") },
+    ],
+    false
+  ),
+  Source: o(
+    [
+      { json: "description", js: "description", typ: "" },
+      { json: "externalLink", js: "externalLink", typ: u(undefined, "") },
+      { json: "key", js: "key", typ: "" },
+      { json: "name", js: "name", typ: "" },
+      { json: "pk", js: "pk", typ: 0 },
+      { json: "sourceType", js: "sourceType", typ: r("SourceType") },
+    ],
+    false
+  ),
+  ModerationDrivesRequest: o([{ json: "page", js: "page", typ: 0 }], false),
+  ModerationDrivesResponse: o(
+    [
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "items", js: "items", typ: a(r("ModerationDriveItem")) },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
+  ModerationDriveItem: o(
+    [
+      { json: "qtyCardbacks", js: "qtyCardbacks", typ: 0 },
+      { json: "qtyCards", js: "qtyCards", typ: 0 },
+      { json: "qtyTokens", js: "qtyTokens", typ: 0 },
+      { json: "source", js: "source", typ: r("Source") },
+    ],
+    false
+  ),
+  ModerationQueueRequest: o([{ json: "page", js: "page", typ: 0 }], false),
+  ModerationQueueResponse: o(
+    [
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "items", js: "items", typ: a(r("ModerationQueueItem")) },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
+  ModerationQueueItem: o(
+    [
+      { json: "card", js: "card", typ: r("Card") },
+      { json: "reportCount", js: "reportCount", typ: 0 },
+      { json: "reportExcerpts", js: "reportExcerpts", typ: a("") },
+      { json: "tagName", js: "tagName", typ: "" },
+    ],
+    false
+  ),
+  ModerationRemoveCardRequest: o(
+    [{ json: "identifier", js: "identifier", typ: "" }],
+    false
+  ),
+  ModerationRemoveCardResponse: o(
+    [{ json: "removed", js: "removed", typ: true }],
+    false
+  ),
+  ModerationRemoveDriveRequest: o(
+    [{ json: "sourceId", js: "sourceId", typ: 0 }],
+    false
+  ),
+  ModerationRemoveDriveResponse: o(
+    [
+      { json: "cardsRemoved", js: "cardsRemoved", typ: 0 },
+      { json: "removed", js: "removed", typ: true },
+    ],
+    false
+  ),
+  NewCardsFirstPagesResponse: o(
+    [{ json: "results", js: "results", typ: m(r("NewCardsFirstPage")) }],
+    false
+  ),
+  NewCardsFirstPage: o(
+    [
+      { json: "cards", js: "cards", typ: a(r("Card")) },
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "pages", js: "pages", typ: 0 },
+      { json: "source", js: "source", typ: r("Source") },
+    ],
+    false
+  ),
+  NewCardsPageResponse: o(
+    [{ json: "cards", js: "cards", typ: a(r("Card")) }],
+    false
+  ),
+  OldEditorSearchRequest: o(
+    [
+      { json: "queries", js: "queries", typ: a(r("SearchQuery")) },
+      {
+        json: "searchSettings",
+        js: "searchSettings",
+        typ: r("SearchSettings"),
+      },
+    ],
+    false
+  ),
+  OldEditorSearchResponse: o(
+    [{ json: "results", js: "results", typ: m(m(a(""))) }],
+    false
+  ),
+  PatreonResponse: o(
+    [{ json: "patreon", js: "patreon", typ: r("Patreon") }],
+    false
+  ),
+  Patreon: o(
+    [
+      { json: "campaign", js: "campaign", typ: u(r("Campaign"), null) },
+      { json: "members", js: "members", typ: a(r("Supporter")) },
+      { json: "tiers", js: "tiers", typ: u(m(r("SupporterTier")), null) },
+      { json: "url", js: "url", typ: u(null, "") },
+    ],
+    false
+  ),
+  Campaign: o(
+    [
+      { json: "about", js: "about", typ: "" },
+      { json: "id", js: "id", typ: "" },
+    ],
+    false
+  ),
+  Supporter: o(
+    [
+      { json: "date", js: "date", typ: "" },
+      { json: "name", js: "name", typ: "" },
+      { json: "tier", js: "tier", typ: "" },
+      { json: "usd", js: "usd", typ: 3.14 },
+    ],
+    false
+  ),
+  SupporterTier: o(
+    [
+      { json: "description", js: "description", typ: "" },
+      { json: "title", js: "title", typ: "" },
+      { json: "usd", js: "usd", typ: 3.14 },
+    ],
+    false
+  ),
+  PrintingCandidatesRequest: o(
+    [
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "query", js: "query", typ: u(undefined, u(null, "")) },
+    ],
+    false
+  ),
+  PrintingCandidatesResponse: o(
+    [{ json: "results", js: "results", typ: a(r("PrintingCandidate")) }],
+    false
+  ),
+  PrintingConsensusRequest: o(
+    [{ json: "identifier", js: "identifier", typ: "" }],
+    false
+  ),
+  PrintingConsensusResponse: o(
+    [
+      { json: "isNoMatch", js: "isNoMatch", typ: true },
+      {
+        json: "resolvedPrinting",
+        js: "resolvedPrinting",
+        typ: u(undefined, r("PrintingCandidate")),
+      },
+      { json: "voteTally", js: "voteTally", typ: a(r("VoteTallyEntry")) },
+    ],
+    false
+  ),
+  VoteTallyEntry: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "isNoMatch", js: "isNoMatch", typ: true },
+      {
+        json: "printing",
+        js: "printing",
+        typ: u(undefined, r("PrintingCandidate")),
+      },
+    ],
+    false
+  ),
+  PrintingTagQueueResponse: o(
+    [
+      { json: "cards", js: "cards", typ: a(r("Card")) },
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
+  ReportCardRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "hide", js: "hide", typ: u(undefined, true) },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "reason", js: "reason", typ: r("Reason") },
+      { json: "text", js: "text", typ: u(undefined, "") },
+    ],
+    false
+  ),
+  ReportCardResponse: o(
+    [
+      { json: "reported", js: "reported", typ: true },
+      { json: "voteCast", js: "voteCast", typ: true },
+    ],
+    false
+  ),
+  ResetSavedDecksRequest: o(
+    [{ json: "confirm", js: "confirm", typ: true }],
+    false
+  ),
+  ResetSavedDecksResponse: o(
+    [{ json: "deletedDeckCount", js: "deletedDeckCount", typ: 0 }],
+    false
+  ),
+  RetractImplicitVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "tagName", js: "tagName", typ: "" },
+    ],
+    false
+  ),
+  ReviewClusterDetailRequest: o(
+    [{ json: "clusterId", js: "clusterId", typ: "" }],
+    false
+  ),
+  ReviewClusterDetailResponse: o(
+    [{ json: "cluster", js: "cluster", typ: r("ReviewClusterSummary") }],
+    false
+  ),
+  ReviewClusterSummary: o(
+    [
+      { json: "clusterId", js: "clusterId", typ: "" },
+      { json: "members", js: "members", typ: a(r("ReviewClusterMember")) },
+      { json: "signals", js: "signals", typ: a(r("ReviewClusterSignal")) },
+      { json: "size", js: "size", typ: 0 },
+    ],
+    false
+  ),
+  ReviewClusterMember: o(
+    [
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "name", js: "name", typ: "" },
+      { json: "smallThumbnailUrl", js: "smallThumbnailUrl", typ: "" },
+    ],
+    false
+  ),
+  ReviewClusterSignal: o(
+    [
+      { json: "memberCount", js: "memberCount", typ: 0 },
+      {
+        json: "signalType",
+        js: "signalType",
+        typ: r("ReviewClusterSignalType"),
+      },
+      { json: "value", js: "value", typ: "" },
+    ],
+    false
+  ),
+  ReviewClusterListRequest: o([{ json: "page", js: "page", typ: 0 }], false),
+  ReviewClusterListResponse: o(
+    [
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "items", js: "items", typ: a(r("ReviewClusterSummary")) },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
+  RevokeDeckShareRequest: o(
+    [{ json: "shareId", js: "shareId", typ: "" }],
+    false
+  ),
+  RevokeDeckShareResponse: o(
+    [{ json: "deleted", js: "deleted", typ: true }],
+    false
+  ),
+  SampleCardsResponse: o(
+    [{ json: "cards", js: "cards", typ: r("Cards") }],
+    "any"
+  ),
+  Cards: o(
+    [
+      { json: "CARD", js: "CARD", typ: a(r("Card")) },
+      { json: "CARDBACK", js: "CARDBACK", typ: a(r("Card")) },
+      { json: "TOKEN", js: "TOKEN", typ: a(r("Card")) },
+    ],
+    "any"
+  ),
+  SaveCryptoProfileRequest: o(
+    [
+      { json: "kdfIterations", js: "kdfIterations", typ: 0 },
+      {
+        json: "passphraseWrappedMasterKey",
+        js: "passphraseWrappedMasterKey",
+        typ: "",
+      },
+      {
+        json: "passphraseWrappedMasterKeyNonce",
+        js: "passphraseWrappedMasterKeyNonce",
+        typ: "",
+      },
+      {
+        json: "recoveryWrappedMasterKey",
+        js: "recoveryWrappedMasterKey",
+        typ: "",
+      },
+      {
+        json: "recoveryWrappedMasterKeyNonce",
+        js: "recoveryWrappedMasterKeyNonce",
+        typ: "",
+      },
+      { json: "salt", js: "salt", typ: "" },
+    ],
+    false
+  ),
+  SaveCryptoProfileResponse: o(
+    [{ json: "saved", js: "saved", typ: true }],
+    false
+  ),
+  SaveDeckRequest: o(
+    [
+      { json: "ciphertext", js: "ciphertext", typ: "" },
+      { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
+      { json: "key", js: "key", typ: u(null, "") },
+      {
+        json: "kind",
+        js: "kind",
+        typ: u(undefined, r("LoadDeckResponseKind")),
+      },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
+    ],
+    false
+  ),
+  SaveDeckResponse: o([{ json: "key", js: "key", typ: "" }], false),
+  SavedDecksResponse: o(
+    [{ json: "decks", js: "decks", typ: a(r("SavedDeckSummary")) }],
+    false
+  ),
+  SavedDeckSummary: o(
+    [
+      { json: "ciphertext", js: "ciphertext", typ: "" },
+      { json: "ciphertextNonce", js: "ciphertextNonce", typ: "" },
+      { json: "createdAt", js: "createdAt", typ: "" },
+      { json: "key", js: "key", typ: "" },
+      { json: "kind", js: "kind", typ: r("LoadDeckResponseKind") },
+      { json: "updatedAt", js: "updatedAt", typ: "" },
+      { json: "wrappedDek", js: "wrappedDek", typ: "" },
+      { json: "wrappedDekNonce", js: "wrappedDekNonce", typ: "" },
+    ],
+    false
+  ),
+  SearchEngineHealthResponse: o(
+    [{ json: "online", js: "online", typ: true }],
+    false
+  ),
+  SourcesResponse: o(
+    [{ json: "results", js: "results", typ: m(r("Source")) }],
+    false
+  ),
+  SubmitArtistVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "artistName", js: "artistName", typ: u(undefined, u(null, "")) },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  SubmitArtistWriteInVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "artistId", js: "artistId", typ: u(undefined, u(0, null)) },
+      { json: "freeText", js: "freeText", typ: u(undefined, u(null, "")) },
+      { json: "identifier", js: "identifier", typ: "" },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  SubmitArtistWriteInVoteResponse: o(
+    [
+      {
+        json: "castArtist",
+        js: "castArtist",
+        typ: r("ArtistAutocompleteResult"),
+      },
+      { json: "createdNewArtist", js: "createdNewArtist", typ: true },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      {
+        json: "resolvedArtist",
+        js: "resolvedArtist",
+        typ: u(undefined, u(r("CanonicalArtist"), null)),
+      },
+      { json: "voteTally", js: "voteTally", typ: a(r("ArtistVoteTallyEntry")) },
+    ],
+    false
+  ),
+  SubmitIllustrationRejectionRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "illustrationId", js: "illustrationId", typ: "" },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  SubmitIllustrationRejectionResponse: o(
+    [{ json: "illustrationId", js: "illustrationId", typ: "" }],
+    false
+  ),
+  SubmitIllustrationVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      {
+        json: "illustrationId",
+        js: "illustrationId",
+        typ: u(undefined, u(null, "")),
+      },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  SubmitIllustrationVoteResponse: o(
+    [
+      {
+        json: "artistAbstainReason",
+        js: "artistAbstainReason",
+        typ: u(undefined, u(null, "")),
+      },
+      { json: "artistVoteCast", js: "artistVoteCast", typ: true },
+      {
+        json: "illustrationId",
+        js: "illustrationId",
+        typ: u(undefined, u(null, "")),
+      },
+      { json: "isUnknown", js: "isUnknown", typ: true },
+      { json: "printingVoteCast", js: "printingVoteCast", typ: true },
+      {
+        json: "resolvedPrinting",
+        js: "resolvedPrinting",
+        typ: u(undefined, r("PrintingCandidate")),
+      },
+    ],
+    false
+  ),
+  SubmitPrintingTagRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "isNoMatch", js: "isNoMatch", typ: true },
+      {
+        json: "printingIdentifier",
+        js: "printingIdentifier",
+        typ: u(undefined, u(null, "")),
+      },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  SubmitQuestionAbstentionRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "questionType", js: "questionType", typ: "" },
+      { json: "reason", js: "reason", typ: u(undefined, "") },
+    ],
+    false
+  ),
+  SubmitQuestionAbstentionResponse: o(
+    [{ json: "recorded", js: "recorded", typ: true }],
+    false
+  ),
+  SubmitTagVoteRequest: o(
+    [
+      { json: "anonymousId", js: "anonymousId", typ: "" },
+      { json: "identifier", js: "identifier", typ: "" },
+      { json: "polarity", js: "polarity", typ: 0 },
+      { json: "tagName", js: "tagName", typ: "" },
+      {
+        json: "voteSurface",
+        js: "voteSurface",
+        typ: u(undefined, u(null, "")),
+      },
+    ],
+    false
+  ),
+  TagConsensusRequest: o(
+    [{ json: "identifier", js: "identifier", typ: "" }],
+    false
+  ),
+  TagConsensusResponse: o(
+    [{ json: "tags", js: "tags", typ: a(r("TagConsensusEntry")) }],
+    false
+  ),
+  TagConsensusEntry: o(
+    [
+      { json: "netPolarity", js: "netPolarity", typ: 3.14 },
+      {
+        json: "resolvedPolarity",
+        js: "resolvedPolarity",
+        typ: u(undefined, u(0, null)),
+      },
+      { json: "tagName", js: "tagName", typ: "" },
+      { json: "tally", js: "tally", typ: a(r("TagVoteTallyEntry")) },
+    ],
+    false
+  ),
+  TagVoteTallyEntry: o(
+    [
+      { json: "count", js: "count", typ: 0 },
+      { json: "polarity", js: "polarity", typ: 0 },
+    ],
+    false
+  ),
+  TagsResponse: o([{ json: "tags", js: "tags", typ: a(r("Tag")) }], false),
+  Tag: o(
+    [
+      { json: "aliases", js: "aliases", typ: u(undefined, a("")) },
+      { json: "children", js: "children", typ: a(r("ChildElement")) },
+      {
+        json: "displayName",
+        js: "displayName",
+        typ: u(undefined, u(null, "")),
+      },
+      {
+        json: "isEnabledByDefault",
+        js: "isEnabledByDefault",
+        typ: u(undefined, true),
+      },
+      { json: "name", js: "name", typ: "" },
+      { json: "parent", js: "parent", typ: u(null, "") },
+    ],
+    false
+  ),
+  ChildElement: o(
+    [
+      { json: "aliases", js: "aliases", typ: u(undefined, a("")) },
+      { json: "children", js: "children", typ: a(r("ChildElement")) },
+      {
+        json: "displayName",
+        js: "displayName",
+        typ: u(undefined, u(null, "")),
+      },
+      {
+        json: "isEnabledByDefault",
+        js: "isEnabledByDefault",
+        typ: u(undefined, true),
+      },
+      { json: "name", js: "name", typ: "" },
+      { json: "parent", js: "parent", typ: u(null, "") },
+    ],
+    false
+  ),
+  VoteQueueRequest: o(
+    [
+      { json: "kind", js: "kind", typ: r("VoteQueueRequestKind") },
+      { json: "page", js: "page", typ: 0 },
+    ],
+    false
+  ),
+  VoteQueueResponse: o(
+    [
+      { json: "hits", js: "hits", typ: 0 },
+      { json: "items", js: "items", typ: a(r("VoteQueueItem")) },
+      { json: "pages", js: "pages", typ: 0 },
+    ],
+    false
+  ),
+  VoteQueueItem: o(
+    [
+      { json: "card", js: "card", typ: r("Card") },
+      { json: "tagName", js: "tagName", typ: u(undefined, u(null, "")) },
+    ],
+    false
+  ),
+  WhoamiResponse: o(
+    [
+      { json: "authenticated", js: "authenticated", typ: true },
+      { json: "discordEnabled", js: "discordEnabled", typ: true },
+      { json: "loginUrl", js: "loginUrl", typ: u(null, "") },
+      { json: "logoutUrl", js: "logoutUrl", typ: u(null, "") },
+      { json: "moderator", js: "moderator", typ: true },
+      { json: "username", js: "username", typ: u(null, "") },
+    ],
+    false
+  ),
+  Game: ["MTG"],
+  BleedProvenance: ["abstained", "method-a", "method-b", "no-evidence"],
+  CardType: ["CARD", "CARDBACK", "TOKEN"],
+  PrintingTagStatus: ["no_match", "resolved", "unresolved"],
+  SourceType: ["AWS S3", "Google Drive", "Local File"],
+  TagVoteDisplayStatus: ["resolved", "suggested"],
+  DiscriminatingAx: ["border", "full_art", "treatment"],
+  Type: [
+    "artist",
+    "border",
+    "confirm_suggestion",
+    "frame_family",
+    "identify_printing",
+    "illustration",
+    "tag",
+  ],
+  SortBy: [
+    "dateCreatedAscending",
+    "dateCreatedDescending",
+    "dateModifiedAscending",
+    "dateModifiedDescending",
+    "nameAscending",
+    "nameDescending",
+  ],
+  LoadDeckResponseKind: ["deck", "snapshot"],
+  Reason: ["broken_image", "low_quality", "nsfw", "other", "wrong_card"],
+  ReviewClusterSignalType: ["legal_line_text", "md5_checksum", "symbol_phash"],
+  VoteQueueRequestKind: ["artist", "printing", "tag"],
 };
