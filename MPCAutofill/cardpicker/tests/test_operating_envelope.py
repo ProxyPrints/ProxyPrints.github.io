@@ -311,38 +311,42 @@ class TestHistoricalTripReplays:
     minimum-window guard correctly distinguishes partial-window false trips from genuine
     failures. Data from the live EnvelopeTrip table:
 
-    | failures/total | breach? | what was it?                               |
-    |----------------|---------|---------------------------------------------|
-    | 24/1           | yes     | partial window, 100% rate → false trip       |
-    | 11/1           | yes     | partial window, 100% rate → false trip       |
-    | 11/1           | yes     | partial window, 100% rate → false trip       |
-    | 497/6          | yes     | transient, 8283% rate → false trip           |
-    | 500/6          | yes     | transient, 8333% rate → false trip           |
+    | total | failures | rate  | verdict                                    |
+    |-------|----------|-------|--------------------------------------------|
+    | 24    | 1        | 4.2%  | partial window, one failure - must NOT trip |
+    | 11    | 1        | 9.1%  | partial window, one failure - must NOT trip |
+    | 11    | 1        | 9.1%  | partial window, one failure - must NOT trip |
+    | 497   | 6        | 1.2%  | full window, genuine - MUST still trip      |
+    | 500   | 6        | 1.2%  | full window, genuine - MUST still trip      |
 
-    The three partial-window trips (total=1) would now be suppressed by the minimum window.
-    The two transient trips (total=6) would also be suppressed. All five are cases where the
-    bar tripped on its own sampling, not on actual system health."""
+    The three partial-window trips (total < 100) are suppressed by the minimum window.
+    The two full-window trips (total >= 100) still trip because their genuine failure
+    rate (≈1.2%) exceeds the 1% ceiling."""
 
     def test_partial_window_single_failure_24_of_1_does_not_trip(self, db):
-        """Historical live trip: 24 failures recorded against total=1. This is a sampling artifact
-        from a partially-filled window (the deque recorded failures before totals, or the total
-        counter lagged). 24/1 = 2400%, wildly above ceiling, but total=1 << 100 minimum."""
-        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=24, fetch_total_in_window=1)) is None
+        """Historical live trip: 1 failure recorded against total=24. This is a sampling artifact
+        from a partially-filled window. 1/24 = 4.2%, well above ceiling, but total=24 < 100
+        minimum so the guard suppresses the trip."""
+        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=1, fetch_total_in_window=24)) is None
 
     def test_partial_window_single_failure_11_of_1_does_not_trip(self, db):
-        """Historical live trip: 11 failures recorded against total=1 — same sampling artifact,
-        different magnitude. 11/1 = 1100%, but total=1 << 100 minimum."""
-        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=11, fetch_total_in_window=1)) is None
+        """Historical live trip: 1 failure recorded against total=11 — same sampling artifact,
+        different magnitude. 1/11 = 9.1%, but total=11 < 100 minimum so the guard suppresses."""
+        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=1, fetch_total_in_window=11)) is None
 
-    def test_transient_497_of_6_does_not_trip(self, db):
-        """Historical live trip: 497 failures in total=6 — an impossibly high rate that is clearly
-        a transient sampling artifact, not sustained failure. 497/6 = 8283%, but total=6 << 100."""
-        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=497, fetch_total_in_window=6)) is None
+    def test_full_window_497_of_6_still_trips(self, db):
+        """Historical live trip: 6 failures in total=497. 6/497 = 1.2% > 1% ceiling, and total=497
+        >= 100 minimum, so this is a genuine sustained failure that must trip."""
+        trip = check_envelope(EnvelopeSignals(fetch_failures_in_window=6, fetch_total_in_window=497))
+        assert trip is not None
+        assert trip.bar == EnvelopeTrip.Bar.FETCH_FAILURE_RATE
 
-    def test_transient_500_of_6_does_not_trip(self, db):
-        """Historical live trip: 500 failures in total=6 — same transient pattern as 497/6.
-        500/6 = 8333%, but total=6 << 100."""
-        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=500, fetch_total_in_window=6)) is None
+    def test_full_window_500_of_6_still_trips(self, db):
+        """Historical live trip: 6 failures in total=500 — same genuine pattern as 6/497.
+        6/500 = 1.2% > 1% ceiling, total=500 >= 100, must trip."""
+        trip = check_envelope(EnvelopeSignals(fetch_failures_in_window=6, fetch_total_in_window=500))
+        assert trip is not None
+        assert trip.bar == EnvelopeTrip.Bar.FETCH_FAILURE_RATE
 
     def test_genuine_failure_rate_at_full_window_still_trips(self, db):
         """A genuine failure rate (e.g. 10/500 = 2% > 1%) at full window size still trips — the
