@@ -1,4 +1,4 @@
-import { expect, Locator, Page } from "@playwright/test";
+import { expect, Locator } from "@playwright/test";
 import { http, HttpResponse } from "msw";
 import { inflateSync } from "zlib";
 
@@ -11,6 +11,11 @@ import {
 } from "@/mocks/handlers";
 
 import { test } from "../playwright.setup";
+import {
+  expandRailSection,
+  importTextOnEditorLanding,
+  loadPageWithDefaultBackend,
+} from "./test-utils";
 
 // Preview/export parity fix - the shipped image transform assumed `object-fit: fill`'s math
 // ("scale the natural size up to the slot, then scale back down") while the CSS actually used
@@ -77,13 +82,6 @@ function trimFixtureImageHandler(measuredBleedMm: number) {
         headers: { "Content-Type": "image/svg+xml" },
       })
   );
-}
-
-async function importOnDisplayLanding(page: Page, text: string) {
-  await page.goto(`/display?server=${localBackendURL}`);
-  await page.getByRole("textbox", { name: "import-text" }).fill(text);
-  await page.getByRole("button", { name: "import-text-submit" }).click();
-  await expect(page.getByTestId("display-page")).toBeVisible();
 }
 
 async function box(locator: Locator) {
@@ -231,7 +229,16 @@ test.describe("PagePreview - image scale matches object-fit (preview/export pari
         searchResultsOneResult,
         ...defaultHandlers
       );
-      await importOnDisplayLanding(page, "my search query");
+      await loadPageWithDefaultBackend(page);
+      await importTextOnEditorLanding(page, "my search query");
+
+      // Pin the cut-guide shape to "perimeter" so the locator resolves to a single
+      // rectangle element rather than 8 corner-mark legs (which would trigger a strict
+      // mode violation on the `page-preview-cut-line` testid).
+      await expandRailSection(page, "cut-lines-guides");
+      await page
+        .getByTestId("display-cut-line-shape")
+        .selectOption("perimeter");
 
       const slot = page.getByTestId("page-preview-slot").first();
       const img = slot.locator("img");

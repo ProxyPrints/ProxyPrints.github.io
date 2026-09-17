@@ -25,12 +25,13 @@
  *     orange loading sweep or a muted "no art" mark + directed-help link, additively alongside
  *     the existing name/query-text label (item 1, owner's hands-on review) - never replacing it,
  *     so a slot's own accessible name/query text stays exactly as findable as before.
- *   - E19 (rounded corner-only cut guides): the screen-side guide render swaps the full
- *     dashed-rectangle trim line for four small corner L-brackets at true scale, matching the
- *     mockup's redline. PDFGenerator's own fast preview keeps today's full-rectangle
- *     approximation. Both variants take their color/length/thickness/offset from the caller's
- *     own cut-line settings (cutLineColor etc.) rather than a fixed constant, so the screen
- *     preview and the exported PDF always draw the same guide.
+ *   - E19 (rounded corner-only cut guides): the screen-side guide render uses four small
+ *     corner L-brackets at true scale. Both surfaces draw the same guide shape by default
+ *     (cornerMarks), since the preview exists to show what will print — a default the
+ *     export does not use makes the preview lie. Both variants take their
+ *     color/length/thickness/offset from the caller's own cut-line settings (cutLineColor
+ *     etc.) rather than a fixed constant, so the screen preview and the exported PDF always
+ *     draw the same guide.
  */
 
 import { keyframes } from "@emotion/react";
@@ -208,11 +209,11 @@ const CustomCardbackDot = styled.span`
 `;
 
 // E19 - the rounded, corner-only cut guide: a small L-bracket (two legs) at each of a card's
-// four trim corners, replacing the full dashed-rectangle trim line the screenPresentation sheet
-// used to draw. Real mm units, so the legs/stroke scale at true sheet scale automatically via
-// this component's one outer transform: scale(), no cqw container-query trick needed. Color and
-// dimensions come from the caller's own cut-line settings, not a fixed constant - see
-// PagePreviewProps.
+// four trim corners. Both surfaces now draw the same guide shape by default (cornerMarks),
+// since the preview exists to show what will print. Real mm units, so the legs/stroke scale
+// at true sheet scale automatically via this component's one outer transform: scale(),
+// no cqw container-query trick needed. Color and dimensions come from the caller's own
+// cut-line settings, not a fixed constant - see PagePreviewProps.
 const CutCornerLeg = styled.div<{
   axis: "horizontal" | "vertical";
   corner: "tl" | "tr" | "bl" | "br";

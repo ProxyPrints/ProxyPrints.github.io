@@ -242,13 +242,13 @@ test.describe("DisplayExportPDF - editor export controls", () => {
     await expect(page.getByTestId("display-cut-line-color")).toBeVisible();
     const shapeSelect = page.getByTestId("display-cut-line-shape");
     await expect(shapeSelect).toBeVisible();
-    await expect(shapeSelect).toHaveValue("perimeter");
+    await expect(shapeSelect).toHaveValue("cornerMarks");
     await page.getByTestId("display-cut-line-color").fill("#ff0000");
-    await shapeSelect.selectOption("cornerMarks");
+    await shapeSelect.selectOption("perimeter");
     await expect(page.getByTestId("display-cut-line-color")).toHaveValue(
       "#ff0000"
     );
-    await expect(shapeSelect).toHaveValue("cornerMarks");
+    await expect(shapeSelect).toHaveValue("perimeter");
 
     // Guides off -> the colour/shape controls have nothing to style, so they don't render.
     await page.getByLabel("Guides").uncheck();
