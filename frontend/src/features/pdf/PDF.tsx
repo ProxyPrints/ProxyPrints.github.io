@@ -14,7 +14,6 @@ import {
   BleedEdgeMM,
   CardHeightMM,
   CardWidthMM,
-  CornerRadiusMM,
   CutLineShape,
 } from "@/common/constants";
 import { SourceType } from "@/common/schema_types";
@@ -23,6 +22,7 @@ import { chunk } from "@/common/utils";
 import { normalizeCardBleed } from "@/features/pdf/bleedExtension";
 import { BleedPrior, ManualOverride } from "@/features/pdf/bleedNormalize";
 import {
+  computeCardCornerRadius,
   computeCutGuideGeometry,
   CUT_LINE_DASH_GAP_MM,
 } from "@/features/pdf/cutGuideGeometry";
@@ -442,31 +442,12 @@ const PDFCardImage = ({ cardDocument }: PDFCardThumbnailProps) => {
   const height = CardHeightMM + renderedBleedMM.top + renderedBleedMM.bottom;
   const width = CardWidthMM + renderedBleedMM.left + renderedBleedMM.right;
 
-  // Rounding is drawn on this box (card + bleed), but the bleed is exactly what a trim along
-  // the cut guide removes - a flat CornerRadiusMM here would sit entirely inside that discarded
-  // margin and vanish the moment the card is actually cut out. Growing the radius by the
-  // adjoining bleed means the arc reaches the TRUE card edge, so the CUT card's own corner comes
-  // out at exactly CornerRadiusMM (trimming a rounded rect by `b` on each edge shrinks its
-  // radius by `b`). min() of the two edges meeting at a corner handles the rare case where a
-  // crowded page axis has cropped one of them below the configured bleed (#301).
-  const cornerRadiusMM = (edgeAMM: number, edgeBMM: number): number =>
-    roundCorners ? CornerRadiusMM + Math.min(edgeAMM, edgeBMM) : 0;
-  const topLeftRadiusMM = cornerRadiusMM(
-    renderedBleedMM.top,
-    renderedBleedMM.left
-  );
-  const topRightRadiusMM = cornerRadiusMM(
-    renderedBleedMM.top,
-    renderedBleedMM.right
-  );
-  const bottomLeftRadiusMM = cornerRadiusMM(
-    renderedBleedMM.bottom,
-    renderedBleedMM.left
-  );
-  const bottomRightRadiusMM = cornerRadiusMM(
-    renderedBleedMM.bottom,
-    renderedBleedMM.right
-  );
+  const {
+    topLeftMM: topLeftRadiusMM,
+    topRightMM: topRightRadiusMM,
+    bottomLeftMM: bottomLeftRadiusMM,
+    bottomRightMM: bottomRightRadiusMM,
+  } = computeCardCornerRadius(renderedBleedMM, roundCorners);
 
   // Non-normalized path only (bleedNormalized short-circuits this - see below): the old
   // proportion-based rescale, fixing up an image assumed to be at the STANDARD bleed amount

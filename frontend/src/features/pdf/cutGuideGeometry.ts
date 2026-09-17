@@ -8,6 +8,34 @@ import type { LayoutEdgeBleed } from "@/features/pdf/layout";
 
 export const CUT_LINE_DASH_GAP_MM = 1;
 
+/** Per-corner radii (mm) for the card+bleed box, matching the exporter's own formula.
+ * When `roundCorners` is true, each corner's radius is `CornerRadiusMM + min(edgeA, edgeB)`
+ * where `edgeA`/`edgeB` are the two adjoining bleed edges — growing the radius so the arc
+ * reaches the true card edge after trimming. Returns 0 for every corner when off. */
+export interface CardCornerRadius {
+  topLeftMM: number;
+  topRightMM: number;
+  bottomLeftMM: number;
+  bottomRightMM: number;
+}
+
+export const computeCardCornerRadius = (
+  bleedMM: LayoutEdgeBleed,
+  roundCorners: boolean
+): CardCornerRadius => {
+  if (!roundCorners) {
+    return { topLeftMM: 0, topRightMM: 0, bottomLeftMM: 0, bottomRightMM: 0 };
+  }
+  const cornerMM = (a: number, b: number): number =>
+    CornerRadiusMM + Math.min(a, b);
+  return {
+    topLeftMM: cornerMM(bleedMM.top, bleedMM.left),
+    topRightMM: cornerMM(bleedMM.top, bleedMM.right),
+    bottomLeftMM: cornerMM(bleedMM.bottom, bleedMM.left),
+    bottomRightMM: cornerMM(bleedMM.bottom, bleedMM.right),
+  };
+};
+
 export interface CutGuideInputs {
   bleedMM: LayoutEdgeBleed;
   cutLineOffsetMM: number;
