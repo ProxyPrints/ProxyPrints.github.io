@@ -169,6 +169,7 @@ describe("PagePreview", () => {
         spacing={zeroSpacing}
         slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
         showCutLines={true}
+        cutLineShape="perimeter"
         maxWidthPx={400}
       />
     );
@@ -191,6 +192,7 @@ describe("PagePreview", () => {
         spacing={zeroSpacing}
         slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
         showCutLines={true}
+        cutLineShape="perimeter"
         maxWidthPx={400}
       />
     );
@@ -215,6 +217,7 @@ describe("PagePreview", () => {
         cutLineColor="#00ff00"
         cutLineThicknessMM={1}
         cutLineOffsetMM={2}
+        cutLineShape="perimeter"
         maxWidthPx={400}
       />
     );
@@ -238,6 +241,7 @@ describe("PagePreview", () => {
         spacing={zeroSpacing}
         slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
         showCutLines={true}
+        cutLineShape="perimeter"
         screenPresentation
         maxWidthPx={400}
       />
@@ -265,6 +269,7 @@ describe("PagePreview", () => {
         spacing={zeroSpacing}
         slots={[{ imageUrl: "https://example.com/1.png", name: "Card 1" }]}
         showCutLines={true}
+        cutLineShape="perimeter"
         maxWidthPx={400}
       />
     );
@@ -299,6 +304,7 @@ describe("PagePreview", () => {
           },
         ]}
         showCutLines={true}
+        cutLineShape="perimeter"
         maxWidthPx={400}
       />
     );

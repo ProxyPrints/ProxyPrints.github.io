@@ -31,6 +31,14 @@
  *     approximation. Both variants take their color/length/thickness/offset from the caller's
  *     own cut-line settings (cutLineColor etc.) rather than a fixed constant, so the screen
  *     preview and the exported PDF always draw the same guide.
+ *
+ * SUPERSESSION NOTE (PR #991 follow-up): Prior to #991 the editor preview and PDF export
+ * drew different guide shapes — screen used corner marks, PDF used a dashed perimeter.
+ * PR #991 unified both surfaces onto the shared cutGuideGeometry module, but left the
+ * DEFAULT_CUT_LINE_SHAPE constant set to "perimeter". This commit changes the default to
+ * "cornerMarks" because both surfaces now MUST draw the same shape, and the preview exists
+ * to show what will print. A default the PDF does not use makes the preview lie.
+ * The corner-mark/gap maths in cutGuideGeometry.ts are unchanged and correct.
  */
 
 import { keyframes } from "@emotion/react";
