@@ -234,9 +234,11 @@ test.describe("PagePreview - card corner radius matches exporter", () => {
     const cardBounds = findBounds(decoded, isBlue);
     expect(cardBounds).not.toBeNull();
 
-    // Corner radius = CornerRadiusMM + min(bleed, bleed) = 2.5 + 3.175 = 5.675mm
-    // = ~57px at FIXTURE_PX_PER_MM. The slot's extreme corner pixel (0,0) is outside
-    // the card image when rounded — it should NOT be blue.
+    // Corner radius = CornerRadiusMM + min(grantedH, grantedV).  The layout crowds
+    // the horizontal axis so the granted horizontal bleed is ~0.54 mm/side, while the
+    // vertical axis is uncrowded at the full 3.175 mm/side.  Measured radius is
+    // 2.5 + 0.5375 = 3.0375 mm ≈ 11.5 px at 96/25.4.  The slot's extreme corner
+    // pixel (0,0) is outside the card image when rounded — it should NOT be blue.
     const topLeftPixel = samplePixel(decoded, 0, 0);
     expect(topLeftPixel).not.toBeNull();
     expect(isBlue(topLeftPixel!.r, topLeftPixel!.g, topLeftPixel!.b)).toBe(
@@ -323,11 +325,25 @@ test.describe("PagePreview - card corner radius matches exporter", () => {
     expect(borderRadius.bottomLeft).not.toBe("0px");
     expect(borderRadius.bottomRight).not.toBe("0px");
 
-    const expectedRadiusPx =
-      (CornerRadiusMM + FIXTURE_BLEED_EDGE_MM) * (96 / 25.4);
+    // The invariant: after trimming the granted bleed, the finished card corner
+    // radius is exactly CornerRadiusMM.  Derive the granted bleed from the slot's
+    // own rendered box rather than assuming the full configured bleed is granted.
+    const CSS_PX_PER_MM = 96 / 25.4;
+    const slotBoxPx = await slot.evaluate((el: HTMLElement) => {
+      const cs = getComputedStyle(el);
+      return { widthPx: parseFloat(cs.width), heightPx: parseFloat(cs.height) };
+    });
+    const slotWidthMM = slotBoxPx.widthPx / CSS_PX_PER_MM;
+    const slotHeightMM = slotBoxPx.heightPx / CSS_PX_PER_MM;
+    const grantedHorizontalMM = (slotWidthMM - CardWidthMM) / 2;
+    const grantedVerticalMM = (slotHeightMM - CardHeightMM) / 2;
+    const minGrantedMM = Math.min(grantedHorizontalMM, grantedVerticalMM);
+
     for (const value of Object.values(borderRadius)) {
-      const px = parseFloat(value);
-      expect(Math.abs(px - expectedRadiusPx)).toBeLessThan(3);
+      const radiusPx = parseFloat(value);
+      const radiusMM = radiusPx / CSS_PX_PER_MM;
+      const finishedRadiusMM = radiusMM - minGrantedMM;
+      expect(Math.abs(finishedRadiusMM - CornerRadiusMM)).toBeLessThan(0.05);
     }
   });
 
