@@ -152,8 +152,8 @@ export interface PDFProps {
   drawCardCutLines: boolean;
   drawPageCutLines: boolean;
   // Cut guide shape: "perimeter" (dashed bleed outline only), "cornerMarks" (crosshair marks
-  // only), or "both". Default "cornerMarks" (supersedes the pre-#991 per-surface split).
-  // Only rendered when drawCardCutLines is on (nothing to draw shapes onto otherwise).
+  // only), or "both". Default "cornerMarks" — both surfaces draw the same guide shape,
+  // and the preview exists to show what will print. Only rendered when drawCardCutLines is on.
   cutLineShape: CutLineShape;
   cutLineLengthMM: number;
   cutLineOffsetMM: number;

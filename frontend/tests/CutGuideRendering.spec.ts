@@ -316,4 +316,104 @@ test.describe("Cut guide rendering - painted output", () => {
     await expect(guides).toBeVisible();
     expect(await guides.count()).toBe(1);
   });
+
+  // ─── Default shape coverage (guards against unintentional default changes) ───
+
+  test("default cut-line shape is cornerMarks (no rail interaction)", async ({
+    page,
+    network,
+  }) => {
+    network.use(...singleCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    // Deliberately do NOT interact with the rail — this test verifies the default.
+    const slot = page.getByTestId("page-preview-slot").first();
+    await expect(slot).toBeVisible();
+
+    const guides = slot.getByTestId("page-preview-cut-line");
+    await expect(guides.first()).toBeVisible();
+
+    // Corner marks: 8 guide elements (2 legs × 4 corners).
+    const guideCount = await guides.count();
+    expect(
+      guideCount,
+      `Expected 8 corner-mark guides (default shape), got ${guideCount}`
+    ).toBe(8);
+  });
+
+  test("default cut-line shape paints corner-mark pixels, not perimeter", async ({
+    page,
+    network,
+  }) => {
+    network.use(...singleCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    // Deliberately do NOT interact with the rail — this test verifies the default.
+    await page.setViewportSize({ width: 800, height: 600 });
+    const slot = await waitForLayoutSettle(page);
+
+    const screenshot = await slot.screenshot();
+    const decoded = decodePNG(screenshot);
+    const guidePixels = countGuidePixels(decoded);
+
+    // Corner marks should paint green pixels (solid bars, not dashed).
+    expect(
+      guidePixels,
+      "Default shape should paint corner-mark guide pixels"
+    ).toBeGreaterThan(8);
+  });
+
+  // ─── Stroke floor measurement (corner marks at different viewports) ───
+
+  test("stroke floor measurement: corner marks at 800px and 1280px", async ({
+    page,
+    network,
+  }) => {
+    network.use(...singleCardHandlers);
+    await loadPageWithDefaultBackend(page);
+    await importTextOnEditorLanding(page, "1x my search query");
+
+    const viewports = [
+      { name: "800px", width: 800, height: 600 },
+      { name: "1280px", width: 1280, height: 800 },
+    ];
+
+    const results: Array<{
+      viewport: string;
+      guidePixels: number;
+    }> = [];
+
+    for (const viewport of viewports) {
+      await page.setViewportSize({
+        width: viewport.width,
+        height: viewport.height,
+      });
+      const slot = await waitForLayoutSettle(page);
+
+      const screenshot = await slot.screenshot();
+      const decoded = decodePNG(screenshot);
+      const guidePixels = countGuidePixels(decoded);
+
+      results.push({
+        viewport: viewport.name,
+        guidePixels,
+      });
+    }
+
+    // Log results for PR body
+    console.log("Stroke floor measurement results:");
+    for (const result of results) {
+      console.log(`  ${result.viewport}: ${result.guidePixels} guide pixels`);
+    }
+
+    // Both viewports should paint guide pixels (floor=2 is working)
+    for (const result of results) {
+      expect(
+        result.guidePixels,
+        `Expected guide pixels at ${result.viewport}`
+      ).toBeGreaterThan(8);
+    }
+  });
 });
