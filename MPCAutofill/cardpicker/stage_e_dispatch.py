@@ -224,6 +224,40 @@ class _FetchOutcomeWindow:
 _window = _FetchOutcomeWindow()
 
 
+class _RSSWindow:
+    """Rolling RSS median window — `dispatch_micro_batch` records one RSS sample per dispatch
+    call and passes the median of the last N samples as `rss_mb_per_worker` to the envelope
+    primitive. The median (not mean) is chosen because the RSS signal oscillates between ~842 MB
+    and ~1390 MB with a mean near 942; the median of a recent window tracks the central tendency
+    without being pulled by a single peak, so a transient spike that is one phase of the normal
+    oscillation does not trip the bar. The envelope primitive's contract is unchanged — it still
+    compares one number against one ceiling and stays stateless. The caller owns the smoothing
+    (same ownership posture as the fetch-outcome window above)."""
+
+    def __init__(self, maxlen: int = 5) -> None:
+        self._window: Deque[float] = deque(maxlen=maxlen)
+
+    def record(self, rss_mb: float) -> None:
+        self._window.append(rss_mb)
+
+    def median(self) -> Optional[float]:
+        if not self._window:
+            return None
+        sorted_vals = sorted(self._window)
+        n = len(sorted_vals)
+        mid = n // 2
+        if n % 2 == 1:
+            return sorted_vals[mid]
+        return (sorted_vals[mid - 1] + sorted_vals[mid]) / 2.0
+
+    def __len__(self) -> int:
+        return len(self._window)
+
+
+# Process-local singleton — one per worker process, same lifecycle as `_window` above.
+_rss_window = _RSSWindow()
+
+
 @dataclass
 class DispatchOutcome:
     """
@@ -370,15 +404,22 @@ def _sample_envelope_signals(google_lockout: bool = False) -> EnvelopeSignals:
     docstring: "the caller owns sampling"). `load_avg`/`rss_mb_per_worker` are best-effort - `None`
     on a platform without `/proc`/`os.getloadavg` (matches `get_process_rss_mb`'s own documented
     convention: a caller must treat `None` as "skip this bar", never as an error).
+    `rss_mb_per_worker` is the MEDIAN of the last `_RSSWindow` (5) samples rather than a single
+    instantaneous read — the RSS signal oscillates (see `_RSSWindow`'s own docstring), and a single
+    sample can land on a peak that does not represent sustained memory pressure.
     """
     try:
         load_avg: Optional[float] = os.getloadavg()[0]
     except (OSError, AttributeError):
         load_avg = None
     failures, total = _window.failures_and_total()
+    raw_rss = get_process_rss_mb()
+    if raw_rss is not None:
+        _rss_window.record(raw_rss)
+    rss_mb = _rss_window.median()
     return EnvelopeSignals(
         load_avg=load_avg,
-        rss_mb_per_worker=get_process_rss_mb(),
+        rss_mb_per_worker=rss_mb,
         fetch_failures_in_window=failures,
         fetch_total_in_window=total,
         google_lockout=google_lockout,
