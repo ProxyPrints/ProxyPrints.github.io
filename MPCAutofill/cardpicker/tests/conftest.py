@@ -12,6 +12,7 @@ from django.conf import settings as conf_settings
 from django.contrib.auth.models import Group, User
 from django.core.management import call_command
 
+from cardpicker import stage_e_dispatch
 from cardpicker.integrations.game.base import GameIntegration
 from cardpicker.models import Card, CardTypes, DFCPair, Source, Tag
 from cardpicker.tests.constants import Cards, DummyIntegration, Sources
@@ -172,7 +173,13 @@ def deterministic_process_rss(request, monkeypatch):
     a separate, deliberately duplicated implementation with its own tests; untouched.)
     """
     if "real_process_rss" in request.keywords:
+        # Clear the window so a real-process-RSS test sees only its own readings, not
+        # the pinned values left over from prior tests.
+        stage_e_dispatch._rss_window.clear()
         return
+    # Clear the window so a pinned test sees only pinned values, not the real readings
+    # left over from a prior real-process-RSS test.
+    stage_e_dispatch._rss_window.clear()
     # String target so importing `stage_e_dispatch` stays lazy, and `raising=True` (the default) so
     # this fails LOUDLY if that module-local name is ever renamed or removed rather than degrading
     # back into ambient sampling.

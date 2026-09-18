@@ -235,6 +235,21 @@ class TestDeterministicProcessRss:
         assert sampled != TEST_PROCESS_RSS_MB
         assert abs(sampled - _real_rss_mb_from_proc()) < 32.0
 
+    def test_sampler_change_takes_effect_on_next_sample(self) -> None:
+        """A sampler change must be immediately reflected in the next sample. This is the property
+        that broke when the RSS window leaked pinned values across sampler transitions — the opt-out
+        marker test above caught it as a side effect, but a dedicated assertion pins it directly so
+        a future window-size or shape change cannot silently reintroduce the leak."""
+        # Seed the window with the pinned value so the median equals it.
+        stage_e_dispatch._rss_window.clear()
+        stage_e_dispatch._rss_window.record(TEST_PROCESS_RSS_MB)
+        assert stage_e_dispatch._rss_window.median() == TEST_PROCESS_RSS_MB
+        # Now clear and record a different value — the median must reflect the new reading
+        # immediately, not a ghost of the old one.
+        stage_e_dispatch._rss_window.clear()
+        stage_e_dispatch._rss_window.record(TEST_PROCESS_RSS_MB + 500.0)
+        assert stage_e_dispatch._rss_window.median() == TEST_PROCESS_RSS_MB + 500.0
+
     def test_process_metrics_own_tests_still_sample_real_rss(self) -> None:
         """
         The primitive itself must stay honestly tested. `test_process_metrics.py` imports

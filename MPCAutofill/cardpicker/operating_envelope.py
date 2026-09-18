@@ -24,7 +24,11 @@ THE FOUR RATIFIED PASSIVE-MODE BARS (§10(a), verbatim numbers - none invented h
      2026-07-28, an owner ops ruling, then raised 768 -> 1024 (2026-08-17) to fit the
      DPI-460 rendering footprint - 1024 is THE ratified number, and an older figure found
      in a doc, report or test is pre-1024 history, not a competing bar).
-  3. Fetch-failure rate > 1% over a rolling 500-card window.
+  3. Fetch-failure rate > 1% over a rolling 500-card window, once the window holds at least
+     FETCH_FAILURE_MIN_WINDOW (100) samples. Below that floor the window is treated as "not enough
+     data yet" — a single failure in a partial window can produce a wildly inflated rate (e.g.
+     1/11 = 9.09%) that trips the bar regardless of actual system health. At floor=100 a single
+     failure yields 1.0%, which equals but does not exceed (>) the 1% ceiling.
 
      WHAT COUNTS AS A "FAILURE" HERE NARROWED ON 2026-07-30 (owner rate ruling: "the limit needs
      to throttle not shut it down"). The bar itself, its 1% ceiling and its 500-card window are
@@ -93,6 +97,15 @@ HOST_LOAD_CEILING = 7.0
 RSS_MB_PER_WORKER_CEILING = 1024.0
 FETCH_FAILURE_RATE_CEILING = 0.01
 FETCH_FAILURE_WINDOW = 500
+# Minimum sample count before the fetch-failure rate bar will evaluate. Below this floor the
+# window is treated as "not enough data yet" (same shape as the existing total=0 guard) — one
+# failure in a partial window can produce a wildly inflated rate (e.g. 1/11 = 9.09%, nine times
+# the ceiling) that trips the bar regardless of actual system health. The hard constraint is that
+# one failure must never breach a 1% ceiling: at floor=100, a single failure yields 1.0%, which
+# equals but does not exceed (>) the ceiling. The bar engages 100 fetches into every fresh window
+# instead of after the full 500 — responsive enough to catch a real failure rate early, while
+# preventing the guaranteed single-failure trips that plagued the partial-window history.
+FETCH_FAILURE_MIN_WINDOW = 100
 
 
 @dataclass(frozen=True)
@@ -101,17 +114,21 @@ class EnvelopeSignals:
     The live signals a caller (the phase-2 streaming dispatcher) samples before each dispatch
     decision - deliberately plain data, no I/O of its own, so this module's own bar-checking logic
     is trivially unit-testable without mocking `os.getloadavg`/`/proc` reads or a rolling-window
-    data structure. The caller owns sampling (`os.getloadavg()[0]`, a per-worker RSS read - see
-    `cardpicker.process_metrics.get_process_rss_mb` for the shared helper this module's own tests
-    use as an example caller - and its own rolling fetch-outcome window, e.g. a
-    `collections.deque(maxlen=FETCH_FAILURE_WINDOW)`), never this module.
+    data structure. The caller owns sampling (`os.getloadavg()[0]`, a rolling-median of recent
+    per-worker RSS reads — see `cardpicker.process_metrics.get_process_rss_mb` for the shared
+    helper and `stage_e_dispatch._sample_envelope_signals` for the smoothing window — and its own
+    rolling fetch-outcome window, e.g. a `collections.deque(maxlen=FETCH_FAILURE_WINDOW)`), never
+    this module.
     """
 
     load_avg: Optional[float] = None
     rss_mb_per_worker: Optional[float] = None
     # (failures, total) over the caller's own rolling window - caller owns the windowing, this
     # module only computes the rate and compares it to the ceiling. total=0 means "not enough data
-    # yet" - never trips on an empty window (see _bar_breach below).
+    # yet" - never trips on an empty window (see _bar_breach below). The rate is also suppressed
+    # when total < FETCH_FAILURE_MIN_WINDOW (100) — a partial window can produce a wildly inflated
+    # rate from a single failure that does not reflect actual system health (see that constant's
+    # own comment).
     # A 429/503 from the destination is NOT a failure for this purpose and must never be counted
     # into either number (2026-07-30 owner rate ruling - see the module docstring's bar 3). The
     # caller's own throttle channel handles it: `stage_e_dispatch._run_stage_c` skips `_window`
@@ -140,7 +157,7 @@ def _bar_breach(signals: EnvelopeSignals) -> Optional[tuple[str, dict[str, Any]]
             EnvelopeTrip.Bar.RSS,
             {"rss_mb_per_worker": signals.rss_mb_per_worker, "ceiling": RSS_MB_PER_WORKER_CEILING},
         )
-    if signals.fetch_total_in_window > 0:
+    if signals.fetch_total_in_window >= FETCH_FAILURE_MIN_WINDOW:
         rate = signals.fetch_failures_in_window / signals.fetch_total_in_window
         if rate > FETCH_FAILURE_RATE_CEILING:
             return (

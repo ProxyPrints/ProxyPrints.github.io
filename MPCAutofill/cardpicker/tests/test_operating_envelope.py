@@ -10,6 +10,7 @@ import pytest
 
 from cardpicker.models import EnvelopeTrip
 from cardpicker.operating_envelope import (
+    FETCH_FAILURE_MIN_WINDOW,
     FETCH_FAILURE_RATE_CEILING,
     FETCH_FAILURE_WINDOW,
     HOST_LOAD_CEILING,
@@ -36,6 +37,12 @@ def _failures_exactly_at_the_rate_ceiling() -> int:
     testing something else.
     """
     return round(FETCH_FAILURE_RATE_CEILING * FETCH_FAILURE_WINDOW)
+
+
+def _failures_exactly_at_the_rate_ceiling_for(window_size: int) -> int:
+    """Same derivation as `_failures_exactly_at_the_rate_ceiling` but for an arbitrary window
+    size — used by the minimum-window boundary tests."""
+    return round(FETCH_FAILURE_RATE_CEILING * window_size)
 
 
 class TestCheckEnvelopeClearSignals:
@@ -122,12 +129,37 @@ class TestFetchFailureRateBar:
         """total=0 means 'not enough data yet', not a 0/0 division or a spurious trip."""
         assert check_envelope(EnvelopeSignals(fetch_failures_in_window=0, fetch_total_in_window=0)) is None
 
-    def test_a_small_window_can_still_breach_the_rate(self, db):
-        # not gated on FETCH_FAILURE_WINDOW itself being reached - the caller owns windowing; this
-        # module only compares whatever rate it's given.
-        trip = check_envelope(EnvelopeSignals(fetch_failures_in_window=1, fetch_total_in_window=10))
+    def test_below_minimum_window_does_not_trip_even_if_rate_breaches(self, db):
+        """Below FETCH_FAILURE_MIN_WINDOW the rate is not evaluated at all — a single failure in a
+        small window (e.g. 1/10 = 10%) would wildly exceed the ceiling, but the window is too small
+        for the rate to be meaningful."""
+        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=1, fetch_total_in_window=10)) is None
+
+    def test_exactly_at_minimum_window_can_breach_the_rate(self, db):
+        """At FETCH_FAILURE_MIN_WINDOW the rate IS evaluated — one failure more than the ceiling
+        allows (6/100 = 6% > 1%) trips."""
+        failures = _failures_exactly_at_the_rate_ceiling_for(FETCH_FAILURE_MIN_WINDOW) + 1
+        trip = check_envelope(
+            EnvelopeSignals(fetch_failures_in_window=failures, fetch_total_in_window=FETCH_FAILURE_MIN_WINDOW)
+        )
         assert trip is not None
         assert trip.bar == EnvelopeTrip.Bar.FETCH_FAILURE_RATE
+
+    def test_exactly_at_minimum_window_at_the_ceiling_does_not_trip(self, db):
+        """At the minimum window exactly at the ceiling — boundary test."""
+        failures = _failures_exactly_at_the_rate_ceiling_for(FETCH_FAILURE_MIN_WINDOW)
+        assert failures / FETCH_FAILURE_MIN_WINDOW == FETCH_FAILURE_RATE_CEILING
+        assert (
+            check_envelope(
+                EnvelopeSignals(fetch_failures_in_window=failures, fetch_total_in_window=FETCH_FAILURE_MIN_WINDOW)
+            )
+            is None
+        )
+
+    def test_below_minimum_window_with_many_failures_does_not_trip(self, db):
+        """Even 50 failures in 99 samples (50.5%) — well above the ceiling — does not trip when
+        the window is one sample short of the minimum."""
+        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=50, fetch_total_in_window=99)) is None
 
 
 class TestGoogleLockoutBar:
@@ -272,3 +304,53 @@ class TestAcknowledgeTrip:
             pass
         trip.refresh_from_db()
         assert trip.acknowledged_note == "first ack"
+
+
+class TestHistoricalTripReplays:
+    """Replay the 5 historical fetch-failure trips from live data to confirm the new
+    minimum-window guard correctly distinguishes partial-window false trips from genuine
+    failures. Data from the live EnvelopeTrip table:
+
+    | total | failures | rate  | verdict                                    |
+    |-------|----------|-------|--------------------------------------------|
+    | 24    | 1        | 4.2%  | partial window, one failure - must NOT trip |
+    | 11    | 1        | 9.1%  | partial window, one failure - must NOT trip |
+    | 11    | 1        | 9.1%  | partial window, one failure - must NOT trip |
+    | 497   | 6        | 1.2%  | full window, genuine - MUST still trip      |
+    | 500   | 6        | 1.2%  | full window, genuine - MUST still trip      |
+
+    The three partial-window trips (total < 100) are suppressed by the minimum window.
+    The two full-window trips (total >= 100) still trip because their genuine failure
+    rate (≈1.2%) exceeds the 1% ceiling."""
+
+    def test_partial_window_single_failure_24_of_1_does_not_trip(self, db):
+        """Historical live trip: 1 failure recorded against total=24. This is a sampling artifact
+        from a partially-filled window. 1/24 = 4.2%, well above ceiling, but total=24 < 100
+        minimum so the guard suppresses the trip."""
+        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=1, fetch_total_in_window=24)) is None
+
+    def test_partial_window_single_failure_11_of_1_does_not_trip(self, db):
+        """Historical live trip: 1 failure recorded against total=11 — same sampling artifact,
+        different magnitude. 1/11 = 9.1%, but total=11 < 100 minimum so the guard suppresses."""
+        assert check_envelope(EnvelopeSignals(fetch_failures_in_window=1, fetch_total_in_window=11)) is None
+
+    def test_full_window_497_of_6_still_trips(self, db):
+        """Historical live trip: 6 failures in total=497. 6/497 = 1.2% > 1% ceiling, and total=497
+        >= 100 minimum, so this is a genuine sustained failure that must trip."""
+        trip = check_envelope(EnvelopeSignals(fetch_failures_in_window=6, fetch_total_in_window=497))
+        assert trip is not None
+        assert trip.bar == EnvelopeTrip.Bar.FETCH_FAILURE_RATE
+
+    def test_full_window_500_of_6_still_trips(self, db):
+        """Historical live trip: 6 failures in total=500 — same genuine pattern as 6/497.
+        6/500 = 1.2% > 1% ceiling, total=500 >= 100, must trip."""
+        trip = check_envelope(EnvelopeSignals(fetch_failures_in_window=6, fetch_total_in_window=500))
+        assert trip is not None
+        assert trip.bar == EnvelopeTrip.Bar.FETCH_FAILURE_RATE
+
+    def test_genuine_failure_rate_at_full_window_still_trips(self, db):
+        """A genuine failure rate (e.g. 10/500 = 2% > 1%) at full window size still trips — the
+        minimum-window guard only suppresses partial windows, not legitimate signals."""
+        trip = check_envelope(EnvelopeSignals(fetch_failures_in_window=10, fetch_total_in_window=500))
+        assert trip is not None
+        assert trip.bar == EnvelopeTrip.Bar.FETCH_FAILURE_RATE
