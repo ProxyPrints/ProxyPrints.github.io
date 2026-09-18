@@ -250,6 +250,12 @@ class _RSSWindow:
             return sorted_vals[mid]
         return (sorted_vals[mid - 1] + sorted_vals[mid]) / 2.0
 
+    def clear(self) -> None:
+        """Reset the window so the next sample reflects only post-clear readings.
+        Called by the test harness when it installs or removes an RSS pin — a stale
+        window is equally wrong in both directions."""
+        self._window.clear()
+
     def __len__(self) -> int:
         return len(self._window)
 
