@@ -3306,6 +3306,7 @@ export function DisplayPage() {
                       cutLineThicknessMM={settings.cutLineThicknessMM}
                       cutLineOffsetMM={settings.cutLineOffsetMM}
                       cutLineShape={settings.cutLineShape}
+                      roundCorners={settings.roundCorners}
                       maxWidthPx={sheetRenderWidthPx}
                       // R7/D17 - screen-only presentation (no white fill/box-shadow, a hairline
                       // pinline instead); the exported PDF (exportPdfProps above) never reads

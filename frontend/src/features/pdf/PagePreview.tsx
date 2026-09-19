@@ -50,6 +50,7 @@ import {
 import { useLongPress } from "@/common/useLongPress";
 import { STANDARD_BLEED_MARGIN_MM } from "@/features/pdf/bleedNormalize";
 import {
+  computeCardCornerRadius,
   computeCutGuideGeometry,
   CutGuideGeometry,
 } from "@/features/pdf/cutGuideGeometry";
@@ -647,6 +648,11 @@ function PagePreviewSlotEl({
     ]
   );
 
+  const cardCornerRadius = useMemo(
+    () => computeCardCornerRadius(bleedMM, roundCorners),
+    [bleedMM, roundCorners]
+  );
+
   // Preview/export parity: scale the image about its centre so its trim rectangle lands on
   // the slot's trim rectangle (bleedMM from each slot edge).
   //
@@ -704,6 +710,18 @@ function PagePreviewSlotEl({
           screenPresentation && content?.loadState != null
             ? `1px solid ${SCREEN_SLOT_PINLINE}`
             : undefined,
+        borderTopLeftRadius: cardCornerRadius.topLeftMM
+          ? `${cardCornerRadius.topLeftMM}mm`
+          : undefined,
+        borderTopRightRadius: cardCornerRadius.topRightMM
+          ? `${cardCornerRadius.topRightMM}mm`
+          : undefined,
+        borderBottomRightRadius: cardCornerRadius.bottomRightMM
+          ? `${cardCornerRadius.bottomRightMM}mm`
+          : undefined,
+        borderBottomLeftRadius: cardCornerRadius.bottomLeftMM
+          ? `${cardCornerRadius.bottomLeftMM}mm`
+          : undefined,
         cursor: onSlotClick != null ? "pointer" : undefined,
         // Tokyo-11 accent wiring (2026-07-24) - the study names "version/sheet selection
         // outlines" as an accent surface; REV from primary/orange.
