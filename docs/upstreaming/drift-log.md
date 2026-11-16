@@ -7,13 +7,13 @@ rebase a branch onto the new upstream tip (see
 `conventions.md`'s automation-composition note — this workflow
 never rebases anything itself).
 
-Last run: 2026-11-02 17:56 UTC, upstream/master @ 2753e304e1532d8ea2679ff1d7527e13b80a9edc
+Last run: 2026-11-16 18:03 UTC, upstream/master @ 2223927a52f4975f0c6f1586ccfb113b4a941d17
 
 | Branch | Applies clean onto upstream/master? | Upstream commits since fork point | Files upstream touched that this branch also touches | Last checked |
 | --- | --- | --- | --- | --- |
-| `upstream-feat-local-file-source` | yes | 63 | 0 file(s) | 2026-11-02 |
-| `upstream-fix-frontend-searchable-the` | yes | 64 | 0 file(s) | 2026-11-02 |
-| `upstream-fix-image-cdn-cors` | yes | 65 | 0 file(s) | 2026-11-02 |
-| `upstream-fix-pdf-canvas-preview` | yes | 65 | 2 file(s) | 2026-11-02 |
-| `upstream-fix-pdf-eager-wasm-load` | yes | 65 | 0 file(s) | 2026-11-02 |
-| `upstream-fix-pdf-thumbnail-worker-route` | yes | 65 | 0 file(s) | 2026-11-02 |
+| `upstream-feat-local-file-source` | yes | 65 | 0 file(s) | 2026-11-16 |
+| `upstream-fix-frontend-searchable-the` | yes | 66 | 0 file(s) | 2026-11-16 |
+| `upstream-fix-image-cdn-cors` | yes | 67 | 0 file(s) | 2026-11-16 |
+| `upstream-fix-pdf-canvas-preview` | yes | 67 | 2 file(s) | 2026-11-16 |
+| `upstream-fix-pdf-eager-wasm-load` | yes | 67 | 0 file(s) | 2026-11-16 |
+| `upstream-fix-pdf-thumbnail-worker-route` | yes | 67 | 0 file(s) | 2026-11-16 |
